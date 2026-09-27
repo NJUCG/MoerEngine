@@ -375,17 +375,22 @@ public:
         fragment_bindings_layout_(std::move(fragment_bindings_layout)) {}
     MetalPipelineState(
         id<MTLComputePipelineState> pipeline, id<MTLFunction> function,
-        std::vector<MetalComputeBinding> bindings, MTLSize local_size,
-        NSUInteger constant_buffer_index
+        MetalRenderBindings bindings, MTLSize local_size
     ) : compute_(pipeline), compute_function_(function),
-        compute_bindings_(std::move(bindings)), local_size_(local_size),
-        constant_buffer_index_(constant_buffer_index) {}
+        compute_bindings_layout_(std::move(bindings)), local_size_(local_size) {}
     id<MTLRenderPipelineState> NativeRender() const noexcept { return render_; }
     id<MTLComputePipelineState> NativeCompute() const noexcept { return compute_; }
     id<MTLFunction> ComputeFunction() const noexcept { return compute_function_; }
-    const std::vector<MetalComputeBinding>& ComputeBindings() const noexcept { return compute_bindings_; }
+    const std::vector<MetalComputeBinding>& ComputeBindings() const noexcept {
+        return compute_bindings_layout_.scalar_bindings;
+    }
+    const std::vector<std::pair<NSUInteger, uint>>& ComputeBindlessSets() const noexcept {
+        return compute_bindings_layout_.bindless_sets;
+    }
     MTLSize LocalSize() const noexcept { return local_size_; }
-    NSUInteger ConstantBufferIndex() const noexcept { return constant_buffer_index_; }
+    NSUInteger ConstantBufferIndex() const noexcept {
+        return compute_bindings_layout_.constant_buffer_index;
+    }
     const std::vector<MTLPixelFormat>& ColorFormats() const noexcept { return color_formats_; }
     uint VertexBindingCount() const noexcept { return vertex_bindings_; }
     const RHIRasterizeInfo& Rasterizer() const noexcept { return rasterizer_; }
@@ -404,9 +409,8 @@ private:
     id<MTLRenderPipelineState> render_{nil};
     id<MTLComputePipelineState> compute_{nil};
     id<MTLFunction> compute_function_{nil};
-    std::vector<MetalComputeBinding> compute_bindings_;
+    MetalRenderBindings compute_bindings_layout_;
     MTLSize local_size_{MTLSizeMake(0, 0, 0)};
-    NSUInteger constant_buffer_index_{0};
     std::vector<MTLPixelFormat> color_formats_;
     uint vertex_bindings_{0};
     RHIRasterizeInfo rasterizer_{};
@@ -523,7 +527,11 @@ MetalRenderBindings MetalRenderStageBindings(
     layout.scalar_bindings.resize(shader_info.layout_hash.size());
     for (uint index = 0; index < shader_info.layout_hash.size(); ++index) {
         const EShaderArgType kind = shader_info.arg_cpp_info[index].type;
-        if (kind == SDA_BindlessArray || kind == SDA_Constant) continue;
+        if (kind == SDA_Constant) {
+            layout.scalar_bindings[index].constant = true;
+            continue;
+        }
+        if (kind == SDA_BindlessArray) continue;
         const auto resource_it = reflection.find(std::string(shader_info.layout_hash[index]));
         if (resource_it == reflection.end()) continue;
         const auto* resource = std::get_if<ReflectParamInfo::Resource>(
@@ -537,38 +545,6 @@ MetalRenderBindings MetalRenderStageBindings(
             layout.constant_buffer_index, NSUInteger(resource->set) + 1);
     }
     return layout;
-}
-
-std::vector<MetalComputeBinding> MetalComputeBindings(
-    const PipelineShaderInfo& shader_info, const SingleShaderInfo& shader,
-    NSUInteger& constant_buffer_index
-) {
-    std::vector<MetalComputeBinding> bindings(shader_info.layout_hash.size());
-    if (shader.shader_param_map == nullptr) return bindings;
-    const auto& reflection = shader.shader_param_map->reflect_map;
-    NSUInteger highest_set = 0;
-    bool has_set = false;
-    for (uint index = 0; index < bindings.size(); ++index) {
-        MetalComputeBinding& binding = bindings[index];
-        binding.kind = shader_info.arg_cpp_info[index].type;
-        binding.constant = shader_info.arg_cpp_info[index].type == SDA_Constant;
-        if (binding.constant) continue;
-        const auto found = reflection.find(std::string(shader_info.layout_hash[index]));
-        if (found == reflection.end()) continue;
-        const auto* resource = std::get_if<ReflectParamInfo::Resource>(
-            &found->second.spirv.resources.data);
-        if (resource == nullptr || !resource->custom_flag.active) continue;
-        binding.set = resource->set;
-        binding.binding = resource->binding;
-        binding.active = true;
-        binding.texel_buffer =
-            resource->desc_type == VDT_UNIFORM_TEXEL_BUFFER ||
-            resource->desc_type == VDT_STORAGE_TEXEL_BUFFER;
-        highest_set = std::max(highest_set, NSUInteger(binding.set));
-        has_set = true;
-    }
-    constant_buffer_index = has_set ? highest_set + 1 : 0;
-    return bindings;
 }
 
 // The table layout mirrors the SPIRV-Cross MSL argument-buffer sets: set 1
@@ -587,6 +563,7 @@ public:
             throw std::runtime_error("Metal bindless capacity is outside the shader handle range");
         }
         slots_.resize(capacity);
+        applied_slots_.resize(capacity);
         const auto new_shared_buffer = [device](NSUInteger size) {
             id<MTLBuffer> buffer = [device newBufferWithLength:size options:MTLResourceStorageModeShared];
             if (buffer == nil) throw std::runtime_error("Cannot allocate Metal bindless table");
@@ -663,7 +640,8 @@ public:
         const uint64 generation = NextGeneration(slot);
         BufferRef reference(view.GetBuffer());
         pending_.emplace_back(BufferUpdateInfo{
-            reference, index, index, view.format, generation, generation, 0, false
+            reference, index, index, view.format, generation, generation, 0, false,
+            view.GetByteOffset()
         });
         slot.buffer = std::move(reference);
         slot.texture = {};
@@ -688,29 +666,61 @@ public:
                 using T = std::decay_t<decltype(item)>;
                 if constexpr (!std::is_same_v<T, InvalidUpdateInfo>) {
                     if (item.array_idx == 0 || item.array_idx >= capacity_) return;
-                    Slot& slot = slots_[item.array_idx];
-                    if (slot.generation != item.array_generation) return;
+                    AppliedSlot& applied = applied_slots_[item.array_idx];
+                    if (applied.generation > item.array_generation) return;
                     if (item.free) {
-                        if (slot.active || slot.kind == Kind::Empty) return;
                         indices[item.array_idx] = 0;
                         textures[item.array_idx] = 0;
                         buffers[item.array_idx + 1] = 0;
-                        slot.texture = {};
-                        slot.texture_view = nil;
-                        slot.buffer = {};
-                        slot.kind = Kind::Empty;
-                        free_slots_.push_back(item.array_idx);
-                    } else if (slot.active) {
-                        if constexpr (std::is_same_v<T, TextureUpdateInfo>) {
-                            textures[item.array_idx] =
-                                slot.texture_view.gpuResourceID._impl;
-                            indices[item.array_idx] = (item.array_idx << 8) | slot.sampler_index;
-                        } else {
-                            buffers[item.array_idx + 1] =
-                                static_cast<MetalBuffer*>(slot.buffer.Get())->Native().gpuAddress +
-                                slot.buffer_offset;
-                            indices[item.array_idx] = item.array_idx;
+                        applied = AppliedSlot{};
+                        applied.generation = item.array_generation;
+                        Slot& slot = slots_[item.array_idx];
+                        if (slot.generation == item.array_generation && !slot.active &&
+                            slot.kind != Kind::Empty) {
+                            slot.texture = {};
+                            slot.texture_view = nil;
+                            slot.buffer = {};
+                            slot.kind = Kind::Empty;
+                            free_slots_.push_back(item.array_idx);
                         }
+                    } else if constexpr (std::is_same_v<T, TextureUpdateInfo>) {
+                        auto* texture = dynamic_cast<MetalTexture*>(item.texture.Get());
+                        if (texture == nullptr) Unsupported("a foreign bindless texture update");
+                        id<MTLTexture> native_view = texture->Native();
+                        if (item.mip_level != 0 || item.num_mips != texture->GetNumMips() ||
+                            item.array_layer != 0 || item.array_count != texture->GetNumArray()) {
+                            const bool cube = texture->GetDimension() == ETextureDimension::TEX_CUBE;
+                            const MTLTextureType type = cube && item.array_count == 6 ?
+                                MTLTextureTypeCube : item.array_count > 1 ?
+                                MTLTextureType2DArray : MTLTextureType2D;
+                            native_view = [texture->Native()
+                                newTextureViewWithPixelFormat:ToMetalFormat(item.format)
+                                                  textureType:type
+                                                       levels:NSMakeRange(item.mip_level, item.num_mips)
+                                                       slices:NSMakeRange(item.array_layer, item.array_count)];
+                            if (native_view == nil) Unsupported("this bindless texture update view");
+                        }
+                        applied.texture = item.texture;
+                        applied.texture_view = native_view;
+                        applied.buffer = {};
+                        applied.generation = item.array_generation;
+                        const uint sampler_index = SamplerIndex(item.sampler);
+                        textures[item.array_idx] = native_view.gpuResourceID._impl;
+                        buffers[item.array_idx + 1] = 0;
+                        indices[item.array_idx] = (item.array_idx << 8) | sampler_index;
+                    } else {
+                        auto* buffer = dynamic_cast<MetalBuffer*>(item.buffer.Get());
+                        if (buffer == nullptr || item.byte_offset >= buffer->GetByteSize()) {
+                            Unsupported("this bindless buffer update");
+                        }
+                        applied.buffer = item.buffer;
+                        applied.texture = {};
+                        applied.texture_view = nil;
+                        applied.generation = item.array_generation;
+                        buffers[item.array_idx + 1] =
+                            buffer->Native().gpuAddress + item.byte_offset;
+                        textures[item.array_idx] = 0;
+                        indices[item.array_idx] = item.array_idx;
                     }
                 }
             }, update);
@@ -735,13 +745,39 @@ public:
         [encoder useResource:texture_arguments_ usage:MTLResourceUsageRead stages:stages];
         [encoder useResource:sampler_arguments_ usage:MTLResourceUsageRead stages:stages];
         for (uint index = 1; index < next_slot_; ++index) {
-            const Slot& slot = slots_[index];
-            if (!slot.active) continue;
-            if (slot.kind == Kind::Texture && slot.texture_view != nil) {
+            const AppliedSlot& slot = applied_slots_[index];
+            if (slot.texture_view != nil) {
                 [encoder useResource:slot.texture_view usage:MTLResourceUsageRead stages:stages];
-            } else if (slot.kind == Kind::Buffer && slot.buffer) {
+            } else if (slot.buffer) {
                 auto* buffer = static_cast<MetalBuffer*>(slot.buffer.Get());
                 [encoder useResource:buffer->Native() usage:MTLResourceUsageRead stages:stages];
+            }
+        }
+    }
+
+    void UseComputeResources(id<MTLComputeCommandEncoder> encoder) {
+        std::lock_guard lock(mutex_);
+        [encoder useResource:indices_ usage:MTLResourceUsageRead];
+        [encoder useResource:buffer_arguments_ usage:MTLResourceUsageRead];
+        [encoder useResource:texture_arguments_ usage:MTLResourceUsageRead];
+        [encoder useResource:sampler_arguments_ usage:MTLResourceUsageRead];
+        for (uint index = 1; index < next_slot_; ++index) {
+            const AppliedSlot& slot = applied_slots_[index];
+            if (slot.texture_view != nil) {
+                MTLResourceUsage usage = MTLResourceUsageRead;
+                if ((slot.texture->GetUsage() & ETextureUsageFlags::UNORDERED_ACCESS) !=
+                    ETextureUsageFlags::UNDEFINED) {
+                    usage |= MTLResourceUsageWrite;
+                }
+                [encoder useResource:slot.texture_view usage:usage];
+            } else if (slot.buffer) {
+                auto* buffer = static_cast<MetalBuffer*>(slot.buffer.Get());
+                MTLResourceUsage usage = MTLResourceUsageRead;
+                if ((buffer->GetUsage() & EBufferUsageFlags::UNORDERED_ACCESS) !=
+                    EBufferUsageFlags::NONE) {
+                    usage |= MTLResourceUsageWrite;
+                }
+                [encoder useResource:buffer->Native() usage:usage];
             }
         }
     }
@@ -781,6 +817,12 @@ protected:
 
 private:
     enum class Kind { Empty, Texture, Buffer };
+    struct AppliedSlot {
+        TextureRef texture{};
+        id<MTLTexture> texture_view{nil};
+        BufferRef buffer{};
+        uint64 generation{0};
+    };
     struct Slot {
         TextureRef texture{};
         id<MTLTexture> texture_view{nil};
@@ -876,7 +918,7 @@ private:
         } else {
             pending_.emplace_back(BufferUpdateInfo{
                 slot.buffer, index, index, PF_UNDEFINED,
-                slot.generation, slot.generation, 0, true
+                slot.generation, slot.generation, 0, true, slot.buffer_offset
             });
         }
         slot.active = false;
@@ -889,6 +931,7 @@ private:
     id<MTLBuffer> sampler_arguments_;
     id<MTLSamplerState> samplers_[kSamplerCount]{};
     std::vector<Slot> slots_;
+    std::vector<AppliedSlot> applied_slots_;
     std::vector<uint> free_slots_;
     Array<UpdateCmd> pending_;
     const uint capacity_;
@@ -1392,6 +1435,7 @@ void EncodeSimpleDraw(
     id<MTLRenderCommandEncoder> encoder =
         [command_buffer renderCommandEncoderWithDescriptor:descriptor];
     if (encoder == nil) throw std::runtime_error("Cannot encode Metal draw render pass");
+    encoder.label = [NSString stringWithUTF8String:draw.name.c_str()];
     [encoder setRenderPipelineState:pipeline->NativeRender()];
     if (pipeline->DepthState() != nil) [encoder setDepthStencilState:pipeline->DepthState()];
     MetalBindlessArray* bindless = nullptr;
@@ -1648,6 +1692,16 @@ MetalPipelineState* ValidateComputeDispatch(
             }
         }
     }
+    if (!pipeline->ComputeBindlessSets().empty()) {
+        bool found_bindless = false;
+        for (const auto& arg : args.args) {
+            const auto* array = std::get_if<BindlessArrayRef>(&arg);
+            if (array == nullptr) continue;
+            found_bindless = dynamic_cast<MetalBindlessArray*>(array->Get()) != nullptr;
+            if (found_bindless) break;
+        }
+        if (!found_bindless) Unsupported("missing compute bindless array");
+    }
     return pipeline;
 }
 
@@ -1664,7 +1718,21 @@ void EncodeComputeDispatch(
     const auto& bindings = pipeline->ComputeBindings();
     id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
     if (encoder == nil) throw std::runtime_error("Cannot encode Metal compute dispatch");
+    encoder.label = [NSString stringWithUTF8String:dispatch.name.c_str()];
     [encoder setComputePipelineState:pipeline->NativeCompute()];
+    if (!pipeline->ComputeBindlessSets().empty()) {
+        MetalBindlessArray* bindless = nullptr;
+        for (const auto& arg : args.args) {
+            if (const auto* array = std::get_if<BindlessArrayRef>(&arg)) {
+                bindless = static_cast<MetalBindlessArray*>(array->Get());
+                break;
+            }
+        }
+        bindless->UseComputeResources(encoder);
+        for (const auto& [set, table] : pipeline->ComputeBindlessSets()) {
+            [encoder setBuffer:bindless->NativeArguments(table) offset:0 atIndex:set];
+        }
+    }
     for (NSUInteger set = 0; set < pipeline->ConstantBufferIndex(); ++set) {
         bool needed = false;
         for (const auto& binding : bindings) {
@@ -1855,15 +1923,35 @@ public:
             prepared.emplace_back(); // Reserve before accepting GPU work.
         }
         for (const WaitEvent& event : submit.wait_events) Wait(event);
-        for (const auto& command : submit.cmds) {
-            if (command->Type() != Command::EType::UpdateBindlessArray) continue;
-            const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
-            if (update.HandOffUpdates()) {
-                static_cast<MetalBindlessArray*>(update.Handle())->Apply(update.UpdateCommands());
+        if (!has_gpu_work) {
+            for (const auto& command : submit.cmds) {
+                if (command->Type() != Command::EType::UpdateBindlessArray) continue;
+                const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
+                if (update.HandOffUpdates()) {
+                    static_cast<MetalBindlessArray*>(update.Handle())->Apply(update.UpdateCommands());
+                }
             }
         }
         if (has_gpu_work) @autoreleasepool {
-            id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
+            MTLCommandBufferDescriptor* buffer_descriptor = [MTLCommandBufferDescriptor new];
+            buffer_descriptor.errorOptions = MTLCommandBufferErrorOptionEncoderExecutionStatus;
+            const auto make_command_buffer = [&]() {
+                return [queue_ commandBufferWithDescriptor:buffer_descriptor];
+            };
+            const auto gpu_error = [](id<MTLCommandBuffer> buffer) {
+                std::string message(
+                    [buffer.error.localizedDescription UTF8String] ?: "unknown GPU error");
+                NSArray<id<MTLCommandBufferEncoderInfo>>* encoders =
+                    buffer.error.userInfo[MTLCommandBufferEncoderInfoErrorKey];
+                for (id<MTLCommandBufferEncoderInfo> encoder in encoders) {
+                    if (encoder.errorState == MTLCommandEncoderErrorStateCompleted) continue;
+                    message += " [";
+                    message += encoder.label.UTF8String ?: "unnamed encoder";
+                    message += ":" + std::to_string(encoder.errorState) + "]";
+                }
+                return message;
+            };
+            id<MTLCommandBuffer> command_buffer = make_command_buffer();
             if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
             NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
             NSMutableArray<id<MTLTexture>>* texture_views = [NSMutableArray array];
@@ -1874,11 +1962,32 @@ public:
                 uint64 byte_size;
             };
             std::vector<PendingReadback> readbacks;
+            bool encoded_work = false;
             for (const auto& command : submit.cmds) {
                 if (command->Type() == Command::EType::Scope ||
                     command->Type() == Command::EType::QueueTransfer ||
-                    command->Type() == Command::EType::Barrier ||
-                    command->Type() == Command::EType::UpdateBindlessArray) continue;
+                    command->Type() == Command::EType::Barrier) continue;
+                if (command->Type() == Command::EType::UpdateBindlessArray) {
+                    if (encoded_work) {
+                        [command_buffer commit];
+                        [command_buffer waitUntilCompleted];
+                        if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+                            throw std::runtime_error("Metal work before bindless update failed: " +
+                                gpu_error(command_buffer));
+                        }
+                        command_buffer = make_command_buffer();
+                        if (command_buffer == nil) {
+                            throw std::runtime_error("Cannot create Metal command buffer");
+                        }
+                        encoded_work = false;
+                    }
+                    const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
+                    if (update.HandOffUpdates()) {
+                        static_cast<MetalBindlessArray*>(update.Handle())->Apply(update.UpdateCommands());
+                    }
+                    continue;
+                }
+                encoded_work = true;
                 if (command->Type() == Command::EType::UploadTexture ||
                     command->Type() == Command::EType::UploadBuffer) {
                     id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
@@ -1927,22 +2036,23 @@ public:
                         [command_buffer waitUntilCompleted];
                         if (command_buffer.status != MTLCommandBufferStatusCompleted) {
                             throw std::runtime_error("Metal indirect count readback failed: " +
-                                std::string([command_buffer.error.localizedDescription UTF8String]
-                                    ?: "unknown GPU error"));
+                                gpu_error(command_buffer));
                         }
                         for (const auto& [mesh_index, staging] : pending_counts) {
                             uint32_t count = 0;
                             std::memcpy(&count, staging.contents, sizeof(count));
                             indirect_counts[mesh_index] = std::min(count, indirect_counts[mesh_index]);
                         }
-                        command_buffer = [queue_ commandBuffer];
+                        command_buffer = make_command_buffer();
                         if (command_buffer == nil) {
                             throw std::runtime_error("Cannot create Metal command buffer");
                         }
+                        encoded_work = false;
                     }
                     EncodeSimpleDraw(
                         command_buffer, draw, indirect_counts, staging_buffers,
                         texture_views, sampler_states);
+                    encoded_work = true;
                     continue;
                 }
                 if (command->Type() == Command::EType::ShaderDispatch) {
@@ -2016,7 +2126,7 @@ public:
             [command_buffer waitUntilCompleted];
             if (command_buffer.status != MTLCommandBufferStatusCompleted) {
                 throw std::runtime_error("Metal texture clear failed: " +
-                    std::string([command_buffer.error.localizedDescription UTF8String] ?: "unknown GPU error"));
+                    gpu_error(command_buffer));
             }
             for (const PendingReadback& readback : readbacks) {
                 std::memcpy(readback.destination,
@@ -2498,12 +2608,11 @@ PipelineHandle MetalDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
                 std::string(error.localizedDescription.UTF8String ?: "unknown error"));
         }
         PipelineHandle handle = MetalPipelineMetadata(shader_info, {&shader});
-        NSUInteger constant_buffer_index = 0;
-        auto bindings = MetalComputeBindings(shader_info, shader, constant_buffer_index);
+        auto bindings = MetalRenderStageBindings(shader_info, shader);
         const uint3 group = shader.compute_local_size;
         handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(
             native_pipeline, function, std::move(bindings),
-            MTLSizeMake(group.x, group.y, group.z), constant_buffer_index
+            MTLSizeMake(group.x, group.y, group.z)
         ));
         return handle;
     }

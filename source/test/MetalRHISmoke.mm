@@ -395,6 +395,10 @@ void CheckGraphicsBindlessArguments() {
         Extent2D(8, 8), PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
     );
+    TextureRef after_release = RenderDevice::Get().CreateTexture(
+        Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+    );
     ArrayArguments args(5, 1, true);
     args.args[0] = scalar->GetView();
     args.args[1] = color->GetView();
@@ -408,10 +412,27 @@ void CheckGraphicsBindlessArguments() {
     CommandList::DrawDispatcher(raster, draw, std::move(args)).Draw(
         Rect2D(0, 0, 8, 8), std::move(meshes), ColorAttachment(target)
     );
+    array->UnbindBuffer(handle);
+    draw.UpdateBindlessArray(array);
+    ArrayArguments after_args(5, 1, true);
+    after_args.args[0] = scalar->GetView();
+    after_args.args[1] = color->GetView();
+    after_args.args[2] = Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE);
+    after_args.args[3] = array;
+    after_args.constants[0] = handle;
+    Moer::Array<MeshDrawData> after_meshes;
+    after_meshes.emplace_back().EmplaceDraw(3, 0, 0);
+    CommandList::DrawDispatcher(raster, draw, std::move(after_args)).Draw(
+        Rect2D(0, 0, 8, 8), std::move(after_meshes), ColorAttachment(after_release)
+    );
     RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     id<MTLTexture> texture = (__bridge id<MTLTexture>)GetMetalNativeTexture(target.Get());
     id<MTLBuffer> readback = [texture.device
+        newBufferWithLength:256 * 8 options:MTLResourceStorageModeShared];
+    id<MTLTexture> after_texture =
+        (__bridge id<MTLTexture>)GetMetalNativeTexture(after_release.Get());
+    id<MTLBuffer> after_readback = [texture.device
         newBufferWithLength:256 * 8 options:MTLResourceStorageModeShared];
     id<MTLCommandQueue> queue = [texture.device newCommandQueue];
     id<MTLCommandBuffer> command = [queue commandBuffer];
@@ -420,16 +441,31 @@ void CheckGraphicsBindlessArguments() {
             sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
                 toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
        destinationBytesPerImage:256 * 8];
+    [blit copyFromTexture:after_texture sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
+                toBuffer:after_readback destinationOffset:0 destinationBytesPerRow:256
+       destinationBytesPerImage:256 * 8];
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
     const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    const auto* after_middle =
+        static_cast<const uint8_t*>(after_readback.contents) + 4 * 256 + 4 * 4;
     const uint8_t red[] = {255, 0, 0, 255};
+    const uint8_t black[] = {0, 0, 0, 0};
     if (command.status != MTLCommandBufferStatusCompleted ||
-        std::memcmp(middle, red, 4) != 0) {
-        throw std::runtime_error("Metal graphics bindless and constants draw failed");
+        std::memcmp(middle, red, 4) != 0 ||
+        std::memcmp(after_middle, black, 4) != 0) {
+        throw std::runtime_error(
+            "Metal graphics ordered bindless updates failed: first=" +
+            std::to_string(middle[0]) + "," + std::to_string(middle[1]) + "," +
+            std::to_string(middle[2]) + "," + std::to_string(middle[3]) +
+            " after=" + std::to_string(after_middle[0]) + "," +
+            std::to_string(after_middle[1]) + "," +
+            std::to_string(after_middle[2]) + "," +
+            std::to_string(after_middle[3]));
     }
-    std::cout << "RHI graphics scalar buffer, texture, sampler, bindless tables, and constants: success"
+    std::cout << "RHI graphics scalar buffer, texture, sampler, ordered bindless updates, and constants: success"
               << std::endl;
 }
 
@@ -876,6 +912,107 @@ void CheckRHIComputeTexelBuffers() {
     }
     MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
     std::cout << "RHI compute R32Uint texel buffer read/write: success" << std::endl;
+}
+
+void CheckRHIComputeBindlessTexture() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        template<typename T> struct spvDescriptor { T value; };
+        template<typename T> struct spvDescriptorArray {
+            spvDescriptorArray(const device spvDescriptor<T>* p) : ptr(&p->value) {}
+            const device T& operator[](size_t i) const { return ptr[i]; }
+            const device T* ptr;
+        };
+        struct Set0 { device float4* output [[id(0)]]; };
+        struct Set1 { const device uint* handles [[id(0)]]; };
+        struct Set2 { spvDescriptor<texture2d<float>> textures [[id(0)]][1]; };
+        struct Set3 { spvDescriptor<sampler> samplers [[id(0)]][1]; };
+        struct Params { uint handle; };
+        kernel void compute_main(
+            const device Set0& scalar [[buffer(0)]],
+            const device Set1& set1 [[buffer(1)]],
+            const device Set2& set2 [[buffer(2)]],
+            const device Set3& set3 [[buffer(3)]],
+            constant Params& params [[buffer(4)]]) {
+            uint packed = set1.handles[params.handle];
+            spvDescriptorArray<texture2d<float>> textures{set2.textures};
+            spvDescriptorArray<sampler> samplers{set3.samplers};
+            scalar.output[0] = textures[packed >> 8].sample(
+                samplers[packed & 255], float2(0.5, 0.5));
+        }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    ShaderParametersInfoMap reflection{};
+    reflection.reflect_map["output"].spirv.resources.data = ReflectParamInfo::Resource{
+        .set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}
+    };
+    auto& bindless = reflection.reflect_map[std::string(ReflectParamInfo::bdls_name)].spirv.bindless;
+    bindless.array = ReflectParamInfo::Bindless{
+        .set = 1, .binding = 0, .custom_flag = {.active = 1}
+    };
+    bindless.image = ReflectParamInfo::Bindless{
+        .set = 2, .binding = 0, .custom_flag = {.active = 1}
+    };
+    bindless.sampler = ReflectParamInfo::Bindless{
+        .set = 3, .binding = 0, .custom_flag = {.active = 1}
+    };
+    reflection.reflect_map["params"].spirv.resources.data = ReflectParamInfo::Constant{
+        .offset = 0, .size = sizeof(uint), .padded_size = sizeof(uint),
+        .custom_flag = {.active = 1}
+    };
+    SingleShaderInfo compute{
+        .entry_point = "compute_main", .shader_data = code,
+        .shader_type = EShaderType::ST_COMPUTE, .shader_param_map = &reflection,
+        .compute_local_size = Moer::uint3{1, 1, 1}
+    };
+    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    shaders.layout_hash = {"output", "bdls", "params"};
+    shaders.arg_cpp_info = {{1, SDA_Buffer}, {1, SDA_BindlessArray}, {1, SDA_Constant}};
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
+    BufferRef output = RenderDevice::Get().CreateBuffer<Moer::float4>(
+        "Metal compute bindless output", 1,
+        EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    TextureRef color = RenderDevice::Get().CreateTexture(
+        Extent2D(1, 1), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+    );
+    constexpr uint8_t pixel[] = {64, 128, 192, 255};
+    CommandList upload(EQueueType::Graphics);
+    upload.CopyFrom(
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(pixel), sizeof(pixel)),
+        color->GetView()
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    BindlessArrayRef array = RenderDevice::Get().CreateBindlessArray(8);
+    const uint handle = array->AllocateTexture(color->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
+    CommandList update(EQueueType::Graphics);
+    update.UpdateBindlessArray(array);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, update.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    ArrayArguments args(3, 1, true);
+    args.args[0] = output->GetView();
+    args.args[1] = array;
+    args.constants[0] = handle;
+    Moer::Array<Moer::UniquePtr<Command>> commands;
+    commands.emplace_back(Moer::MakeUnique<DispatchCmd>(
+        std::move(args), pipeline, Moer::uint3{1, 1, 1}, ProfileSection("Other")));
+    RHIExecutor::Get().Submit(EQueueType::Graphics,
+                              CmdSubmit(std::move(commands), {}, {}, {}));
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    auto* native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(output.Get());
+    const float* result = static_cast<const float*>(native.contents);
+    if (std::abs(result[0] - 64.0f / 255.0f) > 0.01f ||
+        std::abs(result[1] - 128.0f / 255.0f) > 0.01f ||
+        std::abs(result[2] - 192.0f / 255.0f) > 0.01f ||
+        std::abs(result[3] - 1.0f) > 0.01f) {
+        throw std::runtime_error("Metal RHI compute bindless texture result differs from upload");
+    }
+    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    std::cout << "RHI compute bindless texture and sampler: success" << std::endl;
 }
 
 void CheckGraphicsUploads() {
@@ -1672,6 +1809,7 @@ int main(int argc, char** argv) {
             CheckRHIComputeDispatch();
             CheckRHIComputeTextureViews();
             CheckRHIComputeTexelBuffers();
+            CheckRHIComputeBindlessTexture();
             CheckGraphicsUploads();
             CheckMipTexture();
             CheckLayeredTextures();
