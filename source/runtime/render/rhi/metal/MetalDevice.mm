@@ -345,6 +345,7 @@ struct MetalComputeBinding {
 
 struct MetalRenderBindings {
     std::vector<std::pair<NSUInteger, uint>> bindless_sets;
+    std::vector<MetalComputeBinding> scalar_bindings;
     NSUInteger constant_buffer_index{0};
 };
 
@@ -357,11 +358,14 @@ public:
         RHIRasterizeInfo rasterizer,
         MTLPixelFormat depth_format,
         id<MTLDepthStencilState> depth_state,
+        id<MTLFunction> vertex_function,
+        id<MTLFunction> fragment_function,
         MetalRenderBindings vertex_bindings_layout,
         MetalRenderBindings fragment_bindings_layout
     ) : render_(pipeline), color_formats_(std::move(color_formats)),
         vertex_bindings_(vertex_bindings), rasterizer_(rasterizer),
         depth_format_(depth_format), depth_state_(depth_state),
+        vertex_function_(vertex_function), fragment_function_(fragment_function),
         vertex_bindings_layout_(std::move(vertex_bindings_layout)),
         fragment_bindings_layout_(std::move(fragment_bindings_layout)) {}
     MetalPipelineState(
@@ -382,6 +386,8 @@ public:
     const RHIRasterizeInfo& Rasterizer() const noexcept { return rasterizer_; }
     MTLPixelFormat DepthFormat() const noexcept { return depth_format_; }
     id<MTLDepthStencilState> DepthState() const noexcept { return depth_state_; }
+    id<MTLFunction> VertexFunction() const noexcept { return vertex_function_; }
+    id<MTLFunction> FragmentFunction() const noexcept { return fragment_function_; }
     const MetalRenderBindings& VertexBindingsLayout() const noexcept {
         return vertex_bindings_layout_;
     }
@@ -401,6 +407,8 @@ private:
     RHIRasterizeInfo rasterizer_{};
     MTLPixelFormat depth_format_{MTLPixelFormatInvalid};
     id<MTLDepthStencilState> depth_state_{nil};
+    id<MTLFunction> vertex_function_{nil};
+    id<MTLFunction> fragment_function_{nil};
     MetalRenderBindings vertex_bindings_layout_{};
     MetalRenderBindings fragment_bindings_layout_{};
 };
@@ -477,32 +485,49 @@ PipelineHandle MetalPipelineMetadata(
     return handle;
 }
 
-MetalRenderBindings MetalRenderStageBindings(const SingleShaderInfo& shader) {
+MetalRenderBindings MetalRenderStageBindings(
+    const PipelineShaderInfo& shader_info, const SingleShaderInfo& shader
+) {
     MetalRenderBindings layout;
     if (shader.shader_param_map == nullptr) return layout;
     const auto& reflection = shader.shader_param_map->reflect_map;
     const auto found = reflection.find(std::string(ReflectParamInfo::bdls_name));
-    if (found == reflection.end()) return layout;
-    const auto& bindless = found->second.spirv.bindless;
-    const auto add = [&](const std::optional<ReflectParamInfo::Bindless>& resource, uint table) {
-        if (!resource || !resource->custom_flag.active) return;
-        for (const auto& [set, existing_table] : layout.bindless_sets) {
-            if (set == resource->set) {
-                if (existing_table != table) Unsupported("overlapping Metal bindless sets");
-                return;
+    if (found != reflection.end()) {
+        const auto& bindless = found->second.spirv.bindless;
+        const auto add = [&](const std::optional<ReflectParamInfo::Bindless>& resource, uint table) {
+            if (!resource || !resource->custom_flag.active) return;
+            for (const auto& [set, existing_table] : layout.bindless_sets) {
+                if (set == resource->set) {
+                    if (existing_table != table) Unsupported("overlapping Metal bindless sets");
+                    return;
+                }
             }
+            layout.bindless_sets.emplace_back(resource->set, table);
+            layout.constant_buffer_index = std::max(
+                layout.constant_buffer_index, NSUInteger(resource->set) + 1);
+        };
+        add(bindless.array, 1);
+        add(bindless.buffer, 1);
+        add(bindless.image, 2);
+        add(bindless.sampler, 3);
+        if (bindless.acceleration_structure &&
+            bindless.acceleration_structure->custom_flag.active) {
+            Unsupported("Metal bindless acceleration structures");
         }
-        layout.bindless_sets.emplace_back(resource->set, table);
+    }
+    layout.scalar_bindings.resize(shader_info.layout_hash.size());
+    for (uint index = 0; index < shader_info.layout_hash.size(); ++index) {
+        const EShaderArgType kind = shader_info.arg_cpp_info[index].type;
+        if (kind == SDA_BindlessArray || kind == SDA_Constant) continue;
+        const auto resource_it = reflection.find(std::string(shader_info.layout_hash[index]));
+        if (resource_it == reflection.end()) continue;
+        const auto* resource = std::get_if<ReflectParamInfo::Resource>(
+            &resource_it->second.spirv.resources.data);
+        if (resource == nullptr || !resource->custom_flag.active) continue;
+        layout.scalar_bindings[index] = MetalComputeBinding{
+            resource->set, resource->binding, kind, true, false};
         layout.constant_buffer_index = std::max(
             layout.constant_buffer_index, NSUInteger(resource->set) + 1);
-    };
-    add(bindless.array, 1);
-    add(bindless.buffer, 1);
-    add(bindless.image, 2);
-    add(bindless.sampler, 3);
-    if (bindless.acceleration_structure &&
-        bindless.acceleration_structure->custom_flag.active) {
-        Unsupported("Metal bindless acceleration structures");
     }
     return layout;
 }
@@ -1058,13 +1083,24 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
         );
     }
     MetalBindlessArray* bindless = nullptr;
-    for (const TArg& argument : draw.Args().args) {
+    for (uint arg_index = 0; arg_index < draw.Args().args.size(); ++arg_index) {
+        const TArg& argument = draw.Args().args[arg_index];
         if (const auto* array = std::get_if<BindlessArrayRef>(&argument)) {
             if (bindless != nullptr) Unsupported("multiple graphics bindless arrays");
             bindless = dynamic_cast<MetalBindlessArray*>(array->Get());
             if (bindless == nullptr) Unsupported("a foreign graphics bindless array");
+        } else if (const auto* view = std::get_if<BufferView>(&argument)) {
+            auto* buffer = dynamic_cast<MetalBuffer*>(view->GetBuffer());
+            if (buffer == nullptr || view->GetByteSize() == 0 ||
+                view->GetByteOffset() > buffer->GetByteSize() ||
+                view->GetByteSize() > buffer->GetByteSize() - view->GetByteOffset()) {
+                Unsupported("this graphics buffer argument view");
+            }
         } else if (!std::holds_alternative<TInvalidArg>(argument)) {
-            Unsupported("this graphics shader argument kind");
+            throw std::runtime_error(
+                "Metal RHI has not implemented graphics shader argument " + draw.name +
+                " (index=" + std::to_string(arg_index) +
+                ", variant=" + std::to_string(argument.index()) + ")");
         }
     }
     if ((!pipeline->VertexBindingsLayout().bindless_sets.empty() ||
@@ -1196,7 +1232,8 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
 
 void EncodeSimpleDraw(
     id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd& draw,
-    std::span<const uint> indirect_counts
+    std::span<const uint> indirect_counts,
+    NSMutableArray<id<MTLBuffer>>* staging_buffers
 ) {
     auto* pipeline = static_cast<MetalPipelineState*>(
         reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
@@ -1272,6 +1309,41 @@ void EncodeSimpleDraw(
             [encoder setFragmentBuffer:bindless->NativeArguments(table) offset:0 atIndex:set];
         }
     }
+    const auto bind_scalar = [&](const MetalRenderBindings& layout,
+                                 id<MTLFunction> function, bool vertex) {
+        for (NSUInteger set = 0; set < layout.constant_buffer_index; ++set) {
+            bool needed = false;
+            for (const auto& binding : layout.scalar_bindings) {
+                needed |= binding.active && binding.set == set;
+            }
+            if (!needed) continue;
+            id<MTLArgumentEncoder> arguments =
+                [function newArgumentEncoderWithBufferIndex:set];
+            if (arguments == nil) Unsupported("this Metal graphics argument buffer layout");
+            id<MTLBuffer> table = [command_buffer.device
+                newBufferWithLength:arguments.encodedLength
+                options:MTLResourceStorageModeShared];
+            if (table == nil) throw std::runtime_error("Cannot allocate Metal graphics arguments");
+            [staging_buffers addObject:table];
+            [arguments setArgumentBuffer:table offset:0];
+            for (uint index = 0; index < layout.scalar_bindings.size(); ++index) {
+                const auto& binding = layout.scalar_bindings[index];
+                if (!binding.active || binding.set != set) continue;
+                if (binding.kind != SDA_Buffer && binding.kind != SDA_ConstantBuffer) {
+                    Unsupported("this Metal graphics scalar argument kind");
+                }
+                const BufferView& view = std::get<BufferView>(draw.Args().args[index]);
+                auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
+                [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
+                             atIndex:binding.binding];
+                [encoder useResource:buffer->Native() usage:MTLResourceUsageRead];
+            }
+            if (vertex) [encoder setVertexBuffer:table offset:0 atIndex:set];
+            else [encoder setFragmentBuffer:table offset:0 atIndex:set];
+        }
+    };
+    bind_scalar(pipeline->VertexBindingsLayout(), pipeline->VertexFunction(), true);
+    bind_scalar(pipeline->FragmentBindingsLayout(), pipeline->FragmentFunction(), false);
     if (!draw.Args().constants.empty()) {
         const void* data = draw.Args().constants.data();
         const NSUInteger length = draw.Args().constants.size() * sizeof(uint);
@@ -1684,7 +1756,7 @@ public:
                             throw std::runtime_error("Cannot create Metal command buffer");
                         }
                     }
-                    EncodeSimpleDraw(command_buffer, draw, indirect_counts);
+                    EncodeSimpleDraw(command_buffer, draw, indirect_counts, staging_buffers);
                     continue;
                 }
                 if (command->Type() == Command::EType::ShaderDispatch) {
@@ -2194,8 +2266,9 @@ PipelineHandle MetalDevice::CreatePipeline(GfxPsoCreateInfo&& create_info, Pipel
         handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(
             native_pipeline, std::move(color_formats),
             uint(create_info.vertex_stream.bindings.size()), create_info.rasterizer_info,
-            descriptor.depthAttachmentPixelFormat, depth_state,
-            MetalRenderStageBindings(shaders.vs), MetalRenderStageBindings(shaders.ps)
+            descriptor.depthAttachmentPixelFormat, depth_state, vertex, fragment,
+            MetalRenderStageBindings(shader_info, shaders.vs),
+            MetalRenderStageBindings(shader_info, shaders.ps)
         ));
         return handle;
     }

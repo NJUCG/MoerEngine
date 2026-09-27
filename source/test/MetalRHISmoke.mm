@@ -301,23 +301,30 @@ void CheckGraphicsBindlessArguments() {
     constexpr std::string_view source = R"(
         #include <metal_stdlib>
         using namespace metal;
+        struct Set0 { device uint* values [[id(0)]]; };
         struct Set3 { device uint* indices [[id(0)]]; };
         struct Params { uint handle; };
         struct VertexOutput { float4 position [[position]]; };
         vertex VertexOutput draw_vertex(uint index [[vertex_id]],
+                                       const device Set0& scalar [[buffer(0)]],
                                        const device Set3& table [[buffer(3)]],
                                        constant Params& params [[buffer(4)]]) {
             const float2 positions[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};
-            float scale = table.indices[params.handle] != 0 ? 1.0 : 0.0;
+            float scale = scalar.values[0] != 0 && table.indices[params.handle] != 0 ? 1.0 : 0.0;
             return {float4(positions[index] * scale, 0.0, 1.0)};
         }
-        fragment float4 draw_fragment(const device Set3& table [[buffer(3)]],
+        fragment float4 draw_fragment(const device Set0& scalar [[buffer(0)]],
+                                      const device Set3& table [[buffer(3)]],
                                       constant Params& params [[buffer(4)]]) {
-            return table.indices[params.handle] != 0 ? float4(1, 0, 0, 1) : float4(0, 0, 0, 1);
+            return scalar.values[0] != 0 && table.indices[params.handle] != 0 ?
+                float4(1, 0, 0, 1) : float4(0, 0, 0, 1);
         }
     )";
     std::vector<Moer::uint8> code(source.begin(), source.end());
     ShaderParametersInfoMap reflection{};
+    reflection.reflect_map["scalar"].spirv.resources.data = ReflectParamInfo::Resource{
+        .set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}
+    };
     auto& bindless = reflection.reflect_map[std::string(ReflectParamInfo::bdls_name)].spirv.bindless;
     bindless.array = ReflectParamInfo::Bindless{
         .set = 3, .binding = 0, .custom_flag = {.active = 1}
@@ -333,8 +340,10 @@ void CheckGraphicsBindlessArguments() {
                               .shader_type = EShaderType::ST_FRAGMENT,
                               .shader_param_map = &reflection};
     PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    shaders.layout_hash.emplace_back("scalar");
     shaders.layout_hash.emplace_back("bdls");
     shaders.layout_hash.emplace_back("params");
+    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Buffer});
     shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_BindlessArray});
     shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Constant});
     GfxPsoCreateInfo info(
@@ -347,13 +356,21 @@ void CheckGraphicsBindlessArguments() {
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
         "Metal graphics bindless smoke", BufferInfo{4, 1, EBufferUsageFlags::UNORDERED_ACCESS}
     );
+    BufferRef scalar = RenderDevice::Get().CreateBuffer(
+        "Metal graphics scalar smoke", BufferInfo{
+            1, sizeof(uint32_t), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNORDERED_ACCESS
+        }
+    );
+    id<MTLBuffer> native_scalar = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(scalar.Get());
+    *static_cast<uint32_t*>(native_scalar.contents) = 1;
     const uint handle = array->AllocateBuffer(buffer->GetView());
     TextureRef target = RenderDevice::Get().CreateTexture(
         Extent2D(8, 8), PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
     );
-    ArrayArguments args(2, 1, true);
-    args.args[0] = array;
+    ArrayArguments args(3, 1, true);
+    args.args[0] = scalar->GetView();
+    args.args[1] = array;
     args.constants[0] = handle;
     Moer::Array<MeshDrawData> meshes;
     meshes.emplace_back().EmplaceDraw(3, 0, 0);
@@ -383,7 +400,8 @@ void CheckGraphicsBindlessArguments() {
         std::memcmp(middle, red, 4) != 0) {
         throw std::runtime_error("Metal graphics bindless and constants draw failed");
     }
-    std::cout << "RHI graphics bindless tables and stage constants: success" << std::endl;
+    std::cout << "RHI graphics scalar buffer, bindless tables, and stage constants: success"
+              << std::endl;
 }
 
 void CheckIndexedGraphicsDraw(bool indirect) {
