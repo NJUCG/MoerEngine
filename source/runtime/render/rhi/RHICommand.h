@@ -2474,6 +2474,8 @@ public:
     void                Test();
     virtual void        Wait(WaitEvent _event)                                = 0;
     virtual WaitEvent   Execute(CmdSubmit&& _submit)                          = 0;
+    // Present the contents of _target through the backend-owned swapchain.
+    // The backend handles drawable acquisition, transfer, and native present.
     virtual void Present(
         SwapchainRef      _swapchain,
         TextureView       _target,

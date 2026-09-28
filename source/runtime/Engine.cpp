@@ -639,9 +639,13 @@ void Engine::ValidateCommandLine(int argc, const char** argv) {
     }
 
     std::filesystem::path workspace_path = argv[0];
+#if defined(_WIN32)
     workspace_path = workspace_path.filename().string().find(".exe") != std::string::npos ?
                          workspace_path.parent_path() :
                          workspace_path;
+#else
+    workspace_path = workspace_path.parent_path();
+#endif
     const std::filesystem::path config_path =
         ParseConfigOverride(argc, argv).value_or(workspace_path / "MoerEngine.toml");
     if (!std::filesystem::is_regular_file(config_path)) {
@@ -1262,7 +1266,11 @@ void Engine::Init(
     report_startup("Starting engine core", "Initializing logging and configuration");
 
     std::filesystem::path path = argv[0];
+#if defined(_WIN32)
     path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
+#else
+    path = path.parent_path();
+#endif
     const std::string log_directory = (path / "logs").generic_string();
 
     // Init LogSystem
@@ -1458,6 +1466,10 @@ void Engine::Init(
             LOG_INFO("Using D3D12 as RHI backend");
             return ERHIType::D3D12;
         }
+        if (rhi_type_str == "metal") {
+            LOG_INFO("Using Metal as RHI backend");
+            return ERHIType::Metal;
+        }
 
         LOG_WARNING("Unknown RHI type '{}', fallback to Vulkan", config.engine.rhi.type);
         return ERHIType::Vulkan;
@@ -1466,7 +1478,8 @@ void Engine::Init(
     report_startup(
         "Initializing graphics device",
         rhi_type == ERHIType::Vulkan ? "Creating the Vulkan device, queues, and descriptors" :
-                                       "Creating the D3D12 device, queues, and descriptors"
+        rhi_type == ERHIType::Metal ? "Creating the Metal device and command queue" :
+                                     "Creating the D3D12 device, queues, and descriptors"
     );
     // Dispose is safe when initialization leaves a partially constructed
     // implementation behind, so arm cleanup before entering the backend.

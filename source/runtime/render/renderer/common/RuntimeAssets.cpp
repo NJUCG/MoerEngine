@@ -12,6 +12,7 @@
 #include "taskgraph/ThreadManager.h"
 #include "tinyexr.h"
 #include <cassert>
+#include <cstdio>
 #include <utility>
 
 #include <stb_image.h>
@@ -66,8 +67,7 @@ void RuntimeAssets::LoadTextures() {
         if (std::filesystem::exists(texture_path)) {
             for (const auto& entry : std::filesystem::directory_iterator(texture_path)) {
                 if (entry.path().extension() == ".png") {
-                    FILE* file = nullptr;
-                    fopen_s(&file, entry.path().string().c_str(), "rb");
+                    FILE* file = std::fopen(entry.path().string().c_str(), "rb");
                     int width, height, channels;
                     if (file) {
                         ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);

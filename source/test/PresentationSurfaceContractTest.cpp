@@ -30,10 +30,11 @@ public:
         return identity_;
     }
 
-    [[nodiscard]] WindowSurfaceCreateResult
-    CreateSurface(ERHIType, void*, const void*, void*) const noexcept override {
+    [[nodiscard]] WindowNativeHandle GetNativeWindow() const noexcept override {
         return {
-            .status = EWindowSurfaceCreateStatus::UnsupportedRHI,
+            .window_system          = identity_.window_system,
+            .window_system_handle   = identity_.window_system_handle,
+            .platform_window_handle = identity_.platform_window_handle,
         };
     }
 

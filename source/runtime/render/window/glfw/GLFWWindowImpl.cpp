@@ -5,7 +5,6 @@
 #include "misc/MMemory.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
-#include "rhi/vulkan/VulkanCommon.h"
 #include "window/WindowContext.h"
 
 #include "GLFW/glfw3.h"
@@ -92,30 +91,11 @@ public:
         return identity;
     }
 
-    [[nodiscard]] Render::WindowSurfaceCreateResult
-    CreateSurface(ERHIType rhi_type, void* instance, const void* allocation_callbacks, void* surface)
-        const noexcept override {
-        if (rhi_type != ERHIType::Vulkan) {
-            return {
-                .status = Render::EWindowSurfaceCreateStatus::UnsupportedRHI,
-            };
-        }
-        if (window == nullptr || instance == nullptr || surface == nullptr) {
-            return {
-                .status = Render::EWindowSurfaceCreateStatus::InvalidSource,
-            };
-        }
-
-        const VkResult result = glfwCreateWindowSurface(
-            static_cast<VkInstance>(instance),
-            window,
-            static_cast<const VkAllocationCallbacks*>(allocation_callbacks),
-            static_cast<VkSurfaceKHR*>(surface)
-        );
+    [[nodiscard]] Render::WindowNativeHandle GetNativeWindow() const noexcept override {
         return {
-            .status            = result == VK_SUCCESS ? Render::EWindowSurfaceCreateStatus::Success :
-                                                        Render::EWindowSurfaceCreateStatus::NativeFailure,
-            .native_error_code = static_cast<int64_t>(result),
+            .window_system          = Render::EWindowSystemType::GLFW,
+            .window_system_handle   = reinterpret_cast<uintptr_t>(window),
+            .platform_window_handle = identity.platform_window_handle,
         };
     }
 

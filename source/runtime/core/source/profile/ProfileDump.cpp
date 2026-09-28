@@ -2,6 +2,7 @@
 
 #include "ProfileDumpTesting.h"
 #include "platform/Platform.h"
+#include "misc/AtomicSharedPtr.h"
 
 #include <algorithm>
 #include <atomic>
@@ -240,8 +241,8 @@ struct Hub {
     bool                      file_dirty{false};
     PendingLossSlot           pending_loss{};
 
-    std::atomic<std::shared_ptr<Admission>>       admission{};
-    std::atomic<std::shared_ptr<const SchemaMap>> schemas{std::make_shared<const SchemaMap>()};
+    AtomicSharedPtr<Admission>       admission{};
+    AtomicSharedPtr<const SchemaMap> schemas{std::make_shared<const SchemaMap>()};
     std::size_t                                   schema_bytes{0};
 
     std::jthread                worker{};

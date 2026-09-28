@@ -182,7 +182,7 @@ private:
         if (!m_blocks[block_index]) {
             T* new_block = (T*)Memory::Malloc(ITEM_PER_BLOCK * sizeof(T));
             assert(Moer::IsAligned(new_block, alignof(T)));
-            uint64_t zero = 0;
+            uintptr_t zero = 0;
             if (m_blocks[block_index].compare_exchange_strong(zero, (uintptr_t)new_block)) {
                 //swap success
                 assert(m_blocks[block_index] != 0 && "block should not be null");

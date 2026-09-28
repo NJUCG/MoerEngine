@@ -3,7 +3,9 @@
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIThreadOwnership.h"
+#if !defined(__APPLE__)
 #include "vulkan/VulkanSubmissionExecutor.h"
+#endif
 
 #include <atomic>
 #include <exception>
@@ -1298,11 +1300,18 @@ private:
 std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor(uint32 _submission_batch_window) {
     switch (RenderDevice::Get().GetRHIType()) {
         case ERHIType::Vulkan:
+#if !defined(__APPLE__)
             return std::make_shared<VulkanSubmissionExecutor>(_submission_batch_window);
+#else
+            break;
+#endif
         case ERHIType::D3D12:
             LOG_WARNING(
                 "[RHIExecutor] D3D12 uses the legacy queue adapter; upper Vulkan topology is unavailable"
             );
+            return std::make_shared<LegacyQueueBackendExecutor>();
+        case ERHIType::Metal:
+            LOG_INFO("[RHIExecutor] Metal bootstrap uses the single-segment legacy queue adapter");
             return std::make_shared<LegacyQueueBackendExecutor>();
     }
     LOG_ERROR("[RHIExecutor] unsupported RHI type");

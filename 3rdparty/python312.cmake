@@ -1,8 +1,43 @@
-## 限制当前 vendored CPython 包只在已支持的 Windows 主机上使用
 if (NOT WIN32)
-    message(FATAL_ERROR "Vendored Python 3.12 currently only provides Windows x64 binaries.")
+    find_package(Python3 3.12 EXACT REQUIRED COMPONENTS Interpreter Development.Embed)
+
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" -c
+            "import sys, sysconfig; print(sys.base_prefix); print(sysconfig.get_config_var('DESTSHARED'))"
+        OUTPUT_VARIABLE _python312_runtime_paths
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        COMMAND_ERROR_IS_FATAL ANY
+    )
+    string(REPLACE "\n" ";" _python312_runtime_paths "${_python312_runtime_paths}")
+    list(GET _python312_runtime_paths 0 python312_target_root)
+    list(GET _python312_runtime_paths 1 python312_target_dynload_dir)
+    set(python312_target_stdlib_dir "${Python3_STDLIB}")
+    set(python312_target_executable "${Python3_EXECUTABLE}")
+
+    foreach(path
+        "${python312_target_root}"
+        "${python312_target_stdlib_dir}"
+        "${python312_target_dynload_dir}"
+    )
+        if (NOT IS_DIRECTORY "${path}")
+            message(FATAL_ERROR "Required native Python 3.12 directory does not exist: ${path}")
+        endif()
+    endforeach()
+
+    add_library(python312_embed INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(python312_embed INTERFACE Python3::Python)
+    set_target_properties(python312_embed PROPERTIES
+        PYTHON312_TARGET_ROOT "${python312_target_root}"
+        PYTHON312_TARGET_STDLIB_DIR "${python312_target_stdlib_dir}"
+        PYTHON312_TARGET_DYNLOAD_DIR "${python312_target_dynload_dir}"
+        PYTHON312_TARGET_EXECUTABLE "${python312_target_executable}"
+    )
+    set_target_folder(python312_embed ${third_party_folder}/python312)
+    message(STATUS "Using native Python: ${Python3_EXECUTABLE}")
+    return()
 endif()
 
+## Windows continues to use the vendored CPython package.
 ## 统一定义 vendored CPython 的路径，方便下游通过 target property 获取而不是依赖零散变量
 set(python312_target_root "${CMAKE_CURRENT_SOURCE_DIR}/python312/x64")
 set(python312_target_include_dir "${python312_target_root}/include")

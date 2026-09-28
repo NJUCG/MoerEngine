@@ -458,6 +458,8 @@ void VulkanIOInterface::Execute(IOCommandList&& _cmdlist, uint64 _timeline) {
                         } while (true);
                     },
                     [&](TextureViewDesc& _dst) {
+                        const PixelFormatInfo format_info = GetPixelFormatInfo(_dst.pixel_fmt);
+                        MOER_ASSERT(format_info.IsDefined(), "Vulkan IO has no layout for pixel format {}", uint(_dst.pixel_fmt));
                         auto size = GetSizeFromImageFormat(_dst.pixel_fmt, uint3(_dst.size.xy, 1));
                         if (size <= max_chunk_size) {
                             for (auto i = 0; i < _dst.size[2]; i++) {
@@ -479,27 +481,30 @@ void VulkanIOInterface::Execute(IOCommandList&& _cmdlist, uint64 _timeline) {
                                 cur_cmd.file_offset += size;
                             }
                         } else {
-                            //for each row
-                            uint block_height = _dst.size.y;
-                            bool is_bc        = IsPixelFormatBC(_dst.pixel_fmt);
-                            if (is_bc) {
-                                block_height >>= 2;
-                            }
-                            auto row_size = size / block_height;
-                            auto col_size = max_chunk_size / row_size;
-                            if (is_bc)
-                                col_size <<= 2;
+                            // Split at complete block rows for both compressed
+                            // and uncompressed formats. Only the final chunk
+                            // may contain fewer than one full block height.
+                            const uint rows_per_chunk = GetMaxPixelFormatRowsPerChunk(
+                                _dst.pixel_fmt, _dst.size.x, max_chunk_size
+                            );
+                            MOER_ASSERT(
+                                rows_per_chunk != 0,
+                                "One pixel-format block row exceeds the Vulkan IO chunk limit"
+                            );
+                            MOER_ASSERT(
+                                _dst.offset.y % format_info.block_height == 0,
+                                "Compressed texture IO offset is not block-row aligned"
+                            );
                             for (auto i = 0; i < _dst.size[2]; i++) {
-                                uint col_offset = 0;
-                                do {
-                                    auto dst_col = std::min(uint(col_size), _dst.size.y - col_offset);
+                                for (uint row_offset = 0; row_offset < _dst.size.y;) {
+                                    const uint row_count = std::min(rows_per_chunk, _dst.size.y - row_offset);
                                     _splited_cmds.emplace_back(
                                         cur_cmd.src,
                                         TextureViewDesc{
                                             uint3(
-                                                _dst.offset.x, _dst.offset.y + col_offset, _dst.offset.z + i
+                                                _dst.offset.x, _dst.offset.y + row_offset, _dst.offset.z + i
                                             ),
-                                            uint3(_dst.size.x, dst_col, 1),
+                                            uint3(_dst.size.x, row_count, 1),
                                             _dst.handle,
                                             _dst.pixel_fmt,
                                             _dst.mip_offset,
@@ -511,15 +516,11 @@ void VulkanIOInterface::Execute(IOCommandList&& _cmdlist, uint64 _timeline) {
                                         cur_cmd.flags
                                     );
 
-                                    col_offset += dst_col;
-                                    if (col_offset < _dst.size.y) {
-                                        cur_cmd.file_offset += GetSizeFromImageFormat(
-                                            _dst.pixel_fmt, uint3(_dst.size.x, dst_col, 1)
-                                        );
-                                    } else {
-                                        break;
-                                    }
-                                } while (true);
+                                    cur_cmd.file_offset += GetSizeFromImageFormat(
+                                        _dst.pixel_fmt, uint3(_dst.size.x, row_count, 1)
+                                    );
+                                    row_offset += row_count;
+                                }
                             }
                         }
                     }

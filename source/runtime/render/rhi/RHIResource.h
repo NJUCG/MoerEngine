@@ -817,6 +817,9 @@ struct ExportBuffer {
     EBufferState state;
 };
 
+// Backend-owned descriptor/argument table. AllocateTexture/AllocateBuffer
+// return logical indices used by shaders; the backend owns their representation,
+// resource lifetime, and any residency declarations required during submission.
 class RENDER_API BindlessArray : public RHIResource {
 public:
     struct TextureUpdateInfo {
@@ -844,6 +847,7 @@ public:
         uint64       slot_generation;
         uint64       command_token;
         bool         free;
+        uint64       byte_offset{0};
     };
 
     struct InvalidUpdateInfo {
@@ -861,12 +865,16 @@ public:
     virtual void UnbindTexture(uint _handle) = 0;
     virtual void UnbindBuffer(uint _handle)  = 0;
 
+    // Opaque backend token for command translation. It is not a shader index
+    // or a portable GPU address; only the matching backend may interpret it.
     virtual uint64 ArrayHandle() const = 0;
 
 protected:
     friend class CommandList;
     friend class UpdateBindlessArrayCmd;
 
+    // Bindless membership changes travel through the command stream. A backend
+    // finalizes or discards each update when submission succeeds or is dropped.
     virtual UniquePtr<class Command> CreateUpdateCommand() = 0;
     virtual void DiscardUpdateCommand(const Array<UpdateCmd>&) {}
 };
@@ -1151,6 +1159,7 @@ struct SingleShaderInfo {
     std::span<uint8>         shader_data;
     EShaderType              shader_type;
     ShaderParametersInfoMap* shader_param_map = nullptr;
+    uint3                   compute_local_size{0, 0, 0};
 };
 
 struct ShaderVsGsPs {
@@ -1285,6 +1294,9 @@ struct GfxPsoCreateInfo {
     // Required when primitive_topology is PATCH_LIST. Kept explicit instead of assuming triangle
     // patches so the RHI contract remains valid for future isoline/quad tessellation passes.
     uint32_t patch_control_points = 0;
+    // Byte stride of one HS output control point when a backend materializes
+    // patch data in a buffer (for example, Metal's compute tessellation stage).
+    uint32_t patch_control_point_stride = 0;
 
     EPixelFormat                  depth_stencil_format;
     Array<RHIColorAttachmentInfo> color_attachments_info;
@@ -1398,6 +1410,8 @@ struct RenderPassInfo {
 };
 
 struct SwapchainCreateInfo {
+    // The source retains the platform window while the backend owns its
+    // presentation objects (VkSurfaceKHR, CAMetalLayer/drawables, etc.).
     SwapchainSurfaceInfo surface;
     Extent2D             size;
     uint                 back_buffer_sz         = 2;

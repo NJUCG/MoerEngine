@@ -7,6 +7,16 @@
 #define BINDLESS_ARRAY_SUFFIX _array_114514_bdls
 #define BINDLESS_NAME_SUFFIX _
 #define CONCAT(x, y) x##y
+
+// Vulkan and Metal both compile this path through SPIR-V. Keep VULKAN as a
+// fallback for standalone shader compilation outside the engine.
+#ifndef MOER_SPIRV_BINDLESS
+#define MOER_SPIRV_BINDLESS VULKAN
+#endif
+#ifndef MOER_UNIFIED_RW_BINDING
+#define MOER_UNIFIED_RW_BINDING VULKAN
+#endif
+
 struct RenderResourceHandle {
   // 23 bits for index, 2 bits to indicate resource type, 1 bit for writability,
   // 6 bits for version
@@ -23,7 +33,7 @@ struct RenderResourceHandle {
 #endif
   }
 
-#if VULKAN
+#if MOER_UNIFIED_RW_BINDING
   uint WriteIndex() { return ReadIndex(); }
 #else
   uint WriteIndex() { return ReadIndex() + 1; }
@@ -48,6 +58,14 @@ struct RenderResourceHandle {
   ITERATOR(float3, ##__VA_ARGS__)                                              \
   ITERATOR(int4, ##__VA_ARGS__)                                                \
   ITERATOR(uint4, ##__VA_ARGS__)                                               \
+  ITERATOR(float4, ##__VA_ARGS__)
+
+// Integer textures support loads, but HLSL sampling methods require a
+// floating-point texture.
+#define ITERATE_SAMPLE_TEXTURE_TYPES(ITERATOR, ...)                            \
+  ITERATOR(float, ##__VA_ARGS__)                                                \
+  ITERATOR(float2, ##__VA_ARGS__)                                               \
+  ITERATOR(float3, ##__VA_ARGS__)                                               \
   ITERATOR(float4, ##__VA_ARGS__)
 
 struct ByteBufferHandle {
@@ -256,9 +274,9 @@ struct SamplerHeapHandle {
 
 #define DEFINE_FETCH_TEXTURE_TYPE_AND_FORMATS(TextureType, CoordType, OffsetType)                     \
   ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_FETCH, TextureType)                               \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE, TextureType, CoordType, OffsetType)       \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_LEVEL, TextureType, CoordType, OffsetType) \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_GRAD, TextureType, CoordType, OffsetType)  \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE, TextureType, CoordType, OffsetType)       \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_LEVEL, TextureType, CoordType, OffsetType) \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_GRAD, TextureType, CoordType, OffsetType)  \
   INNER_GENERATE_TEXTURE_TYPE_FETCH_WITHOUT_TEMPLATE(TextureType)                                     \
   INNER_GENERATE_TEXTURE_TYPE_SAMPLE_WITHOUT_TEMPLATE(TextureType, CoordType, OffsetType)             \
   INNER_GENERATE_TEXTURE_TYPE_SAMPLE_LEVEL_WITHOUT_TEMPLATE(                                          \
@@ -353,9 +371,9 @@ struct SamplerHeapHandle {
 // Define Fetch Macro for Cube (Combines the above)
 #define DEFINE_FETCH_TEXTURE_CUBE_AND_FORMATS(TextureType, CoordType)                     \
   ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_FETCH, TextureType)                   \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE, TextureType, CoordType)       \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE_LEVEL, TextureType, CoordType) \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE_GRAD, TextureType, CoordType)  \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE, TextureType, CoordType)       \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE_LEVEL, TextureType, CoordType) \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE_GRAD, TextureType, CoordType)  \
   INNER_GENERATE_TEXTURE_TYPE_FETCH_WITHOUT_TEMPLATE(TextureType)                         \
   INNER_GENERATE_TEXTURE_CUBE_SAMPLE_WITHOUT_TEMPLATE(TextureType, CoordType)             \
   INNER_GENERATE_TEXTURE_CUBE_SAMPLE_LEVEL_WITHOUT_TEMPLATE(TextureType, CoordType)       \
@@ -457,7 +475,7 @@ struct SamplerHeapHandle {
     }                                                                                                               \
   };
 
-#if VULKAN
+#if MOER_SPIRV_BINDLESS
 
 #define ACCESS_GLOBAL_TEXTURE_HEAP(NativeType, TextureType, idx)      TextureType<NativeType>(g##TextureType##NativeType##__114514_bdls[NonUniformResourceIndex(idx)])
 #define ACCESS_GLOBAL_TEXTURE_HEAP_WITHOUT_TEMPLATE(TextureType, idx) TextureType(g##TextureType##__114514_bdls[NonUniformResourceIndex(idx)])
@@ -562,6 +580,6 @@ dxResourceDescriptorHeapAccessor.Sample(HandleType(handle), uv)
   HANDLES(DESCRIPTOR_HEAP, DESCRIPTOR_HEAP_SAMPLE, DESCRIPTOR_HEAP_SAMPLE_LEVEL, DESCRIPTOR_HEAP_SAMPLE_GRAD, \
           DESCRIPTOR_HEAP_SAMPLE_CUBE, DESCRIPTOR_HEAP_SAMPLE_LEVEL_CUBE, DESCRIPTOR_HEAP_SAMPLE_GRAD_CUBE)
 
-#endif// VULKAN/DXIL
+#endif // MOER_SPIRV_BINDLESS
 
 #endif// FRAMEWORK_BINDLESS_COMMON_HLSL

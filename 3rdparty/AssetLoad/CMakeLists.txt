@@ -38,18 +38,26 @@ set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE INTERNAL "" FORCE)
 set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE INTERNAL "" FORCE)
 set(ASSIMP_BUILD_TESTS OFF CACHE INTERNAL "" FORCE)
 set(ASSIMP_INSTALL OFF CACHE INTERNAL "" FORCE)
-set(ASSIMP_BUILD_ZLIB ON CACHE INTERNAL "" FORCE)
+if (APPLE)
+    # The bundled zlib treats modern macOS as a classic Mac target and
+    # replaces fdopen, breaking the SDK's stdio.h declarations.
+    set(ASSIMP_BUILD_ZLIB OFF CACHE INTERNAL "" FORCE)
+else()
+    set(ASSIMP_BUILD_ZLIB ON CACHE INTERNAL "" FORCE)
+endif()
 add_sub_target(assimp assimp ${third_party_folder}/assimp "")
 
-target_compile_options(zlibstatic
-    PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-non-prototype>"
-    PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-declarations>"
-    PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-unused-function>"
-)
+if (TARGET zlibstatic)
+    target_compile_options(zlibstatic
+        PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-non-prototype>"
+        PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-declarations>"
+        PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-unused-function>"
+    )
+    set_target_folder(zlibstatic "${third_party_folder}/assimp")
+endif()
 
 target_compile_options(assimp PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-unused-function>")
 set_ide_folder(UpdateAssimpLibsDebugSymbolsAndDLLs ${third_party_folder}/assimp)
-set_target_folder(zlibstatic "${third_party_folder}/assimp")
 
 target_link_libraries(${third_lib_for_asset_load_target} PUBLIC assimp)
 target_include_directories(${third_lib_for_asset_load_target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/assimp)

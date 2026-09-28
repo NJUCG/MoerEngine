@@ -70,8 +70,7 @@ private:
     void InnerEnqueueRequest(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len) {
         std::lock_guard<std::mutex> lk(mutex);
         requests.push_back([=]() {
-            FILE* result_handle = nullptr;
-            fopen_s(&result_handle, (const char*)_handle.file, "r");
+            FILE* result_handle = std::fopen((const char*)_handle.file, "r");
             if (!result_handle) {
                 SPDLOG_ERROR("Failed to open file {}", (const char*)_handle.file);
                 return;
@@ -85,8 +84,7 @@ private:
     void InnerEnqueueRequest(const void* ptr, size_t len, FileHandle handle, size_t file_offset) {
         std::lock_guard<std::mutex> lk(mutex);
         requests.push_back([=]() {
-            FILE* result_handle = nullptr;
-            fopen_s(&result_handle, (const char*)handle.file, "r");
+            FILE* result_handle = std::fopen((const char*)handle.file, "r");
             if (!result_handle) {
                 SPDLOG_ERROR("Failed to open file {}", (const char*)handle.file);
                 return;
@@ -107,10 +105,8 @@ private:
     ) {
         std::lock_guard<std::mutex> lk(mutex);
         requests.push_back([=]() {
-            FILE* src_handle = nullptr;
-            fopen_s(&src_handle, (const char*)_handle.file, "r");
-            FILE* dst_handle = nullptr;
-            fopen_s(&dst_handle, (const char*)_in_dst_handle.file, "r+");
+            FILE* src_handle = std::fopen((const char*)_handle.file, "r");
+            FILE* dst_handle = std::fopen((const char*)_in_dst_handle.file, "r+");
             if (!src_handle || !dst_handle) {
                 SPDLOG_ERROR("Failed to open file {}", (const char*)_handle.file);
                 return;

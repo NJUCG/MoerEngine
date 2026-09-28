@@ -18,7 +18,7 @@ using std::move;
 namespace {
 
 constexpr uint32_t k_shader_cache_magic          = 0x4D534443; // "MSDC"
-constexpr uint32_t k_shader_cache_format_version = 1;
+constexpr uint32_t k_shader_cache_format_version = 2;
 
 std::string_view GetShaderTypeName(EShaderType shader_type) {
     switch (shader_type) {
@@ -97,7 +97,7 @@ void ShaderResourcesCache::RegisterCache(const ShaderCompilerInput& _input, Shad
             (EShaderType)_input.target_info.shader_type,
             StaticArray<uint64, 2>{_output.compiled_hash1, _output.compiled_hash2},
             uint64(_input.shader_name_hash),
-            _input.entry_point,
+            _output.compiled_entry_name.empty() ? _input.entry_point : _output.compiled_entry_name,
             _input.relative_source_file_path,
             key,
             std::move(_output.source_dependencies)
@@ -387,6 +387,10 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
             return shader;
         }
         ShaderAsset asset = std::get<ShaderAsset>(_info);
+        if (b_tessellation && target_info == SP_METAL_MSL && _type == ST_VERTEX) {
+            asset.environment.SetDefine("MOER_METAL_TESS_VS_CAPTURE", true);
+            asset.environment.SetDefine("MOER_METAL_TESS_VS_GRID_BUFFER", true);
+        }
         return shader_manager.CompileShader(_type, std::move(asset));
     };
     auto get_shader_info = [&](EShaderType _type, Shader& _output) {
@@ -397,7 +401,8 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
                 .entry_point      = _output.entry_name,
                 .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
                 .shader_type      = _type,
-                .shader_param_map = &_output.reflection
+                .shader_param_map = &_output.reflection,
+                .compute_local_size = _output.reflection.compute_local_size
             }
         );
     };
@@ -483,7 +488,8 @@ PipelineShaderInfo ComputeConstructor::CompileShaderInfo(
                 .entry_point      = _output.entry_name,
                 .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
                 .shader_type      = _type,
-                .shader_param_map = &_output.reflection
+                .shader_param_map = &_output.reflection,
+                .compute_local_size = _output.reflection.compute_local_size
             }
         );
     };

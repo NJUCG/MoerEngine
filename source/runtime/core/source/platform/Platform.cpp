@@ -1,13 +1,15 @@
 #include "platform/Platform.h"
 #include "PlatformImplement.h"
 #include "misc/STL.h"
-#include <basetsd.h>
 #include <cstdint>
 #include <cstdlib>
 #if PLATFORM_WINDOWS
+#include <basetsd.h>
 #include "Windows/PlatformWindows.h"
 #elif PLATFORM_LINUX
-#include "PlatformLinux.h"
+#include "Linux/PlatformLinux.h"
+#elif PLATFORM_APPLE
+#include "Apple/PlatformApple.h"
 #endif
 
 Affinity::Affinity(Affinity&& _other) noexcept {
@@ -111,6 +113,8 @@ Affinity Affinity::All() {
 #elif PLATFORM_LINUX
     //MARK...
     return Affinity();
+#elif PLATFORM_APPLE
+    return Affinity();
 #endif
 }
 Affinity Affinity::AnyOf(uint32_t _thread_id, Affinity&& _in_affinity) {
@@ -130,6 +134,8 @@ Affinity Affinity::AnyOf(uint32_t _thread_id, Affinity&& _in_affinity) {
 #elif PLATFORM_LINUX
     //MARK...
     return Affinity();
+#elif PLATFORM_APPLE
+    return Affinity();
 #endif
 }
 PlatformImplement* PlatformImplement::GetInstance() {
@@ -137,6 +143,8 @@ PlatformImplement* PlatformImplement::GetInstance() {
     static WindowsPlatform platform;
 #elif PLATFORM_LINUX
     static LinuxPlatform platform;
+#elif PLATFORM_APPLE
+    static ApplePlatform platform;
 #endif
 
     return &platform;
@@ -177,6 +185,10 @@ int32_t Platform::GetProcessorCoreCount() {
 
 uint32_t Platform::GetCurrentThreadID() {
     return PlatformImplement::GetInstance()->GetCurrentThreadID();
+}
+
+const PlatformMemoryInfo& Platform::GetMemoryInfo() {
+    return PlatformImplement::GetInstance()->GetMemoryInfo();
 }
 
 void Platform::SetEnv(const char* _name, const char* _value) {

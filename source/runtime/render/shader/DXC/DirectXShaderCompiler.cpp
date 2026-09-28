@@ -7,10 +7,16 @@
 #include "shader/ShaderResourceManager.h"
 #include "spirv.hpp"
 #include "spirv_common.hpp"
+#include <algorithm>
 #include <cassert>
 #include <optional>
+#include <stdexcept>
 #include <variant>
+#if defined(_WIN32)
 #include <winerror.h>
+#include <wrl/client.h>
+#include <d3d12shader.h>
+#endif
 #if PLATFORM_WINDOWS
 #ifndef NOMINMAX
 #define NOMINMAX 1
@@ -18,8 +24,6 @@
 #endif
 
 #include "rhi/RHI.h"
-#include <wrl/client.h>
-
 #include "DXCUtils.h"
 #include "log/LogSystem.h"
 #include "rhi/RHICommon.h"
@@ -34,13 +38,109 @@
 #include "dxcapi.h"
 #include "shader/ShaderCommon.h"
 #include "spirv_cross.hpp"
-#include <d3d12shader.h>
-
+#if defined(__APPLE__)
+#include "spirv_msl.hpp"
+#endif
+#if defined(_WIN32)
 using Microsoft::WRL::ComPtr;
+#else
+template<typename T>
+using ComPtr = CComPtr<T>;
+#endif
 using ShaderParametersInfoMap   = Moer::Render::ShaderParametersInfoMap;
 using ShaderCompilerEnvironment = Moer::Render::ShaderCompilerEnvironment;
 using ShaderFileDependency      = Moer::Render::ShaderFileDependency;
 using ReflectParamInfo          = Moer::Render::ReflectParamInfo;
+
+#if defined(__APPLE__)
+namespace {
+struct MetalShaderSource {
+    std::string code;
+    std::string entry_point;
+};
+
+MetalShaderSource TranslateToMetal(
+    IDxcResult* result, EShaderType shader_type, bool vertex_for_tessellation
+) {
+    ComPtr<IDxcBlob> spirv;
+    if (FAILED(result->GetResult(&spirv)) || !spirv || spirv->GetBufferSize() % sizeof(uint32_t) != 0) {
+        throw std::runtime_error("DXC did not produce valid SPIR-V for Metal translation");
+    }
+
+    spirv_cross::CompilerMSL compiler(
+        static_cast<const uint32_t*>(spirv->GetBufferPointer()),
+        spirv->GetBufferSize() / sizeof(uint32_t)
+    );
+    auto options = compiler.get_msl_options();
+    // The shared bindless texture binding aliases typed HLSL texture arrays.
+    // SPIRV-Cross requires MSL 3.0 for mutable argument-buffer aliasing.
+    options.set_msl_version(3, 0);
+    options.argument_buffers = true;
+    options.argument_buffers_tier = spirv_cross::CompilerMSL::Options::ArgumentBuffersTier::Tier2;
+    options.vertex_for_tessellation = vertex_for_tessellation;
+    options.multi_patch_workgroup = shader_type == ST_HULL;
+    options.raw_buffer_tese_input = shader_type == ST_DOMAIN;
+    compiler.set_msl_options(options);
+    if (shader_type == ST_DOMAIN) {
+        // DXC omits OutputVertices from the domain stage's SPIR-V. Metal's raw
+        // patch input still needs the control point count for per-patch offsets.
+        // The current Metal RHI supports triangle patches with three points.
+        compiler.set_execution_mode(spv::ExecutionModeOutputVertices, 3);
+    }
+
+    const auto resources = compiler.get_shader_resources();
+    const auto mark_runtime_array_set = [&compiler](const auto& resource_list) {
+        for (const auto& resource : resource_list) {
+            const auto& type = compiler.get_type(resource.type_id);
+            if (std::find(type.array.begin(), type.array.end(), 0) != type.array.end()) {
+                const uint32_t set = compiler.get_decoration(resource.id, spv::DecorationDescriptorSet);
+                compiler.set_argument_buffer_device_address_space(set, true);
+            }
+        }
+    };
+    mark_runtime_array_set(resources.separate_images);
+    mark_runtime_array_set(resources.storage_images);
+    mark_runtime_array_set(resources.separate_samplers);
+    mark_runtime_array_set(resources.storage_buffers);
+    mark_runtime_array_set(resources.acceleration_structures);
+    // Metal does not accept an acceleration-structure pointer as an argument-
+    // buffer member. Keep the descriptor set containing a scalar TLAS on the
+    // direct resource binding path; bindless runtime-array sets stay indirect.
+    for (const auto& resource : resources.acceleration_structures) {
+        const auto& type = compiler.get_type(resource.type_id);
+        if (std::find(type.array.begin(), type.array.end(), 0) == type.array.end()) {
+            compiler.add_discrete_descriptor_set(
+                compiler.get_decoration(resource.id, spv::DecorationDescriptorSet)
+            );
+        }
+    }
+
+    const auto entry_points = compiler.get_entry_points_and_stages();
+    if (entry_points.size() != 1) {
+        throw std::runtime_error("Metal translation currently requires exactly one shader entry point");
+    }
+    MetalShaderSource source;
+    source.code = compiler.compile();
+    if (vertex_for_tessellation) {
+        // SPIRV-Cross emits [[grid_size]] for the vertex capture output stride.
+        // On Metal this value is zero for our compute dispatch, so pass the
+        // actual grid extent explicitly at a reserved buffer slot.
+        constexpr std::string_view original = "uint3 spvStageInputSize [[grid_size]]";
+        constexpr std::string_view replacement =
+            "constant uint3& spvStageInputSize [[buffer(30)]]";
+        const size_t position = source.code.find(original);
+        if (position == std::string::npos) {
+            throw std::runtime_error("Metal tessellation vertex grid size binding was not found");
+        }
+        source.code.replace(position, original.size(), replacement);
+    }
+    source.entry_point = compiler.get_cleansed_entry_point_name(
+        entry_points.front().name, entry_points.front().execution_model
+    );
+    return source;
+}
+} // namespace
+#endif
 
 // 包装默认 IDxcIncludeHandler，在每次 LoadSource 时记录被 include 文件的路径和时间戳。
 // 用于构建 shader cache 的依赖列表，以便后续判断缓存是否因源文件变更而过期。
@@ -109,11 +209,13 @@ private:
     void Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output);
 
     void ReflectSPIRV(ComPtr<IDxcResult> result, ShaderParametersInfoMap& _param_map);
+#if defined(_WIN32)
     void ReflectDXIL(
         ComPtr<IDxcResult>         result,
         const ShaderCompilerInput& _input,
         ShaderParametersInfoMap&   _param_map
     );
+#endif
 };
 
 DXCompiler::Impl::Impl() {
@@ -158,8 +260,7 @@ DXCompiler::DXCompiler() {
 }
 
 void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output) {
-    const auto dxc_header_path =
-        Moer::ConfigManager::GetInstance().GetWorkspacePath() / "3rdparty" / "dxc_2026_02_20" / "inc";
+    const auto dxc_header_path = std::filesystem::path(MOER_DXC_SHADER_INCLUDE_DIR);
     const auto dxc_hlsl_header_path = dxc_header_path / "hlsl";
 
     auto push_back_error_message = [&_output](std::string message) {
@@ -186,7 +287,19 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         // 在对应版本稳定前，DX 平台继续输出 DXIL，Vulkan 平台继续使用当前 SPIR-V 参数组合。
     };
 
-    auto set_default_args = [add_dx_arg, add_vk_arg, dxc_header_path, dxc_hlsl_header_path](
+    auto add_metal_arg = [](Moer::Array<std::wstring>& arguments) {
+        // DXC emits SPIR-V as an intermediate; SPIRV-Cross then emits MSL.
+        arguments.push_back(L"-spirv");
+        arguments.push_back(L"-fspv-target-env=vulkan1.3");
+        arguments.push_back(L"-fvk-use-dx-layout");
+        arguments.push_back(L"-fvk-auto-shift-bindings");
+        arguments.push_back(L"-fspv-preserve-interface");
+        arguments.push_back(L"-DMETAL=1");
+        arguments.push_back(L"-DMOER_SPIRV_BINDLESS=1");
+        arguments.push_back(L"-DMOER_UNIFIED_RW_BINDING=1");
+    };
+
+    auto set_default_args = [add_dx_arg, add_vk_arg, add_metal_arg, dxc_header_path, dxc_hlsl_header_path](
                                 Moer::Array<std::wstring>& arguments,
                                 EShaderPlatform            _platform,
                                 EShaderType                _type,
@@ -204,12 +317,16 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         // 允许 Shader 引用随仓库提供的 DXC 标准头，例如 cooperative_matrix.h。
         arguments.push_back(L"-I");
         arguments.push_back(dxc_header_path.generic_wstring());
-        arguments.push_back(L"-I");
-        arguments.push_back(dxc_hlsl_header_path.generic_wstring());
+        if (std::filesystem::is_directory(dxc_hlsl_header_path)) {
+            arguments.push_back(L"-I");
+            arguments.push_back(dxc_hlsl_header_path.generic_wstring());
+        }
         if (_platform == SP_WIN_D3D_SM6)
             add_dx_arg(arguments);
         else if (_platform == SP_VULKAN_SM6)
             add_vk_arg(arguments);
+        else if (_platform == SP_METAL_MSL)
+            add_metal_arg(arguments);
     };
     auto add_debug_arg = [](Moer::Array<std::wstring>& arguments) {
         arguments.push_back(DXC_ARG_ALL_RESOURCES_BOUND);
@@ -298,7 +415,11 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             arguments_wchar[i] = arguments[i].data();
         }
 
+#if defined(_WIN32)
         auto* tracking_handler = new TrackingIncludeHandler(include_handler.Get());
+#else
+        auto* tracking_handler = new TrackingIncludeHandler(include_handler.p);
+#endif
         HRESULT hres = compiler->Compile(
             &buffer,
             (LPCWSTR*)arguments_wchar.data(),
@@ -343,11 +464,18 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             }
         }
 
-        if (_input.target_info.shader_platform == SP_VULKAN_SM6) {
+        if (_input.target_info.shader_platform == SP_VULKAN_SM6 ||
+            _input.target_info.shader_platform == SP_METAL_MSL) {
             ReflectSPIRV(result, _output.parameter_map);
         } else {
+#if defined(_WIN32)
             // D3D12 使用 DXIL 反射，Vulkan 使用 SPIR-V 反射。
             ReflectDXIL(result, _input, _output.parameter_map);
+#else
+            push_back_error_message("DXIL shader reflection is only supported on Windows");
+            tracking_handler->Release();
+            return;
+#endif
         }
 
         auto fill_success_data =
@@ -373,7 +501,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
                 _output.source_dependencies.clear();
                 _output.source_dependencies.push_back(ShaderFileDependency{
                     .path      = file_path.generic_string(),
-                    .timestamp = last_write_time.time_since_epoch().count(),
+                    .timestamp = static_cast<long long>(last_write_time.time_since_epoch().count()),
                 });
                 auto included = tracking_handler->TakeIncludedFiles();
                 for (auto& dep : included) {
@@ -382,6 +510,22 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             };
 
         fill_success_data();
+#if defined(__APPLE__)
+        if (_input.target_info.shader_platform == SP_METAL_MSL) {
+            try {
+                const bool vertex_for_tessellation =
+                    _input.environment.GetDefines().contains("MOER_METAL_TESS_VS_CAPTURE");
+                MetalShaderSource metal_source = TranslateToMetal(
+                    result.p, static_cast<EShaderType>(_input.target_info.shader_type),
+                    vertex_for_tessellation
+                );
+                _output.shader_code.assign(metal_source.code.begin(), metal_source.code.end());
+                _output.compiled_entry_name = std::move(metal_source.entry_point);
+            } catch (const std::exception& error) {
+                push_back_error_message(std::string("Metal shader translation failed: ") + error.what());
+            }
+        }
+#endif
         tracking_handler->Release();
     }
 }
@@ -406,6 +550,17 @@ bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
         case SP_VULKAN_SM6:
             b_support_platform = true;
             break;
+#if defined(__APPLE__)
+        case SP_METAL_MSL:
+            return _target_info.shader_type == ST_VERTEX ||
+                   _target_info.shader_type == ST_FRAGMENT ||
+                   _target_info.shader_type == ST_COMPUTE ||
+                   _target_info.shader_type == ST_HULL ||
+                   _target_info.shader_type == ST_DOMAIN;
+#else
+        case SP_METAL_MSL:
+            break;
+#endif
         case SP_Num:
         case SP_NumBits:
             break;
@@ -471,6 +626,13 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
     {
         std::span<Moer::uint> spirv_code_span((Moer::uint*)data, size / sizeof(Moer::uint));
         spirv_cross::Compiler        comp(spirv_code_span.data(), spirv_code_span.size());
+        if (comp.get_execution_model() == spv::ExecutionModelGLCompute) {
+            _param_map.compute_local_size = uint3{
+                comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, 0),
+                comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, 1),
+                comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, 2)
+            };
+        }
         spirv_cross::ShaderResources resources = comp.get_shader_resources();
 
         auto active     = comp.get_active_interface_variables();
@@ -653,6 +815,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
         }                                                            \
     } while (0)
 
+#if defined(_WIN32)
 void DXCompiler::Impl::ReflectDXIL(
     ComPtr<IDxcResult>         result,
     const ShaderCompilerInput& _input,
@@ -820,3 +983,4 @@ void DXCompiler::Impl::ReflectDXIL(
 
     _param_map.reflect_map.swap(reflect_map);
 }
+#endif

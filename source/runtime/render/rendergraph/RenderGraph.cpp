@@ -24,6 +24,16 @@
 
 namespace Moer::Render {
 
+const RenderGraph::ActiveRecordingOptions& RenderGraph::DefaultActiveRecordingOptions() {
+    static const ActiveRecordingOptions options{};
+    return options;
+}
+
+const RenderGraph::GpuProfilingOptions& RenderGraph::DefaultGpuProfilingOptions() {
+    static const GpuProfilingOptions options{};
+    return options;
+}
+
 namespace {
 
 struct InjectedSetupDispatchFault {};

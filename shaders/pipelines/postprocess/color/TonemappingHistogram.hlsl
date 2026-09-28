@@ -5,7 +5,7 @@
 [[vk::push_constant]] ConstantBuffer<Moer::TonemappingPipelineBindlessParam> param;
 
 [[vk::binding(0, 0)]] Texture2D      input_image;
-[[vk::binding(1, 0)]] RWBuffer<uint> histogram;
+[[vk::binding(1, 0)]] RWStructuredBuffer<uint> histogram;
 
 groupshared uint s_histogram[Moer::TONEMAPPING_HISTOGRAM_BIN_COUNT];
 

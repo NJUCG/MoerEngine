@@ -21,6 +21,7 @@
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
+#include <GLFW/glfw3.h>
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -322,20 +323,27 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     const bool             candidate_owns_surface = surface_transition != ESwapchainSurfaceTransition::Reuse;
     ScopedSurfaceCandidate candidate_surface_guard(device.GetInstance());
     if (candidate_owns_surface) {
-        candidate_surface                              = VK_NULL_HANDLE;
-        const WindowSurfaceCreateResult surface_result = _info.surface.source->CreateSurface(
-            ERHIType::Vulkan, device.GetInstance(), nullptr, &candidate_surface
-        );
+        candidate_surface = VK_NULL_HANDLE;
+        const WindowNativeHandle native_window = _info.surface.source->GetNativeWindow();
+        VkResult                 native_result = VK_ERROR_INITIALIZATION_FAILED;
+        if (native_window.IsValid() && native_window.window_system == EWindowSystemType::GLFW &&
+            device.GetInstance() != VK_NULL_HANDLE) {
+            native_result = glfwCreateWindowSurface(
+                device.GetInstance(),
+                reinterpret_cast<GLFWwindow*>(native_window.window_system_handle),
+                nullptr,
+                &candidate_surface
+            );
+        }
         candidate_surface_guard.Adopt(candidate_surface);
-        if (!surface_result.Succeeded() || candidate_surface == VK_NULL_HANDLE) {
-            VkResult native_result = VK_ERROR_INITIALIZATION_FAILED;
-            if (surface_result.native_error_code != 0) {
-                native_result = static_cast<VkResult>(static_cast<int32_t>(surface_result.native_error_code));
+        if (native_result != VK_SUCCESS || candidate_surface == VK_NULL_HANDLE) {
+            if (native_result == VK_SUCCESS) {
+                native_result = VK_ERROR_INITIALIZATION_FAILED;
             }
             observe_setup_result(native_result);
             LOG_ERROR(
-                "Window surface creation failed: status={}, native_result={}.",
-                static_cast<uint32_t>(surface_result.status),
+                "Window surface creation failed: window_system={}, native_result={}.",
+                static_cast<uint32_t>(native_window.window_system),
                 static_cast<int32_t>(native_result)
             );
             if (ShouldLatchSwapchainFailure(
@@ -403,7 +411,11 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
     VkPresentModeKHR   present_mode           = ChooseSwapPresentMode(details.present_modes, false);
-    const EPixelFormat new_format             = (EPixelFormat)new_fmt.format;
+    const EPixelFormat new_format             = VulkanEnumTranslator::VKToMEFormat(new_fmt.format);
+    if (new_format == PF_UNDEFINED && new_fmt.format != VK_FORMAT_UNDEFINED) {
+        LOG_ERROR("Swapchain selected an unmapped Vulkan format: {}", static_cast<uint32_t>(new_fmt.format));
+        return false;
+    }
     const uint32_t     queue_family_indices[] = {
         queue_families.graphics.value(),
         queue_families.present.value(),

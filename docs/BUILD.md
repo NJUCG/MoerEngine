@@ -71,6 +71,33 @@
 
 - 成功启动后，可以参考 [DEVELOPMENT.md](DEVELOPMENT.md) 来了解MoerEngine的开发规范等其他内容
 
+### macOS 原生 Metal 开发基线
+
+当前 `metal` 分支可以在 macOS 上配置并编译 `MoerEditor`。原生 Metal RHI 已具备设备创建、Buffer、2D 常用颜色及深度格式、多级 mip、2D 数组与 cube 纹理的分配及子资源上传、基础上传、同类资源拷贝、主机侧同步的 Copy timeline/fence、同一原生队列上的 Copy→Graphics 转移、Copy/Graphics 完成回调、bindless 句柄及 argument buffer 表、HLSL→MSL 图形与计算 pipeline、最多八个颜色附件及 D32/D32S8 深度附件的基础绘制、窗口交换链和 Present 的最小路径。Raster 场景更新会按设备能力跳过 BLAS/TLAS；Metal Raster 启动时将 RTAO 改为 SSAO，并暂时关闭 Probe GI 和阴影。Graphics 提交现支持帧级 fence、Scope 标记、同队列资源 Barrier、Buffer 范围清零及同步读回；基础计算派发支持 Buffer 与 Texture argument buffer、bindless 表、单 mip 纹理视图、R32Uint texel buffer、push constant 和反射出的工作组尺寸。图形绘制已支持普通 Buffer、纹理、采样器、bindless argument buffer 与分阶段 push constant。编辑器首帧已通过 Geometry Pass 的深度附件、间接绘制、曝光与 Tonemapping 校验并提交 Present；在 M2 Pro 上连续执行数万条 Raster/Compute 命令未再触发 GPU 地址错误。使用 1280×960 的 Metal 配置已观察到 Mizuki 场景、天空盒与 UI 持续呈现。已验证的纹理格式包括 R8、RG8、R16F、RG16F、R32F、RGBA8、RGB10A2、RG11B10F、RGBA16F、RGBA32F、D16、D32 和 D32S8；D16 当前只验证了资源创建，尚未验证绘制。
+
+准备 Xcode Command Line Tools、CMake 3.26 至 3.x、Python 3.12（含开发库）以及原生 DXC（`dxc` 可执行文件、`dxcapi.h`、`libdxcompiler`）。初始化子模块后，复制配置模板，将本地 `MoerEngine.toml` 的 `[engine.rhi] type` 设为 `"Metal"`、`[engine.render] default_render_method` 设为 `"Raster"`。建议把 `[editor] width` 和 `height` 设为 1280、960，方便观察完整场景。然后在仓库根目录构建和启动：
+
+```bash
+cp template.MoerEngine.toml MoerEngine.toml # 已有本地配置时跳过
+cmake -S . -B build/mac -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug \
+  -Dmoer_build_test=ON -DMOER_IGNORE_ENABLE_FEATURES=ON
+cmake --build build/mac --target MoerEditor -j 6
+./target/bin/Debug/MoerEditor --no-splash
+```
+
+用独立的最小验证程序确认原生 Metal 清屏和窗口呈现：
+
+```bash
+cmake --build build/mac --target MetalRHISmoke -j 6
+./target/bin/Debug/MetalRHISmoke
+```
+
+程序会经由通用 `CommandList::CopyFrom`、`ClearResource`、`DrawDispatcher`、`RHIExecutor` 及 Metal 命令翻译器上传、拷贝、清屏和绘制，验证 R8/RGBA8/RGBA16F/RGBA32F 纹理与 Buffer 的 GPU 读回、Raster 常用颜色和深度纹理的创建、RGB10A2 通道位序、原生顶点/片元图形 pipeline、非索引、索引及三颜色附件三角形的 GPU 像素读回、图形普通 Buffer、纹理、采样器、bindless 表和 push constant 的 GPU 读回、D32/D32S8 深度写入与比较、计数式索引间接绘制、Compute 纹理参数及 mip 视图、R32Uint texel buffer 读写、Compute bindless 纹理采样与 argument buffer、push constant 的 GPU 结果、Copy fence 完成值、Copy→Graphics 资源转移、无效 fence 依赖拒绝、Copy/Graphics 完成回调（含回调内再次提交）、Graphics 帧级 fence 和 Scope、Buffer 局部清零及 uint 模式、Graphics Buffer 上传后读回、bindless 纹理采样与 Buffer 读取、同一提交中先绘制再解绑 bindless 句柄的命令顺序、首次呈现及调整窗口大小后的呈现，然后退出。上传验证使用 7×5 纹理，以覆盖 Metal blit 所需的行距对齐。可以传入保持窗口显示的秒数，例如 `MetalRHISmoke 10`。如果 DXC 未在 `PATH`，配置时追加 `-DMOER_DXC_ROOT=/path/to/dxc-prefix`；该目录应包含 `bin/dxc`、`include/dxc/dxcapi.h` 和 `lib/libdxcompiler.dylib`。CMake 会查找本机 Python 3.12，并将其标准库位置写入脚本模块的构建配置。Shader 缓存格式升级后会自动丢弃旧缓存并重新编译。默认 `MoerEngine.toml` 仍选择 Vulkan，因此编辑器会报告该后端未在 macOS 构建。配置为 Metal 时，编辑器可提交首帧 Raster Present；使用较宽的窗口可直接观察 Mizuki 场景。
+
+Apple 构建还提供独立的 `SP_METAL_MSL` Shader 目标：DXC 先将 HLSL 编译为 SPIR-V，再由 SPIRV-Cross 转为 MSL。现有 Vulkan 目标仍直接使用 SPIR-V。Metal 目标目前支持顶点、片元和计算 Shader，生成的 bindless MSL 使用 Metal 3.0 argument buffer；含标量 TLAS 的 descriptor set 则使用直接资源绑定；当前已验证单 mip 2D 纹理与无格式 Buffer 的 bindless 句柄更新及 GPU 访问，以及多级 mip、2D 数组和 cube 纹理的创建、指定子资源上传与 bindless view 更新，以及顶点/片元图形 pipeline 与计算 pipeline 的创建。基础绘制支持最多八个颜色附件、顶点缓冲区、16/32 位索引、普通实例参数、D16/D32/D32S8 深度附件及其深度比较状态、图形普通 Buffer、纹理、采样器、bindless 参数与 push constant，以及直接和计数式间接绘制；模板测试仍依赖后续 Metal RHI 实现。
+
+曝光直方图使用 HLSL `RWStructuredBuffer<uint>` 做原子累加；`RWBuffer<uint>` 会由 SPIRV-Cross 生成额外的 Metal 原子缓冲区参数。M2 Pro 上的直方图 GPU 读回总权重与输入像素数一致；对应三个 Shader 已分别通过 Metal、Vulkan SPIR-V 和 DXIL 编译。
+
 ## 3. CUDA等AI组件支持
 
 * 如果你希望在MoerEngine中启用CUDA、LibTorch、TensorRT，那么你需要手动在系统中安装这三个依赖，再在MoerEngine中配置他们。接下来为启用AI组件的具体操作手册：

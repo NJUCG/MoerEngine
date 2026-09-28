@@ -42,7 +42,7 @@ public:
         bool                  wsi_enqueued{false};
         bool                  uses_present_fence{false};
     };
-    friend VkCommandQueue;
+    friend class VkCommandQueue;
     VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info);
     ~VkSwapchain();
     [[nodiscard]] bool Recreate(const SwapchainCreateInfo& _info) override;

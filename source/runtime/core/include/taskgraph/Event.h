@@ -1,5 +1,5 @@
-#ifndef EVENT_H
-#define EVENT_H
+#ifndef MOER_TASKGRAPH_EVENT_H
+#define MOER_TASKGRAPH_EVENT_H
 #include "API_Macro.h"
 #include "misc/LockFree.h"
 #include <condition_variable>
@@ -83,4 +83,4 @@ public:
 private:
     Event* m_event;
 };
-#endif // !EVENT_H
+#endif // MOER_TASKGRAPH_EVENT_H

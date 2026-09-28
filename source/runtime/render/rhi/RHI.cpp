@@ -2,7 +2,12 @@
 #include "Core.h"
 #include "PixelFormat.h"
 #include "RHIImpl.h"
+#if defined(_WIN32)
 #include "d3d12/D3D12Device.h"
+#endif
+#if defined(__APPLE__)
+#include "metal/MetalDevice.h"
+#endif
 #include "log/LogSystem.h"
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHICommand.h"
@@ -11,7 +16,11 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIThreadHeartbeat.h"
 #include "shader/ShaderResourceManager.h"
+#if !defined(__APPLE__)
 #include "vulkan/VulkanDevice.h"
+#endif
+
+#include <stdexcept>
 
 namespace Moer::Render {
 namespace {
@@ -38,6 +47,7 @@ private:
 
 } // namespace
 
+#if !defined(__APPLE__)
 template<>
 VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     using std::string;
@@ -78,7 +88,9 @@ VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
 
     return config;
 }
+#endif
 
+#if defined(_WIN32)
 template<>
 D3D12RHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     MOER_ASSERT(
@@ -92,6 +104,7 @@ D3D12RHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
 
     return config;
 }
+#endif
 
 RenderDevice& RenderDevice::Get() {
     static RenderDevice device;
@@ -113,14 +126,30 @@ void RenderDevice::Init(DeviceInitInfo&& _info) {
     try {
         switch (_info.rhi_type) {
             case ERHIType::Vulkan:
+#if defined(__APPLE__)
+                throw std::runtime_error("Vulkan backend is not built on macOS; select Metal when available");
+#else
                 Get().impl =
                     std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info))));
                 break;
+#endif
+#if defined(_WIN32)
             case ERHIType::D3D12:
                 Get().impl =
                     std::move(UniquePtr<Impl>(MoerNew(D3D12Device)(ResolveConfigAs<D3D12RHIConfig>(_info))));
                 //LOG_ERROR("D3D12 is not supported yet");
                 break;
+#else
+            case ERHIType::D3D12:
+                throw std::runtime_error("D3D12 backend is only available on Windows");
+#endif
+            case ERHIType::Metal:
+#if defined(__APPLE__)
+                Get().impl = UniquePtr<Impl>(MoerNew(MetalDevice)());
+                break;
+#else
+                throw std::runtime_error("Metal backend is only available on macOS");
+#endif
         }
         Get().rhi_type = _info.rhi_type;
         RHIExecutor::StartUp(_info.submission_batch_window);
@@ -149,252 +178,6 @@ CommandQueue& RenderDevice::GetCommandQueue(EQueueType _type) {
 
 CopyQueue& RenderDevice::GetCopyQueue() {
     return Get().impl->GetCopyQueue();
-}
-bool IsPixelFormatBC(EPixelFormat _format) {
-    switch (_format) {
-        case PF_BC1_RGB_UNORM_BLOCK:
-            return true;
-        case PF_BC1_RGB_SRGB_BLOCK:
-            return true;
-        case PF_BC1_RGBA_UNORM_BLOCK:
-            return true;
-        case PF_BC1_RGBA_SRGB_BLOCK:
-            return true;
-        case PF_BC2_UNORM_BLOCK:
-            return true;
-        case PF_BC2_SRGB_BLOCK:
-            return true;
-        case PF_BC3_UNORM_BLOCK:
-            return true;
-        case PF_BC3_SRGB_BLOCK:
-            return true;
-        case PF_BC4_UNORM_BLOCK:
-            return true;
-        case PF_BC4_SNORM_BLOCK:
-            return true;
-        case PF_BC5_UNORM_BLOCK:
-            return true;
-        case PF_BC5_SNORM_BLOCK:
-            return true;
-        case PF_BC6H_UFLOAT_BLOCK:
-            return true;
-        case PF_BC6H_SFLOAT_BLOCK:
-            return true;
-        case PF_BC7_UNORM_BLOCK:
-            return true;
-        case PF_BC7_SRGB_BLOCK:
-            return true;
-    }
-    return false;
-}
-uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
-    return GetSizeFromPixelFormat(_format, _size);
-}
-
-uint64 GetByteFromPixelFormat(EPixelFormat format) {
-    if (IsPixelFormatBC(format)) {
-        MOER_ASSERT(
-            false,
-            "BC format does not have a fixed byte count per pixel"
-        );
-    }
-    switch (format) {
-        case PF_R8G8B8A8_SRGB:
-        case PF_R8G8B8A8_UNORM:
-        case PF_R8G8B8A8_UINT:
-        case PF_R8G8B8A8_SNORM:
-        case PF_R8G8B8A8_SINT:
-            return 4;
-            break;
-        case PF_R32G32B32A32_SFLOAT:
-        case PF_R32G32B32A32_UINT:
-        case PF_R32G32B32A32_SINT:
-            return 16;
-            break;
-        case PF_R32G32_SFLOAT:
-        case PF_R32G32_UINT:
-        case PF_R32G32_SINT:
-            return 8;
-            break;
-        case PF_R32_SFLOAT:
-        case PF_R32_UINT:
-        case PF_R32_SINT:
-            return 4;
-            break;
-        case PF_R16G16B16A16_SFLOAT:
-        case PF_R16G16B16A16_UNORM:
-        case PF_R16G16B16A16_UINT:
-        case PF_R16G16B16A16_SNORM:
-        case PF_R16G16B16A16_SINT:
-            return 8;
-            break;
-        case PF_R16G16_SFLOAT:
-        case PF_R16G16_UNORM:
-        case PF_R16G16_UINT:
-        case PF_R16G16_SNORM:
-        case PF_R16G16_SINT:
-            return 4;
-            break;
-        case PF_R16_SFLOAT:
-        case PF_R16_UNORM:
-        case PF_R16_UINT:
-        case PF_R16_SNORM:
-        case PF_R16_SINT:
-            return 2;
-            break;
-        case PF_R8G8B8_SRGB:
-        case PF_R8G8B8_UNORM:
-        case PF_R8G8B8_UINT:
-        case PF_R8G8B8_SNORM:
-        case PF_R8G8B8_SINT:
-            return 3;
-            break;
-        case PF_R8G8_SRGB:
-        case PF_R8G8_UNORM:
-        case PF_R8G8_UINT:
-        case PF_R8G8_SNORM:
-        case PF_R8G8_SINT:
-            return 2;
-            break;
-        case PF_R8_SRGB:
-        case PF_R8_UNORM:
-        case PF_R8_UINT:
-        case PF_R8_SNORM:
-        case PF_R8_SINT:
-            return 1;
-            break;
-        default:
-            MOER_ASSERT(
-                false,
-                "Unsupported pixel format in GetByteFromPixelFormat: {}",
-                static_cast<std::uint32_t>(format)
-            );
-    }
-    return 0;
-}
-
-uint64 GetChannelFromPixelFormat(EPixelFormat format) {
-    if (IsPixelFormatBC(format)) {
-        MOER_ASSERT(
-            false,
-            "BC format does not have a fixed channel count"
-        );
-    }
-    switch (format) {
-        case PF_R8G8B8A8_SRGB:
-        case PF_R8G8B8A8_UNORM:
-        case PF_R8G8B8A8_UINT:
-        case PF_R8G8B8A8_SNORM:
-        case PF_R8G8B8A8_SINT:
-            return 4;
-            break;
-        case PF_R32G32B32A32_SFLOAT:
-        case PF_R32G32B32A32_UINT:
-        case PF_R32G32B32A32_SINT:
-            return 4;
-            break;
-        case PF_R32G32_SFLOAT:
-        case PF_R32G32_UINT:
-        case PF_R32G32_SINT:
-            return 2;
-            break;
-        case PF_R32_SFLOAT:
-        case PF_R32_UINT:
-        case PF_R32_SINT:
-            return 1;
-            break;
-        case PF_R16G16B16A16_SFLOAT:
-        case PF_R16G16B16A16_UNORM:
-        case PF_R16G16B16A16_UINT:
-        case PF_R16G16B16A16_SNORM:
-        case PF_R16G16B16A16_SINT:
-            return 4;
-            break;
-        case PF_R16G16_SFLOAT:
-        case PF_R16G16_UNORM:
-        case PF_R16G16_UINT:
-        case PF_R16G16_SNORM:
-        case PF_R16G16_SINT:
-            return 2;
-            break;
-        case PF_R16_SFLOAT:
-        case PF_R16_UNORM:
-        case PF_R16_UINT:
-        case PF_R16_SNORM:
-        case PF_R16_SINT:
-            return 1;
-            break;
-        case PF_R8G8B8_SRGB:
-        case PF_R8G8B8_UNORM:
-        case PF_R8G8B8_UINT:
-        case PF_R8G8B8_SNORM:
-        case PF_R8G8B8_SINT:
-            return 3;
-            break;
-        case PF_R8G8_SRGB:
-        case PF_R8G8_UNORM:
-        case PF_R8G8_UINT:
-        case PF_R8G8_SNORM:
-        case PF_R8G8_SINT:
-            return 2;
-            break;
-        case PF_R8_SRGB:
-        case PF_R8_UNORM:
-        case PF_R8_UINT:
-        case PF_R8_SNORM:
-        case PF_R8_SINT:
-            return 1;
-            break;
-        default:
-            MOER_ASSERT(
-                false,
-                "Unsupported pixel format in GetChannelFromPixelFormat: {}",
-                static_cast<std::uint32_t>(format)
-            );
-    }
-    return 0;
-}
-
-uint64 GetSizeFromPixelFormat(EPixelFormat format, const uint3 size) {
-    if (IsPixelFormatBC(format)) {
-        uint64 block_width  = (size.x + 3) / 4;
-        uint64 block_height = (size.y + 3) / 4;
-        uint64 block_cnt    = block_width * block_height * std::max(1u, size.z);
-
-        switch (format) {
-            case PF_BC1_RGB_UNORM_BLOCK:
-            case PF_BC1_RGBA_UNORM_BLOCK:
-            case PF_BC1_RGB_SRGB_BLOCK:
-            case PF_BC1_RGBA_SRGB_BLOCK:
-                return block_cnt * 8;
-                break;
-            case PF_BC2_UNORM_BLOCK:
-            case PF_BC2_SRGB_BLOCK:
-            case PF_BC3_UNORM_BLOCK:
-            case PF_BC3_SRGB_BLOCK:
-                return block_cnt * 16;
-                break;
-            case PF_BC4_UNORM_BLOCK:
-            case PF_BC4_SNORM_BLOCK:
-                return block_cnt * 8;
-                break;
-            case PF_BC5_UNORM_BLOCK:
-            case PF_BC5_SNORM_BLOCK:
-            case PF_BC6H_UFLOAT_BLOCK:
-            case PF_BC6H_SFLOAT_BLOCK:
-            case PF_BC7_UNORM_BLOCK:
-            case PF_BC7_SRGB_BLOCK:
-                return block_cnt * 16;
-                break;
-            default:
-                MOER_ASSERT(
-                    false,
-                    "Unsupported BC pixel format in GetSizeFromPixelFormat: {}",
-                    static_cast<std::uint32_t>(format)
-                );
-        }
-    }
-    return GetByteFromPixelFormat(format) * size.x * size.y * size.z;
 }
 
 }; // namespace Moer::Render

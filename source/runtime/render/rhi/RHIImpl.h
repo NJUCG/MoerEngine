@@ -2061,6 +2061,10 @@ public:
         return false;
     }
 
+    virtual bool SupportsRaytracingAccelerationStructures() const {
+        return false;
+    }
+
     virtual bool IsExtensionCooperativeEnabled() const {
         return false;
     }

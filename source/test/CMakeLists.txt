@@ -312,13 +312,17 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHICmdReordererContract COMMAND $<TARGET_FILE:${test_target}>)
 
-set(test_target TestRHIExplicitBarrier)
-add_executable(${test_target} "RHIExplicitBarrierTest.cpp")
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME RHIExplicitBarrierContract COMMAND $<TARGET_FILE:${test_target}>)
+# The barrier contract calls VkTracker methods implemented only by the Vulkan
+# backend, which is excluded from the Render library on macOS.
+if (NOT APPLE)
+    set(test_target TestRHIExplicitBarrier)
+    add_executable(${test_target} "RHIExplicitBarrierTest.cpp")
+    target_link_libraries(${test_target}
+        PRIVATE Moer::Render
+    )
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+    add_test(NAME RHIExplicitBarrierContract COMMAND $<TARGET_FILE:${test_target}>)
+endif()
 
 # CPU-only contract for Vulkan-style multiview masks and attachment layer
 # coverage. The Vulkan integration test below owns the real GPU draw/readback.
@@ -338,6 +342,14 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHICommandMarkerContract COMMAND $<TARGET_FILE:${test_target}>)
+
+set(test_target TestPixelFormatContract)
+add_executable(${test_target} "PixelFormatContractTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME PixelFormatContract COMMAND $<TARGET_FILE:${test_target}>)
 
 set(test_target TestRHIQuery)
 add_executable(${test_target} "RHIQueryContractTest.cpp")
@@ -524,37 +536,30 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHISubmissionPipelinePolicyContract COMMAND $<TARGET_FILE:${test_target}>)
 
-# CPU-only contract for the Vulkan recorder work heuristic. This uses RHI
-# command payloads but does not create a Vulkan instance or device.
-set(test_target TestVulkanParallelRecordWorkEstimator)
-add_executable(${test_target} "VulkanParallelRecordWorkEstimatorTest.cpp")
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME VulkanParallelRecordWorkEstimatorContract COMMAND $<TARGET_FILE:${test_target}>)
+# These CPU-only contracts still link implementations from Vulkan-only source
+# files, which the Render target excludes on macOS.
+if (NOT APPLE)
+    # Recorder work heuristic using RHI command payloads.
+    set(test_target TestVulkanParallelRecordWorkEstimator)
+    add_executable(${test_target} "VulkanParallelRecordWorkEstimatorTest.cpp")
+    target_link_libraries(${test_target} PRIVATE Moer::Render)
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+    add_test(NAME VulkanParallelRecordWorkEstimatorContract COMMAND $<TARGET_FILE:${test_target}>)
 
-# CPU-only fault-injection contract for the Vulkan submission worker's
-# per-request exception barrier. It verifies Submit rejection ownership and
-# unconditional Sync/Stop completion without requiring a Vulkan device.
-set(test_target TestVulkanSubmissionRequestDispatch)
-add_executable(${test_target} "VulkanSubmissionRequestDispatchTest.cpp")
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
+    # Submission worker fault-injection and completion ownership.
+    set(test_target TestVulkanSubmissionRequestDispatch)
+    add_executable(${test_target} "VulkanSubmissionRequestDispatchTest.cpp")
+    target_link_libraries(${test_target} PRIVATE Moer::Render)
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+    add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
 
-# CPU-only dependency-wave contract for same-batch Vulkan translation.
-# Explicit topology edges unlock at translated, while native-queue aliases and
-# Copy/control boundaries retain packet ownership until released.
-set(test_target TestVulkanTranslateWaveScheduler)
-add_executable(${test_target} "VulkanTranslateWaveSchedulerTest.cpp")
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME VulkanTranslateWaveSchedulerContract COMMAND $<TARGET_FILE:${test_target}>)
+    # Dependency-wave contract for same-batch Vulkan translation.
+    set(test_target TestVulkanTranslateWaveScheduler)
+    add_executable(${test_target} "VulkanTranslateWaveSchedulerTest.cpp")
+    target_link_libraries(${test_target} PRIVATE Moer::Render)
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+    add_test(NAME VulkanTranslateWaveSchedulerContract COMMAND $<TARGET_FILE:${test_target}>)
+endif()
 
 # Compile-time contract for the engine's Volk integration. The source
 # intentionally includes vulkan_core.h before engine Vulkan headers to ensure
@@ -572,12 +577,14 @@ add_test(NAME VulkanHeaderContract COMMAND $<TARGET_FILE:${test_target}>)
 # recoverable worker-failure path. It is intentionally run explicitly because
 # it requires a Vulkan-capable machine; the CPU-only contracts above remain in
 # the default CTest suite.
-set(test_target TestRHIParallelRecordVulkan)
-add_executable(${test_target} "RHIParallelRecordVulkanTest.cpp")
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+if (NOT APPLE)
+    set(test_target TestRHIParallelRecordVulkan)
+    add_executable(${test_target} "RHIParallelRecordVulkanTest.cpp")
+    target_link_libraries(${test_target}
+        PRIVATE Moer::Render
+    )
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+endif()
 
 set(test_target TestProbePhysicalAllocator)
 add_executable(${test_target} "ProbePhysicalAllocatorTest.cpp")
@@ -765,19 +772,21 @@ set_target_properties(MeshProcessTest PROPERTIES FOLDER ${moer_test_folder})
 # set_target_properties(NRDTest PROPERTIES FOLDER ${moer_test_folder})
 
 # DX RHI Test
-set(test_target TestDxRhi)
-add_executable(${test_target} RHITest/dxrhitest.cpp)
-target_include_directories(${test_target}
-    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
-    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
-    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-    PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/dxrhitest>
-)
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-    PRIVATE glfw
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+if (WIN32)
+    set(test_target TestDxRhi)
+    add_executable(${test_target} RHITest/dxrhitest.cpp)
+    target_include_directories(${test_target}
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/dxrhitest>
+    )
+    target_link_libraries(${test_target}
+        PRIVATE Moer::Render
+        PRIVATE glfw
+    )
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+endif()
 
 # CUDA Test
 if (TARGET Moer::Cuda)

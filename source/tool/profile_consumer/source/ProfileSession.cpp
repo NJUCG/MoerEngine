@@ -7047,8 +7047,8 @@ struct ProfileSessionReader::Impl {
                 const std::uint64_t task_count = static_cast<std::uint64_t>(virtual_sequence_tasks.size());
                 if (AddOverflow(boundary_capacity, task_count, boundary_capacity) ||
                     AddOverflow(boundary_capacity, task_count, boundary_capacity) ||
-                    AddOverflow(boundary_capacity, source_scope_count, boundary_capacity) ||
-                    AddOverflow(boundary_capacity, source_scope_count, boundary_capacity) ||
+                    AddOverflow(boundary_capacity, static_cast<std::uint64_t>(source_scope_count), boundary_capacity) ||
+                    AddOverflow(boundary_capacity, static_cast<std::uint64_t>(source_scope_count), boundary_capacity) ||
                     boundary_capacity > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
                     !ChargeTopologyWork(boundary_capacity)) {
                     Fail(

@@ -4,6 +4,9 @@ set(target_name moer_core)
 
 file(GLOB_RECURSE core_headers CONFIGURE_DEPENDS "include/*.h" "include/*.inl")
 file(GLOB_RECURSE core_sources CONFIGURE_DEPENDS "source/*.cpp")
+if (NOT WIN32)
+    list(FILTER core_sources EXCLUDE REGEX "/source/platform/Windows/")
+endif()
 file(GLOB_RECURSE core_private_headers CONFIGURE_DEPENDS "source/*.h")
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${core_headers} ${core_sources} ${core_private_headers})

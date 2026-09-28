@@ -118,6 +118,8 @@ struct Shader {
         _stream << compiled_hash << type << mutation_id << shader_name_hash << entry_name << shader_path
                 << shader_key;
         _stream << reflection.reflect_map;
+        _stream << reflection.compute_local_size.x << reflection.compute_local_size.y
+                << reflection.compute_local_size.z;
         _stream << source_dependencies;
         return _stream;
     }
@@ -126,6 +128,8 @@ struct Shader {
         _stream >> compiled_hash >> type >> mutation_id >> shader_name_hash >> entry_name >> shader_path >>
             shader_key;
         _stream >> reflection.reflect_map;
+        _stream >> reflection.compute_local_size.x >> reflection.compute_local_size.y
+                >> reflection.compute_local_size.z;
         _stream >> source_dependencies;
         return _stream;
     }
@@ -153,6 +157,7 @@ struct ShaderCompilerOutput {
     ShaderTargetInfo target_info;
 
     Moer::Array<uint8_t> shader_code;
+    std::string          compiled_entry_name;
     uint64_t             compiled_hash1;
     uint64_t             compiled_hash2;
     uint32_t             num_instructions;
@@ -366,7 +371,7 @@ namespace std {
 template<>
 struct hash<Shader> {
     size_t operator()(const Moer::Render::Shader& _shader) const {
-        size_t hash = _shader.compiled_hash[0];
+        uint64_t hash = _shader.compiled_hash[0];
         HashCombine(hash, _shader.compiled_hash[1]);
         return hash;
     }
@@ -459,6 +464,8 @@ FORCEINLINE EShaderPlatform GetShaderPlatformByRHIType(ERHIType _type) {
         case ERHIType::D3D12:
             return EShaderPlatform::SP_WIN_D3D_SM6;
             break;
+        case ERHIType::Metal:
+            return EShaderPlatform::SP_METAL_MSL;
         default:
             assert(false && "not supported rhi");
     }
