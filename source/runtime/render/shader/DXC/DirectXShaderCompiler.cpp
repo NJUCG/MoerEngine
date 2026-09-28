@@ -79,7 +79,14 @@ MetalShaderSource TranslateToMetal(
     options.argument_buffers_tier = spirv_cross::CompilerMSL::Options::ArgumentBuffersTier::Tier2;
     options.vertex_for_tessellation = vertex_for_tessellation;
     options.multi_patch_workgroup = shader_type == ST_HULL;
+    options.raw_buffer_tese_input = shader_type == ST_DOMAIN;
     compiler.set_msl_options(options);
+    if (shader_type == ST_DOMAIN) {
+        // DXC omits OutputVertices from the domain stage's SPIR-V. Metal's raw
+        // patch input still needs the control point count for per-patch offsets.
+        // The current Metal RHI supports triangle patches with three points.
+        compiler.set_execution_mode(spv::ExecutionModeOutputVertices, 3);
+    }
 
     const auto resources = compiler.get_shader_resources();
     const auto mark_runtime_array_set = [&compiler](const auto& resource_list) {
@@ -114,6 +121,19 @@ MetalShaderSource TranslateToMetal(
     }
     MetalShaderSource source;
     source.code = compiler.compile();
+    if (vertex_for_tessellation) {
+        // SPIRV-Cross emits [[grid_size]] for the vertex capture output stride.
+        // On Metal this value is zero for our compute dispatch, so pass the
+        // actual grid extent explicitly at a reserved buffer slot.
+        constexpr std::string_view original = "uint3 spvStageInputSize [[grid_size]]";
+        constexpr std::string_view replacement =
+            "constant uint3& spvStageInputSize [[buffer(30)]]";
+        const size_t position = source.code.find(original);
+        if (position == std::string::npos) {
+            throw std::runtime_error("Metal tessellation vertex grid size binding was not found");
+        }
+        source.code.replace(position, original.size(), replacement);
+    }
     source.entry_point = compiler.get_cleansed_entry_point_name(
         entry_points.front().name, entry_points.front().execution_model
     );

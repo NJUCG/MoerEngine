@@ -389,6 +389,7 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
         ShaderAsset asset = std::get<ShaderAsset>(_info);
         if (b_tessellation && target_info == SP_METAL_MSL && _type == ST_VERTEX) {
             asset.environment.SetDefine("MOER_METAL_TESS_VS_CAPTURE", true);
+            asset.environment.SetDefine("MOER_METAL_TESS_VS_GRID_BUFFER", true);
         }
         return shader_manager.CompileShader(_type, std::move(asset));
     };
