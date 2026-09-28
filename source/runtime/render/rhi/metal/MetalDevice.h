@@ -7,8 +7,8 @@
 
 namespace Moer::Render {
 
-// Initial Metal RHI slice: device, 2D color texture, window surface, and Present.
-// Unsupported resource and command types fail explicitly until their translators exist.
+// Metal RHI entry point. Resource, pipeline, queue, and presentation
+// implementations live in their respective backend files.
 class MetalDevice final : public RenderDevice::Impl {
 public:
     MetalDevice();
