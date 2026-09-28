@@ -27,6 +27,8 @@ public:
     PipelineHandle CreatePipeline(GfxPsoCreateInfo&&, PipelineShaderInfo&&) override;
     PipelineHandle CreatePipeline(PipelineShaderInfo&&) override;
     void WaitIdle() override;
+    bool SupportsTessellation() const override;
+    uint32_t GetMaxTessellationFactor() const override;
 
 private:
     struct Native;

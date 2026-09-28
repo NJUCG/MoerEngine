@@ -88,6 +88,7 @@ TessellatedSurfacePass::TessellatedSurfacePass(RasterContext& context) {
         EPrimitiveTopology::PATCH_LIST
     );
     pipeline_info.patch_control_points = 3;
+    pipeline_info.patch_control_point_stride = 16; // MSL float3 control point is 16-byte aligned.
 
     pipeline = context.manager.Raster()
                    .Vertex(kSurfaceShaderPath, "SurfaceVS")

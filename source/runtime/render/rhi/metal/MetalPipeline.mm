@@ -135,8 +135,13 @@ MetalRenderBindings MetalRenderStageBindings(
 } // namespace
 
 PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInfo&& create_info, PipelineShaderInfo&& shader_info) {
-    if (!std::holds_alternative<ShaderVsPs>(shader_info.shader_group) ||
-        create_info.primitive_topology != EPrimitiveTopology::TRIANGLE_LIST ||
+    const bool tessellation = std::holds_alternative<ShaderVsHsDsPs>(shader_info.shader_group);
+    if ((!tessellation && !std::holds_alternative<ShaderVsPs>(shader_info.shader_group)) ||
+        create_info.primitive_topology != (tessellation ?
+            EPrimitiveTopology::PATCH_LIST : EPrimitiveTopology::TRIANGLE_LIST) ||
+        (tessellation && (create_info.patch_control_points != 3 ||
+            create_info.patch_control_point_stride == 0 ||
+            !create_info.vertex_stream.bindings.empty())) ||
         create_info.view_mask != 0 || create_info.multi_view_count != 1 ||
         create_info.multisample_info.sample_count != 1 ||
         create_info.color_attachment_count > 8 ||
@@ -146,15 +151,49 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
         create_info.depth_stencil_info.b_enable_back_face_stencil) {
         Unsupported("this graphics pipeline layout");
     }
-    const auto& shaders = std::get<ShaderVsPs>(shader_info.shader_group);
+    const SingleShaderInfo& vs = tessellation ?
+        std::get<ShaderVsHsDsPs>(shader_info.shader_group).vs :
+        std::get<ShaderVsPs>(shader_info.shader_group).vs;
+    const SingleShaderInfo& ps = tessellation ?
+        std::get<ShaderVsHsDsPs>(shader_info.shader_group).ps :
+        std::get<ShaderVsPs>(shader_info.shader_group).ps;
     @autoreleasepool {
-        id<MTLFunction> vertex = CompileMetalFunction(device, shaders.vs);
-        id<MTLFunction> fragment = CompileMetalFunction(device, shaders.ps);
+        id<MTLFunction> vertex = CompileMetalFunction(device, vs);
+        id<MTLFunction> fragment = CompileMetalFunction(device, ps);
+        id<MTLFunction> hull = nil;
+        id<MTLFunction> domain = nil;
+        id<MTLComputePipelineState> tess_vertex_pipeline = nil;
+        id<MTLComputePipelineState> hull_pipeline = nil;
+        NSError* error = nil;
+        if (tessellation) {
+            const auto& stages = std::get<ShaderVsHsDsPs>(shader_info.shader_group);
+            hull = CompileMetalFunction(device, stages.hs);
+            domain = CompileMetalFunction(device, stages.ds);
+            tess_vertex_pipeline = [device newComputePipelineStateWithFunction:vertex error:&error];
+            if (tess_vertex_pipeline == nil) {
+                throw std::runtime_error("Metal tessellation vertex kernel creation failed: " +
+                    std::string(error.localizedDescription.UTF8String ?: "unknown error"));
+            }
+            error = nil;
+            hull_pipeline = [device newComputePipelineStateWithFunction:hull error:&error];
+            if (hull_pipeline == nil) {
+                throw std::runtime_error("Metal hull kernel creation failed: " +
+                    std::string(error.localizedDescription.UTF8String ?: "unknown error"));
+            }
+        }
         MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
-        descriptor.vertexFunction = vertex;
+        descriptor.vertexFunction = tessellation ? domain : vertex;
         descriptor.fragmentFunction = fragment;
         descriptor.rasterSampleCount = 1;
         descriptor.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+        if (tessellation) {
+            descriptor.maxTessellationFactor = 64;
+            descriptor.tessellationFactorFormat = MTLTessellationFactorFormatHalf;
+            descriptor.tessellationPartitionMode = MTLTessellationPartitionModeFractionalEven;
+            descriptor.tessellationOutputWindingOrder = MTLWindingCounterClockwise;
+            descriptor.tessellationFactorStepFunction = MTLTessellationFactorStepFunctionPerPatch;
+            descriptor.tessellationControlPointIndexType = MTLTessellationControlPointIndexTypeNone;
+        }
 
         MTLVertexDescriptor* vertex_descriptor = [MTLVertexDescriptor vertexDescriptor];
         uint attribute_index = 0;
@@ -207,7 +246,7 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
                 descriptor.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
             }
         }
-        NSError* error = nil;
+        error = nil;
         id<MTLRenderPipelineState> native_pipeline =
             [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
         if (native_pipeline == nil) {
@@ -223,19 +262,35 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
             depth_state = [device newDepthStencilStateWithDescriptor:depth_descriptor];
             if (depth_state == nil) throw std::runtime_error("Cannot create Metal depth state");
         }
-        PipelineHandle handle = MetalPipelineMetadata(shader_info, {&shaders.vs, &shaders.ps});
+        PipelineHandle handle = tessellation ?
+            MetalPipelineMetadata(shader_info, {
+                &std::get<ShaderVsHsDsPs>(shader_info.shader_group).vs,
+                &std::get<ShaderVsHsDsPs>(shader_info.shader_group).hs,
+                &std::get<ShaderVsHsDsPs>(shader_info.shader_group).ds, &ps}) :
+            MetalPipelineMetadata(shader_info, {&vs, &ps});
         std::vector<MTLPixelFormat> color_formats;
         color_formats.reserve(create_info.color_attachment_count);
         for (uint index = 0; index < create_info.color_attachment_count; ++index) {
             color_formats.push_back(ToMetalFormat(create_info.color_attachments_info[index].pixel_format));
         }
-        handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(
+        auto* pipeline = MoerNew(MetalPipelineState)(
             native_pipeline, std::move(color_formats),
             uint(create_info.vertex_stream.bindings.size()), create_info.rasterizer_info,
-            descriptor.depthAttachmentPixelFormat, depth_state, vertex, fragment,
-            MetalRenderStageBindings(shader_info, shaders.vs),
-            MetalRenderStageBindings(shader_info, shaders.ps)
-        ));
+            descriptor.depthAttachmentPixelFormat, depth_state,
+            tessellation ? domain : vertex, fragment,
+            MetalRenderStageBindings(shader_info, tessellation ?
+                std::get<ShaderVsHsDsPs>(shader_info.shader_group).ds : vs),
+            MetalRenderStageBindings(shader_info, ps)
+        );
+        if (tessellation) {
+            pipeline->SetTessellation(
+                tess_vertex_pipeline, vertex, hull_pipeline, hull,
+                MetalRenderStageBindings(shader_info, vs),
+                MetalRenderStageBindings(shader_info,
+                    std::get<ShaderVsHsDsPs>(shader_info.shader_group).hs),
+                create_info.patch_control_points, create_info.patch_control_point_stride);
+        }
+        handle.handle = reinterpret_cast<uint64>(pipeline);
         return handle;
     }
 }

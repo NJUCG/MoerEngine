@@ -9,6 +9,125 @@
 #include <vector>
 
 namespace Moer::Render {
+namespace {
+struct TessellationBuffers {
+    id<MTLBuffer> control_points{nil};
+    id<MTLBuffer> hull_points{nil};
+    id<MTLBuffer> factors{nil};
+    uint32_t patch_count{0};
+};
+
+void BindTessComputeArgs(
+    id<MTLCommandBuffer> command_buffer, id<MTLComputeCommandEncoder> encoder,
+    id<MTLFunction> function, const MetalRenderBindings& layout,
+    const SetDrawStateCmd& draw, NSMutableArray<id<MTLBuffer>>* staging_buffers
+) {
+    if (!layout.bindless_sets.empty() || !draw.Args().constants.empty()) {
+        Unsupported("Metal tessellation compute bindless or push constants");
+    }
+    for (NSUInteger set = 0; set < layout.constant_buffer_index; ++set) {
+        bool needed = false;
+        for (const auto& binding : layout.scalar_bindings) {
+            needed |= binding.active && binding.set == set;
+        }
+        if (!needed) continue;
+        id<MTLArgumentEncoder> arguments = [function newArgumentEncoderWithBufferIndex:set];
+        if (arguments == nil) Unsupported("Metal tessellation argument layout");
+        id<MTLBuffer> table = [command_buffer.device
+            newBufferWithLength:arguments.encodedLength options:MTLResourceStorageModeShared];
+        if (table == nil) throw std::runtime_error("Cannot allocate Metal tessellation arguments");
+        [staging_buffers addObject:table];
+        [arguments setArgumentBuffer:table offset:0];
+        for (uint index = 0; index < layout.scalar_bindings.size(); ++index) {
+            const auto& binding = layout.scalar_bindings[index];
+            if (!binding.active || binding.set != set) continue;
+            if ((binding.kind != SDA_Buffer && binding.kind != SDA_ConstantBuffer) ||
+                binding.texel_buffer || index >= draw.Args().args.size()) {
+                Unsupported("Metal tessellation compute resource kind");
+            }
+            const auto* view = std::get_if<BufferView>(&draw.Args().args[index]);
+            auto* buffer = view == nullptr ? nullptr : dynamic_cast<MetalBuffer*>(view->GetBuffer());
+            if (buffer == nullptr) Unsupported("Metal tessellation buffer argument");
+            [arguments setBuffer:buffer->Native() offset:view->GetByteOffset()
+                         atIndex:binding.binding];
+            [encoder useResource:buffer->Native() usage:MTLResourceUsageRead];
+        }
+        [encoder setBuffer:table offset:0 atIndex:set];
+    }
+}
+
+TessellationBuffers EncodeTessellation(
+    id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd& draw,
+    const MetalPipelineState& pipeline, NSMutableArray<id<MTLBuffer>>* staging_buffers
+) {
+    if (draw.DrawData().size() != 1 || pipeline.PatchPoints() != 3 ||
+        pipeline.PointStride() == 0) {
+        Unsupported("Metal tessellation mesh or patch layout");
+    }
+    const MeshDrawData& mesh = draw.DrawData()[0];
+    if (!mesh.vtx_views.empty() || mesh.indirect_draw_param ||
+        std::holds_alternative<IndexBuffer>(mesh.idx_view) || mesh.draw_params.size() != 1) {
+        Unsupported("Metal tessellation indexed or indirect draw");
+    }
+    const SingleDrawParam& param = mesh.draw_params[0];
+    if (param.index_cnt == 0 || param.index_cnt % 3 != 0 ||
+        param.instance_cnt == 0 || param.first_index != 0 ||
+        param.vertex_offset != 0 || param.first_instance != 0) {
+        Unsupported("Metal tessellation draw range");
+    }
+    const uint64_t vertex_count = uint64_t(param.index_cnt) * param.instance_cnt;
+    const uint64_t patch_count = vertex_count / pipeline.PatchPoints();
+    if (patch_count > UINT32_MAX ||
+        vertex_count > SIZE_MAX / pipeline.PointStride() ||
+        patch_count > SIZE_MAX / sizeof(MTLTriangleTessellationFactorsHalf)) {
+        Unsupported("Metal tessellation draw allocation size");
+    }
+    const auto allocate = [&](NSUInteger bytes) {
+        id<MTLBuffer> buffer = [command_buffer.device
+            newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+        if (buffer == nil) throw std::runtime_error("Cannot allocate Metal tessellation buffer");
+        [staging_buffers addObject:buffer];
+        return buffer;
+    };
+    TessellationBuffers buffers{
+        allocate(vertex_count * pipeline.PointStride()),
+        allocate(vertex_count * pipeline.PointStride()),
+        allocate(patch_count * sizeof(MTLTriangleTessellationFactorsHalf)),
+        uint32_t(patch_count)
+    };
+    const uint32_t params[2] = {pipeline.PatchPoints(), buffers.patch_count};
+
+    id<MTLComputeCommandEncoder> vertex = [command_buffer computeCommandEncoder];
+    if (vertex == nil) throw std::runtime_error("Cannot encode Metal tessellation vertex stage");
+    vertex.label = @"Tessellation vertex capture";
+    [vertex setComputePipelineState:pipeline.TessVertexPipeline()];
+    BindTessComputeArgs(command_buffer, vertex, pipeline.TessVertexFunction(),
+        pipeline.TessVertexBindingsLayout(), draw, staging_buffers);
+    [vertex setBuffer:buffers.control_points offset:0 atIndex:28];
+    // MSL uint3 has 16-byte alignment even though it holds only three values.
+    const uint32_t grid_size[4] = {param.index_cnt, param.instance_cnt, 1, 0};
+    [vertex setBytes:grid_size length:sizeof(grid_size) atIndex:30];
+    [vertex dispatchThreadgroups:MTLSizeMake(param.index_cnt / 3, param.instance_cnt, 1)
+      threadsPerThreadgroup:MTLSizeMake(3, 1, 1)];
+    [vertex endEncoding];
+
+    id<MTLComputeCommandEncoder> hull = [command_buffer computeCommandEncoder];
+    if (hull == nil) throw std::runtime_error("Cannot encode Metal tessellation hull stage");
+    hull.label = @"Tessellation hull and factors";
+    [hull setComputePipelineState:pipeline.HullPipeline()];
+    BindTessComputeArgs(command_buffer, hull, pipeline.HullFunction(),
+        pipeline.HullBindingsLayout(), draw, staging_buffers);
+    [hull setBuffer:buffers.control_points offset:0 atIndex:22];
+    [hull setBuffer:buffers.hull_points offset:0 atIndex:28];
+    [hull setBuffer:buffers.factors offset:0 atIndex:26];
+    [hull setBytes:params length:sizeof(params) atIndex:29];
+    [hull dispatchThreads:MTLSizeMake(vertex_count, 1, 1)
+    threadsPerThreadgroup:MTLSizeMake(3, 1, 1)];
+    [hull endEncoding];
+    return buffers;
+}
+} // namespace
+
 MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
     auto* pipeline = dynamic_cast<MetalPipelineState*>(
         reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
@@ -87,6 +206,10 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
     };
     validate_texel_bindings(pipeline->VertexBindingsLayout());
     validate_texel_bindings(pipeline->FragmentBindingsLayout());
+    if (pipeline->IsTessellation()) {
+        validate_texel_bindings(pipeline->TessVertexBindingsLayout());
+        validate_texel_bindings(pipeline->HullBindingsLayout());
+    }
     if (draw.Args().constants.size() * sizeof(uint) > 4096) {
         Unsupported("this graphics push constant size");
     }
@@ -229,6 +352,8 @@ void EncodeSimpleDraw(
     auto* pipeline = static_cast<MetalPipelineState*>(
         reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
     const RenderPassInfo& pass = draw.RenderPassInfo();
+    const TessellationBuffers tess = pipeline->IsTessellation() ?
+        EncodeTessellation(command_buffer, draw, *pipeline, staging_buffers) : TessellationBuffers{};
     MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
     for (uint index = 0; index < pass.color_attachments.size(); ++index) {
         const ColorAttachment& attachment = pass.color_attachments[index];
@@ -402,6 +527,11 @@ void EncodeSimpleDraw(
     };
     bind_scalar(pipeline->VertexBindingsLayout(), pipeline->VertexFunction(), true);
     bind_scalar(pipeline->FragmentBindingsLayout(), pipeline->FragmentFunction(), false);
+    if (pipeline->IsTessellation()) {
+        [encoder setVertexBuffer:tess.hull_points offset:0 atIndex:22];
+        [encoder setVertexBuffer:tess.factors offset:0 atIndex:26];
+        [encoder setTessellationFactorBuffer:tess.factors offset:0 instanceStride:0];
+    }
     if (!draw.Args().constants.empty()) {
         const void* data = draw.Args().constants.data();
         const NSUInteger length = draw.Args().constants.size() * sizeof(uint);
@@ -424,6 +554,12 @@ void EncodeSimpleDraw(
         MTLTriangleFillModeLines : MTLTriangleFillModeFill];
     for (uint mesh_index = 0; mesh_index < draw.DrawData().size(); ++mesh_index) {
         const MeshDrawData& mesh = draw.DrawData()[mesh_index];
+        if (pipeline->IsTessellation()) {
+            [encoder drawPatches:pipeline->PatchPoints() patchStart:0
+                     patchCount:tess.patch_count patchIndexBuffer:nil
+         patchIndexBufferOffset:0 instanceCount:1 baseInstance:0];
+            continue;
+        }
         for (uint index = 0; index < mesh.vtx_views.size(); ++index) {
             const VertexBuffer& vertex = mesh.vtx_views[index];
             auto* buffer = static_cast<MetalBuffer*>(vertex.buffer);

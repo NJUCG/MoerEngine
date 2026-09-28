@@ -1294,6 +1294,9 @@ struct GfxPsoCreateInfo {
     // Required when primitive_topology is PATCH_LIST. Kept explicit instead of assuming triangle
     // patches so the RHI contract remains valid for future isoline/quad tessellation passes.
     uint32_t patch_control_points = 0;
+    // Byte stride of one HS output control point when a backend materializes
+    // patch data in a buffer (for example, Metal's compute tessellation stage).
+    uint32_t patch_control_point_stride = 0;
 
     EPixelFormat                  depth_stencil_format;
     Array<RHIColorAttachmentInfo> color_attachments_info;

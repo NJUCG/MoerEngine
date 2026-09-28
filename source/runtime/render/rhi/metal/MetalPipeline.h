@@ -71,6 +71,33 @@ public:
     const MetalRenderBindings& FragmentBindingsLayout() const noexcept {
         return fragment_bindings_layout_;
     }
+    bool IsTessellation() const noexcept { return hull_pipeline_ != nil; }
+    void SetTessellation(
+        id<MTLComputePipelineState> vertex_pipeline,
+        id<MTLFunction> vertex_function,
+        id<MTLComputePipelineState> hull_pipeline,
+        id<MTLFunction> hull_function,
+        MetalRenderBindings tess_vertex_bindings,
+        MetalRenderBindings hull_bindings,
+        uint32_t patch_points, uint32_t point_stride
+    ) {
+        tess_vertex_pipeline_ = vertex_pipeline;
+        tess_vertex_function_ = vertex_function;
+        hull_pipeline_ = hull_pipeline;
+        hull_function_ = hull_function;
+        tess_vertex_bindings_layout_ = std::move(tess_vertex_bindings);
+        hull_bindings_layout_ = std::move(hull_bindings);
+        patch_points_ = patch_points;
+        point_stride_ = point_stride;
+    }
+    id<MTLComputePipelineState> TessVertexPipeline() const noexcept { return tess_vertex_pipeline_; }
+    id<MTLFunction> TessVertexFunction() const noexcept { return tess_vertex_function_; }
+    id<MTLComputePipelineState> HullPipeline() const noexcept { return hull_pipeline_; }
+    id<MTLFunction> HullFunction() const noexcept { return hull_function_; }
+    const MetalRenderBindings& HullBindingsLayout() const noexcept { return hull_bindings_layout_; }
+    const MetalRenderBindings& TessVertexBindingsLayout() const noexcept { return tess_vertex_bindings_layout_; }
+    uint32_t PatchPoints() const noexcept { return patch_points_; }
+    uint32_t PointStride() const noexcept { return point_stride_; }
 
 private:
     id<MTLRenderPipelineState> render_{nil};
@@ -87,6 +114,14 @@ private:
     id<MTLFunction> fragment_function_{nil};
     MetalRenderBindings vertex_bindings_layout_{};
     MetalRenderBindings fragment_bindings_layout_{};
+    id<MTLComputePipelineState> tess_vertex_pipeline_{nil};
+    id<MTLFunction> tess_vertex_function_{nil};
+    id<MTLComputePipelineState> hull_pipeline_{nil};
+    id<MTLFunction> hull_function_{nil};
+    MetalRenderBindings tess_vertex_bindings_layout_{};
+    MetalRenderBindings hull_bindings_layout_{};
+    uint32_t patch_points_{0};
+    uint32_t point_stride_{0};
 };
 
 PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device,

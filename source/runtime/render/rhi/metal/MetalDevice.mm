@@ -159,5 +159,12 @@ PipelineHandle MetalDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
     return CreateMetalComputePipeline(native_->device, std::move(shader_info));
 }
 void MetalDevice::WaitIdle() { native_->graphics->Sync(); }
+bool MetalDevice::SupportsTessellation() const {
+    return [native_->device supportsFamily:MTLGPUFamilyApple3] ||
+           [native_->device supportsFamily:MTLGPUFamilyMac1];
+}
+uint32_t MetalDevice::GetMaxTessellationFactor() const {
+    return SupportsTessellation() ? 64 : 0;
+}
 
 } // namespace Moer::Render
