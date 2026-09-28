@@ -4,10 +4,18 @@
 
 #ifndef PIXELFORMAT_H
 #define PIXELFORMAT_H
+#include "RenderAPI.h"
 #include "misc/Traits.h"
 #include <cassert>
 #include <cstdint>
-/* from VkImageFormat vk_core=1.3 */
+/**
+ * Engine-owned pixel format identifiers.
+ *
+ * The numeric values are stable engine identifiers. Backends must translate
+ * them explicitly instead of interpreting them as Vulkan, Metal, or DXGI
+ * values. Comments containing large Vulkan values below are reference values
+ * only; they are not the value of the engine enum entry.
+ */
 enum EPixelFormat : uint8_t {
     PF_UNDEFINED                  = 0,
     PF_R4G4_UNORM_PACK8           = 1,
@@ -262,11 +270,59 @@ enum EPixelFormat : uint8_t {
 
 namespace Moer::Render {
 
-bool   IsPixelFormatBC(EPixelFormat _format);
-uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size);
-uint64 GetByteFromPixelFormat(EPixelFormat format);
-uint64 GetChannelFromPixelFormat(EPixelFormat format);
-uint64 GetSizeFromPixelFormat(EPixelFormat format, const uint3 size);
+enum class EPixelFormatAspect : uint8_t {
+    Undefined,
+    Color,
+    Depth,
+    Stencil,
+    DepthStencil,
+};
+
+enum class EPixelFormatCompression : uint8_t {
+    None,
+    BC,
+    ETC2_EAC,
+    ASTC,
+};
+
+/**
+ * Backend-independent properties of one concrete EPixelFormat enumerator.
+ * This structure describes an existing format; it is not a recipe for
+ * constructing arbitrary combinations of channels and component types.
+ * An undefined result means that the engine has no safe linear block layout
+ * for the format. In particular, multi-plane video, PVRTC (which has minimum
+ * surface dimensions), and vendor-specific formats need separate layout rules.
+ */
+struct PixelFormatInfo {
+    uint8                   block_width{0};
+    uint8                   block_height{0};
+    uint8                   block_depth{0};
+    uint8                   bytes_per_block{0};
+    uint8                   component_count{0};
+    EPixelFormatAspect      aspect{EPixelFormatAspect::Undefined};
+    EPixelFormatCompression compression{EPixelFormatCompression::None};
+    bool                    srgb{false};
+
+    [[nodiscard]] constexpr bool IsDefined() const noexcept {
+        return bytes_per_block != 0;
+    }
+
+    [[nodiscard]] constexpr bool IsCompressed() const noexcept {
+        return compression != EPixelFormatCompression::None;
+    }
+};
+
+[[nodiscard]] RENDER_API PixelFormatInfo GetPixelFormatInfo(EPixelFormat format) noexcept;
+// Returns zero for formats without a known block layout, zero width, or a
+// byte limit smaller than one complete block row. Otherwise the result is a
+// pixel-row count aligned to the format's block height.
+[[nodiscard]] RENDER_API uint32
+GetMaxPixelFormatRowsPerChunk(EPixelFormat format, uint32 width, uint64 byte_limit) noexcept;
+RENDER_API bool   IsPixelFormatBC(EPixelFormat _format);
+RENDER_API uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size);
+RENDER_API uint64 GetByteFromPixelFormat(EPixelFormat format);
+RENDER_API uint64 GetChannelFromPixelFormat(EPixelFormat format);
+RENDER_API uint64 GetSizeFromPixelFormat(EPixelFormat format, const uint3 size);
 
 } // namespace Moer::Render
 #endif //MOERENGINE_PIXELFORMAT_H

@@ -52,10 +52,10 @@ public:
     static VmaMemoryUsage           MEGenerateVmaMemoryUsage();
 };
 struct FormatInfo {
-    uint     stride;
+    uint     stride; // Bytes per texel for linear formats, per block for compressed formats.
     VkFormat format;
 };
-static const FormatInfo g_platform_pixel_formats[static_cast<uint>(PF_Num)]{
+inline constexpr FormatInfo g_platform_pixel_formats[static_cast<uint>(PF_Num)]{
     {0, VK_FORMAT_UNDEFINED},
     {1, VK_FORMAT_R4G4_UNORM_PACK8},
     {2, VK_FORMAT_R4G4B4A4_UNORM_PACK16},
@@ -186,7 +186,7 @@ static const FormatInfo g_platform_pixel_formats[static_cast<uint>(PF_Num)]{
     {1, VK_FORMAT_S8_UINT},
     {4, VK_FORMAT_D16_UNORM_S8_UINT},
     {4, VK_FORMAT_D24_UNORM_S8_UINT},
-    {4, VK_FORMAT_D32_SFLOAT_S8_UINT},
+    {8, VK_FORMAT_D32_SFLOAT_S8_UINT},
     {8, VK_FORMAT_BC1_RGB_UNORM_BLOCK},
     {8, VK_FORMAT_BC1_RGB_SRGB_BLOCK},
     {8, VK_FORMAT_BC1_RGBA_UNORM_BLOCK},
@@ -207,8 +207,8 @@ static const FormatInfo g_platform_pixel_formats[static_cast<uint>(PF_Num)]{
     {8, VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK},
     {8, VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK},
     {8, VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK},
-    {8, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK},
-    {8, VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK},
+    {16, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK},
+    {16, VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK},
     {8, VK_FORMAT_EAC_R11_UNORM_BLOCK},
     {8, VK_FORMAT_EAC_R11_SNORM_BLOCK},
     {16, VK_FORMAT_EAC_R11G11_UNORM_BLOCK},
@@ -305,6 +305,17 @@ static const FormatInfo g_platform_pixel_formats[static_cast<uint>(PF_Num)]{
     /*= 1000054007*/ {8, VK_FORMAT_PVRTC2_4BPP_SRGB_BLOCK_IMG},
     /*= 1000464000*/ {8, VK_FORMAT_R16G16_S10_5_NV}
 };
+
+static_assert(
+    g_platform_pixel_formats[PF_R8G8B8A8_UNORM].format == VK_FORMAT_R8G8B8A8_UNORM
+);
+static_assert(
+    g_platform_pixel_formats[PF_G8B8G8R8_422_UNORM].format == VK_FORMAT_G8B8G8R8_422_UNORM
+);
+static_assert(
+    g_platform_pixel_formats[PF_R16G16_S10_5_NV].format == VK_FORMAT_R16G16_S10_5_NV
+);
+static_assert(g_platform_pixel_formats[PF_ETC2_R8G8B8A8_UNORM_BLOCK].stride == 16);
 
 static uint64 EncodeReflectInfo(uint _set, uint _binding, uint _stage_flags) {
     return uint64(_set << 16) | uint64(_binding) | (uint64(_stage_flags) << 32);

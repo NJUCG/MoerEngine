@@ -339,6 +339,14 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHICommandMarkerContract COMMAND $<TARGET_FILE:${test_target}>)
 
+set(test_target TestPixelFormatContract)
+add_executable(${test_target} "PixelFormatContractTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME PixelFormatContract COMMAND $<TARGET_FILE:${test_target}>)
+
 set(test_target TestRHIQuery)
 add_executable(${test_target} "RHIQueryContractTest.cpp")
 target_link_libraries(${test_target}

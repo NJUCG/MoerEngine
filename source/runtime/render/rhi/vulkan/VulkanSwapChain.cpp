@@ -411,7 +411,11 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
     VkPresentModeKHR   present_mode           = ChooseSwapPresentMode(details.present_modes, false);
-    const EPixelFormat new_format             = (EPixelFormat)new_fmt.format;
+    const EPixelFormat new_format             = VulkanEnumTranslator::VKToMEFormat(new_fmt.format);
+    if (new_format == PF_UNDEFINED && new_fmt.format != VK_FORMAT_UNDEFINED) {
+        LOG_ERROR("Swapchain selected an unmapped Vulkan format: {}", static_cast<uint32_t>(new_fmt.format));
+        return false;
+    }
     const uint32_t     queue_family_indices[] = {
         queue_families.graphics.value(),
         queue_families.present.value(),
