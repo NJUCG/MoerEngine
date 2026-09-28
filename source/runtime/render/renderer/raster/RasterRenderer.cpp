@@ -55,6 +55,18 @@ float GetElapsedTimeSeconds() {
     return std::chrono::duration<float>(std::chrono::steady_clock::now() - s_start_time).count();
 }
 
+bool ApplyMetalAoFallback(RasterConfig& config) {
+    if (config.ao_mode == EAoMode::RTAO) {
+        config.ao_mode = EAoMode::SSAO;
+        return true;
+    }
+    if (config.ao_mode == EAoMode::RTAO_AO_ONLY) {
+        config.ao_mode = EAoMode::SSAO_AO_ONLY;
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 RasterRenderer::RasterRenderer(
@@ -73,12 +85,9 @@ RasterRenderer::RasterRenderer(
     parallel_recording_enabled = graph_config.parallel_recording;
     if (device.GetRHIType() == ERHIType::Metal) {
         auto& raster_config = config->raster_config;
-        if (raster_config.ao_mode == EAoMode::RTAO ||
-            raster_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
-            raster_config.ao_mode = EAoMode::SSAO;
-        }
+        ApplyMetalAoFallback(raster_config);
         raster_config.probe_gi_enabled = false;
-        LOG_INFO("[Metal][Raster] Bootstrap uses SSAO and disables Probe GI");
+        LOG_INFO("[Metal][Raster] RTAO requests use SSAO; Probe GI is disabled by default");
     }
     LOG_INFO(
         "[RenderGraph] Raster execution mode: {}, upper recording: {}",
@@ -499,6 +508,10 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
 
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.config_snapshot_ms);
+        if (device.GetRHIType() == ERHIType::Metal &&
+            ApplyMetalAoFallback(editor_config->raster_config)) {
+            LOG_WARNING("[Metal][Raster] RTAO is unavailable; selected the matching SSAO mode");
+        }
         frame_packet.raster_config        = editor_config->raster_config;
         frame_packet.validation_selected_frame_buffer_name =
             editor_config->validation_selected_frame_buffer_name;
