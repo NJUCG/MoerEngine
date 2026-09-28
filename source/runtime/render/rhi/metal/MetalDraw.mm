@@ -14,7 +14,7 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
         reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
     const RenderPassInfo& pass = draw.RenderPassInfo();
     if (pipeline == nullptr || pipeline->NativeRender() == nil ||
-        pipeline->ColorFormats().empty() ||
+        (pipeline->ColorFormats().empty() && !pass.depth_attachment.Valid()) ||
         pipeline->ColorFormats().size() != pass.color_attachments.size() ||
         pass.view_mask != 0 || pass.viewport_cnt != 1 || !pass.render_area.IsValid() ||
         draw.DrawData().empty()) {
@@ -90,18 +90,28 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
     if (draw.Args().constants.size() * sizeof(uint) > 4096) {
         Unsupported("this graphics push constant size");
     }
-    const ColorAttachment& attachment = pass.color_attachments[0];
-    auto* target = dynamic_cast<MetalTexture*>(attachment.target);
+    const ColorAttachment* first_color = pass.color_attachments.empty() ?
+        nullptr : &pass.color_attachments[0];
+    const DepthAttachment& depth = pass.depth_attachment;
+    auto* target = dynamic_cast<MetalTexture*>(
+        first_color != nullptr ? first_color->target : depth.target
+    );
+    const uint reference_mip = first_color != nullptr ? first_color->mip_level : depth.mip_level;
+    const uint reference_layer = first_color != nullptr ? first_color->array_layer : depth.array_layer;
     if (target == nullptr || pipeline->ColorFormats().size() > 8 ||
-        pipeline->ColorFormats()[0] != ToMetalFormat(target->GetFormat()) ||
-        attachment.mip_level >= target->GetNumMips() ||
-        attachment.array_layer >= target->GetNumArray() || attachment.array_count != 1 ||
+        reference_mip >= target->GetNumMips() ||
+        reference_layer >= target->GetNumArray() ||
         pass.render_area.offset.x < 0 || pass.render_area.offset.y < 0 ||
         uint(pass.render_area.offset.x) + pass.render_area.extent.width >
-            std::max(1u, target->GetWidth() >> attachment.mip_level) ||
+            std::max(1u, target->GetWidth() >> reference_mip) ||
         uint(pass.render_area.offset.y) + pass.render_area.extent.height >
-            std::max(1u, target->GetHeight() >> attachment.mip_level) ||
-        GetStoreOp(attachment.action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE) {
+            std::max(1u, target->GetHeight() >> reference_mip)) {
+        Unsupported("this graphics attachment extent");
+    }
+    if (first_color != nullptr &&
+        (pipeline->ColorFormats()[0] != ToMetalFormat(target->GetFormat()) ||
+         first_color->array_count != 1 ||
+         GetStoreOp(first_color->action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE)) {
         Unsupported("this graphics color attachment");
     }
     for (uint index = 1; index < pass.color_attachments.size(); ++index) {
@@ -111,15 +121,14 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
             pipeline->ColorFormats()[index] != ToMetalFormat(color_target->GetFormat()) ||
             color_target->GetWidth() != target->GetWidth() ||
             color_target->GetHeight() != target->GetHeight() ||
-            color.mip_level != attachment.mip_level ||
-            color.array_layer != attachment.array_layer || color.array_count != 1 ||
+            color.mip_level != reference_mip ||
+            color.array_layer != reference_layer || color.array_count != 1 ||
             color.mip_level >= color_target->GetNumMips() ||
             color.array_layer >= color_target->GetNumArray() ||
             GetStoreOp(color.action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE) {
             Unsupported("this graphics MRT attachment");
         }
     }
-    const DepthAttachment& depth = pass.depth_attachment;
     if (depth.Valid()) {
         auto* depth_target = dynamic_cast<MetalTexture*>(depth.target);
         const EAttachmentAction action = GetDepthAction(depth.action);
@@ -127,8 +136,8 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
             pipeline->DepthFormat() != ToMetalFormat(depth_target->GetFormat()) ||
             depth_target->GetWidth() != target->GetWidth() ||
             depth_target->GetHeight() != target->GetHeight() ||
-            depth.mip_level != attachment.mip_level ||
-            depth.array_layer != attachment.array_layer || depth.array_count != 1 ||
+            depth.mip_level != reference_mip ||
+            depth.array_layer != reference_layer || depth.array_count != 1 ||
             depth.mip_level >= depth_target->GetNumMips() ||
             depth.array_layer >= depth_target->GetNumArray() ||
             GetStoreOp(action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE ||

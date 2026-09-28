@@ -586,7 +586,7 @@ void CheckIndexedGraphicsDraw(bool indirect) {
               << " and GPU color readback: success" << std::endl;
 }
 
-void CheckDepthGraphicsDraw(EPixelFormat depth_format) {
+void CheckDepthGraphicsDraw(EPixelFormat depth_format, bool depth_only_first = false) {
     using namespace Moer::Render;
     constexpr std::string_view source = R"(
         #include <metal_stdlib>
@@ -602,23 +602,28 @@ void CheckDepthGraphicsDraw(EPixelFormat depth_format) {
         }
         fragment float4 red_fragment() { return float4(1.0, 0.0, 0.0, 1.0); }
         fragment float4 green_fragment() { return float4(0.0, 1.0, 0.0, 1.0); }
+        fragment void depth_fragment() {}
     )";
     std::vector<Moer::uint8> code(source.begin(), source.end());
-    auto make_pipeline = [&](const char* vertex_entry, const char* fragment_entry) {
+    auto make_pipeline = [&](const char* vertex_entry, const char* fragment_entry, bool depth_only) {
         SingleShaderInfo vertex{.entry_point = vertex_entry, .shader_data = code,
                                 .shader_type = EShaderType::ST_VERTEX};
         SingleShaderInfo fragment{.entry_point = fragment_entry, .shader_data = code,
                                   .shader_type = EShaderType::ST_FRAGMENT};
         PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+        Moer::Array<RHIColorAttachmentInfo> color_attachments;
+        if (!depth_only) color_attachments.emplace_back(RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM));
         GfxPsoCreateInfo info(
             RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
-            {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)},
+            std::move(color_attachments),
             RHIDepthStencilStateInfo(true, CO_LESS), depth_format
         );
         return RasterPipeline(RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders)));
     };
-    RasterPipeline front = make_pipeline("front_vertex", "red_fragment");
-    RasterPipeline back = make_pipeline("back_vertex", "green_fragment");
+    RasterPipeline front = make_pipeline(
+        "front_vertex", depth_only_first ? "depth_fragment" : "red_fragment", depth_only_first
+    );
+    RasterPipeline back = make_pipeline("back_vertex", "green_fragment", false);
     TextureRef color = RenderDevice::Get().CreateTexture(
         Extent2D(8, 8), PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
@@ -633,12 +638,19 @@ void CheckDepthGraphicsDraw(EPixelFormat depth_format) {
         DepthAttachment depth_attachment(depth.Get());
         depth_attachment.action = pass_index == 0 ? AC_DS_CLEAR_STORE : AC_DS_LOAD_STORE;
         depth_attachment.clear_depth = 1.0f;
-        CommandList::DrawDispatcher(pass_index == 0 ? front : back, draw).Draw(
-            Rect2D(0, 0, 8, 8), std::move(meshes), depth_attachment,
-            ColorAttachment{.target = color.Get(),
-                            .action = pass_index == 0 ? AC_CLEAR_STORE : AC_LOAD_STORE,
-                            .clear_color = {0, 0, 0, 1}}
-        );
+        if (pass_index == 0 && depth_only_first) {
+            CommandList::DrawDispatcher(front, draw).Draw(
+                Rect2D(0, 0, 8, 8), std::move(meshes), depth_attachment
+            );
+        } else {
+            CommandList::DrawDispatcher(pass_index == 0 ? front : back, draw).Draw(
+                Rect2D(0, 0, 8, 8), std::move(meshes), depth_attachment,
+                ColorAttachment{.target = color.Get(),
+                                .action = pass_index == 0 || depth_only_first ?
+                                    AC_CLEAR_STORE : AC_LOAD_STORE,
+                                .clear_color = {0, 0, 0, 1}}
+            );
+        }
     }
     RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -658,10 +670,16 @@ void CheckDepthGraphicsDraw(EPixelFormat depth_format) {
     [command waitUntilCompleted];
     const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
     if (command.status != MTLCommandBufferStatusCompleted ||
-        middle[0] != 255 || middle[1] != 0 || middle[2] != 0 || middle[3] != 255) {
-        throw std::runtime_error("Metal RHI depth test did not reject the farther triangle");
+        middle[0] != (depth_only_first ? 0 : 255) || middle[1] != 0 ||
+        middle[2] != 0 || middle[3] != 255) {
+        throw std::runtime_error(
+            "Metal RHI depth test did not reject the farther triangle: rgba=" +
+            std::to_string(middle[0]) + "," + std::to_string(middle[1]) + "," +
+            std::to_string(middle[2]) + "," + std::to_string(middle[3])
+        );
     }
-    std::cout << "RHI depth attachment and depth test (format "
+    std::cout << "RHI " << (depth_only_first ? "depth-only pass" : "depth attachment")
+              << " and depth test (format "
               << static_cast<uint>(depth_format) << "): success" << std::endl;
 }
 
@@ -1805,6 +1823,8 @@ int main(int argc, char** argv) {
             CheckIndexedGraphicsDraw(true);
             CheckDepthGraphicsDraw(PF_D32_SFLOAT);
             CheckDepthGraphicsDraw(PF_D32_SFLOAT_S8_UINT);
+            CheckDepthGraphicsDraw(PF_D32_SFLOAT, true);
+            CheckDepthGraphicsDraw(PF_D32_SFLOAT_S8_UINT, true);
             CheckComputePipeline();
             CheckRHIComputeDispatch();
             CheckRHIComputeTextureViews();
