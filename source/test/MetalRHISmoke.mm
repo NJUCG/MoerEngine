@@ -223,6 +223,114 @@ void CheckGraphicsDraw() {
     std::cout << "RHI graphics draw and GPU color readback: success" << std::endl;
 }
 
+void CheckTessellationDraw() {
+    using namespace Moer::Render;
+    if (!RenderDevice::Get().SupportsTessellation()) return;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct Point { float3 position; };
+        struct Output { float4 position [[position]]; float4 color; };
+        kernel void patch_vertex(uint3 id [[thread_position_in_grid]],
+                                 constant uint3& size [[buffer(30)]],
+                                 device Point* output [[buffer(28)]]) {
+            const float2 positions[3] = {
+                float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)
+            };
+            float2 position = positions[id.x];
+            position.x = position.x * 0.5 + (id.y == 0 ? -0.5 : 0.5);
+            output[id.y * size.x + id.x].position = float3(position, 0.0);
+        }
+        kernel void patch_hull(uint3 id [[thread_position_in_grid]],
+                               device Point* output [[buffer(28)]],
+                               constant uint* params [[buffer(29)]],
+                               device MTLTriangleTessellationFactorsHalf* factors [[buffer(26)]],
+                               const device Point* input [[buffer(22)]]) {
+            output[id.x].position = input[id.x].position;
+            if (id.x % params[0] == 0) {
+                uint patch = id.x / params[0];
+                factors[patch].edgeTessellationFactor[0] = half(2.0);
+                factors[patch].edgeTessellationFactor[1] = half(2.0);
+                factors[patch].edgeTessellationFactor[2] = half(2.0);
+                factors[patch].insideTessellationFactor = half(2.0);
+            }
+        }
+        [[patch(triangle, 3)]] vertex Output patch_domain(
+            float3 barycentric [[position_in_patch]], uint patch [[patch_id]],
+            const device Point* points [[buffer(22)]],
+            const device MTLTriangleTessellationFactorsHalf* factors [[buffer(26)]]) {
+            uint start = patch * 3;
+            float3 position = points[start].position * barycentric.x +
+                              points[start + 1].position * barycentric.y +
+                              points[start + 2].position * barycentric.z;
+            return {float4(position, 1.0), patch == 0 ?
+                float4(1.0, 0.0, 0.0, 1.0) : float4(0.0, 1.0, 0.0, 1.0)};
+        }
+        fragment float4 patch_fragment(Output input [[stage_in]]) { return input.color; }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    const auto stage = [&](const char* name, EShaderType type) {
+        return SingleShaderInfo{.entry_point = name, .shader_data = code, .shader_type = type};
+    };
+    PipelineShaderInfo shaders{
+        .shader_group = ShaderVsHsDsPs{
+            stage("patch_vertex", EShaderType::ST_VERTEX),
+            stage("patch_hull", EShaderType::ST_HULL),
+            stage("patch_domain", EShaderType::ST_DOMAIN),
+            stage("patch_fragment", EShaderType::ST_FRAGMENT)
+        }
+    };
+    GfxPsoCreateInfo info(
+        RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
+        {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)},
+        RHIDepthStencilStateInfo::Preset(), PF_UNDEFINED,
+        EPrimitiveTopology::PATCH_LIST
+    );
+    info.patch_control_points = 3;
+    info.patch_control_point_stride = sizeof(float) * 4;
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders));
+    RasterPipeline raster(pipeline);
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+    );
+    Moer::Array<MeshDrawData> meshes;
+    meshes.emplace_back().EmplaceDraw(3, 0, 0, 2);
+    CommandList draw(EQueueType::Graphics);
+    CommandList::DrawDispatcher(raster, draw).Draw(
+        Rect2D(0, 0, 8, 8), std::move(meshes),
+        ColorAttachment{.target = texture.Get(), .action = AC_CLEAR_STORE,
+                        .clear_color = {0, 0, 0, 1}}
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get());
+    id<MTLBuffer> readback = [native.device
+        newBufferWithLength:256 * 8 options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> command = [[native.device newCommandQueue] commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:native sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
+                toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+       destinationBytesPerImage:256 * 8];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    const auto* left = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 2 * 4;
+    const auto* right = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 6 * 4;
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        left[0] != 255 || left[1] != 0 || left[2] != 0 || left[3] != 255 ||
+        right[0] != 0 || right[1] != 255 || right[2] != 0 || right[3] != 255) {
+        throw std::runtime_error("Metal tessellation patch draw produced incorrect pixels: left=" +
+            std::to_string(left[0]) + "," + std::to_string(left[1]) + "," +
+            std::to_string(left[2]) + "," + std::to_string(left[3]) +
+            " right=" + std::to_string(right[0]) + "," +
+            std::to_string(right[1]) + "," + std::to_string(right[2]) +
+            "," + std::to_string(right[3]));
+    }
+    std::cout << "RHI two-patch tessellation draw and GPU color readback: success" << std::endl;
+}
+
 void CheckGraphicsMRT() {
     using namespace Moer::Render;
     constexpr std::string_view source = R"(
@@ -1817,6 +1925,7 @@ int main(int argc, char** argv) {
             CheckRasterTextureFormats();
             CheckGraphicsPipeline();
             CheckGraphicsDraw();
+            CheckTessellationDraw();
             CheckGraphicsMRT();
             CheckGraphicsBindlessArguments();
             CheckIndexedGraphicsDraw(false);
