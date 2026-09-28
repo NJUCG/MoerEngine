@@ -59,7 +59,9 @@ struct MetalShaderSource {
     std::string entry_point;
 };
 
-MetalShaderSource TranslateToMetal(IDxcResult* result) {
+MetalShaderSource TranslateToMetal(
+    IDxcResult* result, EShaderType shader_type, bool vertex_for_tessellation
+) {
     ComPtr<IDxcBlob> spirv;
     if (FAILED(result->GetResult(&spirv)) || !spirv || spirv->GetBufferSize() % sizeof(uint32_t) != 0) {
         throw std::runtime_error("DXC did not produce valid SPIR-V for Metal translation");
@@ -75,6 +77,8 @@ MetalShaderSource TranslateToMetal(IDxcResult* result) {
     options.set_msl_version(3, 0);
     options.argument_buffers = true;
     options.argument_buffers_tier = spirv_cross::CompilerMSL::Options::ArgumentBuffersTier::Tier2;
+    options.vertex_for_tessellation = vertex_for_tessellation;
+    options.multi_patch_workgroup = shader_type == ST_HULL;
     compiler.set_msl_options(options);
 
     const auto resources = compiler.get_shader_resources();
@@ -489,7 +493,12 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
 #if defined(__APPLE__)
         if (_input.target_info.shader_platform == SP_METAL_MSL) {
             try {
-                MetalShaderSource metal_source = TranslateToMetal(result.p);
+                const bool vertex_for_tessellation =
+                    _input.environment.GetDefines().contains("MOER_METAL_TESS_VS_CAPTURE");
+                MetalShaderSource metal_source = TranslateToMetal(
+                    result.p, static_cast<EShaderType>(_input.target_info.shader_type),
+                    vertex_for_tessellation
+                );
                 _output.shader_code.assign(metal_source.code.begin(), metal_source.code.end());
                 _output.compiled_entry_name = std::move(metal_source.entry_point);
             } catch (const std::exception& error) {
@@ -525,7 +534,9 @@ bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
         case SP_METAL_MSL:
             return _target_info.shader_type == ST_VERTEX ||
                    _target_info.shader_type == ST_FRAGMENT ||
-                   _target_info.shader_type == ST_COMPUTE;
+                   _target_info.shader_type == ST_COMPUTE ||
+                   _target_info.shader_type == ST_HULL ||
+                   _target_info.shader_type == ST_DOMAIN;
 #else
         case SP_METAL_MSL:
             break;

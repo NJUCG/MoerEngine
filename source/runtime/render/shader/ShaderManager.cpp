@@ -387,6 +387,9 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
             return shader;
         }
         ShaderAsset asset = std::get<ShaderAsset>(_info);
+        if (b_tessellation && target_info == SP_METAL_MSL && _type == ST_VERTEX) {
+            asset.environment.SetDefine("MOER_METAL_TESS_VS_CAPTURE", true);
+        }
         return shader_manager.CompileShader(_type, std::move(asset));
     };
     auto get_shader_info = [&](EShaderType _type, Shader& _output) {
