@@ -78,8 +78,7 @@ RasterRenderer::RasterRenderer(
             raster_config.ao_mode = EAoMode::SSAO;
         }
         raster_config.probe_gi_enabled = false;
-        raster_config.shadow_map_mode = EShadowMapMode::NONE;
-        LOG_INFO("[Metal][Raster] Bootstrap uses SSAO, disables Probe GI and shadow maps");
+        LOG_INFO("[Metal][Raster] Bootstrap uses SSAO and disables Probe GI");
     }
     LOG_INFO(
         "[RenderGraph] Raster execution mode: {}, upper recording: {}",
