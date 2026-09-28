@@ -1,6 +1,8 @@
 #include "rhi/RHIPresentationCompletion.h"
+#if !defined(__APPLE__)
 #include "rhi/vulkan/vulkanextension/VulkanExtensionFactories.h"
 #include "rhi/vulkan/vulkanextension/VulkanExtensionRegistry.h"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -358,6 +360,7 @@ void WaitersWakeAndStrongOwnersReleaseBoundedly() {
     );
 }
 
+#if !defined(__APPLE__)
 void Maintenance1CapabilityGateIsExplicitAndOptional() {
     bool found_surface_dependency = false;
     bool found_surface_maintenance = false;
@@ -443,6 +446,7 @@ void Maintenance1CapabilityGateIsExplicitAndOptional() {
     verify_feature(VK_FALSE, false);
     verify_feature(VK_TRUE, true);
 }
+#endif
 
 } // namespace
 
@@ -463,7 +467,9 @@ int main() {
         RetiredSlotGenerationRejectsLateCallbacks();
         QueueIdleFallbackIsTargetedAndOwnerResolved();
         WaitersWakeAndStrongOwnersReleaseBoundedly();
+#if !defined(__APPLE__)
         Maintenance1CapabilityGateIsExplicitAndOptional();
+#endif
     } catch (const std::exception& exception) {
         std::cerr
             << "RHIPresentationCompletionContract: "

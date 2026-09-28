@@ -238,7 +238,9 @@ void TestClamp(T a, T b, T c, T d) {
     }
 }
 
+#if defined(_WIN32)
 #include <DirectXMath.h>
+#endif
 
 int main() {
 
@@ -334,11 +336,14 @@ int main() {
     me[14] = 0.f;
     me[13] = 0.f;
     me[12] = 0.f;
+#if defined(_WIN32)
+    // DirectXMath is a Windows-only reference for this comparison.
     DirectX::XMFLOAT4X4 dx_m(me);
-
+#endif
     Moer::Matrix4x4f moer_m(me);
     std::cout << moer_m;
 
+#if defined(_WIN32)
     auto                dx_xm_m     = DirectX::XMLoadFloat4x4(&dx_m);
     auto                inv_dx_xm_m = DirectX::XMMatrixInverse(nullptr, dx_xm_m);
     DirectX::XMFLOAT4X4 inv_dx_m;
@@ -349,6 +354,7 @@ int main() {
             std::cout << inv_dx_m.m[i][j] << " ";
         std::cout << std::endl;
     }
+#endif
 
     auto inv_moer_m = Moer::Inverse(moer_m);
     std::cout << inv_moer_m;
