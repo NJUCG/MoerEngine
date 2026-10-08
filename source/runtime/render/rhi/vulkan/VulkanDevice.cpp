@@ -1704,8 +1704,19 @@ void VulkanDevice::SetupDebugUtilsMessengerEXT() {
     ));
 }
 
-static VkPipelineStageFlags2 VkShaderStage2PipelineStage(VkShaderStageFlagBits _stage) {
-    switch (_stage) {
+namespace {
+
+struct VulkanPipelineBindingInfo {
+    UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo> descriptor_set_layouts;
+    VkPushConstantRange                                     push_constant_range{};
+    Array<ParamInfoFlags>                                   argument_flags;
+    UnorderedMap<uint64, uint>                              name_hash_to_argument_index;
+    uint64                                                  active_argument_bits    = 0;
+    int                                                     constant_argument_index = -1;
+};
+
+VkPipelineStageFlags2 ToVulkanPipelineStageFlags(VkShaderStageFlagBits shader_stage) {
+    switch (shader_stage) {
 
         case VK_SHADER_STAGE_VERTEX_BIT:
             return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
@@ -1745,183 +1756,196 @@ static VkPipelineStageFlags2 VkShaderStage2PipelineStage(VkShaderStageFlagBits _
     return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 }
 
-// Merge Shader Reflection Info with Cpp End Definitions, thus we can get binding relations between shader and cpp.
-static void MergeReflectInfo(
-    const VulkanDevice&     _device,
-    const SingleShaderInfo& _info,
-    // target shader compiled result
-    const PipelineShaderInfo& _shader_info,
-    // all shader compiled result in this pso
-    VkShaderStageFlagBits _stage,
-    // target shader stage
-    UnorderedMap<uint64, uint>& _out_hash_2_idx,
-    // hash to index
-    Moer::Array<ParamInfoFlags>& _out_reflect_flags,
-    // cpp param name hash to shader binding index
-    UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& _out_descriptor_bindings,
-    // set to binding to binding info, actual vk pipeline layout
-    VkPushConstantRange& _out_push_constant_ranges,
-    // push constant range
-    int&    _out_constant_idx,
-    uint64& _out_valid_bits,
-    // push constant index in cpp param
-    uint& _max_set // max set index, calculate descriptor set count
-) {
-    auto set_valid_bits = [&](uint _idx, bool _b_valid) {
-        if (_b_valid) {
-            _out_valid_bits |= 1ull << _idx;
-        }
-    };
-    for (const auto& hash : _shader_info.layout_hash) {
-        uint idx                         = uint(&hash - _shader_info.layout_hash.data());
-        _out_hash_2_idx[GetHash(hash)]   = idx;
-        const ShaderArgCppInfo& arg_info = _shader_info.arg_cpp_info[idx];
+void MarkShaderArgumentActive(uint argument_id, bool is_active, VulkanPipelineBindingInfo& out_binding_info) {
+    if (is_active) {
+        out_binding_info.active_argument_bits |= uint64(1) << argument_id;
+    }
+}
 
-        const UnorderedMap<std::string, ReflectParamInfo>& reflect_map  = _info.shader_param_map->reflect_map;
-        const auto                                         binding_iter = reflect_map.find(hash.data());
-        bool                                               b_found      = binding_iter != reflect_map.end();
-        if (arg_info.type != SDA_BindlessArray && !b_found) {
+void AccumulateDescriptorBinding(
+    uint                                set_id,
+    uint                                argument_id,
+    const VkDescriptorSetLayoutBinding& binding,
+    VulkanPipelineBindingInfo&          out_binding_info
+) {
+    auto&      set_layout       = out_binding_info.descriptor_set_layouts[set_id];
+    auto&      existing_binding = set_layout[binding.binding];
+    const auto stage_flags      = existing_binding.stageFlags;
+    existing_binding            = binding;
+    existing_binding.stageFlags |= stage_flags;
+    set_layout.bindings[binding.binding].param_idx = argument_id;
+}
+
+void AccumulateResourceBinding(
+    const ReflectParamInfo::Resource& resource,
+    const ShaderArgCppInfo&           argument_info,
+    uint                              argument_id,
+    VkShaderStageFlagBits             shader_stage,
+    VulkanPipelineBindingInfo&        out_binding_info
+) {
+    const VkDescriptorSetLayoutBinding binding{
+        .binding         = resource.binding,
+        .descriptorType  = METoVkDescriptorType(resource.desc_type),
+        .descriptorCount = std::max(resource.count, argument_info.array_size),
+        .stageFlags      = shader_stage
+    };
+    AccumulateDescriptorBinding(resource.set, argument_id, binding, out_binding_info);
+
+    VulkanShaderResourceState resource_state(resource.desc_type, resource.resource_type, resource.format);
+    if (argument_info.type == SDA_Texture) {
+        resource_state.b_sampled = resource.sampled;
+    }
+    out_binding_info.argument_flags[argument_id].state_flags = resource_state();
+    out_binding_info.argument_flags[argument_id].pipeline_flags |= ToVulkanPipelineStageFlags(shader_stage);
+    MarkShaderArgumentActive(argument_id, resource.custom_flag.active, out_binding_info);
+}
+
+void AccumulatePushConstantBinding(
+    const ReflectParamInfo::Constant& constant,
+    uint                              argument_id,
+    VkShaderStageFlagBits             shader_stage,
+    VulkanPipelineBindingInfo&        out_binding_info
+) {
+    out_binding_info.constant_argument_index = argument_id;
+    out_binding_info.push_constant_range.size =
+        std::max(out_binding_info.push_constant_range.size, constant.size);
+    out_binding_info.push_constant_range.stageFlags |= shader_stage;
+    MarkShaderArgumentActive(argument_id, constant.custom_flag.active, out_binding_info);
+}
+
+void AccumulateBindlessDescriptorBinding(
+    uint                                set_id,
+    uint                                argument_id,
+    const VkDescriptorSetLayoutBinding& binding,
+    VulkanPipelineBindingInfo&          out_binding_info
+) {
+    AccumulateDescriptorBinding(set_id, argument_id, binding, out_binding_info);
+    out_binding_info.descriptor_set_layouts[set_id].is_bindless = true;
+}
+
+void AccumulateBindlessBindings(
+    const ReflectParamInfo::BindlessArray& resources,
+    uint                                   argument_id,
+    VkShaderStageFlagBits                  shader_stage,
+    VulkanPipelineBindingInfo&             out_binding_info
+) {
+    // The bindless resource tables are paired with the indirect handle table.
+    if (resources.array) {
+        constexpr uint k_resource_descriptor_count = 5000;
+        constexpr uint k_sampler_descriptor_count  = 256;
+        assert(resources.array->binding == 0 && "Indirect Binding Slot Must be 0.");
+        AccumulateBindlessDescriptorBinding(
+            resources.array->set,
+            argument_id,
+            {.binding         = 0,
+             .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+             .descriptorCount = 1,
+             .stageFlags      = shader_stage},
+            out_binding_info
+        );
+        MarkShaderArgumentActive(argument_id, resources.array->custom_flag.active, out_binding_info);
+        if (resources.buffer) {
+            // Buffer descriptors share the indirect table's set at binding 1.
+            AccumulateBindlessDescriptorBinding(
+                resources.array->set,
+                argument_id,
+                {.binding         = 1,
+                 .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                 .descriptorCount = k_resource_descriptor_count,
+                 .stageFlags      = shader_stage},
+                out_binding_info
+            );
+            MarkShaderArgumentActive(argument_id, resources.buffer->custom_flag.active, out_binding_info);
+        }
+        if (resources.image) {
+            AccumulateBindlessDescriptorBinding(
+                resources.image->set,
+                argument_id,
+                {.binding         = 0,
+                 .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                 .descriptorCount = k_resource_descriptor_count,
+                 .stageFlags      = shader_stage},
+                out_binding_info
+            );
+            MarkShaderArgumentActive(argument_id, resources.image->custom_flag.active, out_binding_info);
+        }
+        if (resources.sampler) {
+            AccumulateBindlessDescriptorBinding(
+                resources.sampler->set,
+                argument_id,
+                {.binding         = 0,
+                 .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER,
+                 .descriptorCount = k_sampler_descriptor_count,
+                 .stageFlags      = shader_stage},
+                out_binding_info
+            );
+            MarkShaderArgumentActive(argument_id, resources.sampler->custom_flag.active, out_binding_info);
+        }
+    }
+    out_binding_info.argument_flags[argument_id].pipeline_flags |= ToVulkanPipelineStageFlags(shader_stage);
+}
+
+// Match this shader's reflection to C++ arguments and accumulate the pipeline's layout and binding metadata.
+void AccumulateShaderPipelineBindings(
+    const SingleShaderInfo&    shader,
+    const PipelineShaderInfo&  pipeline_shader_info,
+    VkShaderStageFlagBits      shader_stage,
+    VulkanPipelineBindingInfo& out_binding_info
+) {
+    for (uint argument_id = 0; argument_id < pipeline_shader_info.layout_hash.size(); ++argument_id) {
+        const auto  argument_name = pipeline_shader_info.layout_hash[argument_id];
+        const auto& argument_info = pipeline_shader_info.arg_cpp_info[argument_id];
+        out_binding_info.name_hash_to_argument_index[GetHash(argument_name)] = argument_id;
+
+        const auto& reflection = shader.shader_param_map->reflect_map;
+        const auto  reflection_name =
+            argument_info.type == SDA_BindlessArray ? ReflectParamInfo::bdls_name : argument_name;
+        const auto reflected_parameter = reflection.find(std::string(reflection_name));
+        if (reflected_parameter == reflection.end()) {
             continue;
         }
-        switch (arg_info.type) {
-            case SDA_BindlessArray: {
-                auto bdls_iter = reflect_map.find(ReflectParamInfo::bdls_name.data());
-                if (bdls_iter == reflect_map.end()) {
-                    // no bindless array found, skip
-                    break;
-                }
-                const ReflectParamInfo&                binding_info = bdls_iter->second;
-                const ReflectParamInfo::BindlessArray& bdls_array   = binding_info.spirv.bindless;
-                bool b_found_bindless_buffer                        = bdls_array.buffer.has_value();
-                bool b_found_bindless_texture                       = bdls_array.image.has_value();
-                bool b_found_bindless_sampler                       = bdls_array.sampler.has_value();
-                bool b_found_bindless_indirect                      = bdls_array.array.has_value();
-                uint texture_set                                    = 0;
-                uint buffer_set                                     = 0;
-                if (b_found_bindless_indirect) {
-                    const ReflectParamInfo::Bindless& indirect_binding_info = bdls_array.array.value();
 
-                    auto&                 array_set     = _out_descriptor_bindings[indirect_binding_info.set];
-                    static constexpr uint indirect_slot = 0;
-                    static constexpr uint sampler_slot  = 0;
-                    static constexpr uint texture_slot  = 0;
-                    static constexpr uint buffer_slot   = 1;
-                    assert(indirect_binding_info.binding == 0 && "Indirect Binding Slot Must be 0.");
-                    auto& vk_binding           = array_set[indirect_slot];
-                    vk_binding.binding         = indirect_slot;
-                    vk_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    vk_binding.descriptorCount = 1;
-                    vk_binding.stageFlags |= _stage;
-                    vk_binding.pImmutableSamplers = nullptr;
-                    _max_set   = uint(std::max(int(_max_set), int(indirect_binding_info.set)));
-                    buffer_set = indirect_binding_info.set;
-                    array_set.bindings[indirect_slot].param_idx = idx;
-                    array_set.is_bindless                       = true;
-                    set_valid_bits(idx, bdls_array.array.value().custom_flag.active);
-                    if (b_found_bindless_buffer) {
-                        array_set.bindings[buffer_slot].param_idx = idx;
-                        auto& temp_binding                        = array_set[buffer_slot];
-                        temp_binding.binding                      = buffer_slot;
-                        temp_binding.descriptorType               = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                        temp_binding.descriptorCount              = 5000;
-                        temp_binding.stageFlags |= _stage;
-                        temp_binding.pImmutableSamplers = nullptr;
-                        set_valid_bits(idx, bdls_array.buffer.value().custom_flag.active);
-                    }
-
-                    if (b_found_bindless_texture) {
-                        auto& texture_set = _out_descriptor_bindings[bdls_array.image.value().set];
-                        texture_set.bindings[texture_slot].param_idx = idx;
-
-                        auto& temp_binding           = texture_set[texture_slot];
-                        texture_set.is_bindless      = true;
-                        temp_binding.binding         = texture_slot;
-                        temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                        temp_binding.descriptorCount = 5000;
-                        temp_binding.stageFlags |= _stage;
-                        temp_binding.pImmutableSamplers = nullptr;
-
-                        _max_set = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
-                        set_valid_bits(idx, bdls_array.image.value().custom_flag.active);
-                    }
-
-                    if (b_found_bindless_sampler) {
-                        auto& sampler_set  = _out_descriptor_bindings[bdls_array.sampler.value().set];
-                        auto& temp_binding = sampler_set[sampler_slot];
-                        sampler_set.bindings[sampler_slot].param_idx = idx;
-                        sampler_set.is_bindless                      = true;
-                        temp_binding.binding                         = sampler_slot;
-                        temp_binding.descriptorType                  = VK_DESCRIPTOR_TYPE_SAMPLER;
-                        temp_binding.descriptorCount                 = 256;
-                        temp_binding.stageFlags |= _stage;
-                        temp_binding.pImmutableSamplers = nullptr;
-                        _max_set = uint(std::max(int(_max_set), int(bdls_array.sampler.value().set)));
-                        set_valid_bits(idx, bdls_array.sampler.value().custom_flag.active);
-                    }
-                }
-                _out_reflect_flags[idx].pipeline_flags |= VkShaderStage2PipelineStage(_stage);
-
+        const auto& parameter = reflected_parameter->second.spirv;
+        switch (argument_info.type) {
+            case SDA_BindlessArray:
+                AccumulateBindlessBindings(parameter.bindless, argument_id, shader_stage, out_binding_info);
                 break;
-            }
-            case SDA_Constant: {
-                const ReflectParamInfo&           binding_info = binding_iter->second;
-                const ReflectParamInfo::Constant& constant =
-                    std::get<ReflectParamInfo::Constant>(binding_info.spirv.resources.data);
-                _out_constant_idx              = idx;
-                _out_push_constant_ranges.size = std::max(_out_push_constant_ranges.size, constant.size);
-                _out_push_constant_ranges.stageFlags |= _stage;
-                // _out_reflect_flags[idx] = EncodeReflectInfo(0, constant.size, _out_push_constant_ranges.stageFlags);
-                set_valid_bits(idx, constant.custom_flag.active);
+            case SDA_Constant:
+                AccumulatePushConstantBinding(
+                    std::get<ReflectParamInfo::Constant>(parameter.resources.data),
+                    argument_id,
+                    shader_stage,
+                    out_binding_info
+                );
                 break;
-            }
             case SDA_Buffer:
             case SDA_Texture:
             case SDA_TLAS:
-            case SDA_Sampler: {
-                // _out_valid_bits |= 1 << idx;
-                const ReflectParamInfo&           binding_info = binding_iter->second;
-                const ReflectParamInfo::Resource& resource =
-                    std::get<ReflectParamInfo::Resource>(binding_info.spirv.resources.data);
-
-                // auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
-                // auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
-                auto  desc_type            = METoVkDescriptorType(resource.desc_type);
-                auto& set                  = _out_descriptor_bindings[resource.set];
-                auto& vk_binding           = set[resource.binding];
-                vk_binding.binding         = resource.binding;
-                vk_binding.descriptorType  = desc_type;
-                vk_binding.descriptorCount = std::max(resource.count, arg_info.array_size);
-                vk_binding.stageFlags |= _stage;
-                vk_binding.pImmutableSamplers            = nullptr;
-                set.bindings[resource.binding].param_idx = idx;
-                // _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
-                _max_set = uint(std::max(int(_max_set), int(resource.set)));
-                VulkanShaderResourceState state =
-                    VulkanShaderResourceState(resource.desc_type, resource.resource_type, resource.format);
-                if (arg_info.type == SDA_Buffer) {
-                } else if (arg_info.type == SDA_Texture) {
-                    state.b_sampled = resource.sampled;
-                }
-                _out_reflect_flags[idx].state_flags = state();
-                _out_reflect_flags[idx].pipeline_flags |= VkShaderStage2PipelineStage(_stage);
-                set_valid_bits(idx, resource.custom_flag.active);
+            case SDA_Sampler:
+                AccumulateResourceBinding(
+                    std::get<ReflectParamInfo::Resource>(parameter.resources.data),
+                    argument_info,
+                    argument_id,
+                    shader_stage,
+                    out_binding_info
+                );
                 break;
-            }
             default:
                 assert(false && "Unknown shader arg type.");
         }
     }
-    //finalize
-    for (auto& create_info : _out_descriptor_bindings) {
-        //fill missing bindings with empty
+}
+
+void FillMissingDescriptorBindings(UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& out_set_layouts) {
+    for (auto& [set_id, set_layout] : out_set_layouts) {
         uint max_binding = 0;
-        for (auto& binding : create_info.second.bindings) {
-            max_binding = std::max(max_binding, binding.first);
+        for (const auto& [binding_id, binding] : set_layout.bindings) {
+            max_binding = std::max(max_binding, binding_id);
         }
-        for (uint i = 0; i <= max_binding; ++i) {
-            if (create_info.second.bindings.find(i) == create_info.second.bindings.end()) {
-                auto& vk_binding              = create_info.second[i];
-                vk_binding.binding            = i;
+        for (uint binding_id = 0; binding_id <= max_binding; ++binding_id) {
+            if (set_layout.bindings.find(binding_id) == set_layout.bindings.end()) {
+                auto& vk_binding              = set_layout[binding_id];
+                vk_binding.binding            = binding_id;
                 vk_binding.descriptorType     = VK_DESCRIPTOR_TYPE_SAMPLER;
                 vk_binding.descriptorCount    = 0;
                 vk_binding.stageFlags         = 0;
@@ -1930,6 +1954,19 @@ static void MergeReflectInfo(
         }
     }
 }
+
+void InitializeVulkanPipelineLayout(VulkanPipelineState& pipeline, VulkanPipelineBindingInfo& binding_info) {
+    FillMissingDescriptorBindings(binding_info.descriptor_set_layouts);
+    if (binding_info.push_constant_range.size != 0) {
+        pipeline.InitPipelineLayout(
+            std::move(binding_info.descriptor_set_layouts), binding_info.push_constant_range
+        );
+    } else {
+        pipeline.InitPipelineLayout(std::move(binding_info.descriptor_set_layouts));
+    }
+}
+
+} // namespace
 
 PipelineHandle
 VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
@@ -2056,30 +2093,12 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
         shader_stage_info.module = shader_module;
         shader_stage_info.pName  = _info.entry_point.data();
     };
-    using TPipelineSets = UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>;
-    TPipelineSets       descriptor_bindings;
-    VkPushConstantRange push_constant_ranges{.offset = 0, .size = 0};
-    uint                max_set = 0;
+    VulkanPipelineBindingInfo binding_info;
+    binding_info.argument_flags.resize(_shader_info.layout_hash.size());
 
-    Moer::Array<ParamInfoFlags> reflect_flags(_shader_info.layout_hash.size());
-    uint64                      valid_bits = 0;
-    UnorderedMap<uint64, uint>  hash_2_idx;
-    int                         constant_idx = -1;
-
-    auto merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
-        MergeReflectInfo(
-            *this,
-            _info,
-            _shader_info,
-            _stage,
-            hash_2_idx,
-            reflect_flags,
-            descriptor_bindings,
-            push_constant_ranges,
-            constant_idx,
-            valid_bits,
-            max_set
-        );
+    auto accumulate_shader_bindings = [&](const SingleShaderInfo& shader,
+                                          VkShaderStageFlagBits   shader_stage) {
+        AccumulateShaderPipelineBindings(shader, _shader_info, shader_stage, binding_info);
     };
 
     // shader stage
@@ -2089,17 +2108,17 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
                 shader_stages.reserve(2);
                 emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
                 emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                accumulate_shader_bindings(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
             },
             [&](const ShaderVsGsPs& _shader_info_group) {
                 shader_stages.reserve(3);
                 emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
                 emplace_shader(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
                 emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                merge_reflect_info(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                accumulate_shader_bindings(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                accumulate_shader_bindings(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
+                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
             },
             [&](const ShaderVsHsDsPs& _shader_info_group) {
                 shader_stages.reserve(4);
@@ -2107,26 +2126,28 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
                 emplace_shader(_shader_info_group.hs, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
                 emplace_shader(_shader_info_group.ds, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT);
                 emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                merge_reflect_info(_shader_info_group.hs, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                merge_reflect_info(_shader_info_group.ds, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                accumulate_shader_bindings(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                accumulate_shader_bindings(_shader_info_group.hs, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
+                accumulate_shader_bindings(
+                    _shader_info_group.ds, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT
+                );
+                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
             },
             [&](const ShaderMsPs& _shader_info_group) {
                 shader_stages.reserve(2);
                 emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
                 emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                accumulate_shader_bindings(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
             },
             [&](const ShaderTsMsPs& _shader_info_group) {
                 shader_stages.reserve(3);
                 emplace_shader(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
                 emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
                 emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                accumulate_shader_bindings(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
+                accumulate_shader_bindings(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
             },
             [&](const ShaderRT& _shader_info_group) {
                 assert(false && "Should Use RT PSO.");
@@ -2314,34 +2335,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     dynamic_state.dynamicStateCount = states.size();
     dynamic_state.pDynamicStates    = states.data();
 
-    // init descriptor set layouts and pipeline resource cache
-    // Moer::Array<TDescriptorSetLayoutBindingArray> desc_sets_array(max_set + 1u);
-    // for (const auto& [set_idx, desc_set] : descriptor_bindings) {
-    //     TDescriptorSetLayoutBindingArray desc_set_layouts;
-    //     for (const auto& [binding_idx, binding] : desc_set) { desc_set_layouts.push_back(binding); }
-    //     desc_sets_array[set_idx] = std::move(desc_set_layouts);
-    // }
-    // vk_pso->InitDescriptorSetLayouts(desc_sets_array);
-    // vk_pso->InitPipelineResourceCache(desc_sets_array);
-    if (push_constant_ranges.size != 0) {
-        vk_pso->InitPipelineLayout(std::move(descriptor_bindings), std::move(push_constant_ranges));
-
-    } else {
-        vk_pso->InitPipelineLayout(std::move(descriptor_bindings));
-    }
-
-    // const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
-    // // create pipeline layout
-    // VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
-    // pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    // pipeline_layout_create_info.pNext                  = nullptr;
-    // pipeline_layout_create_info.flags                  = 0;
-    // pipeline_layout_create_info.setLayoutCount         = layouts.size();
-    // pipeline_layout_create_info.pSetLayouts            = layouts.data();
-    // pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size == 0 ? 0 : 1;
-    // pipeline_layout_create_info.pPushConstantRanges    = &push_constant_ranges;
-
-    // vk_pso->CreatePipelineLayout(pipeline_layout_create_info);
+    InitializeVulkanPipelineLayout(*vk_pso, binding_info);
     VkGraphicsPipelineCreateInfo pipeline_create_info{};
     pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipeline_create_info.pNext               = &rendering_create_info;
@@ -2374,18 +2368,16 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     }
     return PipelineHandle{
         .handle            = reinterpret_cast<uint64>(vk_pso),
-        .binding_infos     = std::move(reflect_flags),
-        .hash_2_info_index = std::move(hash_2_idx),
-        .valid_bits        = valid_bits,
-        .constant_idx      = constant_idx
+        .binding_infos     = std::move(binding_info.argument_flags),
+        .hash_2_info_index = std::move(binding_info.name_hash_to_argument_index),
+        .valid_bits        = binding_info.active_argument_bits,
+        .constant_idx      = binding_info.constant_argument_index
     };
 }
 
 PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
 
     auto* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute);
-
-    using TPipelineSets = UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>;
 
     VkComputePipelineCreateInfo pipeline_create_info{};
     pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -2397,27 +2389,11 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
 
     VkPipelineShaderStageCreateInfo& shader_stage = pipeline_create_info.stage;
 
-    TPipelineSets              descriptor_bindings;
-    VkPushConstantRange        push_constant_ranges{.offset = 0, .size = 0};
-    uint                       max_set = 0;
-    Array<ParamInfoFlags>      reflect_flags(_shader_info.layout_hash.size());
-    UnorderedMap<uint64, uint> hash_2_idx;
-    int                        constant_idx = -1;
-    uint64                     valid_bits   = 0;
-    auto merge_reflect_info = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
-        MergeReflectInfo(
-            *this,
-            _info,
-            _shader_info,
-            _stage,
-            hash_2_idx,
-            reflect_flags,
-            descriptor_bindings,
-            push_constant_ranges,
-            constant_idx,
-            valid_bits,
-            max_set
-        );
+    VulkanPipelineBindingInfo binding_info;
+    binding_info.argument_flags.resize(_shader_info.layout_hash.size());
+    auto accumulate_shader_bindings = [&](const SingleShaderInfo& shader,
+                                          VkShaderStageFlagBits   shader_stage) {
+        AccumulateShaderPipelineBindings(shader, _shader_info, shader_stage, binding_info);
     };
 
     auto emplace_shader = [&](SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
@@ -2437,7 +2413,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
         [&](auto&& _shader_info_group) {
             using T = std::decay_t<decltype(_shader_info_group)>;
             if constexpr (std::is_same_v<T, ShaderCs>) {
-                merge_reflect_info(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
+                accumulate_shader_bindings(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
                 emplace_shader(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
             } else {
                 LOG_ERROR("Unsupported shader group type: {}", typeid(T).name());
@@ -2446,34 +2422,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
         _shader_info.shader_group
     );
 
-    // init descriptor set layouts and pipeline resource cache
-    // Moer::Array<TDescriptorSetLayoutBindingArray> desc_sets_array(max_set + 1u);
-    // for (const auto& [set_idx, desc_set] : descriptor_bindings) {
-    //     TDescriptorSetLayoutBindingArray desc_set_layouts;
-    //     for (const auto& [binding_idx, binding] : desc_set) { desc_set_layouts.push_back(binding); }
-    //     desc_sets_array[set_idx] = std::move(desc_set_layouts);
-    // }
-    // vk_pso->InitDescriptorSetLayouts(desc_sets_array);
-    // vk_pso->InitPipelineResourceCache(desc_sets_array);
-
-    // const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
-    if (push_constant_ranges.size != 0) {
-        vk_pso->InitPipelineLayout(std::move(descriptor_bindings), std::move(push_constant_ranges));
-
-    } else {
-        vk_pso->InitPipelineLayout(std::move(descriptor_bindings));
-    }
-    // create pipeline layout
-    // VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
-    // pipeline_layout_create_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    // pipeline_layout_create_info.pNext                  = nullptr;
-    // pipeline_layout_create_info.flags                  = 0;
-    // pipeline_layout_create_info.setLayoutCount         = layouts.size();
-    // pipeline_layout_create_info.pSetLayouts            = layouts.data();
-    // pipeline_layout_create_info.pushConstantRangeCount = push_constant_ranges.size == 0 ? 0 : 1;
-    // pipeline_layout_create_info.pPushConstantRanges    = &push_constant_ranges;
-
-    // vk_pso->CreatePipelineLayout(pipeline_layout_create_info);
+    InitializeVulkanPipelineLayout(*vk_pso, binding_info);
 
     pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipeline_create_info.pNext              = nullptr;
@@ -2492,10 +2441,10 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
 
     return PipelineHandle{
         .handle            = reinterpret_cast<uint64>(vk_pso),
-        .binding_infos     = std::move(reflect_flags),
-        .hash_2_info_index = std::move(hash_2_idx),
-        .valid_bits        = valid_bits,
-        .constant_idx      = constant_idx
+        .binding_infos     = std::move(binding_info.argument_flags),
+        .hash_2_info_index = std::move(binding_info.name_hash_to_argument_index),
+        .valid_bits        = binding_info.active_argument_bits,
+        .constant_idx      = binding_info.constant_argument_index
     };
 }
 
