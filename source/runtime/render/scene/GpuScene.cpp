@@ -649,7 +649,7 @@ void GpuScene::InitRaytracingScene(
         RaytracingGeometryInfo geometry_info{};
         geometry_info.build_flags =
             ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
-        geometry_info.vertex_format = PF_R32G32B32_SFLOAT;
+        geometry_info.vertex_format = EVertexFormat::Float3;
         geometry_info.index_type    = IET_UINT32;
 
         m_mesh_key_to_primitive_table_offset[mesh.key] =

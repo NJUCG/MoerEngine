@@ -15,6 +15,115 @@
 #include <utility>
 
 namespace Moer::Render {
+namespace {
+void ValidateMetalBufferInfo(const BufferInfo& info) {
+    if (info.size == 0 || info.stride == 0) Unsupported("zero-sized buffers");
+    const bool texel_buffer =
+        (info.usage & EBufferUsageFlags::TEXTURE_BUFFER) != EBufferUsageFlags::NONE;
+    if (texel_buffer && (info.stride != sizeof(uint32_t) ||
+                         (info.format != PF_UNDEFINED && info.format != PF_R32_UINT))) {
+        Unsupported("this Metal texel buffer format");
+    }
+}
+
+MTLResourceOptions ToMetalBufferResourceOptions(EBufferUsageFlags usage) {
+    return (usage & EBufferUsageFlags::CPU_VISIBLE) != EBufferUsageFlags::NONE ?
+        MTLResourceStorageModeShared : MTLResourceStorageModePrivate;
+}
+
+struct MetalBufferLayout {
+    NSUInteger byte_size;
+    NSUInteger texel_width = 0;
+    NSUInteger texel_height = 0;
+};
+
+MetalBufferLayout CalculateMetalBufferLayout(id<MTLDevice> device, const BufferInfo& info) {
+    if ((info.usage & EBufferUsageFlags::TEXTURE_BUFFER) == EBufferUsageFlags::NONE) {
+        return {info.size * info.stride};
+    }
+    const uint count = static_cast<uint>(info.size);
+    const NSUInteger linear_alignment =
+        [device minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatR32Uint];
+    const NSUInteger texel_width =
+        count > 4096 ? 4096 : std::max<NSUInteger>(count, linear_alignment / sizeof(uint32_t));
+    const NSUInteger texel_height = (count + 4095) / 4096;
+    return {texel_width * texel_height * sizeof(uint32_t), texel_width, texel_height};
+}
+
+id<MTLTexture> CreateMetalTexelBufferTexture(id<MTLBuffer> buffer, const MetalBufferLayout& layout) {
+    if (layout.texel_width == 0) return nil;
+    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Uint
+                                      width:layout.texel_width height:layout.texel_height mipmapped:NO];
+    descriptor.storageMode = buffer.storageMode;
+    descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    id<MTLTexture> texture = [buffer newTextureWithDescriptor:descriptor offset:0
+                                                bytesPerRow:layout.texel_width * sizeof(uint32_t)];
+    if (texture == nil) Unsupported("this Metal texel buffer allocation");
+    return texture;
+}
+
+void ValidateMetalTextureLayout(const TextureInfo& info) {
+    const bool is_2d = info.dimension == ETextureDimension::TEX_2D && info.array_size == 1;
+    const bool is_2d_array = info.dimension == ETextureDimension::TEX_2D_ARRAY && info.array_size > 0;
+    const bool is_cube = info.dimension == ETextureDimension::TEX_CUBE &&
+                         info.array_size == 6 && info.extent.x == info.extent.y;
+    if ((!is_2d && !is_2d_array && !is_cube) || info.depth != 1 ||
+        info.num_mips < 1 || info.num_samples != 1 || info.extent.x <= 0 || info.extent.y <= 0) {
+        throw std::runtime_error(
+            "Metal RHI has not implemented texture layout: dimension=" +
+            std::to_string(static_cast<uint>(info.dimension)) +
+            " extent=" + std::to_string(info.extent.x) + "x" + std::to_string(info.extent.y) +
+            " array=" + std::to_string(info.array_size) +
+            " mips=" + std::to_string(info.num_mips) +
+            " samples=" + std::to_string(info.num_samples)
+        );
+    }
+}
+
+void ValidateDepthTextureUsage(EPixelFormat format, ETextureUsageFlags usage) {
+    const bool is_depth = format == PF_D16_UNORM || format == PF_D32_SFLOAT ||
+                          format == PF_D32_SFLOAT_S8_UINT;
+    if ((is_depth && (usage & ETextureUsageFlags::COLOR_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) ||
+        (!is_depth && (usage & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) ||
+        (is_depth && (usage & ETextureUsageFlags::UNORDERED_ACCESS) != ETextureUsageFlags::UNDEFINED)) {
+        Unsupported("this texture format and usage combination");
+    }
+}
+
+MTLTextureUsage ToMetalTextureUsage(ETextureUsageFlags usage) {
+    MTLTextureUsage native_usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
+    const auto attachment_usage =
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+    if ((usage & attachment_usage) != ETextureUsageFlags::UNDEFINED) {
+        native_usage |= MTLTextureUsageRenderTarget;
+    }
+    if ((usage & ETextureUsageFlags::UNORDERED_ACCESS) != ETextureUsageFlags::UNDEFINED) {
+        native_usage |= MTLTextureUsageShaderWrite;
+    }
+    return native_usage;
+}
+
+MTLTextureDescriptor* CreateMetalTextureDescriptor(const TextureInfo& info, MTLPixelFormat native_format) {
+    MTLTextureDescriptor* desc = info.dimension == ETextureDimension::TEX_CUBE ?
+        [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:native_format
+                                                              size:info.extent.x
+                                                         mipmapped:info.num_mips > 1] :
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:native_format
+                                                            width:info.extent.x
+                                                           height:info.extent.y
+                                                        mipmapped:info.num_mips > 1];
+    if (info.dimension == ETextureDimension::TEX_2D_ARRAY) {
+        desc.textureType = MTLTextureType2DArray;
+        desc.arrayLength = info.array_size;
+    }
+    desc.mipmapLevelCount = info.num_mips;
+    desc.storageMode = MTLStorageModePrivate;
+    desc.usage = ToMetalTextureUsage(info.usage);
+    return desc;
+}
+} // namespace
+
 struct MetalDevice::Native {
     id<MTLDevice> device;
     MetalGraphicsQueuePtr graphics;
@@ -41,90 +150,25 @@ FenceRef MetalDevice::CreateFence() { return FenceRef(MoerNew(MetalFence)()); }
 BufferRef MetalDevice::CreateBuffer(
     std::string_view name, uint count, uint stride, EBufferUsageFlags usage, EPixelFormat format
 ) {
-    if (count == 0 || stride == 0) Unsupported("zero-sized buffers");
     const BufferInfo info(count, stride, usage, format);
-    const bool texel_buffer =
-        (usage & EBufferUsageFlags::TEXTURE_BUFFER) != EBufferUsageFlags::NONE;
-    if (texel_buffer && (stride != sizeof(uint32_t) ||
-                         (format != PF_UNDEFINED && format != PF_R32_UINT))) {
-        Unsupported("this Metal texel buffer format");
-    }
-    const MTLResourceOptions options =
-        (usage & EBufferUsageFlags::CPU_VISIBLE) != EBufferUsageFlags::NONE ?
-            MTLResourceStorageModeShared : MTLResourceStorageModePrivate;
-    const NSUInteger linear_alignment = texel_buffer ?
-        [native_->device minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatR32Uint] : 0;
-    const NSUInteger texel_width = texel_buffer ?
-        (count > 4096 ? 4096 : std::max<NSUInteger>(count, linear_alignment / sizeof(uint32_t))) : 0;
-    const NSUInteger texel_height = texel_buffer ? (count + 4095) / 4096 : 0;
-    const NSUInteger allocation_size = texel_buffer ?
-        texel_width * texel_height * sizeof(uint32_t) : info.size * info.stride;
-    id<MTLBuffer> buffer = [native_->device newBufferWithLength:allocation_size
+    ValidateMetalBufferInfo(info);
+    const MTLResourceOptions options = ToMetalBufferResourceOptions(usage);
+    const MetalBufferLayout layout = CalculateMetalBufferLayout(native_->device, info);
+
+    id<MTLBuffer> buffer = [native_->device newBufferWithLength:layout.byte_size
                                                        options:options];
     if (buffer == nil) throw std::runtime_error("Cannot allocate Metal buffer");
-    id<MTLTexture> texel_texture = nil;
-    if (texel_buffer) {
-        MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Uint
-                                          width:texel_width height:texel_height mipmapped:NO];
-        descriptor.storageMode = buffer.storageMode;
-        descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-        texel_texture = [buffer newTextureWithDescriptor:descriptor offset:0
-                                            bytesPerRow:texel_width * sizeof(uint32_t)];
-        if (texel_texture == nil) Unsupported("this Metal texel buffer allocation");
-    }
+    id<MTLTexture> texel_texture = CreateMetalTexelBufferTexture(buffer, layout);
     auto result = BufferRef(MoerNew(MetalBuffer)(info, buffer, texel_texture));
     result->SetName(name);
     return result;
 }
 TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& info) {
-    const bool is_2d = info.dimension == ETextureDimension::TEX_2D && info.array_size == 1;
-    const bool is_2d_array = info.dimension == ETextureDimension::TEX_2D_ARRAY && info.array_size > 0;
-    const bool is_cube = info.dimension == ETextureDimension::TEX_CUBE &&
-                         info.array_size == 6 && info.extent.x == info.extent.y;
-    if ((!is_2d && !is_2d_array && !is_cube) || info.depth != 1 ||
-        info.num_mips < 1 || info.num_samples != 1 || info.extent.x <= 0 || info.extent.y <= 0) {
-        throw std::runtime_error(
-            "Metal RHI has not implemented texture layout: dimension=" +
-            std::to_string(static_cast<uint>(info.dimension)) +
-            " extent=" + std::to_string(info.extent.x) + "x" + std::to_string(info.extent.y) +
-            " array=" + std::to_string(info.array_size) +
-            " mips=" + std::to_string(info.num_mips) +
-            " samples=" + std::to_string(info.num_samples)
-        );
-    }
+    ValidateMetalTextureLayout(info);
     const MTLPixelFormat native_format = ToMetalFormat(info.format);
-    const bool is_depth = info.format == PF_D16_UNORM || info.format == PF_D32_SFLOAT ||
-                          info.format == PF_D32_SFLOAT_S8_UINT;
-    if ((is_depth && (info.usage & ETextureUsageFlags::COLOR_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) ||
-        (!is_depth && (info.usage & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) ||
-        (is_depth && (info.usage & ETextureUsageFlags::UNORDERED_ACCESS) != ETextureUsageFlags::UNDEFINED)) {
-        Unsupported("this texture format and usage combination");
-    }
-    MTLTextureDescriptor* desc = is_cube ?
-        [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:native_format
-                                                              size:info.extent.x
-                                                         mipmapped:info.num_mips > 1] :
-        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:native_format
-                                                            width:info.extent.x
-                                                           height:info.extent.y
-                                                        mipmapped:info.num_mips > 1];
-    if (is_2d_array) {
-        desc.textureType = MTLTextureType2DArray;
-        desc.arrayLength = info.array_size;
-    }
-    desc.mipmapLevelCount = info.num_mips;
-    desc.storageMode = MTLStorageModePrivate;
-    desc.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
-    if ((info.usage & ETextureUsageFlags::COLOR_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) {
-        desc.usage |= MTLTextureUsageRenderTarget;
-    }
-    if ((info.usage & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) {
-        desc.usage |= MTLTextureUsageRenderTarget;
-    }
-    if ((info.usage & ETextureUsageFlags::UNORDERED_ACCESS) != ETextureUsageFlags::UNDEFINED) {
-        desc.usage |= MTLTextureUsageShaderWrite;
-    }
+    ValidateDepthTextureUsage(info.format, info.usage);
+
+    MTLTextureDescriptor* desc = CreateMetalTextureDescriptor(info, native_format);
     id<MTLTexture> texture = [native_->device newTextureWithDescriptor:desc];
     if (texture == nil) throw std::runtime_error("Cannot allocate Metal texture");
     auto result = TextureRef(MoerNew(MetalTexture)(info, texture));

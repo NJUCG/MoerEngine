@@ -150,8 +150,8 @@ void CheckGraphicsPipeline() {
                               .shader_type = EShaderType::ST_FRAGMENT};
     PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
     VertexStream stream;
-    stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32G32_SFLOAT),
-                             Moer::Render::VertexElement(PF_R32G32B32A32_SFLOAT)});
+    stream.EmplacePerVertex({Moer::Render::VertexElement(EVertexFormat::Float2),
+                             Moer::Render::VertexElement(EVertexFormat::Float4)});
     GfxPsoCreateInfo info(
         RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), std::move(stream),
         {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(PF_B8G8R8A8_UNORM)}
@@ -582,12 +582,19 @@ void CheckIndexedGraphicsDraw(bool indirect) {
     constexpr std::string_view source = R"(
         #include <metal_stdlib>
         using namespace metal;
-        struct VertexInput { float2 position [[attribute(0)]]; };
-        struct VertexOutput { float4 position [[position]]; };
+        struct VertexInput {
+            float2 position [[attribute(0)]];
+            float4 color [[attribute(1)]];
+            uint marker [[attribute(2)]];
+        };
+        struct VertexOutput { float4 position [[position]]; float4 color; };
         vertex VertexOutput indexed_vertex(VertexInput input [[stage_in]]) {
-            return {float4(input.position, 0.0, 1.0)};
+            return {float4(input.position, 0.0, 1.0),
+                    input.marker == 0x12345678u ? input.color : float4(1.0, 0.0, 0.0, 1.0)};
         }
-        fragment float4 indexed_fragment() { return float4(0.0, 1.0, 0.0, 1.0); }
+        fragment float4 indexed_fragment(VertexOutput input [[stage_in]]) {
+            return input.color;
+        }
     )";
     std::vector<Moer::uint8> code(source.begin(), source.end());
     SingleShaderInfo vertex{.entry_point = "indexed_vertex", .shader_data = code,
@@ -596,17 +603,29 @@ void CheckIndexedGraphicsDraw(bool indirect) {
                               .shader_type = EShaderType::ST_FRAGMENT};
     PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
     VertexStream stream;
-    stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
+    stream.EmplacePerVertex({Moer::Render::VertexElement(EVertexFormat::Float2),
+                             Moer::Render::VertexElement(EVertexFormat::UByte4Normalized),
+                             Moer::Render::VertexElement(EVertexFormat::UInt)});
     GfxPsoCreateInfo info(
         RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), std::move(stream),
         {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)}
     );
     RasterPipeline raster(RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders)));
-    constexpr float positions[] = {-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
+    struct Vertex {
+        float position[2];
+        uint8_t color[4];
+        uint32_t marker;
+    };
+    static_assert(sizeof(Vertex) == 16);
+    constexpr Vertex vertices[] = {
+        {{-1.0f, -1.0f}, {64, 128, 192, 255}, 0x12345678u},
+        {{3.0f, -1.0f}, {64, 128, 192, 255}, 0x12345678u},
+        {{-1.0f, 3.0f}, {64, 128, 192, 255}, 0x12345678u}
+    };
     constexpr uint16_t indices[] = {99, 0, 1, 2};
     BufferRef vertex_buffer = RenderDevice::Get().CreateBuffer(
         "Metal indexed draw vertices",
-        BufferInfo{sizeof(positions), 1,
+        BufferInfo{sizeof(vertices), 1,
                    EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST}
     );
     BufferRef index_buffer = RenderDevice::Get().CreateBuffer(
@@ -616,8 +635,8 @@ void CheckIndexedGraphicsDraw(bool indirect) {
     );
     CommandList upload(EQueueType::Graphics);
     upload.CopyFrom(
-        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(positions), sizeof(positions)),
-        vertex_buffer->GetView(0, sizeof(positions))
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(vertices), sizeof(vertices)),
+        vertex_buffer->GetView(0, sizeof(vertices))
     );
     upload.CopyFrom(
         std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(indices), sizeof(indices)),
@@ -687,11 +706,11 @@ void CheckIndexedGraphicsDraw(bool indirect) {
     [command waitUntilCompleted];
     const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
     if (command.status != MTLCommandBufferStatusCompleted ||
-        middle[0] != 0 || middle[1] != 255 || middle[2] != 0 || middle[3] != 255) {
-        throw std::runtime_error("Metal RHI indexed triangle draw readback is not green");
+        middle[0] != 64 || middle[1] != 128 || middle[2] != 192 || middle[3] != 255) {
+        throw std::runtime_error("Metal RHI mixed vertex format draw readback is incorrect");
     }
     std::cout << (indirect ? "RHI counted indexed indirect draw" : "RHI indexed graphics draw")
-              << " and GPU color readback: success" << std::endl;
+              << " with Float2/UByte4Normalized/UInt vertex fetch and GPU color readback: success" << std::endl;
 }
 
 void CheckDepthGraphicsDraw(EPixelFormat depth_format, bool depth_only_first = false) {

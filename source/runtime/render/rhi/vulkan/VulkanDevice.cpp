@@ -12,6 +12,7 @@
 #include "VulkanRHIResource.h"
 #include "VulkanSubmissionDiagnostics.h"
 #include "VulkanUtil.h"
+#include "VulkanVertexFormat.h"
 #include "plugin/VulkanCooperativeSupport.h"
 #include "plugin/VulkanNrdPlugin.h"
 #include "vulkanextension/VulkanExtension.h"
@@ -44,6 +45,7 @@
 #include <optional>
 #include <platform/Platform.h>
 #include <shared_mutex>
+#include <stdexcept>
 #include <variant>
 
 #ifndef MOER_STR
@@ -2158,11 +2160,14 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
             uint binding_stride = 0;
             uint attrib_offset  = 0;
             for (const VertexElement& attribute : binding.vertex_elements) {
-                const FormatInfo& format_info = g_platform_pixel_formats[uint(attribute.format)];
+                const VkFormat format = ToVulkanVertexFormat(attribute.format);
+                if (format == VK_FORMAT_UNDEFINED) {
+                    throw std::invalid_argument("Invalid Vulkan vertex attribute format");
+                }
                 attribute_descs.emplace_back(
-                    attrib_location++, binding_offset, format_info.format, attrib_offset
+                    attrib_location++, binding_offset, format, attrib_offset
                 );
-                attrib_offset += format_info.stride;
+                attrib_offset += GetVertexFormatByteSize(attribute.format);
                 binding_stride = attrib_offset;
             }
             binding_descs.emplace_back(

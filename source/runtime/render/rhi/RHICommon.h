@@ -4,6 +4,7 @@
 #include "PixelFormat.h"
 #include "RenderAPI.h"
 #include "RenderCommon.h"
+#include "VertexFormat.h"
 #include "math/Base.h"
 #include "misc/EnumBitOperation.h"
 #include "misc/STL.h"
