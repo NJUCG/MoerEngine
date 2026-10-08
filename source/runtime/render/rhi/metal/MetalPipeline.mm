@@ -208,7 +208,7 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
                 attribute.format = ToMetalVertexFormat(element.format);
                 attribute.offset = stride;
                 attribute.bufferIndex = metal_buffer_index;
-                stride += GetByteFromPixelFormat(element.format);
+                stride += GetVertexFormatByteSize(element.format);
             }
             auto* layout = vertex_descriptor.layouts[metal_buffer_index];
             layout.stride = stride;

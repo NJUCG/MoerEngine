@@ -22,8 +22,8 @@ const VertexStream& VertexFactory::GetVertexStream() const {
         // Initialize the vertex stream
         const auto& attrs = VertexAttributesTool::GetArrayFromBitmask(mask);
         for (const auto& attr : attrs) {
-            const auto& pixel_format = VertexAttributesTool::GetPixelFormat(attr);
-            stream.EmplacePerVertex({Moer::Render::VertexElement(pixel_format)});
+            const auto vertex_format = VertexAttributesTool::GetVertexFormat(attr);
+            stream.EmplacePerVertex({Moer::Render::VertexElement(vertex_format)});
         }
         return stream;
     }

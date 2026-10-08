@@ -119,7 +119,7 @@ void Test() {
     simple_triangle.transform_buffer     = nullptr;
     simple_triangle.vertex_buffer        = vertex_buffer;
     simple_triangle.vertex_buffer_stride = sizeof(Moer::Vector3f);
-    simple_triangle.vertex_element_type  = PF_R32G32B32_SFLOAT;
+    simple_triangle.vertex_element_type  = EVertexFormat::Float3;
 
     Moer::Array<RHIRayTracingBLASGeometry> blas_geometries;
     RHIRayTracingBLASGeometry              blas_geo{};

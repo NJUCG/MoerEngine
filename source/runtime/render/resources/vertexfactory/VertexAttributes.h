@@ -1,7 +1,7 @@
 #pragma once
 
-#include "PixelFormat.h"
 #include "misc/Traits.h"
+#include "rhi/VertexFormat.h"
 
 namespace Moer {
 
@@ -10,20 +10,17 @@ namespace Moer {
 
 // *************************************************
 // * Vertex Attributes Table
-// *   Name, Type, PixelFormat
-#define VERTEX_ATTRIBUTES_TABLE                 \
-    X(VA_POSITION, float3, PF_R32G32B32_SFLOAT) \
-    X(VA_NORMAL, uint, PF_R32_UINT)             \
-    X(VA_TANGENT, uint, PF_R32_UINT)            \
-    X(VA_TEXCOORD0, float2, PF_R32G32_SFLOAT)   \
-    X(VA_TEXCOORD1, float2, PF_R32G32_SFLOAT)   \
-// X(VA_INSTANCEID, uint, PF_R32_UINT)         \
-    // *                                        \
-    // *************************************************
+// *   Name, Type, VertexFormat
+#define VERTEX_ATTRIBUTES_TABLE                   \
+    X(VA_POSITION, float3, EVertexFormat::Float3)  \
+    X(VA_NORMAL, uint, EVertexFormat::UInt)        \
+    X(VA_TANGENT, uint, EVertexFormat::UInt)       \
+    X(VA_TEXCOORD0, float2, EVertexFormat::Float2) \
+    X(VA_TEXCOORD1, float2, EVertexFormat::Float2)
 
 // EVertexAttributes
 enum class EVertexAttributes : size_t {
-#define X(E, T, PF) E,
+#define X(E, T, VF) E,
     VERTEX_ATTRIBUTES_TABLE
 #undef X
         VA_NUM
@@ -39,7 +36,7 @@ class VertexAttributesTool {
 public:
     static size_t GetSize(EVertexAttributes _attr) {
         switch (_attr) {
-#define X(E, T, PF)            \
+#define X(E, T, VF)            \
     case EVertexAttributes::E: \
         return sizeof(T);
             VERTEX_ATTRIBUTES_TABLE
@@ -51,18 +48,18 @@ public:
         return 0;
     }
 
-    static EPixelFormat GetPixelFormat(EVertexAttributes _attr) {
-        switch (_attr) {
-#define X(E, T, PF)            \
+    static constexpr EVertexFormat GetVertexFormat(EVertexAttributes attr) {
+        switch (attr) {
+#define X(E, T, VF)            \
     case EVertexAttributes::E: \
-        return PF;
+        return VF;
             VERTEX_ATTRIBUTES_TABLE
 #undef X
             default:
                 break;
         }
         assert(false && "Invalid EVertexAttributes");
-        return EPixelFormat::PF_UNDEFINED;
+        return EVertexFormat::Undefined;
     }
 
     static VertexAttributesBitmask GetBitmaskFromArray(Moer::Array<EVertexAttributes> attrs) {
@@ -95,21 +92,20 @@ template<EVertexAttributes E>
 struct VertexAttributesType;
 
 template<EVertexAttributes E>
-struct VertexAttributesPixelFormat;
+struct VertexAttributesFormat;
 
-#define X(E, T, PF)                                     \
-    template<>                                          \
+#define X(E, T, VF)                                    \
+    template<>                                        \
     struct VertexAttributesType<EVertexAttributes::E> { \
         using type = T;                                 \
     };
 VERTEX_ATTRIBUTES_TABLE
 #undef X
 
-// PF is a PixelFormat enum
-#define X(E, T, PF_)                                           \
-    template<>                                                 \
-    struct VertexAttributesPixelFormat<EVertexAttributes::E> { \
-        constexpr static EPixelFormat PF = PF_;                \
+#define X(E, T, VF)                                       \
+    template<>                                           \
+    struct VertexAttributesFormat<EVertexAttributes::E> { \
+        static constexpr EVertexFormat k_format = VF;     \
     };
 VERTEX_ATTRIBUTES_TABLE
 #undef X

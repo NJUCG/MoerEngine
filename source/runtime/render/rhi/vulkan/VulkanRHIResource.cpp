@@ -12,6 +12,7 @@
 #include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanSwapChain.h"
+#include "VulkanVertexFormat.h"
 #include <type_traits>
 
 #include "log/LogSystem.h"
@@ -3087,6 +3088,11 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
             assert(_info.segments.size() > 0 && "No segment to build");
 
+            const VkFormat vertex_format = ToVulkanVertexFormat(_info.vertex_format);
+            if (vertex_format == VK_FORMAT_UNDEFINED) {
+                throw std::invalid_argument("Invalid Vulkan ray tracing vertex format");
+            }
+
             VkGeometryTypeKHR geometry_type = VulkanEnumTranslator::METoVKGeometryType(_info.segments[0].type);
             
             for (const auto& segment : _info.segments) {
@@ -3101,7 +3107,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 geometry.geometryType = VulkanEnumTranslator::METoVKGeometryType(segment.type);
                 geometry.flags = VulkanEnumTranslator::METoVKGeometryFlags(segment.flags);
                 geometry.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-                geometry.geometry.triangles.vertexFormat = g_platform_pixel_formats[_info.vertex_format].format;
+                geometry.geometry.triangles.vertexFormat = vertex_format;
                 geometry.geometry.triangles.vertexStride = segment.vertex_stride;
                 geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset;
                 // maxVertex: Vulkan spec 要求为 vertexData 中可被寻址的最高顶点索引。

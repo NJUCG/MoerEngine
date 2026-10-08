@@ -328,9 +328,9 @@ static uint UploadFontAtlasAndCreatePipelines(
             auto&        shader_manager = ShaderManager::Get();
             VertexStream vertex_stream;
             vertex_stream.EmplacePerVertex(
-                {Moer::Render::VertexElement(PF_R32G32_SFLOAT),
-                 Moer::Render::VertexElement(PF_R32G32_SFLOAT),
-                 Moer::Render::VertexElement(PF_R8G8B8A8_UNORM)}
+                {Moer::Render::VertexElement(EVertexFormat::Float2),
+                 Moer::Render::VertexElement(EVertexFormat::Float2),
+                 Moer::Render::VertexElement(EVertexFormat::UByte4Normalized)}
             );
 
             for (auto format : ImGuiData::s_supported_formats) {

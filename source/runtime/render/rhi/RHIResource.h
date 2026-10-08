@@ -192,7 +192,7 @@ class RHITextureBarrierInfo;
 #pragma region utils definition
 
 struct VertexAttrb {
-    EPixelFormat format;
+    EVertexFormat format;
 };
 
 struct VertexBinding {
@@ -213,7 +213,7 @@ struct VertexElement {
     VertexElement(
         uint8_t          _binding_index,
         uint8_t          _offset,
-        EPixelFormat     _format,
+        EVertexFormat    _format,
         uint8_t          _attribute_index,
         uint16_t         _stride,
         EVertexInputRate _input_rate
@@ -230,13 +230,13 @@ struct VertexElement {
                attribute_index == other.attribute_index && stride == other.stride &&
                input_rate == other.input_rate;
     }
-    uint8_t                      binding_index;
-    uint8_t                      offset;
-    EnumInByte<EPixelFormat>     format;
-    uint8_t                      attribute_index;
-    uint16_t                     stride;
+    uint8_t                     binding_index;
+    uint8_t                     offset;
+    EVertexFormat               format;
+    uint8_t                     attribute_index;
+    uint16_t                    stride;
     EnumInByte<EVertexInputRate> input_rate;
-    uint8_t                      reserve_byte;
+    uint8_t                     reserve_byte;
 };
 
 static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
@@ -370,7 +370,7 @@ private:
 namespace Moer::Render {
 
 struct VertexElement {
-    EPixelFormat format;
+    EVertexFormat format;
 };
 
 struct VertexBinding {
@@ -966,7 +966,7 @@ struct RaytracingGeometryInfo {
     Array<RaytracingSegment> segments = {};
 
     EIndexElementType index_type    = EIndexElementType::IET_UINT32;
-    EPixelFormat      vertex_format = PF_R32G32B32_SFLOAT;
+    EVertexFormat     vertex_format = EVertexFormat::Float3;
 
     ERayTracingAccelerationStructureBuildFlags build_flags = ERayTracingAccelerationStructureBuildFlags::NONE;
 };

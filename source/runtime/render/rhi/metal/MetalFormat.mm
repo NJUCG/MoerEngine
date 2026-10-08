@@ -76,14 +76,22 @@ NSUInteger PixelStride(EPixelFormat format) {
     }
 }
 
-MTLVertexFormat ToMetalVertexFormat(EPixelFormat format) {
+MTLVertexFormat ToMetalVertexFormat(EVertexFormat format) {
     switch (format) {
-        case PF_R32_SFLOAT: return MTLVertexFormatFloat;
-        case PF_R32G32_SFLOAT: return MTLVertexFormatFloat2;
-        case PF_R32G32B32_SFLOAT: return MTLVertexFormatFloat3;
-        case PF_R32G32B32A32_SFLOAT: return MTLVertexFormatFloat4;
-        case PF_R8G8B8A8_UNORM: return MTLVertexFormatUChar4Normalized;
-        default: Unsupported("this vertex attribute format");
+        case EVertexFormat::Float1:
+            return MTLVertexFormatFloat;
+        case EVertexFormat::Float2:
+            return MTLVertexFormatFloat2;
+        case EVertexFormat::Float3:
+            return MTLVertexFormatFloat3;
+        case EVertexFormat::Float4:
+            return MTLVertexFormatFloat4;
+        case EVertexFormat::UInt:
+            return MTLVertexFormatUInt;
+        case EVertexFormat::UByte4Normalized:
+            return MTLVertexFormatUChar4Normalized;
+        default:
+            Unsupported("this vertex attribute format");
     }
 }
 
