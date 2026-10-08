@@ -349,20 +349,14 @@ static auto DecodeBindlessInfo(uint64 _val) {
         uint8(_val) & 0x1
     );
 }
-struct VulkanDescriptorSetLayoutBinding {
-    VkDescriptorSetLayoutBinding binding;
-    int                          param_idx;
+struct VulkanDescriptorBindingInfo {
+    VkDescriptorSetLayoutBinding vk_binding{};
+    int                          argument_index = 0;
 };
 struct VulkanDescriptorSetLayoutCreateInfo {
     VkDescriptorSetLayoutCreateInfo layout_create_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    UnorderedMap<uint, VulkanDescriptorSetLayoutBinding> bindings{};
-    bool                                                 is_bindless = false;
-    VkDescriptorSetLayoutBinding&                        operator[](uint _binding) {
-        return bindings[_binding].binding;
-    }
-    auto TryEmplaceBinding(uint _binding, VkDescriptorSetLayoutBinding&& _binding_info) {
-        return bindings.try_emplace(_binding, std::move(_binding_info));
-    }
+    UnorderedMap<uint, VulkanDescriptorBindingInfo> bindings{};
+    bool                                            is_bindless = false;
 };
 
 struct VulkanDescriptorInfo {

@@ -47,6 +47,7 @@
 #include <platform/Platform.h>
 #include <shared_mutex>
 #include <stdexcept>
+#include <string>
 #include <variant>
 
 #ifndef MOER_STR
@@ -1766,15 +1767,39 @@ void MarkShaderArgumentActive(uint argument_id, bool is_active, VulkanPipelineBi
 void AccumulateDescriptorBinding(
     uint                                set_id,
     uint                                argument_id,
-    const VkDescriptorSetLayoutBinding& binding,
+    const VkDescriptorSetLayoutBinding& binding_desc,
     VulkanPipelineBindingInfo&          out_binding_info
 ) {
-    auto&      set_layout       = out_binding_info.descriptor_set_layouts[set_id];
-    auto&      existing_binding = set_layout[binding.binding];
-    const auto stage_flags      = existing_binding.stageFlags;
-    existing_binding            = binding;
-    existing_binding.stageFlags |= stage_flags;
-    set_layout.bindings[binding.binding].param_idx = argument_id;
+    auto& set_layout            = out_binding_info.descriptor_set_layouts.try_emplace(set_id).first->second;
+    auto [binding_it, inserted] = set_layout.bindings.try_emplace(
+        binding_desc.binding,
+        VulkanDescriptorBindingInfo{
+            .vk_binding = binding_desc, .argument_index = static_cast<int>(argument_id)
+        }
+    );
+    if (inserted) {
+        return;
+    }
+
+    auto& binding_info = binding_it->second;
+    if (binding_info.argument_index != static_cast<int>(argument_id)) {
+        throw std::invalid_argument(
+            "Vulkan descriptor binding conflict at set " + std::to_string(set_id) + ", binding " +
+            std::to_string(binding_desc.binding) + ": C++ argument indices " +
+            std::to_string(binding_info.argument_index) + " and " + std::to_string(argument_id) + " differ."
+        );
+    }
+    auto& vk_binding = binding_info.vk_binding;
+    if (vk_binding.descriptorType != binding_desc.descriptorType ||
+        vk_binding.descriptorCount != binding_desc.descriptorCount ||
+        vk_binding.pImmutableSamplers != binding_desc.pImmutableSamplers) {
+        throw std::invalid_argument(
+            "Vulkan descriptor binding conflict at set " + std::to_string(set_id) + ", binding " +
+            std::to_string(binding_desc.binding) + ": descriptor descriptions differ."
+        );
+    }
+    // Shared stages extend visibility while retaining the original descriptor and argument source.
+    vk_binding.stageFlags |= binding_desc.stageFlags;
 }
 
 void AccumulateResourceBinding(
@@ -1817,11 +1842,11 @@ void AccumulatePushConstantBinding(
 void AccumulateBindlessDescriptorBinding(
     uint                                set_id,
     uint                                argument_id,
-    const VkDescriptorSetLayoutBinding& binding,
+    const VkDescriptorSetLayoutBinding& binding_desc,
     VulkanPipelineBindingInfo&          out_binding_info
 ) {
-    AccumulateDescriptorBinding(set_id, argument_id, binding, out_binding_info);
-    out_binding_info.descriptor_set_layouts[set_id].is_bindless = true;
+    AccumulateDescriptorBinding(set_id, argument_id, binding_desc, out_binding_info);
+    out_binding_info.descriptor_set_layouts.at(set_id).is_bindless = true;
 }
 
 void AccumulateBindlessBindings(
@@ -1982,14 +2007,12 @@ void FillMissingDescriptorBindings(UnorderedMap<uint, VulkanDescriptorSetLayoutC
             max_binding = std::max(max_binding, binding_id);
         }
         for (uint binding_id = 0; binding_id <= max_binding; ++binding_id) {
-            if (set_layout.bindings.find(binding_id) == set_layout.bindings.end()) {
-                auto& vk_binding              = set_layout[binding_id];
-                vk_binding.binding            = binding_id;
-                vk_binding.descriptorType     = VK_DESCRIPTOR_TYPE_SAMPLER;
-                vk_binding.descriptorCount    = 0;
-                vk_binding.stageFlags         = 0;
-                vk_binding.pImmutableSamplers = nullptr;
-            }
+            set_layout.bindings.try_emplace(
+                binding_id,
+                VulkanDescriptorBindingInfo{
+                    .vk_binding = {.binding = binding_id, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER}
+                }
+            );
         }
     }
 }
@@ -2051,6 +2074,9 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
         return {};
     }
 
+    const auto ordered_shaders = GetGraphicsShadersInStageOrder(_shader_info.shaders);
+    auto binding_info =
+        BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.layout_hash, _shader_info.arg_cpp_info);
     VulkanPipelineState* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX);
 
     uint32_t attachment_count = _create_info.color_attachment_count;
@@ -2058,9 +2084,8 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     Moer::Array<VkFormat> color_attachment_formats(attachment_count);
 
     for (int i = 0; i < attachment_count; ++i) {
-        color_attachment_formats[i] = VulkanEnumTranslator::METoVKFormat(
-            _create_info.color_attachments_info[i].pixel_format
-        );
+        color_attachment_formats[i] =
+            VulkanEnumTranslator::METoVKFormat(_create_info.color_attachments_info[i].pixel_format);
     }
     VkPipelineRenderingCreateInfo rendering_create_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     rendering_create_info.pNext                   = nullptr;
@@ -2120,10 +2145,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     color_blend_state.attachmentCount = attachment_count;
     color_blend_state.pAttachments    = color_blend_attachments.data();
 
-    const auto ordered_shaders = GetGraphicsShadersInStageOrder(_shader_info.shaders);
-    auto       shader_stages   = CreateVulkanShaderStages(m_device, ordered_shaders);
-    auto       binding_info =
-        BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.layout_hash, _shader_info.arg_cpp_info);
+    auto shader_stages = CreateVulkanShaderStages(m_device, ordered_shaders);
 
     VkPipelineVertexInputStateCreateInfo vertex_input_state{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
@@ -2346,12 +2368,12 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
         LOG_ERROR("Cannot create Vulkan compute pipeline: {}", error);
         return {};
     }
-    auto* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute);
     const SingleShaderInfo* shader = &shader_info.shaders.front();
     const std::span<const SingleShaderInfo* const> stages(&shader, 1);
-    auto                                           shader_stages = CreateVulkanShaderStages(m_device, stages);
     auto                                           binding_info =
         BuildVulkanPipelineBindingInfo(stages, shader_info.layout_hash, shader_info.arg_cpp_info);
+    auto* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute);
+    auto  shader_stages = CreateVulkanShaderStages(m_device, stages);
     InitializeVulkanPipelineLayout(*vk_pso, binding_info);
 
     VkComputePipelineCreateInfo pipeline_create_info{};
