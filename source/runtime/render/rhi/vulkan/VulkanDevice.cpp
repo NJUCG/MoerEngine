@@ -1813,7 +1813,7 @@ void AccumulateResourceBinding(
         .binding         = resource.binding,
         .descriptorType  = METoVkDescriptorType(resource.desc_type),
         .descriptorCount = std::max(resource.count, argument_info.array_size),
-        .stageFlags      = shader_stage
+        .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)
     };
     AccumulateDescriptorBinding(resource.set, argument_id, binding, out_binding_info);
 
@@ -1866,7 +1866,7 @@ void AccumulateBindlessBindings(
             {.binding         = 0,
              .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
              .descriptorCount = 1,
-             .stageFlags      = shader_stage},
+             .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)},
             out_binding_info
         );
         MarkShaderArgumentActive(argument_id, resources.array->custom_flag.active, out_binding_info);
@@ -1878,7 +1878,7 @@ void AccumulateBindlessBindings(
                 {.binding         = 1,
                  .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                  .descriptorCount = k_resource_descriptor_count,
-                 .stageFlags      = shader_stage},
+                 .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)},
                 out_binding_info
             );
             MarkShaderArgumentActive(argument_id, resources.buffer->custom_flag.active, out_binding_info);
@@ -1890,7 +1890,7 @@ void AccumulateBindlessBindings(
                 {.binding         = 0,
                  .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
                  .descriptorCount = k_resource_descriptor_count,
-                 .stageFlags      = shader_stage},
+                 .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)},
                 out_binding_info
             );
             MarkShaderArgumentActive(argument_id, resources.image->custom_flag.active, out_binding_info);
@@ -1902,7 +1902,7 @@ void AccumulateBindlessBindings(
                 {.binding         = 0,
                  .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER,
                  .descriptorCount = k_sampler_descriptor_count,
-                 .stageFlags      = shader_stage},
+                 .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)},
                 out_binding_info
             );
             MarkShaderArgumentActive(argument_id, resources.sampler->custom_flag.active, out_binding_info);
