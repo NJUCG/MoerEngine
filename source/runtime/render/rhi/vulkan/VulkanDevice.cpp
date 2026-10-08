@@ -24,9 +24,10 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIMultiview.h"
-#include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "rhi/RHIThreadHeartbeat.h"
+#include "rhi/ShaderStageUtils.h"
 
 #include "Core.h"
 #include "shader/ShaderResourceManager.h"
@@ -1887,14 +1888,15 @@ void AccumulateBindlessBindings(
 
 // Match this shader's reflection to C++ arguments and accumulate the pipeline's layout and binding metadata.
 void AccumulateShaderPipelineBindings(
-    const SingleShaderInfo&    shader,
-    const PipelineShaderInfo&  pipeline_shader_info,
-    VkShaderStageFlagBits      shader_stage,
-    VulkanPipelineBindingInfo& out_binding_info
+    const SingleShaderInfo&           shader,
+    std::span<const std::string_view> argument_names,
+    std::span<const ShaderArgCppInfo> arguments,
+    VkShaderStageFlagBits             shader_stage,
+    VulkanPipelineBindingInfo&        out_binding_info
 ) {
-    for (uint argument_id = 0; argument_id < pipeline_shader_info.layout_hash.size(); ++argument_id) {
-        const auto  argument_name = pipeline_shader_info.layout_hash[argument_id];
-        const auto& argument_info = pipeline_shader_info.arg_cpp_info[argument_id];
+    for (uint argument_id = 0; argument_id < argument_names.size(); ++argument_id) {
+        const auto  argument_name                                            = argument_names[argument_id];
+        const auto& argument_info                                            = arguments[argument_id];
         out_binding_info.name_hash_to_argument_index[GetHash(argument_name)] = argument_id;
 
         const auto& reflection = shader.shader_param_map->reflect_map;
@@ -1936,6 +1938,43 @@ void AccumulateShaderPipelineBindings(
     }
 }
 
+VulkanPipelineBindingInfo BuildVulkanPipelineBindingInfo(
+    std::span<const SingleShaderInfo* const> shaders,
+    std::span<const std::string_view>        argument_names,
+    std::span<const ShaderArgCppInfo>        arguments
+) {
+    VulkanPipelineBindingInfo binding_info;
+    binding_info.argument_flags.resize(argument_names.size());
+    for (const auto* shader : shaders) {
+        const auto shader_stage = static_cast<VkShaderStageFlagBits>(
+            VulkanEnumTranslator::METoVKShaderStageFlags(shader->shader_type)
+        );
+        AccumulateShaderPipelineBindings(*shader, argument_names, arguments, shader_stage, binding_info);
+    }
+    return binding_info;
+}
+
+Array<VkPipelineShaderStageCreateInfo>
+CreateVulkanShaderStages(VkDevice device, std::span<const SingleShaderInfo* const> shaders) {
+    Array<VkPipelineShaderStageCreateInfo> stages;
+    stages.reserve(shaders.size());
+    for (const auto* shader : shaders) {
+        VkShaderModuleCreateInfo module_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        module_info.codeSize = shader->shader_data.size();
+        module_info.pCode    = reinterpret_cast<const uint32_t*>(shader->shader_data.data());
+        VkShaderModule module;
+        VK_CHECK_RESULT(vkCreateShaderModule(device, &module_info, nullptr, &module));
+        VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stage.stage = static_cast<VkShaderStageFlagBits>(
+            VulkanEnumTranslator::METoVKShaderStageFlags(shader->shader_type)
+        );
+        stage.module = module;
+        stage.pName  = shader->entry_point.data();
+        stages.push_back(stage);
+    }
+    return stages;
+}
+
 void FillMissingDescriptorBindings(UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& out_set_layouts) {
     for (auto& [set_id, set_layout] : out_set_layouts) {
         uint max_binding = 0;
@@ -1970,6 +2009,10 @@ void InitializeVulkanPipelineLayout(VulkanPipelineState& pipeline, VulkanPipelin
 
 PipelineHandle
 VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
+    if (const auto error = ValidateGraphicsShaderStages(_shader_info.shaders); !error.empty()) {
+        LOG_ERROR("Cannot create Vulkan graphics pipeline: {}", error);
+        return {};
+    }
     const uint32_t required_view_count = Multiview::RequiredViewCount(_create_info.view_mask);
     if (_create_info.view_mask != 0 && !SupportsMultiview(required_view_count)) {
         LOG_ERROR(
@@ -1983,7 +2026,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
         return {};
     }
 
-    const bool uses_tessellation = std::holds_alternative<ShaderVsHsDsPs>(_shader_info.shader_group);
+    const bool uses_tessellation = FindShaderStage(_shader_info.shaders, ST_HULL) != nullptr;
     if (uses_tessellation) {
         const uint32_t patch_control_points = _create_info.patch_control_points;
         const uint32_t max_patch_size = m_device_info.core_properties.core_1_0.limits.maxTessellationPatchSize;
@@ -2077,87 +2120,10 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     color_blend_state.attachmentCount = attachment_count;
     color_blend_state.pAttachments    = color_blend_attachments.data();
 
-    Moer::Array<VkPipelineShaderStageCreateInfo> shader_stages;
-
-    auto emplace_shader = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
-        VkShaderModuleCreateInfo shader_module_create_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        shader_module_create_info.codeSize = _info.shader_data.size();
-        shader_module_create_info.pCode    = reinterpret_cast<const uint32_t*>(_info.shader_data.data());
-        shader_module_create_info.flags    = 0;
-        VkShaderModule shader_module;
-        VK_CHECK_RESULT(vkCreateShaderModule(m_device, &shader_module_create_info, nullptr, &shader_module));
-        shader_stages.push_back({VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO});
-        auto& shader_stage_info = shader_stages.back();
-
-        shader_stage_info.stage  = _stage;
-        shader_stage_info.module = shader_module;
-        shader_stage_info.pName  = _info.entry_point.data();
-    };
-    VulkanPipelineBindingInfo binding_info;
-    binding_info.argument_flags.resize(_shader_info.layout_hash.size());
-
-    auto accumulate_shader_bindings = [&](const SingleShaderInfo& shader,
-                                          VkShaderStageFlagBits   shader_stage) {
-        AccumulateShaderPipelineBindings(shader, _shader_info, shader_stage, binding_info);
-    };
-
-    // shader stage
-    std::visit(
-        Overload{
-            [&](const ShaderVsPs& _shader_info_group) {
-                shader_stages.reserve(2);
-                emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                accumulate_shader_bindings(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            },
-            [&](const ShaderVsGsPs& _shader_info_group) {
-                shader_stages.reserve(3);
-                emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                emplace_shader(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                accumulate_shader_bindings(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                accumulate_shader_bindings(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
-                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            },
-            [&](const ShaderVsHsDsPs& _shader_info_group) {
-                shader_stages.reserve(4);
-                emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                emplace_shader(_shader_info_group.hs, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                emplace_shader(_shader_info_group.ds, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                accumulate_shader_bindings(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                accumulate_shader_bindings(_shader_info_group.hs, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                accumulate_shader_bindings(
-                    _shader_info_group.ds, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT
-                );
-                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            },
-            [&](const ShaderMsPs& _shader_info_group) {
-                shader_stages.reserve(2);
-                emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                accumulate_shader_bindings(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            },
-            [&](const ShaderTsMsPs& _shader_info_group) {
-                shader_stages.reserve(3);
-                emplace_shader(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                accumulate_shader_bindings(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                accumulate_shader_bindings(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                accumulate_shader_bindings(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            },
-            [&](const ShaderRT& _shader_info_group) {
-                assert(false && "Should Use RT PSO.");
-            },
-            [&](const ShaderCs& _shader_info_group) {
-                assert(false && "Should Use Compute PSO.");
-            },
-        },
-        _shader_info.shader_group
-    );
+    const auto ordered_shaders = GetGraphicsShadersInStageOrder(_shader_info.shaders);
+    auto       shader_stages   = CreateVulkanShaderStages(m_device, ordered_shaders);
+    auto       binding_info =
+        BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.layout_hash, _shader_info.arg_cpp_info);
 
     VkPipelineVertexInputStateCreateInfo vertex_input_state{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
@@ -2375,70 +2341,30 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     };
 }
 
-PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
-
+PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
+    if (const auto error = ValidateComputeShaderStages(shader_info.shaders); !error.empty()) {
+        LOG_ERROR("Cannot create Vulkan compute pipeline: {}", error);
+        return {};
+    }
     auto* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute);
-
-    VkComputePipelineCreateInfo pipeline_create_info{};
-    pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_create_info.pNext              = nullptr;
-    pipeline_create_info.flags              = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-    pipeline_create_info.stage              = {};
-    pipeline_create_info.layout             = nullptr;
-    pipeline_create_info.basePipelineHandle = nullptr;
-
-    VkPipelineShaderStageCreateInfo& shader_stage = pipeline_create_info.stage;
-
-    VulkanPipelineBindingInfo binding_info;
-    binding_info.argument_flags.resize(_shader_info.layout_hash.size());
-    auto accumulate_shader_bindings = [&](const SingleShaderInfo& shader,
-                                          VkShaderStageFlagBits   shader_stage) {
-        AccumulateShaderPipelineBindings(shader, _shader_info, shader_stage, binding_info);
-    };
-
-    auto emplace_shader = [&](SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
-        VkShaderModuleCreateInfo shader_module_create_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        shader_module_create_info.codeSize = _info.shader_data.size();
-        shader_module_create_info.pCode    = reinterpret_cast<const uint32_t*>(_info.shader_data.data());
-        shader_module_create_info.flags    = 0;
-        VkShaderModule shader_module;
-        VK_CHECK_RESULT(vkCreateShaderModule(m_device, &shader_module_create_info, nullptr, &shader_module));
-        shader_stage        = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        shader_stage.stage  = _stage;
-        shader_stage.module = shader_module;
-        shader_stage.pName  = _info.entry_point.data();
-    };
-
-    std::visit(
-        [&](auto&& _shader_info_group) {
-            using T = std::decay_t<decltype(_shader_info_group)>;
-            if constexpr (std::is_same_v<T, ShaderCs>) {
-                accumulate_shader_bindings(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
-                emplace_shader(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
-            } else {
-                LOG_ERROR("Unsupported shader group type: {}", typeid(T).name());
-            }
-        },
-        _shader_info.shader_group
-    );
-
+    const SingleShaderInfo* shader = &shader_info.shaders.front();
+    const std::span<const SingleShaderInfo* const> stages(&shader, 1);
+    auto                                           shader_stages = CreateVulkanShaderStages(m_device, stages);
+    auto                                           binding_info =
+        BuildVulkanPipelineBindingInfo(stages, shader_info.layout_hash, shader_info.arg_cpp_info);
     InitializeVulkanPipelineLayout(*vk_pso, binding_info);
 
-    pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_create_info.pNext              = nullptr;
-    pipeline_create_info.flags              = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-    pipeline_create_info.stage              = shader_stage;
-    pipeline_create_info.layout             = vk_pso->GetPipelineLayout();
-    pipeline_create_info.basePipelineHandle = nullptr;
-    pipeline_create_info.basePipelineIndex  = -1;
-
+    VkComputePipelineCreateInfo pipeline_create_info{};
+    pipeline_create_info.sType             = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeline_create_info.flags             = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    pipeline_create_info.stage             = shader_stages.front();
+    pipeline_create_info.layout            = vk_pso->GetPipelineLayout();
+    pipeline_create_info.basePipelineIndex = -1;
     VK_CHECK_RESULT(vkCreateComputePipelines(
         m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline
     ));
 
-    //destroy shader module
-    vkDestroyShaderModule(m_device, shader_stage.module, nullptr);
-
+    vkDestroyShaderModule(m_device, shader_stages.front().module, nullptr);
     return PipelineHandle{
         .handle            = reinterpret_cast<uint64>(vk_pso),
         .binding_infos     = std::move(binding_info.argument_flags),

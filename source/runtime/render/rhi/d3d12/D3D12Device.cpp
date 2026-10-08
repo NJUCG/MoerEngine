@@ -6,6 +6,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/RHIThreadOwnership.h"
+#include "rhi/ShaderStageUtils.h"
 
 #include "Core.h"
 #include "shader/ShaderResourceManager.h"
@@ -459,9 +460,12 @@ void D3D12PipelineState::BuildRootSignature(const PipelineLayout& _layout) {
 }
 
 PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
-    ASSERT(std::holds_alternative<ShaderCs>(_shaders.shader_group));
+    if (const auto error = ValidateComputeShaderStages(_shaders.shaders); !error.empty()) {
+        LOG_ERROR("Cannot create D3D12 compute pipeline: {}", error);
+        return {};
+    }
 
-    SingleShaderInfo& cs_info         = std::get<ShaderCs>(_shaders.shader_group).cs;
+    SingleShaderInfo& cs_info         = _shaders.shaders.front();
     const auto&       shader_bytecode = cs_info.shader_data;
 
     // TODO shader reflection-> pipeline reflection

@@ -1162,47 +1162,6 @@ struct SingleShaderInfo {
     uint3                   compute_local_size{0, 0, 0};
 };
 
-struct ShaderVsGsPs {
-    SingleShaderInfo vs;
-    SingleShaderInfo gs;
-    SingleShaderInfo ps;
-};
-
-struct ShaderCs {
-    SingleShaderInfo cs;
-};
-
-struct ShaderVsPs {
-    SingleShaderInfo vs;
-    SingleShaderInfo ps;
-};
-
-struct ShaderVsHsDsPs {
-    SingleShaderInfo vs;
-    SingleShaderInfo hs;
-    SingleShaderInfo ds;
-    SingleShaderInfo ps;
-};
-
-struct ShaderMsPs {
-    SingleShaderInfo ms;
-    SingleShaderInfo ps;
-};
-
-struct ShaderTsMsPs {
-    SingleShaderInfo ts;
-    SingleShaderInfo ms;
-    SingleShaderInfo ps;
-};
-
-struct ShaderRT {
-    Array<SingleShaderInfo> raygen;
-    Array<SingleShaderInfo> miss;
-    Array<SingleShaderInfo> hit;
-    Array<SingleShaderInfo> closesthit;
-    Array<SingleShaderInfo> callable;
-};
-
 enum EShaderArgType : uint8 {
     SDA_Buffer,
     SDA_ConstantBuffer,
@@ -1220,11 +1179,8 @@ struct ShaderArgCppInfo {
     EShaderArgType type;
 };
 
-using ShaderOutputGroup =
-    std::variant<ShaderVsGsPs, ShaderVsPs, ShaderVsHsDsPs, ShaderMsPs, ShaderTsMsPs, ShaderCs, ShaderRT>;
-
 struct PipelineShaderInfo {
-    ShaderOutputGroup       shader_group;
+    Array<SingleShaderInfo> shaders;
     Array<std::string_view> layout_hash;
     Array<ShaderArgCppInfo> arg_cpp_info;
 };

@@ -1,10 +1,88 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/ShaderStageUtils.h"
 #include "shader/DXC/DXCUtils.h"
 
+#include <algorithm>
 #include <cassert>
 #include <iostream>
-#include <variant>
+
+namespace {
+
+Moer::Array<Moer::Render::SingleShaderInfo> MakeShaders(std::initializer_list<EShaderType> shader_types) {
+    Moer::Array<Moer::Render::SingleShaderInfo> shaders;
+    for (const auto shader_type : shader_types) {
+        shaders.push_back({.shader_type = shader_type});
+    }
+    return shaders;
+}
+
+void CheckShaderStageComposition() {
+    using namespace Moer::Render;
+    const std::initializer_list<EShaderType> k_valid_graphics[] = {
+        {ST_VERTEX, ST_FRAGMENT},
+        {ST_VERTEX, ST_GEOMETRY, ST_FRAGMENT},
+        {ST_VERTEX, ST_HULL, ST_DOMAIN, ST_FRAGMENT},
+        {ST_MESH, ST_FRAGMENT},
+        {ST_AMPLIFICATION, ST_MESH, ST_FRAGMENT}
+    };
+    const auto compare_type = [](const SingleShaderInfo& lhs, const SingleShaderInfo& rhs) {
+        return lhs.shader_type < rhs.shader_type;
+    };
+    for (const auto shader_types : k_valid_graphics) {
+        auto shaders = MakeShaders(shader_types);
+        std::sort(shaders.begin(), shaders.end(), compare_type);
+        do {
+            assert(ValidateGraphicsShaderStages(shaders).empty());
+            const auto ordered = GetGraphicsShadersInStageOrder(shaders);
+            assert(ordered.size() == shader_types.size());
+            size_t shader_id = 0;
+            for (const auto shader_type : shader_types) {
+                assert(ordered[shader_id]->shader_type == shader_type);
+                assert(ordered[shader_id] == FindShaderStage(shaders, shader_type));
+                ++shader_id;
+            }
+        } while (std::next_permutation(shaders.begin(), shaders.end(), compare_type));
+    }
+
+    const std::initializer_list<EShaderType> k_invalid_graphics[] = {
+        {},
+        {ST_FRAGMENT},
+        {ST_VERTEX},
+        {ST_VERTEX, ST_VERTEX, ST_FRAGMENT},
+        {ST_VERTEX, ST_COMPUTE, ST_FRAGMENT},
+        {ST_VERTEX, ST_RAY_GEN, ST_FRAGMENT},
+        {ST_VERTEX, ST_NONE, ST_FRAGMENT},
+        {ST_VERTEX, static_cast<EShaderType>(255), ST_FRAGMENT},
+        {ST_VERTEX, ST_MESH, ST_FRAGMENT},
+        {ST_VERTEX, ST_AMPLIFICATION, ST_FRAGMENT},
+        {ST_AMPLIFICATION, ST_FRAGMENT},
+        {ST_MESH, ST_HULL, ST_DOMAIN, ST_FRAGMENT},
+        {ST_MESH, ST_GEOMETRY, ST_FRAGMENT},
+        {ST_VERTEX, ST_HULL, ST_FRAGMENT},
+        {ST_VERTEX, ST_DOMAIN, ST_FRAGMENT},
+        {ST_VERTEX, ST_HULL, ST_DOMAIN, ST_GEOMETRY, ST_FRAGMENT}
+    };
+    for (const auto shader_types : k_invalid_graphics) {
+        assert(!ValidateGraphicsShaderStages(MakeShaders(shader_types)).empty());
+    }
+    assert(ValidateComputeShaderStages(MakeShaders({ST_COMPUTE})).empty());
+    const std::initializer_list<EShaderType> k_invalid_compute[] = {
+        {}, {ST_VERTEX}, {ST_RAY_GEN}, {ST_COMPUTE, ST_COMPUTE}, {ST_COMPUTE, ST_FRAGMENT}
+    };
+    for (const auto shader_types : k_invalid_compute) {
+        assert(!ValidateComputeShaderStages(MakeShaders(shader_types)).empty());
+    }
+
+    const auto shaders = MakeShaders({ST_VERTEX, ST_FRAGMENT});
+    assert(FindShaderStage(shaders, ST_HULL) == nullptr);
+    // The generic storage also permits repeated RT stages; only graphics/compute
+    // validators impose uniqueness for their own creation entry points.
+    PipelineShaderInfo ray_shaders{.shaders = MakeShaders({ST_RAY_GEN, ST_RAY_GEN})};
+    assert(ray_shaders.shaders.size() == 2);
+}
+
+} // namespace
 
 int main() {
     static_assert(ST_HULL > ST_RAY_ANYHIT, "New stages must not renumber serialized shader types.");
@@ -22,8 +100,7 @@ int main() {
         ERHIPipelineStageFlags::PS_TESSELLATION_EVALUATION_SHADER
     );
 
-    Moer::Render::ShaderOutputGroup shader_group = Moer::Render::ShaderVsHsDsPs{};
-    assert(std::holds_alternative<Moer::Render::ShaderVsHsDsPs>(shader_group));
+    CheckShaderStageComposition();
 
     Moer::Render::GfxPsoCreateInfo pipeline_info(
         ::RHIRasterizeInfo::Preset(),

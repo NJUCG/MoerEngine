@@ -1,7 +1,7 @@
 #include "rhi/metal/MetalPipeline.h"
+#include "rhi/ShaderStageUtils.h"
 
 #include <algorithm>
-#include <initializer_list>
 #include <stdexcept>
 #include <string>
 
@@ -35,10 +35,7 @@ id<MTLFunction> CompileMetalFunction(id<MTLDevice> device, const SingleShaderInf
     return function;
 }
 
-PipelineHandle MetalPipelineMetadata(
-    const PipelineShaderInfo& shader_info,
-    std::initializer_list<const SingleShaderInfo*> stages
-) {
+PipelineHandle MetalPipelineMetadata(const PipelineShaderInfo& shader_info) {
     if (shader_info.layout_hash.size() != shader_info.arg_cpp_info.size() ||
         shader_info.layout_hash.size() > 64) {
         Unsupported("this pipeline argument layout");
@@ -47,9 +44,9 @@ PipelineHandle MetalPipelineMetadata(
     handle.binding_infos.resize(shader_info.layout_hash.size());
     for (uint index = 0; index < shader_info.layout_hash.size(); ++index) {
         handle.hash_2_info_index[GetHash(shader_info.layout_hash[index])] = index;
-        for (const SingleShaderInfo* shader : stages) {
-            if (shader->shader_param_map == nullptr) continue;
-            const auto& reflection = shader->shader_param_map->reflect_map;
+        for (const auto& shader : shader_info.shaders) {
+            if (shader.shader_param_map == nullptr) continue;
+            const auto& reflection = shader.shader_param_map->reflect_map;
             const bool bindless = shader_info.arg_cpp_info[index].type == SDA_BindlessArray;
             const auto found = reflection.find(std::string(
                 bindless ? ReflectParamInfo::bdls_name : shader_info.layout_hash[index]
@@ -135,8 +132,15 @@ MetalRenderBindings MetalRenderStageBindings(
 } // namespace
 
 PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInfo&& create_info, PipelineShaderInfo&& shader_info) {
-    const bool tessellation = std::holds_alternative<ShaderVsHsDsPs>(shader_info.shader_group);
-    if ((!tessellation && !std::holds_alternative<ShaderVsPs>(shader_info.shader_group)) ||
+    if (const auto error = ValidateGraphicsShaderStages(shader_info.shaders); !error.empty()) {
+        throw std::runtime_error("Cannot create Metal graphics pipeline: " + std::string(error));
+    }
+    const auto* vs_info = FindShaderStage(shader_info.shaders, ST_VERTEX);
+    const auto* hs_info = FindShaderStage(shader_info.shaders, ST_HULL);
+    const auto* ds_info = FindShaderStage(shader_info.shaders, ST_DOMAIN);
+    const bool tessellation = hs_info != nullptr;
+    if (FindShaderStage(shader_info.shaders, ST_GEOMETRY) != nullptr ||
+        FindShaderStage(shader_info.shaders, ST_MESH) != nullptr ||
         create_info.primitive_topology != (tessellation ?
             EPrimitiveTopology::PATCH_LIST : EPrimitiveTopology::TRIANGLE_LIST) ||
         (tessellation && (create_info.patch_control_points != 3 ||
@@ -151,12 +155,8 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
         create_info.depth_stencil_info.b_enable_back_face_stencil) {
         Unsupported("this graphics pipeline layout");
     }
-    const SingleShaderInfo& vs = tessellation ?
-        std::get<ShaderVsHsDsPs>(shader_info.shader_group).vs :
-        std::get<ShaderVsPs>(shader_info.shader_group).vs;
-    const SingleShaderInfo& ps = tessellation ?
-        std::get<ShaderVsHsDsPs>(shader_info.shader_group).ps :
-        std::get<ShaderVsPs>(shader_info.shader_group).ps;
+    const SingleShaderInfo& vs = *vs_info;
+    const SingleShaderInfo& ps = *FindShaderStage(shader_info.shaders, ST_FRAGMENT);
     @autoreleasepool {
         id<MTLFunction> vertex = CompileMetalFunction(device, vs);
         id<MTLFunction> fragment = CompileMetalFunction(device, ps);
@@ -166,9 +166,8 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
         id<MTLComputePipelineState> hull_pipeline = nil;
         NSError* error = nil;
         if (tessellation) {
-            const auto& stages = std::get<ShaderVsHsDsPs>(shader_info.shader_group);
-            hull = CompileMetalFunction(device, stages.hs);
-            domain = CompileMetalFunction(device, stages.ds);
+            hull = CompileMetalFunction(device, *hs_info);
+            domain = CompileMetalFunction(device, *ds_info);
             tess_vertex_pipeline = [device newComputePipelineStateWithFunction:vertex error:&error];
             if (tess_vertex_pipeline == nil) {
                 throw std::runtime_error("Metal tessellation vertex kernel creation failed: " +
@@ -262,12 +261,7 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
             depth_state = [device newDepthStencilStateWithDescriptor:depth_descriptor];
             if (depth_state == nil) throw std::runtime_error("Cannot create Metal depth state");
         }
-        PipelineHandle handle = tessellation ?
-            MetalPipelineMetadata(shader_info, {
-                &std::get<ShaderVsHsDsPs>(shader_info.shader_group).vs,
-                &std::get<ShaderVsHsDsPs>(shader_info.shader_group).hs,
-                &std::get<ShaderVsHsDsPs>(shader_info.shader_group).ds, &ps}) :
-            MetalPipelineMetadata(shader_info, {&vs, &ps});
+        PipelineHandle handle = MetalPipelineMetadata(shader_info);
         std::vector<MTLPixelFormat> color_formats;
         color_formats.reserve(create_info.color_attachment_count);
         for (uint index = 0; index < create_info.color_attachment_count; ++index) {
@@ -278,16 +272,14 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
             uint(create_info.vertex_stream.bindings.size()), create_info.rasterizer_info,
             descriptor.depthAttachmentPixelFormat, depth_state,
             tessellation ? domain : vertex, fragment,
-            MetalRenderStageBindings(shader_info, tessellation ?
-                std::get<ShaderVsHsDsPs>(shader_info.shader_group).ds : vs),
+            MetalRenderStageBindings(shader_info, tessellation ? *ds_info : vs),
             MetalRenderStageBindings(shader_info, ps)
         );
         if (tessellation) {
             pipeline->SetTessellation(
                 tess_vertex_pipeline, vertex, hull_pipeline, hull,
                 MetalRenderStageBindings(shader_info, vs),
-                MetalRenderStageBindings(shader_info,
-                    std::get<ShaderVsHsDsPs>(shader_info.shader_group).hs),
+                MetalRenderStageBindings(shader_info, *hs_info),
                 create_info.patch_control_points, create_info.patch_control_point_stride);
         }
         handle.handle = reinterpret_cast<uint64>(pipeline);
@@ -295,10 +287,10 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
     }
 }
 PipelineHandle CreateMetalComputePipeline(id<MTLDevice> device, PipelineShaderInfo&& shader_info) {
-    if (!std::holds_alternative<ShaderCs>(shader_info.shader_group)) {
-        Unsupported("this compute pipeline shader group");
+    if (const auto error = ValidateComputeShaderStages(shader_info.shaders); !error.empty()) {
+        throw std::runtime_error("Cannot create Metal compute pipeline: " + std::string(error));
     }
-    const SingleShaderInfo& shader = std::get<ShaderCs>(shader_info.shader_group).cs;
+    const SingleShaderInfo& shader = shader_info.shaders.front();
     @autoreleasepool {
         id<MTLFunction> function = CompileMetalFunction(device, shader);
         NSError* error = nil;
@@ -308,7 +300,7 @@ PipelineHandle CreateMetalComputePipeline(id<MTLDevice> device, PipelineShaderIn
             throw std::runtime_error("Metal compute pipeline creation failed: " +
                 std::string(error.localizedDescription.UTF8String ?: "unknown error"));
         }
-        PipelineHandle handle = MetalPipelineMetadata(shader_info, {&shader});
+        PipelineHandle handle = MetalPipelineMetadata(shader_info);
         auto bindings = MetalRenderStageBindings(shader_info, shader);
         const uint3 group = shader.compute_local_size;
         handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(

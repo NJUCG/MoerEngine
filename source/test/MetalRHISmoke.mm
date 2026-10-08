@@ -148,7 +148,7 @@ void CheckGraphicsPipeline() {
                             .shader_type = EShaderType::ST_VERTEX};
     SingleShaderInfo fragment{.entry_point = "fragment_main", .shader_data = code,
                               .shader_type = EShaderType::ST_FRAGMENT};
-    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    PipelineShaderInfo shaders{.shaders = {vertex, fragment}};
     VertexStream stream;
     stream.EmplacePerVertex({Moer::Render::VertexElement(EVertexFormat::Float2),
                              Moer::Render::VertexElement(EVertexFormat::Float4)});
@@ -180,7 +180,7 @@ void CheckGraphicsDraw() {
                             .shader_type = EShaderType::ST_VERTEX};
     SingleShaderInfo fragment{.entry_point = "draw_fragment", .shader_data = code,
                               .shader_type = EShaderType::ST_FRAGMENT};
-    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    PipelineShaderInfo shaders{.shaders = {vertex, fragment}};
     GfxPsoCreateInfo info(
         RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
         {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)}
@@ -273,7 +273,7 @@ void CheckTessellationDraw() {
         return SingleShaderInfo{.entry_point = name, .shader_data = code, .shader_type = type};
     };
     PipelineShaderInfo shaders{
-        .shader_group = ShaderVsHsDsPs{
+        .shaders = {
             stage("patch_vertex", EShaderType::ST_VERTEX),
             stage("patch_hull", EShaderType::ST_HULL),
             stage("patch_domain", EShaderType::ST_DOMAIN),
@@ -355,7 +355,7 @@ void CheckGraphicsMRT() {
                             .shader_type = EShaderType::ST_VERTEX};
     SingleShaderInfo fragment{.entry_point = "draw_fragment", .shader_data = code,
                               .shader_type = EShaderType::ST_FRAGMENT};
-    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    PipelineShaderInfo shaders{.shaders = {vertex, fragment}};
     GfxPsoCreateInfo info(
         RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
         {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM),
@@ -457,7 +457,7 @@ void CheckGraphicsBindlessArguments() {
     SingleShaderInfo fragment{.entry_point = "draw_fragment", .shader_data = code,
                               .shader_type = EShaderType::ST_FRAGMENT,
                               .shader_param_map = &reflection};
-    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    PipelineShaderInfo shaders{.shaders = {vertex, fragment}};
     shaders.layout_hash.emplace_back("scalar");
     shaders.layout_hash.emplace_back("color");
     shaders.layout_hash.emplace_back("linear");
@@ -601,7 +601,7 @@ void CheckIndexedGraphicsDraw(bool indirect) {
                             .shader_type = EShaderType::ST_VERTEX};
     SingleShaderInfo fragment{.entry_point = "indexed_fragment", .shader_data = code,
                               .shader_type = EShaderType::ST_FRAGMENT};
-    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    PipelineShaderInfo shaders{.shaders = {vertex, fragment}};
     VertexStream stream;
     stream.EmplacePerVertex({Moer::Render::VertexElement(EVertexFormat::Float2),
                              Moer::Render::VertexElement(EVertexFormat::UByte4Normalized),
@@ -737,7 +737,7 @@ void CheckDepthGraphicsDraw(EPixelFormat depth_format, bool depth_only_first = f
                                 .shader_type = EShaderType::ST_VERTEX};
         SingleShaderInfo fragment{.entry_point = fragment_entry, .shader_data = code,
                                   .shader_type = EShaderType::ST_FRAGMENT};
-        PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+        PipelineShaderInfo shaders{.shaders = {vertex, fragment}};
         Moer::Array<RHIColorAttachmentInfo> color_attachments;
         if (!depth_only) color_attachments.emplace_back(RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM));
         GfxPsoCreateInfo info(
@@ -823,7 +823,7 @@ void CheckComputePipeline() {
     std::vector<Moer::uint8> code(source.begin(), source.end());
     SingleShaderInfo compute{.entry_point = "compute_main", .shader_data = code,
                              .shader_type = EShaderType::ST_COMPUTE};
-    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    PipelineShaderInfo shaders{.shaders = {compute}};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     id<MTLComputePipelineState> native =
         (__bridge id<MTLComputePipelineState>)GetMetalNativeComputePipeline(pipeline);
@@ -880,7 +880,7 @@ void CheckRHIComputeDispatch() {
         .shader_type = EShaderType::ST_COMPUTE, .shader_param_map = &reflection,
         .compute_local_size = Moer::uint3{4, 1, 1}
     };
-    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    PipelineShaderInfo shaders{.shaders = {compute}};
     shaders.layout_hash.emplace_back("values");
     shaders.layout_hash.emplace_back("increment");
     shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Buffer});
@@ -937,7 +937,7 @@ void CheckRHIComputeTextureViews() {
         .shader_type = EShaderType::ST_COMPUTE, .shader_param_map = &reflection,
         .compute_local_size = Moer::uint3{1, 1, 1}
     };
-    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    PipelineShaderInfo shaders{.shaders = {compute}};
     shaders.layout_hash = {"src", "dst"};
     shaders.arg_cpp_info = {{1, SDA_Texture}, {1, SDA_Texture}};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
@@ -1019,7 +1019,7 @@ void CheckRHIComputeTexelBuffers() {
         .shader_type = EShaderType::ST_COMPUTE, .shader_param_map = &reflection,
         .compute_local_size = Moer::uint3{1, 1, 1}
     };
-    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    PipelineShaderInfo shaders{.shaders = {compute}};
     shaders.layout_hash = {"histogram", "exposure"};
     shaders.arg_cpp_info = {{1, SDA_Buffer}, {1, SDA_Buffer}};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
@@ -1112,7 +1112,7 @@ void CheckRHIComputeBindlessTexture() {
         .shader_type = EShaderType::ST_COMPUTE, .shader_param_map = &reflection,
         .compute_local_size = Moer::uint3{1, 1, 1}
     };
-    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    PipelineShaderInfo shaders{.shaders = {compute}};
     shaders.layout_hash = {"output", "bdls", "params"};
     shaders.arg_cpp_info = {{1, SDA_Buffer}, {1, SDA_BindlessArray}, {1, SDA_Constant}};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));

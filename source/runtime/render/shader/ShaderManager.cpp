@@ -3,6 +3,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/ShaderStageUtils.h"
 #include "serialize/Serializer.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderCompiler.h"
@@ -349,112 +350,72 @@ RTConstructor ShaderManager::Raytracing() {
 }
 
 PipelineHandle RasterPipelineConstructor::CreatePipeline(
-    GfxPsoCreateInfo&&        _pso_info,
-    Array<std::string_view>&& _hash_values,
-    Array<ShaderArgCppInfo>&& _arg_type_values
+    GfxPsoCreateInfo&&        pso_info,
+    Array<std::string_view>&& argument_names,
+    Array<ShaderArgCppInfo>&& argument_info
 ) {
-    // get shaders and reflection
-    auto is_empty = [](ShaderAssetOrCache& _asset) {
-        if (!std::holds_alternative<ShaderAsset>(_asset)) {
-            return false;
+    const auto is_empty = [](const ShaderAssetOrCache& source) {
+        if (const auto* shader = std::get_if<Shader*>(&source)) {
+            return *shader == nullptr;
         }
-
-        auto& asset = std::get<ShaderAsset>(_asset);
+        const auto& asset = std::get<ShaderAsset>(source);
         return asset.path.empty() || asset.entry_name.empty();
     };
-    bool b_vs_ps  = is_empty(task_path) && !is_empty(vertex_path) && !is_empty(pixel_path);
-    bool b_gs     = !is_empty(geometry_path);
-    bool b_hull   = !is_empty(hull_path);
-    bool b_domain = !is_empty(domain_path);
-    bool b_mesh   = !is_empty(mesh_path) && !is_empty(pixel_path);
-    bool b_task   = !is_empty(task_path);
-
-    if (b_hull != b_domain) {
-        LOG_ERROR("Raster pipeline tessellation requires both Hull and Domain shaders.");
-        return {};
-    }
-    const bool b_tessellation = b_hull && b_domain;
-    if (b_tessellation && (!b_vs_ps || b_gs || b_mesh || b_task)) {
-        LOG_ERROR("Raster tessellation currently supports only the VS + HS + DS + PS stage chain.");
-        return {};
-    }
-
-    auto target_info       = device.GetShaderPlatform();
-    auto get_shader_output = [&](const ShaderAssetOrCache& _info, EShaderType _type) -> Shader& {
-        if (std::holds_alternative<ShaderAsset>(_info) == false) {
-            Shader& shader = *std::get<Shader*>(_info);
-
-            return shader;
+    struct StageSource {
+        EShaderType         shader_type;
+        ShaderAssetOrCache* source;
+    };
+    const StageSource k_stage_sources[] = {
+        {ST_VERTEX, &vertex_path},
+        {ST_HULL, &hull_path},
+        {ST_DOMAIN, &domain_path},
+        {ST_GEOMETRY, &geometry_path},
+        {ST_AMPLIFICATION, &task_path},
+        {ST_MESH, &mesh_path},
+        {ST_FRAGMENT, &pixel_path}
+    };
+    PipelineShaderInfo pipeline_shader_info{
+        .layout_hash = std::move(argument_names), .arg_cpp_info = std::move(argument_info)
+    };
+    for (const auto& stage : k_stage_sources) {
+        if (!is_empty(*stage.source)) {
+            pipeline_shader_info.shaders.push_back(SingleShaderInfo{.shader_type = stage.shader_type});
         }
-        ShaderAsset asset = std::get<ShaderAsset>(_info);
-        if (b_tessellation && target_info == SP_METAL_MSL && _type == ST_VERTEX) {
+    }
+    if (const auto error = ValidateGraphicsShaderStages(pipeline_shader_info.shaders); !error.empty()) {
+        LOG_ERROR("Cannot create raster pipeline: {}", error);
+        return {};
+    }
+    const bool uses_tessellation = FindShaderStage(pipeline_shader_info.shaders, ST_HULL) != nullptr;
+    const auto target_info       = device.GetShaderPlatform();
+    const auto get_shader_output = [&](const ShaderAssetOrCache& source, EShaderType shader_type) -> Shader& {
+        if (const auto* shader = std::get_if<Shader*>(&source)) {
+            return **shader;
+        }
+        ShaderAsset asset = std::get<ShaderAsset>(source);
+        if (uses_tessellation && target_info == SP_METAL_MSL && shader_type == ST_VERTEX) {
             asset.environment.SetDefine("MOER_METAL_TESS_VS_CAPTURE", true);
             asset.environment.SetDefine("MOER_METAL_TESS_VS_GRID_BUFFER", true);
         }
-        return shader_manager.CompileShader(_type, std::move(asset));
+        return shader_manager.CompileShader(shader_type, std::move(asset));
     };
-    auto get_shader_info = [&](EShaderType _type, Shader& _output) {
-        ShaderEntry& entry = shader_manager.GetShaderEntry(_output);
-        return std::move(
-            SingleShaderInfo{
-                .name             = _output.shader_path,
-                .entry_point      = _output.entry_name,
-                .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
-                .shader_type      = _type,
-                .shader_param_map = &_output.reflection,
-                .compute_local_size = _output.reflection.compute_local_size
-            }
-        );
-    };
-    PipelineShaderInfo sd_info{
-        .layout_hash = std::move(_hash_values), .arg_cpp_info = std::move(_arg_type_values)
-    };
-    if (b_vs_ps) {
-        auto& vert_output  = get_shader_output(vertex_path, ST_VERTEX);
-        auto& pixel_output = get_shader_output(pixel_path, ST_FRAGMENT);
-        if (b_tessellation) {
-            auto& hull_output   = get_shader_output(hull_path, ST_HULL);
-            auto& domain_output = get_shader_output(domain_path, ST_DOMAIN);
-            sd_info.shader_group = ShaderVsHsDsPs{
-                .vs = get_shader_info(ST_VERTEX, vert_output),
-                .hs = get_shader_info(ST_HULL, hull_output),
-                .ds = get_shader_info(ST_DOMAIN, domain_output),
-                .ps = get_shader_info(ST_FRAGMENT, pixel_output)
-            };
-        } else if (!b_gs) {
-            sd_info.shader_group = ShaderVsPs{
-                .vs = get_shader_info(ST_VERTEX, vert_output),
-                .ps = get_shader_info(ST_FRAGMENT, pixel_output)
-            };
-        } else {
-            auto& geo_output     = get_shader_output(geometry_path, ST_GEOMETRY);
-            sd_info.shader_group = ShaderVsGsPs{
-                .vs = get_shader_info(ST_VERTEX, vert_output),
-                .gs = get_shader_info(ST_GEOMETRY, geo_output),
-                .ps = get_shader_info(ST_FRAGMENT, pixel_output)
-            };
+    size_t shader_id = 0;
+    for (const auto& stage : k_stage_sources) {
+        if (is_empty(*stage.source)) {
+            continue;
         }
+        Shader&      output                       = get_shader_output(*stage.source, stage.shader_type);
+        ShaderEntry& entry                        = shader_manager.GetShaderEntry(output);
+        pipeline_shader_info.shaders[shader_id++] = SingleShaderInfo{
+            .name               = output.shader_path,
+            .entry_point        = output.entry_name,
+            .shader_data        = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
+            .shader_type        = stage.shader_type,
+            .shader_param_map   = &output.reflection,
+            .compute_local_size = output.reflection.compute_local_size
+        };
     }
-
-    if (b_mesh) {
-        auto& mesh_output  = get_shader_output(mesh_path, ST_MESH);
-        auto& pixel_output = get_shader_output(pixel_path, ST_FRAGMENT);
-
-        if (!b_task) {
-            sd_info.shader_group = ShaderMsPs{
-                .ms = get_shader_info(ST_MESH, mesh_output), .ps = get_shader_info(ST_FRAGMENT, pixel_output)
-            };
-        } else {
-            auto task_output     = get_shader_output(task_path, ST_AMPLIFICATION);
-            sd_info.shader_group = ShaderTsMsPs{
-                .ts = get_shader_info(ST_AMPLIFICATION, task_output),
-                .ms = get_shader_info(ST_MESH, mesh_output),
-                .ps = get_shader_info(ST_FRAGMENT, pixel_output)
-            };
-        }
-    }
-
-    return device.CreatePipeline(std::move(_pso_info), std::move(sd_info));
+    return device.CreatePipeline(std::move(pso_info), std::move(pipeline_shader_info));
 }
 
 #pragma region[ compute pipeline ]
@@ -498,7 +459,7 @@ PipelineShaderInfo ComputeConstructor::CompileShaderInfo(
     PipelineShaderInfo sd_info{
         .layout_hash = std::move(_hash_values), .arg_cpp_info = std::move(_arg_type_values)
     };
-    sd_info.shader_group = ShaderCs{.cs = get_shader_info(ST_COMPUTE, output)};
+    sd_info.shaders.push_back(get_shader_info(ST_COMPUTE, output));
     return std::move(sd_info);
 }
 
