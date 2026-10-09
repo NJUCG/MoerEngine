@@ -359,82 +359,63 @@ struct VulkanDescriptorSetLayoutCreateInfo {
     bool                                            is_bindless = false;
 };
 
-struct VulkanDescriptorInfo {
-    /** offset in current descriptor set */
-    // uint offset;
-    /** index in ArrayArguments */
-    uint param_idx;
-    /** index in descinfo arrays */
-    uint info_idx;
+struct DescriptorSetBufferBinding {
+    uint   set_index;
+    uint   buffer_index;
+    uint64 offset;
 };
-struct DescBufferOffsetInfo {
-    uint                set;
-    VkPipelineBindPoint bind_point;
-    VkPipelineLayout    layout;
-    uint                buf_idx;
-    uint64              offset;
+struct VulkanResourceBinding {
+    uint             binding_index;
+    uint             argument_index;
+    VkDescriptorType descriptor_type;
+    uint             descriptor_count;
+    uint64           byte_offset; // Binding offset relative to the set start.
 };
-struct VulkanDescriptorSetBinder {
-    Array<VkWriteDescriptorSet>                        writers;
-    Array<VulkanDescriptorInfo>                        bind_infos;
-    Array<VkDescriptorImageInfo>                       image_infos;
-    Array<VkDescriptorBufferInfo>                      buffer_infos;
-    Array<VkWriteDescriptorSetAccelerationStructureNV> accel_structures;
-
-    VkPushDescriptorSetInfoKHR push_info;
-    VkPipelineBindPoint        bind_point;
-
-    struct BindingInfo {
-        uint64 offset;     //set offset in descriptor buffer
-        uint64 src_handle; //cpu handle in global buffer
-
-        uint binding;
-    };
-    Array<BindingInfo> binding_infos;
-    uint64             size; //size in descriptor buffer
-    uint64             pipeline_offset;
-    uint               desc_idx;
-    uint               offset_idx;
+struct VulkanResourceSetBinding {
+    Array<VulkanResourceBinding> bindings;
+    uint64                       allocation_size; // Includes alignment and extra padding.
+    uint                         descriptor_buffer_index;
+    uint                         set_buffer_binding_index;
 };
 
-struct VulkanBindlessSetArray {
+struct VulkanBindlessBufferSetBinding {
     //index in ArrayArguments
-    uint param_idx;
+    uint argument_index;
     //descriptor buffer index
-    uint desc_idx;
+    uint descriptor_buffer_index;
     //descriptorCount declared by the pipeline layout
     uint descriptor_count;
 };
 
-struct VulkanBindlessSetImage {
+struct VulkanBindlessImageSetBinding {
     //index in ArrayArguments
-    uint param_idx;
+    uint argument_index;
     //descriptor buffer index
-    uint desc_idx;
+    uint descriptor_buffer_index;
     //descriptorCount declared by the pipeline layout
     uint descriptor_count;
 };
 
-struct VulkanBindlessSetSampler {
+struct VulkanBindlessSamplerSetBinding {
     //index in ArrayArguments
-    uint param_idx;
+    uint argument_index;
     //descriptor buffer index
-    uint desc_idx;
+    uint descriptor_buffer_index;
     //descriptorCount declared by the pipeline layout
     uint descriptor_count;
 };
-using TBinder = std::variant<
-    VulkanDescriptorSetBinder,
-    VulkanBindlessSetArray,
-    VulkanBindlessSetImage,
-    VulkanBindlessSetSampler>;
-struct VulkanPipelineParamBinder {
-    UnorderedMap<uint, TBinder> set_binders;
-    VkPushConstantsInfoKHR      push_constants_info;
+using VulkanDescriptorSetBinding = std::variant<
+    VulkanResourceSetBinding,
+    VulkanBindlessBufferSetBinding,
+    VulkanBindlessImageSetBinding,
+    VulkanBindlessSamplerSetBinding>;
+struct VulkanPipelineBindingTemplate {
+    UnorderedMap<uint, VulkanDescriptorSetBinding> set_bindings;
+    VkPushConstantsInfoKHR                         push_constants_info;
     //descriptor buffer bind template
-    Array<VkDescriptorBufferBindingInfoEXT> desc_buffers;
+    Array<VkDescriptorBufferBindingInfoEXT> descriptor_buffers;
     //set offsets in descriptor buffers
-    Array<DescBufferOffsetInfo> desc_buffer_offsets;
+    Array<DescriptorSetBufferBinding> set_buffer_bindings;
 };
 
 class VulkanEnumTranslator final {
@@ -544,7 +525,7 @@ public:
     void InitDescriptorSetLayouts(
         Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings
     );
-    void                CreatePipelineLayout(const VkPipelineLayoutCreateInfo& _pipeline_layout_ci);
+    void                CreatePipelineLayout(const VkPipelineLayoutCreateInfo& pipeline_layout_info);
     VkPipelineBindPoint GetPipelineBindPoint() {
         switch (m_type) {
             case GFX:
@@ -558,12 +539,12 @@ public:
         }
     }
     void InitPipelineLayout(
-        UnorderedMap<uint, struct VulkanDescriptorSetLayoutCreateInfo>&&,
-        std::optional<VkPushConstantRange> _push_constant_range = std::nullopt
+        UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
+        std::optional<VkPushConstantRange> push_constant_range = std::nullopt
     );
 
 public:
-    UniquePtr<struct VulkanPipelineParamBinder> bind_template;
+    UniquePtr<VulkanPipelineBindingTemplate> binding_template;
 
 protected:
     friend VulkanDevice;

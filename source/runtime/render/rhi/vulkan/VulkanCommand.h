@@ -159,7 +159,7 @@ public:
 
     void UploadDescriptors(const PipelineHandle& _pso_handle);
     void UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data);
-    void BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args);
+    void BindDescriptors(const PipelineHandle& pipeline_handle, const ArrayArguments& arguments);
     void SetDescriptorPushLease(std::shared_ptr<VulkanDescriptorPushLeaseState> _lease) {
         descriptor_push_lease = std::move(_lease);
     }

@@ -10,7 +10,7 @@ namespace Moer::Render {
 
 struct ArrayArguments;
 struct PipelineHandle;
-struct VulkanPipelineParamBinder;
+struct VulkanPipelineBindingTemplate;
 
 // Profile-only recorder for the Phase 9.0 serial baseline. Native handles are
 // accepted only as lookup keys and never enter a digest.
@@ -44,9 +44,9 @@ public:
     void RecordUnresolvedBufferBarrier(const SerialBarrierItem& _item);
 
     void RecordDescriptorBind(
-        const PipelineHandle&             _pipeline,
-        const ArrayArguments&             _args,
-        const VulkanPipelineParamBinder&  _binder
+        const PipelineHandle&                pipeline_handle,
+        const ArrayArguments&                arguments,
+        const VulkanPipelineBindingTemplate& binding_template
     );
     // Called only from ExecuteNow's profile-on branch, after VisitCmd returned.
     // Replays the descriptor calls that the successful command just emitted.

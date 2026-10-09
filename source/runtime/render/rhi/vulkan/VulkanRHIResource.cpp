@@ -800,346 +800,255 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         m_descriptor_sets_layout = MoerNew(VulkanDescriptorSetsLayout)(m_device, _descriptor_bindings);
     }
 
-    void VulkanPipelineState::CreatePipelineLayout(const VkPipelineLayoutCreateInfo& _pipeline_layout_ci) { VK_CHECK_RESULT(vkCreatePipelineLayout(m_device->GetDevice(), &_pipeline_layout_ci, nullptr, &m_pipeline_layout)); }
+void VulkanPipelineState::CreatePipelineLayout(const VkPipelineLayoutCreateInfo& pipeline_layout_info) {
+    VK_CHECK_RESULT(
+        vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_info, nullptr, &m_pipeline_layout)
+    );
+}
 
-    void VulkanPipelineState::InitPipelineLayout(UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& _descriptor_set_layouts, std::optional<VkPushConstantRange> _push_constant_range){
-        VkPipelineLayoutCreateInfo pipeline_layout_ci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+namespace {
 
-        bind_template = MakeUnique<VulkanPipelineParamBinder>();
-        bind_template->set_binders.rehash(_descriptor_set_layouts.size());
-        Array<VkDescriptorBufferBindingInfoEXT>& descriptor_buffers = bind_template->desc_buffers;
-        Array<DescBufferOffsetInfo>& desc_buffer_offsets = bind_template->desc_buffer_offsets;
+void InitializeDescriptorSetBindings(
+    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+    VulkanPipelineBindingTemplate&                                 binding_template
+) {
+    constexpr uint invalid_buffer_index         = std::numeric_limits<uint>::max();
+    uint           bindless_buffer_index        = invalid_buffer_index;
+    uint           bindless_image_sampler_index = invalid_buffer_index;
+    uint           resource_buffer_index        = invalid_buffer_index;
+    uint           descriptor_buffer_count      = 0;
 
-        // VkDescriptorSetLayoutCreateInfo descriptor_set_layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        Array<VkDescriptorSetLayoutBinding> descriptor_set_layout_bindings;
-        uint total_binding_count = 0;
-        uint descriptor_buffer_count = 0;
-        constexpr static uint invalid_descriptor_buffer_idx = 114514;
-        uint buffer_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
-        uint sampler_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
-        uint global_descriptor_buffer_idx = invalid_descriptor_buffer_idx;
-
-        VkDescriptorSetLayout empty_layout = m_device->GetEmptyDescriptorSetLayout();
-
-        //precompute array sizes
-        for (auto& [set, layout] : _descriptor_set_layouts) {
-            total_binding_count += layout.bindings.size();
-            auto& binder = bind_template->set_binders[set];
-
-            if(layout.is_bindless){
-                const auto& binding_info = layout.bindings.at(0);
-                const auto& vk_binding = binding_info.vk_binding;
-                if(vk_binding.descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER){
-                    if(buffer_descriptor_buffer_idx == invalid_descriptor_buffer_idx){
-                        descriptor_buffer_count++;
-                        buffer_descriptor_buffer_idx = descriptor_buffer_count - 1;
-                    }
-                    binder.emplace<VulkanBindlessSetArray>(
-                        binding_info.argument_index,
-                        buffer_descriptor_buffer_idx,
-                        vk_binding.descriptorCount
-                    );
-                }else if(vk_binding.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER){
-                    if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
-                        descriptor_buffer_count++;
-                        sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
-                    }
-
-                    binder.emplace<VulkanBindlessSetSampler>(
-                        binding_info.argument_index,
-                        sampler_descriptor_buffer_idx,
-                        vk_binding.descriptorCount
-                    );
-                }else if (vk_binding.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE){
-                    //sampler and sampled_image use same descriptor buffer
-                    if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
-                        descriptor_buffer_count++;
-                        sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
-                    }
-                    binder.emplace<VulkanBindlessSetImage>(
-                        binding_info.argument_index,
-                        sampler_descriptor_buffer_idx,
-                        vk_binding.descriptorCount
-                    );
-                }
-                else{
-                    LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint(vk_binding.descriptorType));
-                    assert(false);
-                }
-                continue;
-            }
-            //not bindless
-            if(global_descriptor_buffer_idx == invalid_descriptor_buffer_idx){
-                descriptor_buffer_count++;
-                global_descriptor_buffer_idx = descriptor_buffer_count - 1;
-            }
-            VulkanDescriptorSetBinder& resource_binder = std::get<VulkanDescriptorSetBinder>(binder);
-            resource_binder.bind_infos.resize(layout.bindings.size());
-            resource_binder.writers.resize(layout.bindings.size());
-            resource_binder.binding_infos.resize(layout.bindings.size());
+    auto allocate_buffer_index = [&](uint& buffer_index) {
+        if (buffer_index == invalid_buffer_index) {
+            buffer_index = descriptor_buffer_count++;
         }
-        descriptor_buffers.resize(descriptor_buffer_count);
-        desc_buffer_offsets.reserve(descriptor_buffer_count);
+        return buffer_index;
+    };
 
-        //get max set index
-        uint max_set_idx = 0;
-        for (const auto& [set, layout] : _descriptor_set_layouts) {
-            max_set_idx = std::max(max_set_idx, set);
-        }
-        if (_descriptor_set_layouts.empty()) {
-            max_set_idx = 0;
-        }
-        pipeline_layout_ci.setLayoutCount         = _descriptor_set_layouts.empty() ? 0 : max_set_idx + 1;
-        descriptor_set_layouts.resize(pipeline_layout_ci.setLayoutCount, VK_NULL_HANDLE);
-        descriptor_set_layout_bindings.resize(total_binding_count);
-        total_binding_count = 0;
+    binding_template.set_bindings.rehash(set_layout_infos.size());
+    for (const auto& [set_index, layout_info] : set_layout_infos) {
+        auto  binding_it      = binding_template.set_bindings.try_emplace(set_index).first;
+        auto& binding_variant = binding_it->second;
 
-        static constexpr VkDescriptorBindingFlags bdls_flags [] = {0,
-            VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
-            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-            VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT
-        };
-
-        static constexpr VkDescriptorBindingFlags bdls_sampler_flags [] = {
-            VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
-            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-            VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT
-        };
-
-
-        //build descriptor set layouts
-        for (const auto& [set, layout] : _descriptor_set_layouts) {
-            VkDescriptorSetLayoutCreateInfo descriptor_set_layout_ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-
-            auto& binder = bind_template->set_binders[set];
-            descriptor_set_layout_ci = layout.layout_create_info;
-            descriptor_set_layout_ci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-            VkDescriptorSetLayoutBindingFlagsCreateInfo bdls_buffer_ext{};
-            bdls_buffer_ext.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-            bdls_buffer_ext.bindingCount = 1;
-            bdls_buffer_ext.pBindingFlags = bdls_flags;
-
-            VkDescriptorSetLayoutBindingFlagsCreateInfo bdls_texture_ext{};
-            bdls_texture_ext.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-            bdls_texture_ext.bindingCount = 1;
-            bdls_texture_ext.pBindingFlags = bdls_sampler_flags;
-            std::visit([&](auto&& _binder){
-                using T = std::decay_t<decltype(_binder)>;
-                if constexpr(std::is_same_v<T, VulkanBindlessSetArray>){
-                    descriptor_set_layout_ci.pNext = &bdls_buffer_ext;
-                    for (const auto& [binding_idx, binding_info] : layout.bindings) {
-                        const auto& vk_binding = binding_info.vk_binding;
-                        descriptor_set_layout_bindings[total_binding_count + vk_binding.binding] = vk_binding;
-                        if(binding_idx == 1){bdls_buffer_ext.bindingCount = 2;}
-                    }
-                    //need to calculate a layout
-                }else if constexpr(std::is_same_v<T, VulkanBindlessSetImage>){
-                    descriptor_set_layout_ci.pNext = &bdls_texture_ext;
-                    for (const auto& [binding_idx, binding_info] : layout.bindings) {
-                        const auto& vk_binding = binding_info.vk_binding;
-                        descriptor_set_layout_bindings[total_binding_count + vk_binding.binding] = vk_binding;
-                    }
-
-                }else if constexpr(std::is_same_v<T, VulkanBindlessSetSampler>){
-                        descriptor_set_layout_ci.pNext = &bdls_texture_ext;
-                    for (const auto& [binding_idx, binding_info] : layout.bindings) {
-                        const auto& vk_binding = binding_info.vk_binding;
-                        descriptor_set_layout_bindings[total_binding_count + vk_binding.binding] = vk_binding;
-                    }
-                }else if constexpr(std::is_same_v<T, VulkanDescriptorSetBinder>){
-                    for (const auto& [binding_idx, binding_info] : layout.bindings) {
-                        const auto& vk_binding = binding_info.vk_binding;
-                        descriptor_set_layout_bindings[total_binding_count + vk_binding.binding] = vk_binding;
-                        VkWriteDescriptorSet& write_info = _binder.writers[vk_binding.binding];
-                        write_info.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                        write_info.dstSet = VK_NULL_HANDLE;//ignored
-                        write_info.dstBinding = vk_binding.binding;
-                        write_info.dstArrayElement = 0;
-                        write_info.descriptorCount = vk_binding.descriptorCount;
-                        write_info.descriptorType = vk_binding.descriptorType;
-
-                        VulkanDescriptorInfo& descriptor_info = _binder.bind_infos[vk_binding.binding];
-                        descriptor_info.param_idx = binding_info.argument_index;
-                        if(vk_binding.descriptorCount < 1){
-                            continue;
-                        }
-                        switch (vk_binding.descriptorType){
-
-                            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-                            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-                            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-                            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:{
-                                descriptor_info.info_idx = _binder.buffer_infos.size();
-                                _binder.buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
-                                write_info.pBufferInfo = &_binder.buffer_infos.back();
-                                break;
-                            }
-                            case VK_DESCRIPTOR_TYPE_SAMPLER:{
-                                descriptor_info.info_idx = _binder.image_infos.size();
-                                _binder.image_infos.emplace_back(VK_NULL_HANDLE,
-                                    VK_NULL_HANDLE,
-                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                                write_info.pImageInfo = &_binder.image_infos.back();
-                                break;
-                            }
-                            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-                            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:{
-                                descriptor_info.info_idx = _binder.image_infos.size();
-                                _binder.image_infos.emplace_back(VK_NULL_HANDLE,
-                                    VK_NULL_HANDLE,
-                                    vk_binding.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ?
-                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL :
-                                        VK_IMAGE_LAYOUT_GENERAL);
-                                write_info.pImageInfo = &_binder.image_infos.back();
-                                break;
-                            }
-                            case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:{
-                                descriptor_info.info_idx = _binder.accel_structures.size();
-                                _binder.accel_structures.emplace_back();
-                                write_info.pNext = &_binder.accel_structures.back();
-                                break;
-
-                            }
-                            default:
-                                {
-                                    LOG_CRITICAL("Unsupported descriptor type: {}", uint(vk_binding.descriptorType));
-                                    assert(false);
-                                }
-                        }
-                        _binder.push_info.stageFlags |= vk_binding.stageFlags;
-
-                    }
-                    _binder.bind_point = GetPipelineBindPoint();
-                }
-
-            }, binder);
-
-            descriptor_set_layout_ci.bindingCount = layout.bindings.size();
-            descriptor_set_layout_ci.pBindings = descriptor_set_layout_bindings.data() + total_binding_count;
-            VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_device->GetDevice(), &descriptor_set_layout_ci, VK_NULL_HANDLE, &descriptor_set_layouts[set]));
-            total_binding_count += layout.bindings.size();
-            std::visit([&](auto& _binder){
-                using T = std::decay_t<decltype(_binder)>;
-                if constexpr(std::is_same_v<T, VulkanDescriptorSetBinder>){
-                    for (const auto& [binding_idx, binding_info] : layout.bindings) {
-                        const auto& vk_binding = binding_info.vk_binding;
-                        auto& binding_offset_info = _binder.binding_infos[vk_binding.binding];
-                        vkGetDescriptorSetLayoutBindingOffsetEXT(m_device->GetDevice(), descriptor_set_layouts[set], vk_binding.binding, &binding_offset_info.offset);
-                        binding_offset_info.binding = vk_binding.binding;
-                    }
-                    vkGetDescriptorSetLayoutSizeEXT(m_device->GetDevice(), descriptor_set_layouts[set], &_binder.size);
-                    // Align descriptor set layout size for AMD GPU compatibility
-                    uint64 align = m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
-                    // Add extra padding for safety
-                    _binder.size = Moer::AlignUp(_binder.size, align) + align;
-                }
-            }, binder);
-
-        }
-        for (auto& layout : descriptor_set_layouts) {
-            if (layout == VK_NULL_HANDLE) {
-                layout = empty_layout;
-            }
-        }
-        pipeline_layout_ci.pSetLayouts = descriptor_set_layouts.data();
-        pipeline_layout_ci.pushConstantRangeCount = _push_constant_range.has_value() ? 1 : 0;
-        pipeline_layout_ci.pPushConstantRanges = _push_constant_range.has_value() ? &_push_constant_range.value() : nullptr;
-        VK_CHECK_RESULT(vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_ci, nullptr, &m_pipeline_layout));
-
-        //post build pipeline layout
-        for (auto& [set, binder] : bind_template->set_binders) {
-            std::visit([&](auto&& _binder){
-                using T = std::decay_t<decltype(_binder)>;
-                if constexpr(std::is_same_v<T, VulkanBindlessSetArray>){
-                    descriptor_buffers[buffer_descriptor_buffer_idx] = {
-                        VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
-                        VK_NULL_HANDLE,
-                        0ull,
-                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT
-                    };
-                    desc_buffer_offsets.emplace_back(
-                         set,
-                        GetPipelineBindPoint(),
-                        m_pipeline_layout,
-                        buffer_descriptor_buffer_idx,
-                        0);
-                }else if constexpr(std::is_same_v<T, VulkanBindlessSetImage>){
-                    descriptor_buffers[sampler_descriptor_buffer_idx] = {
-                        VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
-                        VK_NULL_HANDLE,
-                        0ull,
-                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                            VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
-                            VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT
-                    };
-                    desc_buffer_offsets.emplace_back(
-                        set,
-                        GetPipelineBindPoint(),
-                        m_pipeline_layout,
-                        sampler_descriptor_buffer_idx,
-                        GetBindlessTextureDescriptorOffset(*m_device));
-
-                }else if constexpr(std::is_same_v<T, VulkanBindlessSetSampler>){
-                    descriptor_buffers[sampler_descriptor_buffer_idx] = {
-                        VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
-                        VK_NULL_HANDLE,
-                        0ull,
-                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                            VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
-                            VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT
-                    };
-
-                    desc_buffer_offsets.emplace_back(
-                        set,
-                        GetPipelineBindPoint(),
-                        m_pipeline_layout,
-                        sampler_descriptor_buffer_idx,
-                        0);
-                }else if constexpr(std::is_same_v<T, VulkanDescriptorSetBinder>){
-                    descriptor_buffers[global_descriptor_buffer_idx] = {
-                        VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
-                        VK_NULL_HANDLE,
-                        m_device->GetGlobalDescriptorHeap().ring_desc_buffer->DeviceAddress(),
-                        VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-                    };
-
-                    _binder.push_info.pDescriptorWrites = _binder.writers.data();
-                    _binder.push_info.descriptorWriteCount = _binder.writers.size();
-                    _binder.push_info.sType = VK_STRUCTURE_TYPE_PUSH_DESCRIPTOR_SET_INFO_KHR;
-                    _binder.push_info.pNext = nullptr;
-                    _binder.push_info.layout = m_pipeline_layout;
-                    _binder.push_info.set = set;
-
-                    _binder.desc_idx = global_descriptor_buffer_idx;
-                    _binder.offset_idx = desc_buffer_offsets.size();
-
-                    desc_buffer_offsets.emplace_back(
-                        set,
-                        GetPipelineBindPoint(),
-                        m_pipeline_layout,
-                        global_descriptor_buffer_idx,
-                        0);
-                }
-            }, binder);
-
-        }
-        if(_push_constant_range.has_value()){
-            bind_template->push_constants_info.sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR;
-            bind_template->push_constants_info.pNext = nullptr;
-            bind_template->push_constants_info.layout = m_pipeline_layout;
-            bind_template->push_constants_info.stageFlags = _push_constant_range->stageFlags;
-            bind_template->push_constants_info.offset = _push_constant_range->offset;
-            bind_template->push_constants_info.size = _push_constant_range->size;
-
-        }
-        for (auto& layout : descriptor_set_layouts) {
-            if (layout != empty_layout) {
-                // vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
-            }
+        if (!layout_info.is_bindless) {
+            std::get<VulkanResourceSetBinding>(binding_variant).descriptor_buffer_index =
+                allocate_buffer_index(resource_buffer_index);
+            continue;
         }
 
+        const auto& binding_info = layout_info.bindings.at(0);
+        const auto& vk_binding   = binding_info.vk_binding;
+        switch (vk_binding.descriptorType) {
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                binding_variant.emplace<VulkanBindlessBufferSetBinding>(
+                    binding_info.argument_index,
+                    allocate_buffer_index(bindless_buffer_index),
+                    vk_binding.descriptorCount
+                );
+                break;
+            case VK_DESCRIPTOR_TYPE_SAMPLER:
+                binding_variant.emplace<VulkanBindlessSamplerSetBinding>(
+                    binding_info.argument_index,
+                    allocate_buffer_index(bindless_image_sampler_index),
+                    vk_binding.descriptorCount
+                );
+                break;
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                // Bindless images and samplers share one descriptor buffer.
+                binding_variant.emplace<VulkanBindlessImageSetBinding>(
+                    binding_info.argument_index,
+                    allocate_buffer_index(bindless_image_sampler_index),
+                    vk_binding.descriptorCount
+                );
+                break;
+            default:
+                LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint(vk_binding.descriptorType));
+                assert(false);
+        }
     }
+    binding_template.descriptor_buffers.resize(descriptor_buffer_count);
+    binding_template.set_buffer_bindings.reserve(set_layout_infos.size());
+}
 
+void InitializeResourceSetBinding(
+    const VulkanDescriptorSetLayoutCreateInfo& layout_info,
+    VulkanResourceSetBinding&                  set_binding
+) {
+    set_binding.bindings.resize(layout_info.bindings.size());
+    for (const auto& [binding_index, binding_info] : layout_info.bindings) {
+        const auto& vk_binding            = binding_info.vk_binding;
+        auto&       resource_binding      = set_binding.bindings[vk_binding.binding];
+        resource_binding.binding_index    = vk_binding.binding;
+        resource_binding.argument_index   = binding_info.argument_index;
+        resource_binding.descriptor_type  = vk_binding.descriptorType;
+        resource_binding.descriptor_count = vk_binding.descriptorCount;
+        if (vk_binding.descriptorCount == 0) {
+            continue;
+        }
+
+        switch (vk_binding.descriptorType) {
+            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+            case VK_DESCRIPTOR_TYPE_SAMPLER:
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+            case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+                break;
+            default:
+                LOG_CRITICAL("Unsupported descriptor type: {}", uint(vk_binding.descriptorType));
+                assert(false);
+        }
+    }
+}
+
+void CacheDescriptorSetStorageLayout(
+    const VulkanDevice&                        device,
+    VkDescriptorSetLayout                      set_layout,
+    const VulkanDescriptorSetLayoutCreateInfo& layout_info,
+    VulkanResourceSetBinding&                  set_binding
+) {
+    for (const auto& [binding_index, binding_info] : layout_info.bindings) {
+        const auto& vk_binding       = binding_info.vk_binding;
+        auto&       resource_binding = set_binding.bindings[vk_binding.binding];
+        vkGetDescriptorSetLayoutBindingOffsetEXT(
+            device.GetDevice(), set_layout, vk_binding.binding, &resource_binding.byte_offset
+        );
+    }
+    vkGetDescriptorSetLayoutSizeEXT(device.GetDevice(), set_layout, &set_binding.allocation_size);
+
+    // Preserve the aligned size and extra padding used for AMD GPU compatibility.
+    const uint64 alignment =
+        device.GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
+    set_binding.allocation_size = Moer::AlignUp(set_binding.allocation_size, alignment) + alignment;
+}
+
+Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
+    VulkanDevice&                                                  device,
+    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+    VulkanPipelineBindingTemplate&                                 binding_template
+) {
+    uint set_layout_count = 0;
+    for (const auto& [set_index, layout_info] : set_layout_infos) {
+        set_layout_count = std::max(set_layout_count, set_index + 1);
+    }
+    // Vulkan addresses sets by array index, so gaps require the shared empty layout.
+    Array<VkDescriptorSetLayout> set_layouts(set_layout_count, device.GetEmptyDescriptorSetLayout());
+
+    constexpr VkDescriptorBindingFlags bindless_flags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
+                                                        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                                                        VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
+    constexpr VkDescriptorBindingFlags bindless_buffer_flags[] = {0, bindless_flags};
+
+    for (const auto& [set_index, layout_info] : set_layout_infos) {
+        // FillMissingDescriptorBindings has made the binding indices contiguous.
+        Array<VkDescriptorSetLayoutBinding> vk_bindings(layout_info.bindings.size());
+        for (const auto& [binding_index, binding_info] : layout_info.bindings) {
+            vk_bindings[binding_info.vk_binding.binding] = binding_info.vk_binding;
+        }
+
+        auto layout_create_info         = layout_info.layout_create_info;
+        layout_create_info.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+        layout_create_info.bindingCount = vk_bindings.size();
+        layout_create_info.pBindings    = vk_bindings.data();
+
+        VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags_info{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO
+        };
+        if (layout_info.is_bindless) {
+            const auto descriptor_type       = layout_info.bindings.at(0).vk_binding.descriptorType;
+            const bool is_buffer             = descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            binding_flags_info.bindingCount  = is_buffer && layout_info.bindings.contains(1) ? 2 : 1;
+            binding_flags_info.pBindingFlags = is_buffer ? bindless_buffer_flags : &bindless_flags;
+            layout_create_info.pNext         = &binding_flags_info;
+        }
+
+        auto& binding_variant      = binding_template.set_bindings.at(set_index);
+        auto* resource_set_binding = std::get_if<VulkanResourceSetBinding>(&binding_variant);
+        if (resource_set_binding) {
+            InitializeResourceSetBinding(layout_info, *resource_set_binding);
+        }
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(
+            device.GetDevice(), &layout_create_info, nullptr, &set_layouts[set_index]
+        ));
+        if (resource_set_binding) {
+            CacheDescriptorSetStorageLayout(
+                device, set_layouts[set_index], layout_info, *resource_set_binding
+            );
+        }
+    }
+    return set_layouts;
+}
+
+void InitializeDescriptorBufferBindingTemplate(
+    VulkanDevice&                  device,
+    VulkanPipelineBindingTemplate& binding_template
+) {
+    for (auto& [set_index, binding_variant] : binding_template.set_bindings) {
+        std::visit(
+            [&](auto& set_binding) {
+                using SetBinding = std::decay_t<decltype(set_binding)>;
+                auto& descriptor_buffer =
+                    binding_template.descriptor_buffers[set_binding.descriptor_buffer_index];
+                descriptor_buffer.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT;
+                descriptor_buffer.usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                          VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
+                uint64 set_byte_offset = 0;
+
+                if constexpr (std::is_same_v<SetBinding, VulkanResourceSetBinding>) {
+                    descriptor_buffer.address =
+                        device.GetGlobalDescriptorHeap().ring_desc_buffer->DeviceAddress();
+                    descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
+
+                    set_binding.set_buffer_binding_index = binding_template.set_buffer_bindings.size();
+                } else {
+                    // The bindless buffer address is supplied by each draw/dispatch.
+                    descriptor_buffer.address = 0;
+                    if constexpr (!std::is_same_v<SetBinding, VulkanBindlessBufferSetBinding>) {
+                        descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
+                    }
+                    if constexpr (std::is_same_v<SetBinding, VulkanBindlessImageSetBinding>) {
+                        set_byte_offset = GetBindlessTextureDescriptorOffset(device);
+                    }
+                }
+                binding_template.set_buffer_bindings.emplace_back(
+                    set_index, set_binding.descriptor_buffer_index, set_byte_offset
+                );
+            },
+            binding_variant
+        );
+    }
+}
+
+} // namespace
+
+void VulkanPipelineState::InitPipelineLayout(
+    UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
+    std::optional<VkPushConstantRange>                        push_constant_range
+) {
+    binding_template = MakeUnique<VulkanPipelineBindingTemplate>();
+
+    InitializeDescriptorSetBindings(set_layout_infos, *binding_template);
+    descriptor_set_layouts = CreateDescriptorSetLayouts(*m_device, set_layout_infos, *binding_template);
+
+    VkPipelineLayoutCreateInfo pipeline_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pipeline_layout_info.setLayoutCount         = descriptor_set_layouts.size();
+    pipeline_layout_info.pSetLayouts            = descriptor_set_layouts.data();
+    pipeline_layout_info.pushConstantRangeCount = push_constant_range.has_value() ? 1 : 0;
+    pipeline_layout_info.pPushConstantRanges    = push_constant_range ? &*push_constant_range : nullptr;
+    CreatePipelineLayout(pipeline_layout_info);
+
+    InitializeDescriptorBufferBindingTemplate(*m_device, *binding_template);
+    if (push_constant_range) {
+        auto& constants_info      = binding_template->push_constants_info;
+        constants_info.sType      = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR;
+        constants_info.layout     = m_pipeline_layout;
+        constants_info.stageFlags = push_constant_range->stageFlags;
+        constants_info.offset     = push_constant_range->offset;
+        constants_info.size       = push_constant_range->size;
+    }
+}
 
 #pragma endregion
 
