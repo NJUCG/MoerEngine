@@ -808,6 +808,39 @@ void VulkanPipelineState::CreatePipelineLayout(const VkPipelineLayoutCreateInfo&
 
 namespace {
 
+void InitializeResourceSetBindings(
+    const VulkanDescriptorSetLayoutCreateInfo& layout_info,
+    VulkanResourceSetBindings&                 resource_bindings
+) {
+    resource_bindings.bindings.resize(layout_info.bindings.size());
+    for (const auto& [binding_index, binding_info] : layout_info.bindings) {
+        const auto& vk_binding            = binding_info.vk_binding;
+        auto&       resource_binding      = resource_bindings.bindings[vk_binding.binding];
+        resource_binding.binding_index    = vk_binding.binding;
+        resource_binding.argument_index   = binding_info.argument_index;
+        resource_binding.descriptor_type  = vk_binding.descriptorType;
+        resource_binding.descriptor_count = vk_binding.descriptorCount;
+        if (vk_binding.descriptorCount == 0) {
+            continue;
+        }
+
+        switch (vk_binding.descriptorType) {
+            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+            case VK_DESCRIPTOR_TYPE_SAMPLER:
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+            case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+                break;
+            default:
+                LOG_CRITICAL("Unsupported descriptor type: {}", uint(vk_binding.descriptorType));
+                assert(false);
+        }
+    }
+}
+
 void InitializeDescriptorSetBindings(
     const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
     VulkanPipelineBindingTemplate&                                 binding_template
@@ -832,6 +865,8 @@ void InitializeDescriptorSetBindings(
         auto& resource_bindings = set_binding.resource_bindings;
 
         if (!layout_info.is_bindless) {
+            auto& ordinary_bindings = resource_bindings.emplace<VulkanResourceSetBindings>();
+            InitializeResourceSetBindings(layout_info, ordinary_bindings);
             set_binding.buffer_index = allocate_buffer_index(resource_buffer_index);
             continue;
         }
@@ -864,39 +899,6 @@ void InitializeDescriptorSetBindings(
         }
     }
     binding_template.descriptor_buffers.resize(descriptor_buffer_count);
-}
-
-void InitializeResourceSetBindings(
-    const VulkanDescriptorSetLayoutCreateInfo& layout_info,
-    VulkanResourceSetBindings&                 resource_bindings
-) {
-    resource_bindings.bindings.resize(layout_info.bindings.size());
-    for (const auto& [binding_index, binding_info] : layout_info.bindings) {
-        const auto& vk_binding            = binding_info.vk_binding;
-        auto&       resource_binding      = resource_bindings.bindings[vk_binding.binding];
-        resource_binding.binding_index    = vk_binding.binding;
-        resource_binding.argument_index   = binding_info.argument_index;
-        resource_binding.descriptor_type  = vk_binding.descriptorType;
-        resource_binding.descriptor_count = vk_binding.descriptorCount;
-        if (vk_binding.descriptorCount == 0) {
-            continue;
-        }
-
-        switch (vk_binding.descriptorType) {
-            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-            case VK_DESCRIPTOR_TYPE_SAMPLER:
-            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-            case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-                break;
-            default:
-                LOG_CRITICAL("Unsupported descriptor type: {}", uint(vk_binding.descriptorType));
-                assert(false);
-        }
-    }
 }
 
 void CacheDescriptorSetStorageLayout(
@@ -961,15 +963,11 @@ Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
             layout_create_info.pNext         = &binding_flags_info;
         }
 
-        auto& set_binding       = binding_template.set_bindings.at(set_index);
-        auto* resource_bindings = std::get_if<VulkanResourceSetBindings>(&set_binding.resource_bindings);
-        if (resource_bindings) {
-            InitializeResourceSetBindings(layout_info, *resource_bindings);
-        }
         VK_CHECK_RESULT(vkCreateDescriptorSetLayout(
             device.GetDevice(), &layout_create_info, nullptr, &set_layouts[set_index]
         ));
-        if (resource_bindings) {
+        auto& set_binding = binding_template.set_bindings.at(set_index);
+        if (auto* resource_bindings = std::get_if<VulkanResourceSetBindings>(&set_binding.resource_bindings)) {
             CacheDescriptorSetStorageLayout(device, set_layouts[set_index], layout_info, *resource_bindings);
         }
     }
