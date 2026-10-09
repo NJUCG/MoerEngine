@@ -987,12 +987,12 @@ struct VulkanSerialGoldenTrace::Impl {
         std::sort(set_indices.begin(), set_indices.end());
 
         for (const uint32_t set_index : set_indices) {
-            const VulkanDescriptorSetBinding& binding_variant = binding_template.set_bindings.at(set_index);
+            const auto& resource_bindings = binding_template.set_bindings.at(set_index).resource_bindings;
             std::visit(
                 Overload{
-                    [&](const VulkanBindlessBufferSetBinding& set_binding) {
-                        const TArg* arg = set_binding.argument_index < arguments.args.size() ?
-                                              &arguments.args[set_binding.argument_index] :
+                    [&](const VulkanBindlessBufferSetBindings& set_resource_bindings) {
+                        const TArg* arg = set_resource_bindings.argument_index < arguments.args.size() ?
+                                              &arguments.args[set_resource_bindings.argument_index] :
                                               nullptr;
                         AddDescriptorItem(
                             pipeline_bind_point,
@@ -1000,16 +1000,16 @@ struct VulkanSerialGoldenTrace::Impl {
                             0,
                             0,
                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                            set_binding.argument_index,
-                            set_binding.descriptor_count,
+                            set_resource_bindings.argument_index,
+                            set_resource_bindings.descriptor_count,
                             arg,
                             0,
                             pipeline_token
                         );
                     },
-                    [&](const VulkanBindlessSamplerSetBinding& set_binding) {
-                        const TArg* arg = set_binding.argument_index < arguments.args.size() ?
-                                              &arguments.args[set_binding.argument_index] :
+                    [&](const VulkanBindlessSamplerSetBindings& set_resource_bindings) {
+                        const TArg* arg = set_resource_bindings.argument_index < arguments.args.size() ?
+                                              &arguments.args[set_resource_bindings.argument_index] :
                                               nullptr;
                         AddDescriptorItem(
                             pipeline_bind_point,
@@ -1017,16 +1017,16 @@ struct VulkanSerialGoldenTrace::Impl {
                             0,
                             0,
                             VK_DESCRIPTOR_TYPE_SAMPLER,
-                            set_binding.argument_index,
-                            set_binding.descriptor_count,
+                            set_resource_bindings.argument_index,
+                            set_resource_bindings.descriptor_count,
                             arg,
                             0,
                             pipeline_token
                         );
                     },
-                    [&](const VulkanBindlessImageSetBinding& set_binding) {
-                        const TArg* arg = set_binding.argument_index < arguments.args.size() ?
-                                              &arguments.args[set_binding.argument_index] :
+                    [&](const VulkanBindlessImageSetBindings& set_resource_bindings) {
+                        const TArg* arg = set_resource_bindings.argument_index < arguments.args.size() ?
+                                              &arguments.args[set_resource_bindings.argument_index] :
                                               nullptr;
                         AddDescriptorItem(
                             pipeline_bind_point,
@@ -1034,15 +1034,15 @@ struct VulkanSerialGoldenTrace::Impl {
                             0,
                             0,
                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                            set_binding.argument_index,
-                            set_binding.descriptor_count,
+                            set_resource_bindings.argument_index,
+                            set_resource_bindings.descriptor_count,
                             arg,
                             0,
                             pipeline_token
                         );
                     },
-                    [&](const VulkanResourceSetBinding& set_binding) {
-                        for (const auto& resource_binding : set_binding.bindings) {
+                    [&](const VulkanResourceSetBindings& set_resource_bindings) {
+                        for (const auto& resource_binding : set_resource_bindings.bindings) {
                             if (resource_binding.descriptor_count == 0) {
                                 continue;
                             }
@@ -1096,7 +1096,7 @@ struct VulkanSerialGoldenTrace::Impl {
                         }
                     }
                 },
-                binding_variant
+                resource_bindings
             );
         }
 
@@ -1151,10 +1151,10 @@ struct VulkanSerialGoldenTrace::Impl {
                 return;
             }
             uint64_t bind_descriptor_bytes = 0;
-            for (const auto& [set_index, binding_variant] : vk_pipeline->binding_template->set_bindings) {
-                (void)set_index;
-                if (const auto* set_binding = std::get_if<VulkanResourceSetBinding>(&binding_variant)) {
-                    bind_descriptor_bytes += set_binding->allocation_size;
+            for (const auto& [set_index, set_binding] : vk_pipeline->binding_template->set_bindings) {
+                if (const auto* resource_bindings =
+                        std::get_if<VulkanResourceSetBindings>(&set_binding.resource_bindings)) {
+                    bind_descriptor_bytes += resource_bindings->allocation_size;
                 }
             }
             descriptor_relative_begin = _relative_descriptor_begin + expected_descriptor_bytes;

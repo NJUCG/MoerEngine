@@ -827,12 +827,12 @@ void InitializeDescriptorSetBindings(
 
     binding_template.set_bindings.rehash(set_layout_infos.size());
     for (const auto& [set_index, layout_info] : set_layout_infos) {
-        auto  binding_it      = binding_template.set_bindings.try_emplace(set_index).first;
-        auto& binding_variant = binding_it->second;
+        auto  binding_it        = binding_template.set_bindings.try_emplace(set_index).first;
+        auto& set_binding       = binding_it->second;
+        auto& resource_bindings = set_binding.resource_bindings;
 
         if (!layout_info.is_bindless) {
-            std::get<VulkanResourceSetBinding>(binding_variant).descriptor_buffer_index =
-                allocate_buffer_index(resource_buffer_index);
+            set_binding.buffer_index = allocate_buffer_index(resource_buffer_index);
             continue;
         }
 
@@ -840,26 +840,23 @@ void InitializeDescriptorSetBindings(
         const auto& vk_binding   = binding_info.vk_binding;
         switch (vk_binding.descriptorType) {
             case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-                binding_variant.emplace<VulkanBindlessBufferSetBinding>(
-                    binding_info.argument_index,
-                    allocate_buffer_index(bindless_buffer_index),
-                    vk_binding.descriptorCount
+                resource_bindings.emplace<VulkanBindlessBufferSetBindings>(
+                    binding_info.argument_index, vk_binding.descriptorCount
                 );
+                set_binding.buffer_index = allocate_buffer_index(bindless_buffer_index);
                 break;
             case VK_DESCRIPTOR_TYPE_SAMPLER:
-                binding_variant.emplace<VulkanBindlessSamplerSetBinding>(
-                    binding_info.argument_index,
-                    allocate_buffer_index(bindless_image_sampler_index),
-                    vk_binding.descriptorCount
+                resource_bindings.emplace<VulkanBindlessSamplerSetBindings>(
+                    binding_info.argument_index, vk_binding.descriptorCount
                 );
+                set_binding.buffer_index = allocate_buffer_index(bindless_image_sampler_index);
                 break;
             case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
                 // Bindless images and samplers share one descriptor buffer.
-                binding_variant.emplace<VulkanBindlessImageSetBinding>(
-                    binding_info.argument_index,
-                    allocate_buffer_index(bindless_image_sampler_index),
-                    vk_binding.descriptorCount
+                resource_bindings.emplace<VulkanBindlessImageSetBindings>(
+                    binding_info.argument_index, vk_binding.descriptorCount
                 );
+                set_binding.buffer_index = allocate_buffer_index(bindless_image_sampler_index);
                 break;
             default:
                 LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint(vk_binding.descriptorType));
@@ -867,17 +864,16 @@ void InitializeDescriptorSetBindings(
         }
     }
     binding_template.descriptor_buffers.resize(descriptor_buffer_count);
-    binding_template.set_buffer_bindings.reserve(set_layout_infos.size());
 }
 
-void InitializeResourceSetBinding(
+void InitializeResourceSetBindings(
     const VulkanDescriptorSetLayoutCreateInfo& layout_info,
-    VulkanResourceSetBinding&                  set_binding
+    VulkanResourceSetBindings&                 resource_bindings
 ) {
-    set_binding.bindings.resize(layout_info.bindings.size());
+    resource_bindings.bindings.resize(layout_info.bindings.size());
     for (const auto& [binding_index, binding_info] : layout_info.bindings) {
         const auto& vk_binding            = binding_info.vk_binding;
-        auto&       resource_binding      = set_binding.bindings[vk_binding.binding];
+        auto&       resource_binding      = resource_bindings.bindings[vk_binding.binding];
         resource_binding.binding_index    = vk_binding.binding;
         resource_binding.argument_index   = binding_info.argument_index;
         resource_binding.descriptor_type  = vk_binding.descriptorType;
@@ -907,21 +903,22 @@ void CacheDescriptorSetStorageLayout(
     const VulkanDevice&                        device,
     VkDescriptorSetLayout                      set_layout,
     const VulkanDescriptorSetLayoutCreateInfo& layout_info,
-    VulkanResourceSetBinding&                  set_binding
+    VulkanResourceSetBindings&                 resource_bindings
 ) {
     for (const auto& [binding_index, binding_info] : layout_info.bindings) {
         const auto& vk_binding       = binding_info.vk_binding;
-        auto&       resource_binding = set_binding.bindings[vk_binding.binding];
+        auto&       resource_binding = resource_bindings.bindings[vk_binding.binding];
         vkGetDescriptorSetLayoutBindingOffsetEXT(
             device.GetDevice(), set_layout, vk_binding.binding, &resource_binding.byte_offset
         );
     }
-    vkGetDescriptorSetLayoutSizeEXT(device.GetDevice(), set_layout, &set_binding.allocation_size);
+    vkGetDescriptorSetLayoutSizeEXT(device.GetDevice(), set_layout, &resource_bindings.allocation_size);
 
     // Preserve the aligned size and extra padding used for AMD GPU compatibility.
     const uint64 alignment =
         device.GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
-    set_binding.allocation_size = Moer::AlignUp(set_binding.allocation_size, alignment) + alignment;
+    resource_bindings.allocation_size =
+        Moer::AlignUp(resource_bindings.allocation_size, alignment) + alignment;
 }
 
 Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
@@ -964,18 +961,16 @@ Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
             layout_create_info.pNext         = &binding_flags_info;
         }
 
-        auto& binding_variant      = binding_template.set_bindings.at(set_index);
-        auto* resource_set_binding = std::get_if<VulkanResourceSetBinding>(&binding_variant);
-        if (resource_set_binding) {
-            InitializeResourceSetBinding(layout_info, *resource_set_binding);
+        auto& set_binding       = binding_template.set_bindings.at(set_index);
+        auto* resource_bindings = std::get_if<VulkanResourceSetBindings>(&set_binding.resource_bindings);
+        if (resource_bindings) {
+            InitializeResourceSetBindings(layout_info, *resource_bindings);
         }
         VK_CHECK_RESULT(vkCreateDescriptorSetLayout(
             device.GetDevice(), &layout_create_info, nullptr, &set_layouts[set_index]
         ));
-        if (resource_set_binding) {
-            CacheDescriptorSetStorageLayout(
-                device, set_layouts[set_index], layout_info, *resource_set_binding
-            );
+        if (resource_bindings) {
+            CacheDescriptorSetStorageLayout(device, set_layouts[set_index], layout_info, *resource_bindings);
         }
     }
     return set_layouts;
@@ -985,38 +980,31 @@ void InitializeDescriptorBufferBindingTemplate(
     VulkanDevice&                  device,
     VulkanPipelineBindingTemplate& binding_template
 ) {
-    for (auto& [set_index, binding_variant] : binding_template.set_bindings) {
+    for (auto& [set_index, set_binding] : binding_template.set_bindings) {
+        auto& descriptor_buffer = binding_template.descriptor_buffers[set_binding.buffer_index];
         std::visit(
-            [&](auto& set_binding) {
-                using SetBinding = std::decay_t<decltype(set_binding)>;
-                auto& descriptor_buffer =
-                    binding_template.descriptor_buffers[set_binding.descriptor_buffer_index];
+            [&](const auto& resource_bindings) {
+                using ResourceBindings  = std::decay_t<decltype(resource_bindings)>;
                 descriptor_buffer.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT;
                 descriptor_buffer.usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                           VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
-                uint64 set_byte_offset = 0;
 
-                if constexpr (std::is_same_v<SetBinding, VulkanResourceSetBinding>) {
+                if constexpr (std::is_same_v<ResourceBindings, VulkanResourceSetBindings>) {
                     descriptor_buffer.address =
                         device.GetGlobalDescriptorHeap().ring_desc_buffer->DeviceAddress();
                     descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
-
-                    set_binding.set_buffer_binding_index = binding_template.set_buffer_bindings.size();
                 } else {
                     // The bindless buffer address is supplied by each draw/dispatch.
                     descriptor_buffer.address = 0;
-                    if constexpr (!std::is_same_v<SetBinding, VulkanBindlessBufferSetBinding>) {
+                    if constexpr (!std::is_same_v<ResourceBindings, VulkanBindlessBufferSetBindings>) {
                         descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
                     }
-                    if constexpr (std::is_same_v<SetBinding, VulkanBindlessImageSetBinding>) {
-                        set_byte_offset = GetBindlessTextureDescriptorOffset(device);
+                    if constexpr (std::is_same_v<ResourceBindings, VulkanBindlessImageSetBindings>) {
+                        set_binding.initial_byte_offset = GetBindlessTextureDescriptorOffset(device);
                     }
                 }
-                binding_template.set_buffer_bindings.emplace_back(
-                    set_index, set_binding.descriptor_buffer_index, set_byte_offset
-                );
             },
-            binding_variant
+            set_binding.resource_bindings
         );
     }
 }

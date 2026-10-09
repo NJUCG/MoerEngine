@@ -359,6 +359,7 @@ struct VulkanDescriptorSetLayoutCreateInfo {
     bool                                            is_bindless = false;
 };
 
+// Resolved position for one descriptor-set binding command.
 struct DescriptorSetBufferBinding {
     uint   set_index;
     uint   buffer_index;
@@ -371,51 +372,49 @@ struct VulkanResourceBinding {
     uint             descriptor_count;
     uint64           byte_offset; // Binding offset relative to the set start.
 };
-struct VulkanResourceSetBinding {
+struct VulkanResourceSetBindings {
     Array<VulkanResourceBinding> bindings;
     uint64                       allocation_size; // Includes alignment and extra padding.
-    uint                         descriptor_buffer_index;
-    uint                         set_buffer_binding_index;
 };
 
-struct VulkanBindlessBufferSetBinding {
+struct VulkanBindlessBufferSetBindings {
     //index in ArrayArguments
     uint argument_index;
-    //descriptor buffer index
-    uint descriptor_buffer_index;
     //descriptorCount declared by the pipeline layout
     uint descriptor_count;
 };
 
-struct VulkanBindlessImageSetBinding {
+struct VulkanBindlessImageSetBindings {
     //index in ArrayArguments
     uint argument_index;
-    //descriptor buffer index
-    uint descriptor_buffer_index;
     //descriptorCount declared by the pipeline layout
     uint descriptor_count;
 };
 
-struct VulkanBindlessSamplerSetBinding {
+struct VulkanBindlessSamplerSetBindings {
     //index in ArrayArguments
     uint argument_index;
-    //descriptor buffer index
-    uint descriptor_buffer_index;
     //descriptorCount declared by the pipeline layout
     uint descriptor_count;
 };
-using VulkanDescriptorSetBinding = std::variant<
-    VulkanResourceSetBinding,
-    VulkanBindlessBufferSetBinding,
-    VulkanBindlessImageSetBinding,
-    VulkanBindlessSamplerSetBinding>;
+using VulkanSetResourceBindings = std::variant<
+    VulkanResourceSetBindings,
+    VulkanBindlessBufferSetBindings,
+    VulkanBindlessImageSetBindings,
+    VulkanBindlessSamplerSetBindings>;
+
+struct VulkanDescriptorSetBinding {
+    uint buffer_index = 0;
+    // Fixed bindless offset; ordinary sets resolve their offset when recording.
+    uint64                    initial_byte_offset = 0;
+    VulkanSetResourceBindings resource_bindings;
+};
+
 struct VulkanPipelineBindingTemplate {
     UnorderedMap<uint, VulkanDescriptorSetBinding> set_bindings;
     VkPushConstantsInfoKHR                         push_constants_info;
     //descriptor buffer bind template
     Array<VkDescriptorBufferBindingInfoEXT> descriptor_buffers;
-    //set offsets in descriptor buffers
-    Array<DescriptorSetBufferBinding> set_buffer_bindings;
 };
 
 class VulkanEnumTranslator final {

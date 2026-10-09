@@ -673,15 +673,14 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
     const VulkanPipelineBindingTemplate& binding_template    = *pipeline->binding_template;
     const auto&                          set_bindings        = binding_template.set_bindings;
     auto                                 descriptor_buffers  = binding_template.descriptor_buffers;
-    auto                                 set_buffer_bindings = binding_template.set_buffer_bindings;
     const auto&                          push_constants_info = binding_template.push_constants_info;
     VulkanDescriptorHeap&                descriptor_heap     = device.GetGlobalDescriptorHeap();
 
     uint64 descriptor_allocation_size = 0;
-    for (const auto& [set_index, binding_variant] : set_bindings) {
-        (void)set_index;
-        if (const auto* descriptor_set = std::get_if<VulkanResourceSetBinding>(&binding_variant)) {
-            descriptor_allocation_size += descriptor_set->allocation_size;
+    for (const auto& [set_index, set_binding] : set_bindings) {
+        if (const auto* resource_bindings =
+                std::get_if<VulkanResourceSetBindings>(&set_binding.resource_bindings)) {
+            descriptor_allocation_size += resource_bindings->allocation_size;
         }
     }
     const std::optional<uint64> descriptor_allocation_offset =
@@ -691,34 +690,35 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
     }
     uint64 next_set_byte_offset = *descriptor_allocation_offset;
 
-    for (const auto& [set_index, binding_variant] : set_bindings) {
+    Array<DescriptorSetBufferBinding> resolved_set_bindings;
+    resolved_set_bindings.reserve(set_bindings.size());
+    for (const auto& [set_index, set_binding] : set_bindings) {
+        auto&  descriptor_buffer = descriptor_buffers[set_binding.buffer_index];
+        uint64 set_byte_offset   = set_binding.initial_byte_offset;
         std::visit(
             Overload{
-                [&](const VulkanBindlessBufferSetBinding& set_binding) {
+                [&](const VulkanBindlessBufferSetBindings& resource_bindings) {
                     BindlessArrayRef array =
-                        std::get<BindlessArrayRef>(arguments[set_binding.argument_index]);
+                        std::get<BindlessArrayRef>(arguments[resource_bindings.argument_index]);
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    descriptor_buffers[set_binding.descriptor_buffer_index].address =
-                        bindless_array->bindless_buffer_descs->DeviceAddress();
+                    descriptor_buffer.address = bindless_array->bindless_buffer_descs->DeviceAddress();
                 },
-                [&](const VulkanBindlessSamplerSetBinding& set_binding) {
+                [&](const VulkanBindlessSamplerSetBindings& resource_bindings) {
                     BindlessArrayRef array =
-                        std::get<BindlessArrayRef>(arguments[set_binding.argument_index]);
+                        std::get<BindlessArrayRef>(arguments[resource_bindings.argument_index]);
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    descriptor_buffers[set_binding.descriptor_buffer_index].address =
-                        bindless_array->bindless_texture_descs->DeviceAddress();
+                    descriptor_buffer.address = bindless_array->bindless_texture_descs->DeviceAddress();
                 },
-                [&](const VulkanBindlessImageSetBinding& set_binding) {
+                [&](const VulkanBindlessImageSetBindings& resource_bindings) {
                     BindlessArrayRef array =
-                        std::get<BindlessArrayRef>(arguments[set_binding.argument_index]);
+                        std::get<BindlessArrayRef>(arguments[resource_bindings.argument_index]);
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    descriptor_buffers[set_binding.descriptor_buffer_index].address =
-                        bindless_array->bindless_texture_descs->DeviceAddress();
+                    descriptor_buffer.address = bindless_array->bindless_texture_descs->DeviceAddress();
                 },
-                [&](const VulkanResourceSetBinding& set_binding) {
-                    const uint64 set_byte_offset = next_set_byte_offset;
-                    next_set_byte_offset += set_binding.allocation_size;
-                    for (const auto& resource_binding : set_binding.bindings) {
+                [&](const VulkanResourceSetBindings& resource_bindings) {
+                    set_byte_offset = next_set_byte_offset;
+                    next_set_byte_offset += resource_bindings.allocation_size;
+                    for (const auto& resource_binding : resource_bindings.bindings) {
                         if (resource_binding.descriptor_count == 0) {
                             continue;
                         }
@@ -922,13 +922,11 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                             }
                         }
                     }
-
-                    // Update this draw/dispatch's set position in the shared descriptor buffer.
-                    set_buffer_bindings[set_binding.set_buffer_binding_index].offset = set_byte_offset;
                 }
             },
-            binding_variant
+            set_binding.resource_bindings
         );
+        resolved_set_bindings.emplace_back(set_index, set_binding.buffer_index, set_byte_offset);
     }
     if (!descriptor_buffers.empty()) {
         vkCmdBindDescriptorBuffersEXT(command_buffer, descriptor_buffers.size(), descriptor_buffers.data());
@@ -936,7 +934,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
 
     const auto bind_point      = pipeline->GetPipelineBindPoint();
     const auto pipeline_layout = pipeline->GetPipelineLayout();
-    for (const auto& set_buffer_binding : set_buffer_bindings) {
+    for (const auto& set_buffer_binding : resolved_set_bindings) {
         vkCmdSetDescriptorBufferOffsetsEXT(
             command_buffer,
             bind_point,
