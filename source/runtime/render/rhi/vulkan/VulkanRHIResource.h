@@ -377,26 +377,23 @@ struct VulkanResourceSetBindings {
     uint64                       allocation_size; // Includes alignment and extra padding.
 };
 
-struct VulkanBindlessBufferSetBindings {
-    //index in ArrayArguments
-    uint argument_index;
-    //descriptorCount declared by the pipeline layout
-    uint descriptor_count;
-};
+template<VkDescriptorType DescriptorType>
+struct VulkanBindlessSetBindings {
+    static_assert(
+        DescriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
+            DescriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ||
+            DescriptorType == VK_DESCRIPTOR_TYPE_SAMPLER,
+        "Unsupported bindless descriptor type"
+    );
+    static constexpr VkDescriptorType descriptor_type = DescriptorType;
 
-struct VulkanBindlessImageSetBindings {
-    //index in ArrayArguments
-    uint argument_index;
-    //descriptorCount declared by the pipeline layout
-    uint descriptor_count;
+    uint argument_index;   // Index in ArrayArguments.
+    uint descriptor_count; // Count declared by the pipeline layout.
 };
+using VulkanBindlessBufferSetBindings  = VulkanBindlessSetBindings<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>;
+using VulkanBindlessImageSetBindings   = VulkanBindlessSetBindings<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>;
+using VulkanBindlessSamplerSetBindings = VulkanBindlessSetBindings<VK_DESCRIPTOR_TYPE_SAMPLER>;
 
-struct VulkanBindlessSamplerSetBindings {
-    //index in ArrayArguments
-    uint argument_index;
-    //descriptorCount declared by the pipeline layout
-    uint descriptor_count;
-};
 using VulkanSetResourceBindings = std::variant<
     VulkanResourceSetBindings,
     VulkanBindlessBufferSetBindings,

@@ -697,23 +697,17 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
         uint64 set_byte_offset   = set_binding.initial_byte_offset;
         std::visit(
             Overload{
-                [&](const VulkanBindlessBufferSetBindings& resource_bindings) {
+                [&]<VkDescriptorType DescriptorType>(
+                    const VulkanBindlessSetBindings<DescriptorType>& resource_bindings
+                ) {
                     BindlessArrayRef array =
                         std::get<BindlessArrayRef>(arguments[resource_bindings.argument_index]);
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    descriptor_buffer.address = bindless_array->bindless_buffer_descs->DeviceAddress();
-                },
-                [&](const VulkanBindlessSamplerSetBindings& resource_bindings) {
-                    BindlessArrayRef array =
-                        std::get<BindlessArrayRef>(arguments[resource_bindings.argument_index]);
-                    VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    descriptor_buffer.address = bindless_array->bindless_texture_descs->DeviceAddress();
-                },
-                [&](const VulkanBindlessImageSetBindings& resource_bindings) {
-                    BindlessArrayRef array =
-                        std::get<BindlessArrayRef>(arguments[resource_bindings.argument_index]);
-                    VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    descriptor_buffer.address = bindless_array->bindless_texture_descs->DeviceAddress();
+                    if constexpr (DescriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+                        descriptor_buffer.address = bindless_array->bindless_buffer_descs->DeviceAddress();
+                    } else {
+                        descriptor_buffer.address = bindless_array->bindless_texture_descs->DeviceAddress();
+                    }
                 },
                 [&](const VulkanResourceSetBindings& resource_bindings) {
                     set_byte_offset = next_set_byte_offset;

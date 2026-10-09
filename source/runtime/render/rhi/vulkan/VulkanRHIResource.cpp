@@ -808,14 +808,15 @@ void VulkanPipelineState::CreatePipelineLayout(const VkPipelineLayoutCreateInfo&
 
 namespace {
 
-void InitializeResourceSetBindings(
+void InitializeNonBindlessSetBindings(
     const VulkanDescriptorSetLayoutCreateInfo& layout_info,
-    VulkanResourceSetBindings&                 resource_bindings
+    VulkanSetResourceBindings&                 resource_bindings
 ) {
-    resource_bindings.bindings.resize(layout_info.bindings.size());
+    auto& ordinary_bindings = resource_bindings.emplace<VulkanResourceSetBindings>();
+    ordinary_bindings.bindings.resize(layout_info.bindings.size());
     for (const auto& [binding_index, binding_info] : layout_info.bindings) {
         const auto& vk_binding            = binding_info.vk_binding;
-        auto&       resource_binding      = resource_bindings.bindings[vk_binding.binding];
+        auto&       resource_binding      = ordinary_bindings.bindings[vk_binding.binding];
         resource_binding.binding_index    = vk_binding.binding;
         resource_binding.argument_index   = binding_info.argument_index;
         resource_binding.descriptor_type  = vk_binding.descriptorType;
@@ -841,7 +842,35 @@ void InitializeResourceSetBindings(
     }
 }
 
-void InitializeDescriptorSetBindings(
+void InitializeBindlessSetBindings(
+    const VulkanDescriptorSetLayoutCreateInfo& layout_info,
+    VulkanSetResourceBindings&                 resource_bindings
+) {
+    const auto& binding_info = layout_info.bindings.at(0);
+    const auto& vk_binding   = binding_info.vk_binding;
+    switch (vk_binding.descriptorType) {
+        case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+            resource_bindings.emplace<VulkanBindlessBufferSetBindings>(
+                binding_info.argument_index, vk_binding.descriptorCount
+            );
+            break;
+        case VK_DESCRIPTOR_TYPE_SAMPLER:
+            resource_bindings.emplace<VulkanBindlessSamplerSetBindings>(
+                binding_info.argument_index, vk_binding.descriptorCount
+            );
+            break;
+        case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+            resource_bindings.emplace<VulkanBindlessImageSetBindings>(
+                binding_info.argument_index, vk_binding.descriptorCount
+            );
+            break;
+        default:
+            LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint(vk_binding.descriptorType));
+            assert(false);
+    }
+}
+
+void InitializePipelineSetBindings(
     const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
     VulkanPipelineBindingTemplate&                                 binding_template
 ) {
@@ -865,38 +894,17 @@ void InitializeDescriptorSetBindings(
         auto& resource_bindings = set_binding.resource_bindings;
 
         if (!layout_info.is_bindless) {
-            auto& ordinary_bindings = resource_bindings.emplace<VulkanResourceSetBindings>();
-            InitializeResourceSetBindings(layout_info, ordinary_bindings);
+            InitializeNonBindlessSetBindings(layout_info, resource_bindings);
             set_binding.buffer_index = allocate_buffer_index(resource_buffer_index);
             continue;
         }
 
-        const auto& binding_info = layout_info.bindings.at(0);
-        const auto& vk_binding   = binding_info.vk_binding;
-        switch (vk_binding.descriptorType) {
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-                resource_bindings.emplace<VulkanBindlessBufferSetBindings>(
-                    binding_info.argument_index, vk_binding.descriptorCount
-                );
-                set_binding.buffer_index = allocate_buffer_index(bindless_buffer_index);
-                break;
-            case VK_DESCRIPTOR_TYPE_SAMPLER:
-                resource_bindings.emplace<VulkanBindlessSamplerSetBindings>(
-                    binding_info.argument_index, vk_binding.descriptorCount
-                );
-                set_binding.buffer_index = allocate_buffer_index(bindless_image_sampler_index);
-                break;
-            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-                // Bindless images and samplers share one descriptor buffer.
-                resource_bindings.emplace<VulkanBindlessImageSetBindings>(
-                    binding_info.argument_index, vk_binding.descriptorCount
-                );
-                set_binding.buffer_index = allocate_buffer_index(bindless_image_sampler_index);
-                break;
-            default:
-                LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint(vk_binding.descriptorType));
-                assert(false);
-        }
+        InitializeBindlessSetBindings(layout_info, resource_bindings);
+        // Bindless images and samplers share one descriptor buffer.
+        auto& buffer_index = std::holds_alternative<VulkanBindlessBufferSetBindings>(resource_bindings) ?
+                                 bindless_buffer_index :
+                                 bindless_image_sampler_index;
+        set_binding.buffer_index = allocate_buffer_index(buffer_index);
     }
     binding_template.descriptor_buffers.resize(descriptor_buffer_count);
 }
@@ -994,10 +1002,10 @@ void InitializeDescriptorBufferBindingTemplate(
                 } else {
                     // The bindless buffer address is supplied by each draw/dispatch.
                     descriptor_buffer.address = 0;
-                    if constexpr (!std::is_same_v<ResourceBindings, VulkanBindlessBufferSetBindings>) {
+                    if constexpr (ResourceBindings::descriptor_type != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
                         descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
                     }
-                    if constexpr (std::is_same_v<ResourceBindings, VulkanBindlessImageSetBindings>) {
+                    if constexpr (ResourceBindings::descriptor_type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
                         set_binding.initial_byte_offset = GetBindlessTextureDescriptorOffset(device);
                     }
                 }
@@ -1015,7 +1023,7 @@ void VulkanPipelineState::InitPipelineLayout(
 ) {
     binding_template = MakeUnique<VulkanPipelineBindingTemplate>();
 
-    InitializeDescriptorSetBindings(set_layout_infos, *binding_template);
+    InitializePipelineSetBindings(set_layout_infos, *binding_template);
     descriptor_set_layouts = CreateDescriptorSetLayouts(*m_device, set_layout_infos, *binding_template);
 
     VkPipelineLayoutCreateInfo pipeline_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
