@@ -1865,6 +1865,8 @@ void VulkanPipelineState::InitPipelineLayout(
     static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
     void VulkanBindlessArray::UnbindTexture(uint _array_idx) {
         std::unique_lock<std::mutex> lk(mtx);
+        // Entries in this map have not been captured by CreateUpdateCommand yet;
+        // cancelling an allocation here is normal while the initial extent settles.
         if(auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()){
             const UpdateCmd& src_cmd = update_cmds[iter->second];
 
@@ -1876,8 +1878,6 @@ void VulkanPipelineState::InitPipelineLayout(
                             LOG_WARNING("You are releasing a bindless texture that's pending releasing, array index: {}", _array_idx);
                             return;
                         }else{
-                            //TODO: invalidate update command
-                            LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
                             if (array_slot_generations[_cmd.array_idx] != _cmd.array_generation ||
                                 texture_slot_generations[_cmd.slot] != _cmd.slot_generation ||
                                 array_slot_claim_tokens[_cmd.array_idx] != 0 ||
@@ -1902,13 +1902,13 @@ void VulkanPipelineState::InitPipelineLayout(
                             free_texture_slots.Push(_cmd.slot);
 
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                            LOG_DEBUG("Cancelled a pending bindless texture allocation before submission, array index: {}", _array_idx);
                         }
                 } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>){
                     if(_cmd.free){
                         LOG_WARNING("You are releasing a bindless buffer that's pending releasing, array index: {}", _array_idx);
                         return;
                     }else{
-                        LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
                         if (array_slot_generations[_cmd.array_idx] != _cmd.array_generation ||
                             buffer_slot_generations[_cmd.slot] != _cmd.slot_generation ||
                             array_slot_claim_tokens[_cmd.array_idx] != 0 ||
@@ -1931,6 +1931,7 @@ void VulkanPipelineState::InitPipelineLayout(
                         free_slots.Push(_cmd.array_idx);
                         free_buffer_slots.Push(_cmd.slot);
                         update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                        LOG_DEBUG("Cancelled a pending bindless buffer allocation before submission, array index: {}", _array_idx);
                     }
                 } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>){
                         
@@ -1999,8 +2000,6 @@ void VulkanPipelineState::InitPipelineLayout(
                             LOG_WARNING("You are releasing a bindless texture that's pending releasing, array index: {}", _array_idx);
                             return;
                         }else{
-                            LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
-
                             if (array_slot_generations[_cmd.array_idx] != _cmd.array_generation ||
                                 texture_slot_generations[_cmd.slot] != _cmd.slot_generation ||
                                 array_slot_claim_tokens[_cmd.array_idx] != 0 ||
@@ -2024,14 +2023,13 @@ void VulkanPipelineState::InitPipelineLayout(
                             free_slots.Push(_cmd.array_idx);
                             free_texture_slots.Push(_cmd.slot);
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                            LOG_DEBUG("Cancelled a pending bindless texture allocation before submission, array index: {}", _array_idx);
                         }
                     } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>){
                         if(_cmd.free){
                             LOG_WARNING("You are releasing a bindless buffer that's pending releasing, array index: {}", _array_idx);
                             return;
                         }else{
-                            LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
-
                             if (array_slot_generations[_cmd.array_idx] != _cmd.array_generation ||
                                 buffer_slot_generations[_cmd.slot] != _cmd.slot_generation ||
                                 array_slot_claim_tokens[_cmd.array_idx] != 0 ||
@@ -2054,6 +2052,7 @@ void VulkanPipelineState::InitPipelineLayout(
                             free_slots.Push(_cmd.array_idx);
                             free_buffer_slots.Push(_cmd.slot);
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                            LOG_DEBUG("Cancelled a pending bindless buffer allocation before submission, array index: {}", _array_idx);
                         }
                     } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>){
                         

@@ -14,12 +14,8 @@ namespace Moer::Render::Raytracing {
 AntialiasPass::AntialiasPass(RenderDevice& _device, ShaderManager& _manager, CreateInfo _info) :
     frame_idx(0),
     jitter(float2(0.f)),
-    jitter_mode(EJitter::MSAA),
-    motion(_info.motion),
-    feedback_color_ping(_info.feedback_color_ping),
-    feedback_color_pong(_info.feedback_color_pong),
-    feedback_slot_zero(_info.feedback_color_ping),
-    feedback_slot_one(_info.feedback_color_pong) {
+    jitter_mode(EJitter::MSAA) {
+    RebindResources(_info);
     auto owner = MakeShared<RecordingOwner>();
     owner->pipeline =
         _manager.Compute<TAAPipeline>("pipelines/raytracing/postprocess/TAAPass.hlsl");
@@ -27,6 +23,18 @@ AntialiasPass::AntialiasPass(RenderDevice& _device, ShaderManager& _manager, Cre
         "PostProcess::TAAConstantBuffer", sizeof(TAAParams), EBufferUsageFlags::CONSTANT_BUFFER
     );
     recording_owner = std::move(owner);
+}
+
+void AntialiasPass::RebindResources(const CreateInfo& info) {
+    motion              = info.motion;
+    feedback_color_ping = info.feedback_color_ping;
+    feedback_color_pong = info.feedback_color_pong;
+    feedback_slot_zero  = info.feedback_color_ping;
+    feedback_slot_one   = info.feedback_color_pong;
+
+    frame_idx                = 0;
+    jitter                   = float2(0.f);
+    initialized_history_mask = 0;
 }
 
 AntialiasPass::SetupInput AntialiasPass::CaptureSetupInput(
