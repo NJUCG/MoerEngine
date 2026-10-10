@@ -29,7 +29,9 @@
 #include "VulkanSubmissionDiagnostics.h"
 #include "vulkan/vk_enum_string_helper.h"
 
+#include <algorithm>
 #include <limits>
+#include <ranges>
 
 #if WITH_CUDA
 #include "platform/windows/WindowsSecurityAttributes.h"
@@ -936,17 +938,19 @@ Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
     const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
     VulkanPipelineBindingTemplate&                                 binding_template
 ) {
-    uint set_layout_count = 0;
-    for (const auto& [set_index, layout_info] : set_layout_infos) {
-        set_layout_count = std::max(set_layout_count, set_index + 1);
-    }
+    const uint set_layout_count =
+        set_layout_infos.empty() ? 0u : std::ranges::max(set_layout_infos | std::views::keys) + 1u;
     // Vulkan addresses sets by array index, so gaps require the shared empty layout.
     Array<VkDescriptorSetLayout> set_layouts(set_layout_count, device.GetEmptyDescriptorSetLayout());
 
-    constexpr VkDescriptorBindingFlags bindless_flags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
-                                                        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-                                                        VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
-    constexpr VkDescriptorBindingFlags bindless_buffer_flags[] = {0, bindless_flags};
+    constexpr VkDescriptorBindingFlags bindless_array_binding_flags =
+        VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+        VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
+    constexpr VkDescriptorBindingFlags bindless_buffer_set_binding_flags[] = {
+        0,                            // binding 0: indirect handle table.
+        bindless_array_binding_flags, // binding 1: buffer descriptor array.
+    };
 
     for (const auto& [set_index, layout_info] : set_layout_infos) {
         // FillMissingDescriptorBindings has made the binding indices contiguous.
@@ -955,7 +959,9 @@ Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
             vk_bindings[binding_info.vk_binding.binding] = binding_info.vk_binding;
         }
 
-        auto layout_create_info         = layout_info.layout_create_info;
+        VkDescriptorSetLayoutCreateInfo layout_create_info{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
+        };
         layout_create_info.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
         layout_create_info.bindingCount = vk_bindings.size();
         layout_create_info.pBindings    = vk_bindings.data();
@@ -967,7 +973,8 @@ Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
             const auto descriptor_type       = layout_info.bindings.at(0).vk_binding.descriptorType;
             const bool is_buffer             = descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             binding_flags_info.bindingCount  = is_buffer && layout_info.bindings.contains(1) ? 2 : 1;
-            binding_flags_info.pBindingFlags = is_buffer ? bindless_buffer_flags : &bindless_flags;
+            binding_flags_info.pBindingFlags =
+                is_buffer ? bindless_buffer_set_binding_flags : &bindless_array_binding_flags;
             layout_create_info.pNext         = &binding_flags_info;
         }
 

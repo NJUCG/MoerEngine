@@ -354,7 +354,6 @@ struct VulkanDescriptorBindingInfo {
     int                          argument_index = 0;
 };
 struct VulkanDescriptorSetLayoutCreateInfo {
-    VkDescriptorSetLayoutCreateInfo layout_create_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     UnorderedMap<uint, VulkanDescriptorBindingInfo> bindings{};
     bool                                            is_bindless = false;
 };
