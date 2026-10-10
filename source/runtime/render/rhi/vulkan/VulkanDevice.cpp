@@ -2017,13 +2017,9 @@ void FillMissingDescriptorBindings(UnorderedMap<uint, VulkanDescriptorSetLayoutC
 
 void InitializeVulkanPipelineLayout(VulkanPipelineState& pipeline, VulkanPipelineBindingInfo& binding_info) {
     FillMissingDescriptorBindings(binding_info.descriptor_set_layouts);
-    if (binding_info.push_constant_range.size != 0) {
-        pipeline.InitPipelineLayout(
-            std::move(binding_info.descriptor_set_layouts), binding_info.push_constant_range
-        );
-    } else {
-        pipeline.InitPipelineLayout(std::move(binding_info.descriptor_set_layouts));
-    }
+    pipeline.InitPipelineLayout(
+        std::move(binding_info.descriptor_set_layouts), binding_info.push_constant_range
+    );
 }
 
 } // namespace

@@ -1033,15 +1033,16 @@ void VulkanPipelineState::InitPipelineLayout(
     InitializePipelineSetBindings(set_layout_infos, *binding_template);
     descriptor_set_layouts = CreateDescriptorSetLayouts(*m_device, set_layout_infos, *binding_template);
 
+    const bool has_push_constants = push_constant_range && push_constant_range->size != 0;
     VkPipelineLayoutCreateInfo pipeline_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pipeline_layout_info.setLayoutCount         = descriptor_set_layouts.size();
     pipeline_layout_info.pSetLayouts            = descriptor_set_layouts.data();
-    pipeline_layout_info.pushConstantRangeCount = push_constant_range.has_value() ? 1 : 0;
-    pipeline_layout_info.pPushConstantRanges    = push_constant_range ? &*push_constant_range : nullptr;
+    pipeline_layout_info.pushConstantRangeCount = has_push_constants ? 1 : 0;
+    pipeline_layout_info.pPushConstantRanges    = has_push_constants ? &*push_constant_range : nullptr;
     CreatePipelineLayout(pipeline_layout_info);
 
     InitializeDescriptorBufferBindingTemplate(*m_device, *binding_template);
-    if (push_constant_range) {
+    if (has_push_constants) {
         auto& constants_info      = binding_template->push_constants_info;
         constants_info.sType      = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR;
         constants_info.layout     = m_pipeline_layout;
