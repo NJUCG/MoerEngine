@@ -7,7 +7,10 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <span>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 using namespace Moer;
 using namespace Moer::Render;
@@ -46,21 +49,19 @@ void RequireRejected(Fn&& fn) {
 }
 
 PipelineShaderInfo MakeInfo() {
-    const auto arguments = MixedConstants::GetArgumentInfoArray();
-    return {
-        .arguments       = {arguments.begin(), arguments.end()},
-        .constant_layout = MixedConstants::GetConstantLayout()
-    };
+    return {.argument_metadata = MixedConstants::GetArgumentMetadata()};
 }
 
 void CheckPacking() {
-    const auto layout = MixedConstants::GetConstantLayout();
-    Require(layout.byte_size == 116 && layout.arguments.size() == 5, "Unexpected packed constant size");
+    const auto metadata = MixedConstants::GetArgumentMetadata();
+    const auto layouts  = metadata.GetConstantLayouts();
+    Require(metadata.GetConstantByteSize() == 116 && layouts.size() == 5, "Unexpected packed constant size");
     const uint offsets[] = {0, 16, 32, 48, 112};
     for (uint index = 0; index < 5; ++index) {
-        Require(layout.arguments[index].byte_offset == offsets[index], "Unexpected constant offset");
+        Require(layouts[index].byte_offset == offsets[index], "Unexpected constant offset");
     }
-    Require(layout.arguments[1].argument_index == 2, "Resource argument consumed constant storage");
+    Require(layouts[1].argument_index == 2, "Resource argument consumed constant storage");
+    Require(layouts[2].byte_size == sizeof(float3), "Vector payload size was rounded up");
     const float scale = 2.0f;
     const ConstantTestData data{3, 4};
     const float3 tint{0.25f, 0.5f, 0.75f};
@@ -75,17 +76,56 @@ void CheckPacking() {
     Require(std::memcmp(bytes + 112, &bias, sizeof(bias)) == 0, "Last scalar overwritten");
     for (uint index = 4; index < 16; ++index) Require(bytes[index] == 0, "Padding was not initialized");
     Require(NoConstants::SetArgs().constants.empty(), "Zero-constant pipeline allocated data");
-    Require(SingleConstant::GetConstantLayout().byte_size == sizeof(data), "Single-struct layout changed");
+    Require(
+        SingleConstant::GetArgumentMetadata().GetConstantByteSize() == sizeof(data),
+        "Single-struct layout changed"
+    );
     const auto single = SingleConstant::SetArgs(data);
     Require(std::memcmp(single.constants.data(), &data, sizeof(data)) == 0, "Single-struct constant upload changed");
     ArrayArguments short_data(6, 0, false);
     RequireRejected([&] { MixedConstants::InnerArgs::SetParam<float, MixedConstants::scale>(2.0f, short_data); });
-    const auto         empty_arguments = NoConstants::GetArgumentInfoArray();
-    PipelineShaderInfo empty{
-        .arguments       = {empty_arguments.begin(), empty_arguments.end()},
-        .constant_layout = NoConstants::GetConstantLayout()
-    };
+    PipelineShaderInfo empty{.argument_metadata = NoConstants::GetArgumentMetadata()};
     Require(ValidatePipelineConstants(empty, 128) == 0, "Empty pipeline validation failed");
+}
+
+void CheckMetadataOwnership() {
+    static_assert(!std::is_aggregate_v<PipelineArgumentMetadata>);
+    static_assert(!std::is_constructible_v<
+                  PipelineArgumentMetadata,
+                  std::span<const PipelineArgumentInfo>,
+                  std::span<const ShaderConstantArgumentLayout>,
+                  uint>);
+    static_assert(std::is_same_v<
+                  decltype(std::declval<PipelineArgumentMetadata&>().GetArguments()),
+                  std::span<const PipelineArgumentInfo>>);
+    static_assert(std::is_same_v<
+                  decltype(std::declval<PipelineArgumentMetadata&>().GetConstantLayouts()),
+                  std::span<const ShaderConstantArgumentLayout>>);
+
+    auto original = MixedConstants::GetArgumentMetadata();
+    auto copy     = original;
+    auto moved    = std::move(original);
+    Require(
+        original.GetArguments().empty() && original.GetConstantLayouts().empty() &&
+            original.GetConstantByteSize() == 0,
+        "Moved-from metadata is not a valid empty layout"
+    );
+    original = std::move(moved);
+    Require(
+        moved.GetArguments().empty() && moved.GetConstantLayouts().empty() &&
+            moved.GetConstantByteSize() == 0,
+        "Move assignment left inconsistent metadata"
+    );
+    copy = NoConstants::GetArgumentMetadata();
+    Require(
+        original.GetConstantByteSize() == 116 && original.GetArguments().size() == 6 &&
+            original.GetConstantLayouts().size() == 5,
+        "Metadata ownership was not preserved"
+    );
+    Require(
+        copy.GetArguments().empty() && copy.GetConstantByteSize() == 0,
+        "Replacing metadata did not replace the complete layout"
+    );
 }
 
 ShaderCompilerInput MakeInput(EShaderType stage, const char* entry, EShaderPlatform platform) {
@@ -97,9 +137,10 @@ ShaderCompilerInput MakeInput(EShaderType stage, const char* entry, EShaderPlatf
     input.shader_name = entry;
     const auto info = MakeInfo();
     input.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint(1));
-    input.environment.SetDefine("MOER_PC_BYTE_SIZE", info.constant_layout.byte_size);
-    for (const auto& argument : info.constant_layout.arguments) {
-        const auto name = info.arguments[argument.argument_index].name;
+    const auto& metadata = info.argument_metadata;
+    input.environment.SetDefine("MOER_PC_BYTE_SIZE", metadata.GetConstantByteSize());
+    for (const auto& argument : metadata.GetConstantLayouts()) {
+        const auto name = metadata.GetArguments()[argument.argument_index].name;
         input.environment.SetDefine("MOER_PC_OFFSET_" + std::string(name), argument.byte_offset);
         input.environment.SetDefine("MOER_PC_SIZE_" + std::string(name), argument.byte_size);
     }
@@ -128,15 +169,38 @@ void CheckReflection(EShaderPlatform platform) {
     Require(!active(vs, "tint") && active(ps, "tint"), "Unused stage constant marked active");
     Require(!ps.parameter_map.reflect_map.contains("transform"), "Subset shader included an undeclared constant");
     RequireRejected([&] { ValidatePipelineConstants(info, 64); });
-    auto wrong = info;
-    wrong.constant_layout.arguments[0].byte_offset = 4;
-    RequireRejected([&] { ValidatePipelineConstants(wrong, 128); });
-    wrong = info;
-    wrong.constant_layout.arguments.pop_back();
-    RequireRejected([&] { ValidatePipelineConstants(wrong, 128); });
-    wrong = info;
-    wrong.arguments[0].cpp_info.type = SDA_Buffer;
-    RequireRejected([&] { ValidatePipelineConstants(wrong, 128); });
+    auto       wrong_reflection  = ps.parameter_map;
+    const auto reject_reflection = [&] {
+        auto wrong = info;
+        // The first stage already uses constants; the later stage must still be validated.
+        wrong.shaders.back().shader_param_map = &wrong_reflection;
+        RequireRejected([&] {
+            ValidatePipelineConstants(wrong, 128);
+        });
+    };
+    std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").spirv.resources.data)
+        .offset = 4;
+    reject_reflection();
+    wrong_reflection = ps.parameter_map;
+    std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").spirv.resources.data).size =
+        8;
+    reject_reflection();
+    wrong_reflection = ps.parameter_map;
+    std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").spirv.resources.data).size =
+        0;
+    reject_reflection();
+    wrong_reflection = ps.parameter_map;
+    wrong_reflection.reflect_map["undeclared"].spirv.resources.data =
+        ReflectParamInfo::Constant{.offset = 0, .size = 4, .custom_flag = {.active = 1}};
+    reject_reflection();
+    wrong_reflection = ps.parameter_map;
+    wrong_reflection.reflect_map.at("scale").spirv.resources.data =
+        ReflectParamInfo::Resource{.set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}};
+    reject_reflection();
+
+    auto unused = info;
+    unused.shaders.clear();
+    Require(ValidatePipelineConstants(unused, 64) == 0, "Unused constants required an upload");
 
     const auto input = MakeInput(ST_COMPUTE, "ComputeMain", platform);
     auto shifted = input;
@@ -154,6 +218,7 @@ int main() {
         ConfigManager::GetInstance().Init(std::filesystem::path(MOER_TEST_WORKSPACE));
         ShaderCompiler::Init();
         CheckPacking();
+        CheckMetadataOwnership();
         CheckReflection(SP_VULKAN_SM6);
 #if defined(__APPLE__)
         CheckReflection(SP_METAL_MSL);

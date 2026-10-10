@@ -123,19 +123,13 @@ struct RasterPipelineConstructor {
     template<typename TPipeline>
         requires std::is_base_of_v<RasterPipeline, TPipeline>
     TPipeline Build(GfxPsoCreateInfo&& _pso_info) {
-        const auto     arguments = TPipeline::GetArgumentInfoArray();
-        PipelineHandle handle    = CreatePipeline(
-            std::move(_pso_info), {arguments.begin(), arguments.end()}, TPipeline::GetConstantLayout()
-        );
+        PipelineHandle handle = CreatePipeline(std::move(_pso_info), TPipeline::GetArgumentMetadata());
         return TPipeline(handle);
     };
 
 private:
-    RENDER_API PipelineHandle CreatePipeline(
-        GfxPsoCreateInfo&&            _pso_info,
-        Array<PipelineArgumentInfo>&& arguments,
-        PipelineConstantLayout&&      _constant_layout
-    );
+    RENDER_API PipelineHandle
+    CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineArgumentMetadata&& argument_metadata);
 
     ShaderAssetOrCache vertex_path;
     ShaderAssetOrCache pixel_path;
@@ -152,9 +146,7 @@ struct ComputeConstructor {
     template<typename TPipeline>
         requires std::is_base_of_v<ComputePipeline, TPipeline>
     TPipeline Build() {
-        const auto     arguments = TPipeline::GetArgumentInfoArray();
-        PipelineHandle handle =
-            CreatePipeline({arguments.begin(), arguments.end()}, TPipeline::GetConstantLayout());
+        PipelineHandle handle = CreatePipeline(TPipeline::GetArgumentMetadata());
         return std::move(TPipeline(handle));
     };
 
@@ -163,15 +155,12 @@ struct ComputeConstructor {
     template<typename TPipeline>
         requires std::is_base_of_v<ComputePipeline, TPipeline>
     PipelineShaderInfo CompileShaderInfo() {
-        const auto arguments = TPipeline::GetArgumentInfoArray();
-        return CompileShaderInfo({arguments.begin(), arguments.end()}, TPipeline::GetConstantLayout());
+        return CompileShaderInfo(TPipeline::GetArgumentMetadata());
     }
 
 private:
-    RENDER_API PipelineHandle
-    CreatePipeline(Array<PipelineArgumentInfo>&& arguments, PipelineConstantLayout&& constant_layout);
-    PipelineShaderInfo
-    CompileShaderInfo(Array<PipelineArgumentInfo>&& arguments, PipelineConstantLayout&& constant_layout);
+    RENDER_API PipelineHandle CreatePipeline(PipelineArgumentMetadata&& argument_metadata);
+    PipelineShaderInfo        CompileShaderInfo(PipelineArgumentMetadata&& argument_metadata);
 
     ShaderAssetOrCache    shader_info;
     Render::RenderDevice& device;

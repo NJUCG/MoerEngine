@@ -199,7 +199,7 @@ D3D12Device::~D3D12Device() {
 }
 
 PipelineHandle D3D12Device::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
-    if (_shaders.constant_layout.arguments.size() > 1) {
+    if (_shaders.argument_metadata.GetConstantLayouts().size() > 1) {
         throw std::invalid_argument("D3D12 multiple logical constant arguments are not supported");
     }
     return PipelineHandle();
@@ -463,7 +463,7 @@ void D3D12PipelineState::BuildRootSignature(const PipelineLayout& _layout) {
 }
 
 PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
-    if (_shaders.constant_layout.arguments.size() > 1) {
+    if (_shaders.argument_metadata.GetConstantLayouts().size() > 1) {
         throw std::invalid_argument("D3D12 multiple logical constant arguments are not supported");
     }
     if (const auto error = ValidateComputeShaderStages(_shaders.shaders); !error.empty()) {
@@ -478,12 +478,13 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
 
     auto& reflect_map = cs_info.shader_param_map->reflect_map;
 
-    Array<ParamInfoFlags> binding_infos(_shaders.arguments.size());
+    const auto            arguments = _shaders.argument_metadata.GetArguments();
+    Array<ParamInfoFlags> binding_infos(arguments.size());
 
     D3D12PipelineState::PipelineLayout layout;
 
-    for (size_t i = 0; i < _shaders.arguments.size(); ++i) {
-        const auto& argument = _shaders.arguments[i];
+    for (size_t i = 0; i < arguments.size(); ++i) {
+        const auto& argument = arguments[i];
         const auto& arg_info = argument.cpp_info;
 
         std::string name_internal(argument.name);

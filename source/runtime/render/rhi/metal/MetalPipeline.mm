@@ -37,20 +37,20 @@ id<MTLFunction> CompileMetalFunction(id<MTLDevice> device, const SingleShaderInf
 }
 
 PipelineHandle MetalPipelineMetadata(const PipelineShaderInfo& shader_info) {
-    if (shader_info.arguments.size() > 64) {
+    const auto arguments = shader_info.argument_metadata.GetArguments();
+    if (arguments.size() > 64) {
         Unsupported("this pipeline argument layout");
     }
     PipelineHandle handle{};
-    handle.binding_infos.resize(shader_info.arguments.size());
-    for (uint index = 0; index < shader_info.arguments.size(); ++index) {
-        handle.hash_2_info_index[GetHash(shader_info.arguments[index].name)] = index;
+    handle.binding_infos.resize(arguments.size());
+    for (uint index = 0; index < arguments.size(); ++index) {
+        handle.hash_2_info_index[GetHash(arguments[index].name)] = index;
         for (const auto& shader : shader_info.shaders) {
             if (shader.shader_param_map == nullptr) continue;
             const auto& reflection = shader.shader_param_map->reflect_map;
-            const bool  bindless   = shader_info.arguments[index].cpp_info.type == SDA_BindlessArray;
-            const auto  found      = reflection.find(
-                std::string(bindless ? ReflectParamInfo::bdls_name : shader_info.arguments[index].name)
-            );
+            const bool  bindless   = arguments[index].cpp_info.type == SDA_BindlessArray;
+            const auto  found =
+                reflection.find(std::string(bindless ? ReflectParamInfo::bdls_name : arguments[index].name));
             if (found == reflection.end()) continue;
             bool active = false;
             if (bindless) {
@@ -78,13 +78,14 @@ MetalRenderBindings MetalRenderStageBindings(
     MetalRenderBindings layout;
     if (shader.shader_param_map == nullptr) return layout;
     const auto& reflection = shader.shader_param_map->reflect_map;
-    for (const auto& argument : shader_info.constant_layout.arguments) {
-        const auto parameter =
-            reflection.find(std::string(shader_info.arguments[argument.argument_index].name));
+    const auto& metadata   = shader_info.argument_metadata;
+    const auto  arguments  = metadata.GetArguments();
+    for (const auto& argument : metadata.GetConstantLayouts()) {
+        const auto parameter = reflection.find(std::string(arguments[argument.argument_index].name));
         if (parameter == reflection.end()) continue;
         const auto* constant = std::get_if<ReflectParamInfo::Constant>(&parameter->second.spirv.resources.data);
         if (constant != nullptr && constant->custom_flag.active) {
-            layout.constant_byte_size = shader_info.constant_layout.byte_size;
+            layout.constant_byte_size = metadata.GetConstantByteSize();
         }
     }
     const auto found = reflection.find(std::string(ReflectParamInfo::bdls_name));
@@ -111,15 +112,15 @@ MetalRenderBindings MetalRenderStageBindings(
             Unsupported("Metal bindless acceleration structures");
         }
     }
-    layout.scalar_bindings.resize(shader_info.arguments.size());
-    for (uint index = 0; index < shader_info.arguments.size(); ++index) {
-        const EShaderArgType kind = shader_info.arguments[index].cpp_info.type;
+    layout.scalar_bindings.resize(arguments.size());
+    for (uint index = 0; index < arguments.size(); ++index) {
+        const EShaderArgType kind = arguments[index].cpp_info.type;
         if (kind == SDA_Constant) {
             layout.scalar_bindings[index].constant = true;
             continue;
         }
         if (kind == SDA_BindlessArray) continue;
-        const auto resource_it = reflection.find(std::string(shader_info.arguments[index].name));
+        const auto resource_it = reflection.find(std::string(arguments[index].name));
         if (resource_it == reflection.end()) continue;
         const auto* resource = std::get_if<ReflectParamInfo::Resource>(
             &resource_it->second.spirv.resources.data);
@@ -154,7 +155,8 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
           !create_info.vertex_stream.bindings.empty())) ||
         create_info.view_mask != 0 || create_info.multi_view_count != 1 ||
         create_info.multisample_info.sample_count != 1 || create_info.color_attachment_count > 8 ||
-        shader_info.arguments.size() > 64 || create_info.depth_stencil_info.b_enable_front_face_stencil ||
+        shader_info.argument_metadata.GetArguments().size() > 64 ||
+        create_info.depth_stencil_info.b_enable_front_face_stencil ||
         create_info.depth_stencil_info.b_enable_back_face_stencil) {
         Unsupported("this graphics pipeline layout");
     }

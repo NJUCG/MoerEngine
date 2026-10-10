@@ -49,6 +49,50 @@ public:
     DEFINE_SHADER_ARGS(scale, data, tint, transform, bias);
 };
 
+class BindlessGraphicsSmoke : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(BindlessGraphicsSmoke);
+    DEFINE_SHADER_BUFFER(scalar);
+    DEFINE_SHADER_TEX(color);
+    DEFINE_SHADER_SAMPLER(linear);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT(uint, params);
+    DEFINE_SHADER_ARGS(scalar, color, linear, bdls, params);
+};
+
+class ScalarComputeSmoke : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(ScalarComputeSmoke);
+    DEFINE_SHADER_BUFFER(values);
+    DEFINE_SHADER_CONSTANT(uint, increment);
+    DEFINE_SHADER_ARGS(values, increment);
+};
+
+class TextureComputeSmoke : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(TextureComputeSmoke);
+    DEFINE_SHADER_TEX(src);
+    DEFINE_SHADER_TEX(dst);
+    DEFINE_SHADER_ARGS(src, dst);
+};
+
+class HistogramComputeSmoke : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(HistogramComputeSmoke);
+    DEFINE_SHADER_BUFFER(histogram);
+    DEFINE_SHADER_BUFFER(exposure);
+    DEFINE_SHADER_ARGS(histogram, exposure);
+};
+
+class BindlessComputeSmoke : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(BindlessComputeSmoke);
+    DEFINE_SHADER_BUFFER(output);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT(uint, params);
+    DEFINE_SHADER_ARGS(output, bdls, params);
+};
+
 void CheckMultipleConstants() {
     using namespace Moer;
     using namespace Moer::Render;
@@ -543,14 +587,7 @@ void CheckGraphicsBindlessArguments() {
                               .shader_type = EShaderType::ST_FRAGMENT,
                               .shader_param_map = &reflection};
     PipelineShaderInfo shaders{.shaders = {vertex, fragment}};
-    shaders.arguments = {
-        {"scalar", {1, SDA_Buffer}},
-        {"color", {1, SDA_Texture}},
-        {"linear", {1, SDA_Sampler}},
-        {"bdls", {1, SDA_BindlessArray}},
-        {"params", {1, SDA_Constant}}
-    };
-    shaders.constant_layout = {{{4, 0, sizeof(uint)}}, sizeof(uint)};
+    shaders.argument_metadata = BindlessGraphicsSmoke::GetArgumentMetadata();
     GfxPsoCreateInfo info(
         RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
         {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)}
@@ -964,8 +1001,7 @@ void CheckRHIComputeDispatch() {
         .compute_local_size = Moer::uint3{4, 1, 1}
     };
     PipelineShaderInfo shaders{.shaders = {compute}};
-    shaders.arguments       = {{"values", {1, SDA_Buffer}}, {"increment", {1, SDA_Constant}}};
-    shaders.constant_layout = {{{1, 0, sizeof(uint)}}, sizeof(uint)};
+    shaders.argument_metadata = ScalarComputeSmoke::GetArgumentMetadata();
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
         "Metal compute dispatch smoke", BufferInfo{
@@ -1019,7 +1055,7 @@ void CheckRHIComputeTextureViews() {
         .compute_local_size = Moer::uint3{1, 1, 1}
     };
     PipelineShaderInfo shaders{.shaders = {compute}};
-    shaders.arguments       = {{"src", {1, SDA_Texture}}, {"dst", {1, SDA_Texture}}};
+    shaders.argument_metadata = TextureComputeSmoke::GetArgumentMetadata();
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     TextureRef src = RenderDevice::Get().CreateTexture(
         Extent2D(2, 2), PF_R32_SFLOAT,
@@ -1100,7 +1136,7 @@ void CheckRHIComputeTexelBuffers() {
         .compute_local_size = Moer::uint3{1, 1, 1}
     };
     PipelineShaderInfo shaders{.shaders = {compute}};
-    shaders.arguments        = {{"histogram", {1, SDA_Buffer}}, {"exposure", {1, SDA_Buffer}}};
+    shaders.argument_metadata = HistogramComputeSmoke::GetArgumentMetadata();
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     BufferRef histogram = RenderDevice::Get().CreateBuffer<uint32_t>(
         "Metal histogram texel buffer", 256,
@@ -1192,10 +1228,7 @@ void CheckRHIComputeBindlessTexture() {
         .compute_local_size = Moer::uint3{1, 1, 1}
     };
     PipelineShaderInfo shaders{.shaders = {compute}};
-    shaders.arguments = {
-        {"output", {1, SDA_Buffer}}, {"bdls", {1, SDA_BindlessArray}}, {"params", {1, SDA_Constant}}
-    };
-    shaders.constant_layout = {{{2, 0, sizeof(uint)}}, sizeof(uint)};
+    shaders.argument_metadata = BindlessComputeSmoke::GetArgumentMetadata();
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     BufferRef output = RenderDevice::Get().CreateBuffer<Moer::float4>(
         "Metal compute bindless output", 1,

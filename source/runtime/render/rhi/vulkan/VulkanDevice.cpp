@@ -2339,7 +2339,8 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     }
 
     const auto ordered_shaders = GetGraphicsShadersInStageOrder(_shader_info.shaders);
-    auto       binding_info    = BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.arguments);
+    auto       binding_info =
+        BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.argument_metadata.GetArguments());
     binding_info.push_constant_range.size = constant_byte_size;
 
     auto*                       vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX);
@@ -2377,7 +2378,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
     }
     const SingleShaderInfo* shader = &shader_info.shaders.front();
     const std::span<const SingleShaderInfo* const> stages(&shader, 1);
-    auto binding_info                     = BuildVulkanPipelineBindingInfo(stages, shader_info.arguments);
+    auto binding_info = BuildVulkanPipelineBindingInfo(stages, shader_info.argument_metadata.GetArguments());
     binding_info.push_constant_range.size = constant_byte_size;
     auto* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute);
     auto  shader_stages = CreateVulkanShaderStages(m_device, stages);

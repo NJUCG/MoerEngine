@@ -24,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 static constexpr std::string_view default_name = "NoName";
@@ -1189,15 +1190,60 @@ struct ShaderConstantArgumentLayout {
     uint byte_size      = 0;
 };
 
-struct PipelineConstantLayout {
-    Array<ShaderConstantArgumentLayout> arguments;
-    uint                                byte_size = 0;
+// C++ argument declarations and their generated constant layout travel together.
+class PipelineArgumentMetadata {
+public:
+    PipelineArgumentMetadata()                                = default;
+    PipelineArgumentMetadata(const PipelineArgumentMetadata&) = default;
+
+    PipelineArgumentMetadata(PipelineArgumentMetadata&& other) noexcept {
+        Swap(other);
+    }
+
+    PipelineArgumentMetadata& operator=(PipelineArgumentMetadata other) noexcept {
+        Swap(other);
+        return *this;
+    }
+
+    std::span<const PipelineArgumentInfo> GetArguments() const {
+        return arguments;
+    }
+
+    std::span<const ShaderConstantArgumentLayout> GetConstantLayouts() const {
+        return constant_layouts;
+    }
+
+    uint GetConstantByteSize() const {
+        return constant_byte_size;
+    }
+
+private:
+    template<typename TPipeline, typename... Args>
+    friend struct ShaderArgs;
+
+    PipelineArgumentMetadata(
+        std::span<const PipelineArgumentInfo>         arguments,
+        std::span<const ShaderConstantArgumentLayout> constant_layouts,
+        uint                                          constant_byte_size
+    ) :
+        arguments(arguments.begin(), arguments.end()),
+        constant_layouts(constant_layouts.begin(), constant_layouts.end()),
+        constant_byte_size(constant_byte_size) {}
+
+    void Swap(PipelineArgumentMetadata& other) noexcept {
+        arguments.swap(other.arguments);
+        constant_layouts.swap(other.constant_layouts);
+        std::swap(constant_byte_size, other.constant_byte_size);
+    }
+
+    Array<PipelineArgumentInfo>         arguments;
+    Array<ShaderConstantArgumentLayout> constant_layouts;
+    uint                                constant_byte_size = 0;
 };
 
 struct PipelineShaderInfo {
-    Array<SingleShaderInfo>     shaders;
-    Array<PipelineArgumentInfo> arguments;
-    PipelineConstantLayout      constant_layout;
+    Array<SingleShaderInfo>  shaders;
+    PipelineArgumentMetadata argument_metadata;
 };
 
 struct GfxPsoCreateInfo {
