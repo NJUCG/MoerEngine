@@ -198,6 +198,22 @@ void CheckReflection(EShaderPlatform platform) {
         ReflectParamInfo::Resource{.set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}};
     reject_reflection();
 
+    // Binding kinds must match even when the shader does not use the parameter.
+    std::get<ReflectParamInfo::Resource>(wrong_reflection.reflect_map.at("scale").spirv.resources.data)
+        .custom_flag.active = 0;
+    reject_reflection();
+
+    // Unused constants may have no meaningful reflected offset or size.
+    wrong_reflection = ps.parameter_map;
+    auto& unused_constant =
+        std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").spirv.resources.data);
+    unused_constant.offset                         = 4;
+    unused_constant.size                           = 0;
+    unused_constant.custom_flag.active             = 0;
+    auto partially_used                            = info;
+    partially_used.shaders.back().shader_param_map = &wrong_reflection;
+    Require(ValidatePipelineConstants(partially_used, 128) == 116, "Unused constant layout was validated");
+
     auto unused = info;
     unused.shaders.clear();
     Require(ValidatePipelineConstants(unused, 64) == 0, "Unused constants required an upload");

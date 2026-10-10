@@ -6,30 +6,38 @@
 namespace Moer::Render {
 namespace {
 
+const ReflectParamInfo::Constant*
+TryGetConstant(std::string_view parameter_name, const ReflectParamInfo& parameter) {
+    // Bindless parameters use a different union member.
+    if (parameter_name == ReflectParamInfo::bdls_name) {
+        return nullptr;
+    }
+    return std::get_if<ReflectParamInfo::Constant>(&parameter.spirv.resources.data);
+}
+
 const ShaderConstantArgumentLayout*
-FindConstantArgumentLayout(const PipelineShaderInfo& pipeline_shader_info, std::string_view constant_name) {
-    const auto& metadata = pipeline_shader_info.argument_metadata;
-    for (const auto& argument_layout : metadata.GetConstantLayouts()) {
-        if (metadata.GetArguments()[argument_layout.argument_index].name == constant_name) {
-            return &argument_layout;
+FindCppConstantLayout(const PipelineArgumentMetadata& cpp_metadata, std::string_view parameter_name) {
+    const auto cpp_arguments = cpp_metadata.GetArguments();
+    for (const auto& cpp_layout : cpp_metadata.GetConstantLayouts()) {
+        if (cpp_arguments[cpp_layout.argument_index].name == parameter_name) {
+            return &cpp_layout;
         }
     }
     return nullptr;
 }
 
-void ValidateShaderConstantArgumentTypes(
-    const PipelineShaderInfo&      pipeline_shader_info,
-    const ShaderParametersInfoMap& shader_reflection
+void ValidateConstantBindingTypes(
+    const PipelineArgumentMetadata& cpp_metadata,
+    const ShaderParametersInfoMap&  shader_parameters
 ) {
-    const auto& reflected_parameters = shader_reflection.reflect_map;
-    const auto& metadata             = pipeline_shader_info.argument_metadata;
-    for (const auto& argument_layout : metadata.GetConstantLayouts()) {
-        const auto constant_name       = metadata.GetArguments()[argument_layout.argument_index].name;
-        const auto reflected_parameter = reflected_parameters.find(std::string(constant_name));
-        if (reflected_parameter != reflected_parameters.end() &&
-            !std::holds_alternative<ReflectParamInfo::Constant>(
-                reflected_parameter->second.spirv.resources.data
-            )) {
+    const auto cpp_arguments = cpp_metadata.GetArguments();
+    for (const auto& cpp_layout : cpp_metadata.GetConstantLayouts()) {
+        const auto constant_name       = cpp_arguments[cpp_layout.argument_index].name;
+        const auto reflected_parameter = shader_parameters.reflect_map.find(std::string(constant_name));
+        if (reflected_parameter == shader_parameters.reflect_map.end()) {
+            continue;
+        }
+        if (TryGetConstant(reflected_parameter->first, reflected_parameter->second) == nullptr) {
             throw std::invalid_argument(
                 "Shader constant argument has a resource binding: " + std::string(constant_name)
             );
@@ -37,68 +45,67 @@ void ValidateShaderConstantArgumentTypes(
     }
 }
 
-bool ValidateShaderConstantReflection(
-    const PipelineShaderInfo& pipeline_shader_info,
-    const SingleShaderInfo&   shader
+void ValidateConstantLayoutMatch(
+    const ShaderConstantArgumentLayout& cpp_layout,
+    const ReflectParamInfo::Constant&   shader_constant,
+    std::string_view                    constant_name,
+    std::string_view                    shader_name
 ) {
-    if (shader.shader_param_map == nullptr) {
-        return false;
+    if (shader_constant.offset == cpp_layout.byte_offset && shader_constant.size != 0 &&
+        shader_constant.size <= cpp_layout.byte_size) {
+        return;
     }
-    ValidateShaderConstantArgumentTypes(pipeline_shader_info, *shader.shader_param_map);
+    throw std::invalid_argument(
+        "Shader constant layout mismatch for '" + std::string(constant_name) + "' in shader '" +
+        std::string(shader_name) + "': expected offset=" + std::to_string(cpp_layout.byte_offset) +
+        ", available size=" + std::to_string(cpp_layout.byte_size) + ", reflected offset=" +
+        std::to_string(shader_constant.offset) + ", size=" + std::to_string(shader_constant.size)
+    );
+}
 
-    bool has_active_constants = false;
-    for (const auto& [constant_name, reflected_parameter] : shader.shader_param_map->reflect_map) {
-        if (constant_name == ReflectParamInfo::bdls_name) {
+// Returns whether this shader uses constants; validation failures throw.
+bool ValidateShaderConstantUsage(
+    const PipelineArgumentMetadata& cpp_metadata,
+    const ShaderParametersInfoMap&  shader_parameters,
+    std::string_view                shader_name
+) {
+    bool uses_constants = false;
+    for (const auto& [parameter_name, parameter] : shader_parameters.reflect_map) {
+        const auto* shader_constant = TryGetConstant(parameter_name, parameter);
+        if (shader_constant == nullptr || !shader_constant->custom_flag.active) {
             continue;
         }
-        const auto* reflected_constant =
-            std::get_if<ReflectParamInfo::Constant>(&reflected_parameter.spirv.resources.data);
-        if (reflected_constant == nullptr || !reflected_constant->custom_flag.active) {
-            continue;
-        }
-        has_active_constants = true;
-
-        const auto* declared_argument_layout =
-            FindConstantArgumentLayout(pipeline_shader_info, constant_name);
-        if (declared_argument_layout == nullptr) {
+        const auto* cpp_layout = FindCppConstantLayout(cpp_metadata, parameter_name);
+        if (cpp_layout == nullptr) {
             throw std::invalid_argument(
-                "Undeclared active constant '" + std::string(constant_name) + "' in shader '" +
-                std::string(shader.name) + "'"
+                "Undeclared active constant '" + std::string(parameter_name) + "' in shader '" +
+                std::string(shader_name) + "'"
             );
         }
 
-        const bool offsets_match = reflected_constant->offset == declared_argument_layout->byte_offset;
-        const bool has_valid_reflected_size =
-            reflected_constant->size != 0 && reflected_constant->size <= declared_argument_layout->byte_size;
-        if (!offsets_match || !has_valid_reflected_size) {
-            throw std::invalid_argument(
-                "Shader constant layout mismatch for '" + std::string(constant_name) + "' in shader '" +
-                std::string(shader.name) +
-                "': expected offset=" + std::to_string(declared_argument_layout->byte_offset) +
-                ", available size=" + std::to_string(declared_argument_layout->byte_size) +
-                ", reflected offset=" + std::to_string(reflected_constant->offset) +
-                ", size=" + std::to_string(reflected_constant->size)
-            );
-        }
+        ValidateConstantLayoutMatch(*cpp_layout, *shader_constant, parameter_name, shader_name);
+        uses_constants = true;
     }
-    return has_active_constants;
+    return uses_constants;
 }
 
 } // namespace
 
 uint ValidatePipelineConstants(const PipelineShaderInfo& pipeline_shader_info, uint max_constant_byte_size) {
-    bool has_active_constants = false;
+    const auto& cpp_metadata     = pipeline_shader_info.argument_metadata;
+    uint        upload_byte_size = 0;
     for (const auto& shader : pipeline_shader_info.shaders) {
-        const bool shader_has_active_constants =
-            ValidateShaderConstantReflection(pipeline_shader_info, shader);
-        has_active_constants = has_active_constants || shader_has_active_constants;
-    }
-    if (!has_active_constants) {
-        return 0;
+        if (shader.shader_param_map == nullptr) {
+            continue;
+        }
+        const auto& shader_parameters = *shader.shader_param_map;
+        ValidateConstantBindingTypes(cpp_metadata, shader_parameters);
+        if (ValidateShaderConstantUsage(cpp_metadata, shader_parameters, shader.name)) {
+            upload_byte_size = cpp_metadata.GetConstantByteSize();
+        }
     }
 
-    const uint upload_byte_size = pipeline_shader_info.argument_metadata.GetConstantByteSize();
-    if (upload_byte_size == 0 || upload_byte_size > max_constant_byte_size) {
+    if (upload_byte_size > max_constant_byte_size) {
         throw std::invalid_argument(
             "Pipeline constants exceed the device limit: " + std::to_string(upload_byte_size) + " > " +
             std::to_string(max_constant_byte_size)
