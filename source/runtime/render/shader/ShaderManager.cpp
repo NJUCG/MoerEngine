@@ -31,7 +31,7 @@ void ConfigureShaderConstantLayout(ShaderAsset& asset, const PipelineShaderInfo&
     asset.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint32_t(1));
     asset.environment.SetDefine("MOER_PC_BYTE_SIZE", layout.byte_size);
     for (const auto& argument : layout.arguments) {
-        const auto name = shader_info.layout_hash.at(argument.argument_index);
+        const auto name = shader_info.arguments.at(argument.argument_index).name;
         asset.environment.SetDefine("MOER_PC_OFFSET_" + std::string(name), argument.byte_offset);
         asset.environment.SetDefine("MOER_PC_SIZE_" + std::string(name), argument.byte_size);
     }
@@ -366,10 +366,9 @@ RTConstructor ShaderManager::Raytracing() {
 }
 
 PipelineHandle RasterPipelineConstructor::CreatePipeline(
-    GfxPsoCreateInfo&&        pso_info,
-    Array<std::string_view>&& argument_names,
-    Array<ShaderArgCppInfo>&& argument_info,
-    PipelineConstantLayout&& constant_layout
+    GfxPsoCreateInfo&&            pso_info,
+    Array<PipelineArgumentInfo>&& arguments,
+    PipelineConstantLayout&&      constant_layout
 ) {
     const auto is_empty = [](const ShaderAssetOrCache& source) {
         if (const auto* shader = std::get_if<Shader*>(&source)) {
@@ -392,8 +391,7 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
         {ST_FRAGMENT, &pixel_path}
     };
     PipelineShaderInfo pipeline_shader_info{
-        .layout_hash = std::move(argument_names), .arg_cpp_info = std::move(argument_info),
-        .constant_layout = std::move(constant_layout)
+        .arguments = std::move(arguments), .constant_layout = std::move(constant_layout)
     };
     for (const auto& stage : k_stage_sources) {
         if (!is_empty(*stage.source)) {
@@ -445,13 +443,11 @@ ComputeConstructor::ComputeConstructor(RenderDevice& _device, ShaderAsset&& _ass
     shader_info(std::move(_asset)) {}
 
 PipelineShaderInfo ComputeConstructor::CompileShaderInfo(
-    Array<std::string_view>&& _hash_values,
-    Array<ShaderArgCppInfo>&& _arg_type_values,
-    PipelineConstantLayout&& constant_layout
+    Array<PipelineArgumentInfo>&& arguments,
+    PipelineConstantLayout&&      constant_layout
 ) {
     PipelineShaderInfo sd_info{
-        .layout_hash = std::move(_hash_values), .arg_cpp_info = std::move(_arg_type_values),
-        .constant_layout = std::move(constant_layout)
+        .arguments = std::move(arguments), .constant_layout = std::move(constant_layout)
     };
     auto target_info       = device.GetShaderPlatform();
     auto get_shader_output = [&](const ShaderAssetOrCache& _info, EShaderType _type) -> Shader& {
@@ -485,12 +481,10 @@ PipelineShaderInfo ComputeConstructor::CompileShaderInfo(
 }
 
 PipelineHandle ComputeConstructor::CreatePipeline(
-    Array<std::string_view>&& _hash_values,
-    Array<ShaderArgCppInfo>&& _arg_type_values,
-    PipelineConstantLayout&& constant_layout
+    Array<PipelineArgumentInfo>&& arguments,
+    PipelineConstantLayout&&      constant_layout
 ) {
-    return device.CreatePipeline(CompileShaderInfo(std::move(_hash_values), std::move(_arg_type_values),
-                                                std::move(constant_layout)));
+    return device.CreatePipeline(CompileShaderInfo(std::move(arguments), std::move(constant_layout)));
 }
 
 #pragma endregion

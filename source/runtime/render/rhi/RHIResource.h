@@ -1178,22 +1178,26 @@ struct ShaderArgCppInfo {
     EShaderArgType type;
 };
 
+struct PipelineArgumentInfo {
+    std::string_view name;
+    ShaderArgCppInfo cpp_info;
+};
+
 struct ShaderConstantArgumentLayout {
     uint argument_index = 0;
-    uint byte_offset = 0;
-    uint byte_size = 0;
+    uint byte_offset    = 0;
+    uint byte_size      = 0;
 };
 
 struct PipelineConstantLayout {
     Array<ShaderConstantArgumentLayout> arguments;
-    uint byte_size = 0;
+    uint                                byte_size = 0;
 };
 
 struct PipelineShaderInfo {
-    Array<SingleShaderInfo> shaders;
-    Array<std::string_view> layout_hash;
-    Array<ShaderArgCppInfo> arg_cpp_info;
-    PipelineConstantLayout constant_layout;
+    Array<SingleShaderInfo>     shaders;
+    Array<PipelineArgumentInfo> arguments;
+    PipelineConstantLayout      constant_layout;
 };
 
 struct GfxPsoCreateInfo {

@@ -4,7 +4,10 @@
 
 namespace Moer::Render {
 
-// Returns the upload size, or zero when no stage uses constants. SPIR-V reflection only.
-RENDER_API uint ValidatePipelineConstants(const PipelineShaderInfo& shader_info, uint max_byte_size);
+// Validates the C++ argument layout against active SPIR-V constants.
+// Returns the full upload size, or zero when no shader stage uses constants.
+// Throws std::invalid_argument for invalid argument metadata, layouts, or device limits.
+RENDER_API uint
+ValidatePipelineConstants(const PipelineShaderInfo& pipeline_shader_info, uint max_constant_byte_size);
 
 } // namespace Moer::Render

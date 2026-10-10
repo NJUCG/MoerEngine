@@ -478,16 +478,15 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
 
     auto& reflect_map = cs_info.shader_param_map->reflect_map;
 
-    Array<ParamInfoFlags> binding_infos(_shaders.layout_hash.size());
+    Array<ParamInfoFlags> binding_infos(_shaders.arguments.size());
 
     D3D12PipelineState::PipelineLayout layout;
 
-    ASSERT(_shaders.layout_hash.size() == _shaders.arg_cpp_info.size());
-    const auto& resource_names = _shaders.layout_hash; // (not hash, but resource names
-    for (size_t i = 0; i < resource_names.size(); ++i) {
-        const ShaderArgCppInfo& arg_info = _shaders.arg_cpp_info[i];
+    for (size_t i = 0; i < _shaders.arguments.size(); ++i) {
+        const auto& argument = _shaders.arguments[i];
+        const auto& arg_info = argument.cpp_info;
 
-        std::string name_internal(resource_names[i]);
+        std::string name_internal(argument.name);
         bool        b_special_bindless = false;
         if (arg_info.type == EShaderArgType::SDA_BindlessArray) {
             name_internal      = ReflectParamInfo::bdls_name; // !
@@ -496,9 +495,7 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
 
         auto reflect_map_iter = reflect_map.find(name_internal.data());
         if (reflect_map_iter == reflect_map.end()) {
-            LOG_WARNING(
-                "provided pipeline arg '{}' not found in shader '{}'", resource_names[i], cs_info.name
-            );
+            LOG_WARNING("provided pipeline arg '{}' not found in shader '{}'", argument.name, cs_info.name);
             continue;
         }
 
@@ -510,7 +507,7 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
 
         ASSERT2(
             CheckReflectionTypeMatch(resource_info, arg_info),
-            std::format("reflection mismatch for resource {} in shader {}", resource_names[i], cs_info.name)
+            std::format("reflection mismatch for resource {} in shader {}", argument.name, cs_info.name)
         );
 
         binding_infos[i].pipeline_flags = uint64(D3D12_BARRIER_SYNC_COMPUTE_SHADING);

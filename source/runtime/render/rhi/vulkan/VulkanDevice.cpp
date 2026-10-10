@@ -1911,15 +1911,14 @@ void AccumulateBindlessBindings(
 
 // Match this shader's reflection to C++ arguments and accumulate the pipeline's layout and binding metadata.
 void AccumulateShaderPipelineBindings(
-    const SingleShaderInfo&           shader,
-    std::span<const std::string_view> argument_names,
-    std::span<const ShaderArgCppInfo> arguments,
-    VkShaderStageFlagBits             shader_stage,
-    VulkanPipelineBindingInfo&        out_binding_info
+    const SingleShaderInfo&               shader,
+    std::span<const PipelineArgumentInfo> arguments,
+    VkShaderStageFlagBits                 shader_stage,
+    VulkanPipelineBindingInfo&            out_binding_info
 ) {
-    for (uint argument_id = 0; argument_id < argument_names.size(); ++argument_id) {
-        const auto  argument_name                                            = argument_names[argument_id];
-        const auto& argument_info                                            = arguments[argument_id];
+    for (uint argument_id = 0; argument_id < arguments.size(); ++argument_id) {
+        const auto  argument_name = arguments[argument_id].name;
+        const auto& argument_info = arguments[argument_id].cpp_info;
         out_binding_info.name_hash_to_argument_index[GetHash(argument_name)] = argument_id;
 
         const auto& reflection = shader.shader_param_map->reflect_map;
@@ -1963,16 +1962,15 @@ void AccumulateShaderPipelineBindings(
 
 VulkanPipelineBindingInfo BuildVulkanPipelineBindingInfo(
     std::span<const SingleShaderInfo* const> shaders,
-    std::span<const std::string_view>        argument_names,
-    std::span<const ShaderArgCppInfo>        arguments
+    std::span<const PipelineArgumentInfo>    arguments
 ) {
     VulkanPipelineBindingInfo binding_info;
-    binding_info.argument_flags.resize(argument_names.size());
+    binding_info.argument_flags.resize(arguments.size());
     for (const auto* shader : shaders) {
         const auto shader_stage = static_cast<VkShaderStageFlagBits>(
             VulkanEnumTranslator::METoVKShaderStageFlags(shader->shader_type)
         );
-        AccumulateShaderPipelineBindings(*shader, argument_names, arguments, shader_stage, binding_info);
+        AccumulateShaderPipelineBindings(*shader, arguments, shader_stage, binding_info);
     }
     return binding_info;
 }
@@ -2022,40 +2020,41 @@ void InitializeVulkanPipelineLayout(VulkanPipelineState& pipeline, VulkanPipelin
     );
 }
 
-} // namespace
-
-PipelineHandle
-VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
-    const uint constant_byte_size = ValidatePipelineConstants(
-        _shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize);
-    if (const auto error = ValidateGraphicsShaderStages(_shader_info.shaders); !error.empty()) {
+bool ValidateGraphicsPipelineCreateInfo(
+    const VulkanDevice&       device,
+    const VulkanDeviceInfo&   device_info,
+    const GfxPsoCreateInfo&   create_info,
+    const PipelineShaderInfo& shader_info
+) {
+    if (const auto error = ValidateGraphicsShaderStages(shader_info.shaders); !error.empty()) {
         LOG_ERROR("Cannot create Vulkan graphics pipeline: {}", error);
-        return {};
+        return false;
     }
-    const uint32_t required_view_count = Multiview::RequiredViewCount(_create_info.view_mask);
-    if (_create_info.view_mask != 0 && !SupportsMultiview(required_view_count)) {
+    const uint32_t required_view_count = Multiview::RequiredViewCount(create_info.view_mask);
+    if (create_info.view_mask != 0 && !device.SupportsMultiview(required_view_count)) {
         LOG_ERROR(
             "Cannot create multiview graphics pipeline: view_mask=0x{:x} requires {} views, "
             "but the selected device supports at most {} (feature enabled={}).",
-            _create_info.view_mask,
+            create_info.view_mask,
             required_view_count,
-            m_device_info.core_properties.core_1_1.maxMultiviewViewCount,
-            m_device_info.core_features.core_1_1.multiview == VK_TRUE
+            device_info.core_properties.core_1_1.maxMultiviewViewCount,
+            device_info.core_features.core_1_1.multiview == VK_TRUE
         );
-        return {};
+        return false;
     }
 
-    const bool uses_tessellation = FindShaderStage(_shader_info.shaders, ST_HULL) != nullptr;
+    const bool uses_tessellation = FindShaderStage(shader_info.shaders, ST_HULL) != nullptr;
     if (uses_tessellation) {
-        const uint32_t patch_control_points = _create_info.patch_control_points;
-        const uint32_t max_patch_size = m_device_info.core_properties.core_1_0.limits.maxTessellationPatchSize;
-        if (!SupportsTessellation()) {
-            LOG_ERROR("Cannot create tessellation pipeline: the Vulkan device does not support tessellation shaders.");
-            return {};
+        const uint32_t patch_control_points = create_info.patch_control_points;
+        const uint32_t max_patch_size = device_info.core_properties.core_1_0.limits.maxTessellationPatchSize;
+        if (!device.SupportsTessellation()) {
+            LOG_ERROR("Cannot create tessellation pipeline: the Vulkan device does not support tessellation "
+                      "shaders.");
+            return false;
         }
-        if (_create_info.primitive_topology != EPrimitiveTopology::PATCH_LIST) {
+        if (create_info.primitive_topology != EPrimitiveTopology::PATCH_LIST) {
             LOG_ERROR("Cannot create tessellation pipeline: primitive topology must be PATCH_LIST.");
-            return {};
+            return false;
         }
         if (patch_control_points == 0 || patch_control_points > max_patch_size) {
             LOG_ERROR(
@@ -2063,292 +2062,302 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
                 patch_control_points,
                 max_patch_size
             );
-            return {};
+            return false;
         }
-    } else if (_create_info.primitive_topology == EPrimitiveTopology::PATCH_LIST) {
+    } else if (create_info.primitive_topology == EPrimitiveTopology::PATCH_LIST) {
         LOG_ERROR("Cannot create PATCH_LIST pipeline without Hull and Domain shaders.");
+        return false;
+    }
+    return true;
+}
+
+VkPipelineColorBlendAttachmentState ToVulkanBlendAttachment(const RHIBlendAttachmentInfo& info) {
+    VkPipelineColorBlendAttachmentState state{};
+    state.blendEnable         = (info.color_blend_op != BO_ADD || info.color_dst_blend_factor != BF_ZERO ||
+                         info.color_src_blend_factor != BF_ONE || info.alpha_blend_op != BO_ADD ||
+                         info.alpha_dst_blend_factor != BF_ZERO || info.alpha_src_blend_factor != BF_ONE) ?
+                                    VK_TRUE :
+                                    VK_FALSE;
+    state.srcColorBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(info.color_src_blend_factor);
+    state.dstColorBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(info.color_dst_blend_factor);
+    state.colorBlendOp        = VulkanEnumTranslator::METoVKBlendOp(info.color_blend_op);
+    state.srcAlphaBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(info.alpha_src_blend_factor);
+    state.dstAlphaBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(info.alpha_dst_blend_factor);
+    state.alphaBlendOp        = VulkanEnumTranslator::METoVKBlendOp(info.alpha_blend_op);
+    state.colorWriteMask      = (info.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
+    state.colorWriteMask |= (info.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
+    state.colorWriteMask |= (info.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
+    state.colorWriteMask |= (info.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
+    return state;
+}
+
+VkPipelineRasterizationStateCreateInfo ToVulkanRasterizationState(const RHIRasterizeInfo& info) {
+    VkPipelineRasterizationStateCreateInfo state{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    state.depthClampEnable        = info.b_depth_clamp_enable ? VK_TRUE : VK_FALSE;
+    state.rasterizerDiscardEnable = VK_FALSE;
+    state.polygonMode             = VulkanEnumTranslator::METoVKPolygonMode(info.fill_mode);
+    state.cullMode                = VulkanEnumTranslator::METoVKCullModeFlags(info.cull_mode);
+    state.frontFace =
+        info.b_front_counter_clockwise ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+    state.depthBiasEnable         = info.b_depth_bias ? VK_TRUE : VK_FALSE;
+    state.depthBiasConstantFactor = info.depth_bias;
+    state.depthBiasClamp          = info.depth_bias_clamp;
+    state.depthBiasSlopeFactor    = info.depth_bias_slop_factor;
+    state.lineWidth               = 1.0f;
+    return state;
+}
+
+VkPipelineMultisampleStateCreateInfo ToVulkanMultisampleState(const RHIMultisampleStateInfo& info) {
+    VkPipelineMultisampleStateCreateInfo state{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    state.rasterizationSamples  = VulkanEnumTranslator::METoVKSampleCountFlagBits(info.sample_count);
+    state.sampleShadingEnable   = VK_FALSE;
+    state.minSampleShading      = 1.0f;
+    state.pSampleMask           = nullptr;
+    state.alphaToCoverageEnable = VK_FALSE;
+    state.alphaToOneEnable      = VK_FALSE;
+    return state;
+}
+
+VkPipelineDepthStencilStateCreateInfo ToVulkanDepthStencilState(const RHIDepthStencilStateInfo& info) {
+    VkPipelineDepthStencilStateCreateInfo state{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    state.depthTestEnable =
+        (info.b_enable_depth_write || info.depth_test_op != ECompareOption::CO_NEVER) ? VK_TRUE : VK_FALSE;
+    state.depthWriteEnable      = info.b_enable_depth_write;
+    state.depthCompareOp        = VulkanEnumTranslator::METoVKCompareOp(info.depth_test_op);
+    state.depthBoundsTestEnable = VK_FALSE;
+    state.minDepthBounds        = 0.0f;
+    state.maxDepthBounds        = 1.0f;
+
+    state.stencilTestEnable =
+        (info.b_enable_front_face_stencil || info.b_enable_back_face_stencil) ? VK_TRUE : VK_FALSE;
+
+    if (info.b_enable_front_face_stencil) {
+        state.front.failOp = VulkanEnumTranslator::METoVKStencilOp(info.front_face_stencil_fail_stencil_op);
+        state.front.passOp = VulkanEnumTranslator::METoVKStencilOp(info.front_face_pass_stencil_op);
+        state.front.depthFailOp =
+            VulkanEnumTranslator::METoVKStencilOp(info.front_face_depth_fail_stencil_op);
+        state.front.compareOp   = VulkanEnumTranslator::METoVKCompareOp(info.front_face_stencil_test);
+        state.front.compareMask = info.stencil_readmask;
+        state.front.writeMask   = info.stencil_writemask;
+        state.front.reference   = 0;
+    } else {
+        state.front.failOp      = VK_STENCIL_OP_KEEP;
+        state.front.passOp      = VK_STENCIL_OP_KEEP;
+        state.front.depthFailOp = VK_STENCIL_OP_KEEP;
+        state.front.compareOp   = VK_COMPARE_OP_ALWAYS;
+        state.front.compareMask = 0;
+        state.front.writeMask   = 0;
+        state.front.reference   = 0;
+    }
+
+    if (info.b_enable_back_face_stencil) {
+        state.back.failOp = VulkanEnumTranslator::METoVKStencilOp(info.back_face_stencil_fail_stencil_op);
+        state.back.passOp = VulkanEnumTranslator::METoVKStencilOp(info.back_face_pass_stencil_op);
+        state.back.depthFailOp = VulkanEnumTranslator::METoVKStencilOp(info.back_face_depth_fail_stencil_op);
+        state.back.compareOp   = VulkanEnumTranslator::METoVKCompareOp(info.back_face_stencil_test);
+        state.back.compareMask = info.stencil_readmask;
+        state.back.writeMask   = info.stencil_writemask;
+        state.back.reference   = 0;
+    } else {
+        state.back.failOp      = VK_STENCIL_OP_KEEP;
+        state.back.passOp      = VK_STENCIL_OP_KEEP;
+        state.back.depthFailOp = VK_STENCIL_OP_KEEP;
+        state.back.compareOp   = VK_COMPARE_OP_ALWAYS;
+        state.back.compareMask = 0;
+        state.back.writeMask   = 0;
+        state.back.reference   = 0;
+    }
+    return state;
+}
+
+// Owns every array referenced by the Vulkan state structures until pipeline creation completes.
+struct VulkanGraphicsPipelineState {
+    Array<VkFormat>                            color_attachment_formats;
+    Array<VkPipelineColorBlendAttachmentState> color_blend_attachments;
+    Array<VkVertexInputBindingDescription>     vertex_bindings;
+    Array<VkVertexInputAttributeDescription>   vertex_attributes;
+    StaticArray<VkDynamicState, 2> dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+
+    VkPipelineRenderingCreateInfo        rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    VkPipelineVertexInputStateCreateInfo vertex_input{
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
+    };
+    VkPipelineInputAssemblyStateCreateInfo input_assembly{
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO
+    };
+    VkPipelineViewportStateCreateInfo      viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    VkPipelineRasterizationStateCreateInfo rasterization{
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO
+    };
+    VkPipelineMultisampleStateCreateInfo  multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO
+    };
+    VkPipelineTessellationStateCreateInfo tessellation{
+        VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO
+    };
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO
+    };
+    VkPipelineColorBlendStateCreateInfo color_blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    VkPipelineDynamicStateCreateInfo    dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    bool                                uses_stencil_attachment = false;
+
+    VulkanGraphicsPipelineState() = default;
+    // Internal pointers refer to this object's storage, so its address must remain stable.
+    VulkanGraphicsPipelineState(const VulkanGraphicsPipelineState&)            = delete;
+    VulkanGraphicsPipelineState& operator=(const VulkanGraphicsPipelineState&) = delete;
+    VulkanGraphicsPipelineState(VulkanGraphicsPipelineState&&)                 = delete;
+    VulkanGraphicsPipelineState& operator=(VulkanGraphicsPipelineState&&)      = delete;
+};
+
+void InitializeGraphicsAttachmentState(
+    const GfxPsoCreateInfo&      create_info,
+    VulkanGraphicsPipelineState& states
+) {
+    const uint32_t attachment_count = create_info.color_attachment_count;
+    states.color_attachment_formats.resize(attachment_count);
+    states.color_blend_attachments.resize(attachment_count);
+    for (uint32_t index = 0; index < attachment_count; ++index) {
+        const auto& attachment                 = create_info.color_attachments_info[index];
+        states.color_attachment_formats[index] = VulkanEnumTranslator::METoVKFormat(attachment.pixel_format);
+        states.color_blend_attachments[index]  = ToVulkanBlendAttachment(attachment.blend_state_info);
+    }
+
+    states.rendering.viewMask                = create_info.view_mask;
+    states.rendering.colorAttachmentCount    = attachment_count;
+    states.rendering.pColorAttachmentFormats = states.color_attachment_formats.data();
+    states.rendering.depthAttachmentFormat =
+        VulkanEnumTranslator::METoVKFormat(create_info.depth_stencil_format);
+
+    // Only declare a stencil attachment when the PSO actually enables stencil tests.
+    const bool depth_has_stencil = create_info.depth_stencil_format == PF_D32_SFLOAT_S8_UINT ||
+                                   create_info.depth_stencil_format == PF_D24_UNORM_S8_UINT ||
+                                   create_info.depth_stencil_format == PF_D16_UNORM_S8_UINT ||
+                                   create_info.depth_stencil_format == PF_S8_UINT;
+    const bool stencil_enabled = create_info.depth_stencil_info.b_enable_front_face_stencil ||
+                                 create_info.depth_stencil_info.b_enable_back_face_stencil;
+    states.uses_stencil_attachment = depth_has_stencil && stencil_enabled;
+    states.rendering.stencilAttachmentFormat =
+        states.uses_stencil_attachment ? states.rendering.depthAttachmentFormat : VK_FORMAT_UNDEFINED;
+
+    states.color_blend.logicOp         = VK_LOGIC_OP_COPY;
+    states.color_blend.logicOpEnable   = VK_FALSE;
+    states.color_blend.attachmentCount = attachment_count;
+    states.color_blend.pAttachments    = states.color_blend_attachments.data();
+}
+
+void InitializeGraphicsVertexInputState(
+    const GfxPsoCreateInfo&      create_info,
+    VulkanGraphicsPipelineState& states
+) {
+    uint binding_index = 0;
+    states.vertex_bindings.reserve(create_info.vertex_stream.bindings.size());
+    uint attribute_count = 0;
+    for (const auto& binding : create_info.vertex_stream.bindings) {
+        attribute_count += binding.vertex_elements.size();
+    }
+    uint attribute_location = 0;
+    states.vertex_attributes.reserve(attribute_count);
+    for (const VertexBinding& binding : create_info.vertex_stream.bindings) {
+        uint binding_stride   = 0;
+        uint attribute_offset = 0;
+        for (const VertexElement& attribute : binding.vertex_elements) {
+            const VkFormat format = ToVulkanVertexFormat(attribute.format);
+            if (format == VK_FORMAT_UNDEFINED) {
+                throw std::invalid_argument("Invalid Vulkan vertex attribute format");
+            }
+            states.vertex_attributes.emplace_back(
+                attribute_location++, binding_index, format, attribute_offset
+            );
+            attribute_offset += GetVertexFormatByteSize(attribute.format);
+            binding_stride = attribute_offset;
+        }
+        states.vertex_bindings.emplace_back(
+            binding_index, binding_stride, VulkanEnumTranslator::METoVKVertexInputRate(binding.input_rate)
+        );
+        ++binding_index;
+    }
+    states.vertex_input.vertexBindingDescriptionCount   = uint(states.vertex_bindings.size());
+    states.vertex_input.pVertexBindingDescriptions      = states.vertex_bindings.data();
+    states.vertex_input.vertexAttributeDescriptionCount = uint(states.vertex_attributes.size());
+    states.vertex_input.pVertexAttributeDescriptions    = states.vertex_attributes.data();
+}
+
+void InitializeGraphicsPipelineState(
+    const GfxPsoCreateInfo&      create_info,
+    VulkanGraphicsPipelineState& states
+) {
+    InitializeGraphicsAttachmentState(create_info, states);
+    InitializeGraphicsVertexInputState(create_info, states);
+
+    states.input_assembly.topology =
+        VulkanEnumTranslator::METoVKPrimitiveTopology(create_info.primitive_topology);
+    states.input_assembly.primitiveRestartEnable = VK_FALSE;
+    states.viewport.viewportCount                = create_info.multi_view_count;
+    states.viewport.scissorCount                 = create_info.multi_view_count;
+    states.rasterization                         = ToVulkanRasterizationState(create_info.rasterizer_info);
+    states.multisample                           = ToVulkanMultisampleState(create_info.multisample_info);
+    states.tessellation.patchControlPoints       = create_info.patch_control_points;
+    states.depth_stencil                         = ToVulkanDepthStencilState(create_info.depth_stencil_info);
+    states.dynamic.dynamicStateCount             = states.dynamic_states.size();
+    states.dynamic.pDynamicStates                = states.dynamic_states.data();
+}
+
+VkGraphicsPipelineCreateInfo MakeGraphicsPipelineCreateInfo(
+    const VulkanGraphicsPipelineState&               states,
+    std::span<const VkPipelineShaderStageCreateInfo> shader_stages,
+    VkPipelineLayout                                 layout,
+    bool                                             uses_tessellation
+) {
+    VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    info.pNext               = &states.rendering;
+    info.flags               = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    info.stageCount          = static_cast<uint32_t>(shader_stages.size());
+    info.pStages             = shader_stages.data();
+    info.pVertexInputState   = &states.vertex_input;
+    info.pInputAssemblyState = &states.input_assembly;
+    info.pTessellationState  = uses_tessellation ? &states.tessellation : nullptr;
+    info.pViewportState      = &states.viewport;
+    info.pRasterizationState = &states.rasterization;
+    info.pMultisampleState   = &states.multisample;
+    info.pDepthStencilState  = &states.depth_stencil;
+    info.pColorBlendState    = &states.color_blend;
+    info.pDynamicState       = &states.dynamic;
+    info.layout              = layout;
+    info.basePipelineIndex   = -1;
+    return info;
+}
+
+} // namespace
+
+PipelineHandle
+VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
+    const uint constant_byte_size = ValidatePipelineConstants(
+        _shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize
+    );
+    if (!ValidateGraphicsPipelineCreateInfo(*this, m_device_info, _create_info, _shader_info)) {
         return {};
     }
 
     const auto ordered_shaders = GetGraphicsShadersInStageOrder(_shader_info.shaders);
-    auto binding_info =
-        BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.layout_hash, _shader_info.arg_cpp_info);
+    auto       binding_info    = BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.arguments);
     binding_info.push_constant_range.size = constant_byte_size;
-    VulkanPipelineState* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX);
 
-    uint32_t attachment_count = _create_info.color_attachment_count;
-
-    Moer::Array<VkFormat> color_attachment_formats(attachment_count);
-
-    for (int i = 0; i < attachment_count; ++i) {
-        color_attachment_formats[i] =
-            VulkanEnumTranslator::METoVKFormat(_create_info.color_attachments_info[i].pixel_format);
-    }
-    VkPipelineRenderingCreateInfo rendering_create_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rendering_create_info.pNext                   = nullptr;
-    rendering_create_info.viewMask                = _create_info.view_mask;
-    rendering_create_info.colorAttachmentCount    = attachment_count;
-    rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
-    rendering_create_info.depthAttachmentFormat =
-        VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format);
-
-    // Only declare a stencil attachment when the PSO actually enables stencil tests.
-    bool depth_has_stencil =
-        (_create_info.depth_stencil_format == PF_D32_SFLOAT_S8_UINT ||
-         _create_info.depth_stencil_format == PF_D24_UNORM_S8_UINT ||
-         _create_info.depth_stencil_format == PF_D16_UNORM_S8_UINT ||
-         _create_info.depth_stencil_format == PF_S8_UINT);
-    bool stencil_enabled = _create_info.depth_stencil_info.b_enable_front_face_stencil ||
-                           _create_info.depth_stencil_info.b_enable_back_face_stencil;
-    vk_pso->b_uses_stencil_attachment = depth_has_stencil && stencil_enabled;
+    auto*                       vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX);
+    VulkanGraphicsPipelineState states;
+    InitializeGraphicsPipelineState(_create_info, states);
+    vk_pso->b_uses_stencil_attachment = states.uses_stencil_attachment;
     vk_pso->view_mask                 = _create_info.view_mask;
-    rendering_create_info.stencilAttachmentFormat =
-        vk_pso->b_uses_stencil_attachment ?
-            VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format) :
-            VK_FORMAT_UNDEFINED;
-
-    auto to_vk_blend_attachment = [](const RHIBlendAttachmentInfo& _info) {
-        VkPipelineColorBlendAttachmentState state{};
-        state.blendEnable =
-            (_info.color_blend_op != BO_ADD || _info.color_dst_blend_factor != BF_ZERO ||
-             _info.color_src_blend_factor != BF_ONE || _info.alpha_blend_op != BO_ADD ||
-             _info.alpha_dst_blend_factor != BF_ZERO || _info.alpha_src_blend_factor != BF_ONE) ?
-                VK_TRUE :
-                VK_FALSE;
-        state.srcColorBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(_info.color_src_blend_factor);
-        state.dstColorBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(_info.color_dst_blend_factor);
-        state.colorBlendOp        = VulkanEnumTranslator::METoVKBlendOp(_info.color_blend_op);
-        state.srcAlphaBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(_info.alpha_src_blend_factor);
-        state.dstAlphaBlendFactor = VulkanEnumTranslator::METoVKBlendFactor(_info.alpha_dst_blend_factor);
-        state.alphaBlendOp        = VulkanEnumTranslator::METoVKBlendOp(_info.alpha_blend_op);
-        state.colorWriteMask      = (_info.color_write_mask & CW_RED) ? VK_COLOR_COMPONENT_R_BIT : 0;
-        state.colorWriteMask |= (_info.color_write_mask & CW_GREEN) ? VK_COLOR_COMPONENT_G_BIT : 0;
-        state.colorWriteMask |= (_info.color_write_mask & CW_BLUE) ? VK_COLOR_COMPONENT_B_BIT : 0;
-        state.colorWriteMask |= (_info.color_write_mask & CW_ALPHA) ? VK_COLOR_COMPONENT_A_BIT : 0;
-        return std::move(state);
-    };
-    Moer::Array<VkPipelineColorBlendAttachmentState> color_blend_attachments(attachment_count);
-    for (int i = 0; i < attachment_count; ++i) {
-        color_blend_attachments[i] =
-            to_vk_blend_attachment(_create_info.color_attachments_info[i].blend_state_info);
-    }
-    // color blend state
-    VkPipelineColorBlendStateCreateInfo color_blend_state{
-        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO
-    };
-
-    color_blend_state.logicOp         = VK_LOGIC_OP_COPY;
-    color_blend_state.logicOpEnable   = VK_FALSE;
-    color_blend_state.attachmentCount = attachment_count;
-    color_blend_state.pAttachments    = color_blend_attachments.data();
 
     auto shader_stages = CreateVulkanShaderStages(m_device, ordered_shaders);
-
-    VkPipelineVertexInputStateCreateInfo vertex_input_state{
-        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
-    };
-    Moer::Array<VkVertexInputBindingDescription>   binding_descs;
-    Moer::Array<VkVertexInputAttributeDescription> attribute_descs;
-
-    auto to_vk_vertex_stream = [&]() {
-        uint binding_offset = 0;
-        binding_descs.reserve(_create_info.vertex_stream.bindings.size());
-        auto attribute_cnt = [&]() {
-            uint cnt = 0;
-            for (const auto& binding : _create_info.vertex_stream.bindings) {
-                cnt += binding.vertex_elements.size();
-            }
-            return cnt;
-        }();
-        uint attrib_location = 0;
-        attribute_descs.reserve(attribute_cnt);
-        for (const VertexBinding& binding : _create_info.vertex_stream.bindings) {
-            uint binding_stride = 0;
-            uint attrib_offset  = 0;
-            for (const VertexElement& attribute : binding.vertex_elements) {
-                const VkFormat format = ToVulkanVertexFormat(attribute.format);
-                if (format == VK_FORMAT_UNDEFINED) {
-                    throw std::invalid_argument("Invalid Vulkan vertex attribute format");
-                }
-                attribute_descs.emplace_back(
-                    attrib_location++, binding_offset, format, attrib_offset
-                );
-                attrib_offset += GetVertexFormatByteSize(attribute.format);
-                binding_stride = attrib_offset;
-            }
-            binding_descs.emplace_back(
-                binding_offset,
-                binding_stride,
-                VulkanEnumTranslator::METoVKVertexInputRate(binding.input_rate)
-            );
-            ++binding_offset;
-        }
-        vertex_input_state.vertexBindingDescriptionCount   = uint(binding_descs.size());
-        vertex_input_state.pVertexBindingDescriptions      = binding_descs.data();
-        vertex_input_state.vertexAttributeDescriptionCount = uint(attribute_descs.size());
-        vertex_input_state.pVertexAttributeDescriptions    = attribute_descs.data();
-    };
-    to_vk_vertex_stream();
-    // input assembly
-    VkPipelineInputAssemblyStateCreateInfo input_assembly_state{};
-    input_assembly_state.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    input_assembly_state.pNext = nullptr;
-    input_assembly_state.flags = 0;
-    input_assembly_state.topology =
-        VulkanEnumTranslator::METoVKPrimitiveTopology(_create_info.primitive_topology);
-    input_assembly_state.primitiveRestartEnable = VK_FALSE;
-
-    // viewport state
-    VkPipelineViewportStateCreateInfo viewport_state{};
-    viewport_state.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewport_state.pNext         = nullptr;
-    viewport_state.flags         = 0;
-    viewport_state.viewportCount = _create_info.multi_view_count;
-    viewport_state.scissorCount  = _create_info.multi_view_count;
-    // rasterization state
-    VkPipelineRasterizationStateCreateInfo vk_rasterization_state{};
-
-    auto to_rasterize_state = [](const RHIRasterizeInfo& _info) {
-        VkPipelineRasterizationStateCreateInfo state{};
-        state.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        state.pNext                   = nullptr;
-        state.flags                   = 0;
-        state.depthClampEnable        = _info.b_depth_clamp_enable ? VK_TRUE : VK_FALSE;
-        state.rasterizerDiscardEnable = VK_FALSE; // MARK...
-        state.polygonMode             = VulkanEnumTranslator::METoVKPolygonMode(_info.fill_mode);
-        state.cullMode                = VulkanEnumTranslator::METoVKCullModeFlags(_info.cull_mode);
-        state.frontFace               = _info.b_front_counter_clockwise ? VK_FRONT_FACE_COUNTER_CLOCKWISE :
-                                                                          VK_FRONT_FACE_CLOCKWISE; // MARK...
-        state.depthBiasEnable         = _info.b_depth_bias ? VK_TRUE : VK_FALSE;
-        state.depthBiasConstantFactor = _info.depth_bias;
-        state.depthBiasClamp          = _info.depth_bias_clamp;
-        state.depthBiasSlopeFactor    = _info.depth_bias_slop_factor;
-        state.lineWidth               = 1.0f;
-        return std::move(state);
-    };
-
-    vk_rasterization_state = to_rasterize_state(_create_info.rasterizer_info);
-    // multisample state
-    auto to_multi_sample_state = [](const RHIMultisampleStateInfo& info) {
-        VkPipelineMultisampleStateCreateInfo state{};
-        state.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        state.pNext                 = nullptr;
-        state.flags                 = 0;
-        state.rasterizationSamples  = VulkanEnumTranslator::METoVKSampleCountFlagBits(info.sample_count);
-        state.sampleShadingEnable   = VK_FALSE;
-        state.minSampleShading      = 1.0f;
-        state.pSampleMask           = nullptr;
-        state.alphaToCoverageEnable = VK_FALSE;
-        state.alphaToOneEnable      = VK_FALSE;
-        return std::move(state);
-    };
-    auto vk_multisample_state = to_multi_sample_state(_create_info.multisample_info);
-
-    VkPipelineTessellationStateCreateInfo tessellation_state{
-        VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO
-    };
-    tessellation_state.patchControlPoints = _create_info.patch_control_points;
-
-    auto to_depth_stencil_state = [](const RHIDepthStencilStateInfo& info) {
-        VkPipelineDepthStencilStateCreateInfo state{};
-        state.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        state.pNext = nullptr;
-        state.flags = 0;
-        state.depthTestEnable =
-            (info.b_enable_depth_write || info.depth_test_op != ECompareOption::CO_NEVER) ? VK_TRUE :
-                                                                                            VK_FALSE;
-        state.depthWriteEnable      = info.b_enable_depth_write;
-        state.depthCompareOp        = VulkanEnumTranslator::METoVKCompareOp(info.depth_test_op);
-        state.depthBoundsTestEnable = VK_FALSE; // MARK...
-        state.minDepthBounds        = 0.0f;
-        state.maxDepthBounds        = 1.0f;
-
-        state.stencilTestEnable =
-            (info.b_enable_front_face_stencil || info.b_enable_back_face_stencil) ? VK_TRUE : VK_FALSE;
-
-        if (info.b_enable_front_face_stencil) {
-            state.front.failOp =
-                VulkanEnumTranslator::METoVKStencilOp(info.front_face_stencil_fail_stencil_op);
-            state.front.passOp = VulkanEnumTranslator::METoVKStencilOp(info.front_face_pass_stencil_op);
-            state.front.depthFailOp =
-                VulkanEnumTranslator::METoVKStencilOp(info.front_face_depth_fail_stencil_op);
-            state.front.compareOp   = VulkanEnumTranslator::METoVKCompareOp(info.front_face_stencil_test);
-            state.front.compareMask = info.stencil_readmask;
-            state.front.writeMask   = info.stencil_writemask;
-            state.front.reference   = 0;
-        } else {
-            state.front.failOp      = VK_STENCIL_OP_KEEP;
-            state.front.passOp      = VK_STENCIL_OP_KEEP;
-            state.front.depthFailOp = VK_STENCIL_OP_KEEP;
-            state.front.compareOp   = VK_COMPARE_OP_ALWAYS;
-            state.front.compareMask = 0;
-            state.front.writeMask   = 0;
-            state.front.reference   = 0;
-        }
-
-        if (info.b_enable_back_face_stencil) {
-            state.back.failOp = VulkanEnumTranslator::METoVKStencilOp(info.back_face_stencil_fail_stencil_op);
-            state.back.passOp = VulkanEnumTranslator::METoVKStencilOp(info.back_face_pass_stencil_op);
-            state.back.depthFailOp =
-                VulkanEnumTranslator::METoVKStencilOp(info.back_face_depth_fail_stencil_op);
-            state.back.compareOp   = VulkanEnumTranslator::METoVKCompareOp(info.back_face_stencil_test);
-            state.back.compareMask = info.stencil_readmask;
-            state.back.writeMask   = info.stencil_writemask;
-            state.back.reference   = 0;
-        } else {
-            state.back.failOp      = VK_STENCIL_OP_KEEP;
-            state.back.passOp      = VK_STENCIL_OP_KEEP;
-            state.back.depthFailOp = VK_STENCIL_OP_KEEP;
-            state.back.compareOp   = VK_COMPARE_OP_ALWAYS;
-            state.back.compareMask = 0;
-            state.back.writeMask   = 0;
-            state.back.reference   = 0;
-        }
-        return std::move(state);
-    };
-    auto vk_depth_stencil_state = to_depth_stencil_state(_create_info.depth_stencil_info);
-
-    // dynamic state
-    Moer::StaticArray<VkDynamicState, 2> states = {
-        VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR
-        //VK_DYNAMIC_STATE_STENCIL_REFERENCE //TODO：用于动态设置模板Ref值
-    };
-    VkPipelineDynamicStateCreateInfo dynamic_state{};
-    dynamic_state.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamic_state.pNext             = nullptr;
-    dynamic_state.flags             = 0;
-    dynamic_state.dynamicStateCount = states.size();
-    dynamic_state.pDynamicStates    = states.data();
-
     InitializeVulkanPipelineLayout(*vk_pso, binding_info);
-    VkGraphicsPipelineCreateInfo pipeline_create_info{};
-    pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipeline_create_info.pNext               = &rendering_create_info;
-    pipeline_create_info.flags               = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-    pipeline_create_info.stageCount          = shader_stages.size();
-    pipeline_create_info.pStages             = shader_stages.data();
-    pipeline_create_info.pVertexInputState   = &vertex_input_state;
-    pipeline_create_info.pInputAssemblyState = &input_assembly_state;
-    pipeline_create_info.pTessellationState  = uses_tessellation ? &tessellation_state : nullptr;
-    pipeline_create_info.pViewportState      = &viewport_state;
-    pipeline_create_info.pRasterizationState = &vk_rasterization_state;
-    pipeline_create_info.pMultisampleState   = &vk_multisample_state;
-    pipeline_create_info.pDepthStencilState  = &vk_depth_stencil_state;
-    pipeline_create_info.pColorBlendState    = &color_blend_state;
-    pipeline_create_info.pDynamicState       = &dynamic_state;
-    pipeline_create_info.layout              = vk_pso->GetPipelineLayout();
-    pipeline_create_info.renderPass          = nullptr;
-    pipeline_create_info.subpass             = 0;
-    pipeline_create_info.basePipelineHandle  = nullptr; // MARK...
-    pipeline_create_info.basePipelineIndex   = -1;
-
-    // vk_pso->CreateGraphicsPipeline(pipeline_create_info);
+    const bool uses_tessellation = FindShaderStage(_shader_info.shaders, ST_HULL) != nullptr;
+    const auto pipeline_create_info =
+        MakeGraphicsPipelineCreateInfo(states, shader_stages, vk_pso->GetPipelineLayout(), uses_tessellation);
     VK_CHECK_RESULT(vkCreateGraphicsPipelines(
         m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline
     ));
 
-    //destroy shader modules
-    for (auto& shader_stage : shader_stages) {
+    for (const auto& shader_stage : shader_stages) {
         vkDestroyShaderModule(m_device, shader_stage.module, nullptr);
     }
     return PipelineHandle{
@@ -2368,8 +2377,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
     }
     const SingleShaderInfo* shader = &shader_info.shaders.front();
     const std::span<const SingleShaderInfo* const> stages(&shader, 1);
-    auto                                           binding_info =
-        BuildVulkanPipelineBindingInfo(stages, shader_info.layout_hash, shader_info.arg_cpp_info);
+    auto binding_info                     = BuildVulkanPipelineBindingInfo(stages, shader_info.arguments);
     binding_info.push_constant_range.size = constant_byte_size;
     auto* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute);
     auto  shader_stages = CreateVulkanShaderStages(m_device, stages);

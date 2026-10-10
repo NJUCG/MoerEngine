@@ -85,52 +85,46 @@ using TConstsant [[deprecated("Use TConstant instead")]] = TConstant<T>;
     MOVE_CONSTRUCTOR(name)                                     \
     NO_COPY_CONSTRUCTOR(name)
 
-#define DEFINE_SHADER_ARGS(...)                                                                           \
-public:                                                                                                   \
-    using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                   \
-    static PipelineConstantLayout GetConstantLayout() { return InnerArgs::GetConstantLayout(); }          \
-    template<typename... T>                                                                               \
-    static ArrayArguments SetArgs(T&&... _args) {                                                         \
-        return std::move(                                                                                 \
-            InnerArgs::SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...)     \
-        );                                                                                                \
-    }                                                                                                     \
-                                                                                                          \
-private:                                                                                                  \
-    template<size_t... idx>                                                                               \
-    static StaticArray<std::string_view, InnerArgs::arg_size> GetHashArray(std::index_sequence<idx...>) { \
-        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetName()...};                        \
-    }                                                                                                     \
-                                                                                                          \
-    template<size_t... idx>                                                                               \
-    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray(std::index_sequence<idx...>) {       \
-        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetHashCode()...};                    \
-    }                                                                                                     \
-                                                                                                          \
-    template<size_t... idx>                                                                               \
-    static StaticArray<Moer::Render::ShaderArgCppInfo, InnerArgs::arg_size>                               \
-    GetArgInfoArray(std::index_sequence<idx...>) {                                                        \
-        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetArgInfo()...};                     \
-    }                                                                                                     \
-                                                                                                          \
-public:                                                                                                   \
-    static StaticArray<std::string_view, InnerArgs::arg_size> GetHashArray() {                            \
-        if constexpr (InnerArgs::arg_size == 0) {                                                         \
-            return {};                                                                                    \
-        }                                                                                                 \
-        return GetHashArray(std::make_index_sequence<InnerArgs::arg_size>());                             \
-    }                                                                                                     \
-    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray() {                                  \
-        if constexpr (InnerArgs::arg_size == 0) {                                                         \
-            return {};                                                                                    \
-        }                                                                                                 \
-        return GetHashCodeArray(std::make_index_sequence<InnerArgs::arg_size>());                         \
-    }                                                                                                     \
-    static StaticArray<Moer::Render::ShaderArgCppInfo, InnerArgs::arg_size> GetArgInfoArray() {           \
-        if constexpr (InnerArgs::arg_size == 0) {                                                         \
-            return {};                                                                                    \
-        }                                                                                                 \
-        return GetArgInfoArray(std::make_index_sequence<InnerArgs::arg_size>());                          \
+#define DEFINE_SHADER_ARGS(...)                                                                          \
+public:                                                                                                  \
+    using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                  \
+    static PipelineConstantLayout GetConstantLayout() {                                                  \
+        return InnerArgs::GetConstantLayout();                                                           \
+    }                                                                                                    \
+    template<typename... T>                                                                              \
+    static ArrayArguments SetArgs(T&&... _args) {                                                        \
+        return std::move(                                                                                \
+            InnerArgs::SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...)    \
+        );                                                                                               \
+    }                                                                                                    \
+                                                                                                         \
+private:                                                                                                 \
+    template<size_t... idx>                                                                              \
+    static StaticArray<Moer::Render::PipelineArgumentInfo, InnerArgs::arg_size>                          \
+    GetArgumentInfoArray(std::index_sequence<idx...>) {                                                  \
+        return {Moer::Render::PipelineArgumentInfo{                                                      \
+            std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetName(),                               \
+            std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetArgInfo()                             \
+        }...};                                                                                           \
+    }                                                                                                    \
+                                                                                                         \
+    template<size_t... idx>                                                                              \
+    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray(std::index_sequence<idx...>) {      \
+        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetHashCode()...};                   \
+    }                                                                                                    \
+                                                                                                         \
+public:                                                                                                  \
+    static StaticArray<Moer::Render::PipelineArgumentInfo, InnerArgs::arg_size> GetArgumentInfoArray() { \
+        if constexpr (InnerArgs::arg_size == 0) {                                                        \
+            return {};                                                                                   \
+        }                                                                                                \
+        return GetArgumentInfoArray(std::make_index_sequence<InnerArgs::arg_size>());                    \
+    }                                                                                                    \
+    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray() {                                 \
+        if constexpr (InnerArgs::arg_size == 0) {                                                        \
+            return {};                                                                                   \
+        }                                                                                                \
+        return GetHashCodeArray(std::make_index_sequence<InnerArgs::arg_size>());                        \
     }
 
 #define StringType(in_name)                                \
@@ -577,7 +571,7 @@ using ParamterBlock [[deprecated("Use ParameterBlock instead")]] = ParameterBloc
 
 template<typename T>
 concept is_shader_pipeline = requires {
-    T::GetHashArray();
+    T::GetArgumentInfoArray();
     T::GetHashCodeArray();
 };
 

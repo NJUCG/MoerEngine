@@ -46,11 +46,11 @@ void RequireRejected(Fn&& fn) {
 }
 
 PipelineShaderInfo MakeInfo() {
-    const auto names = MixedConstants::GetHashArray();
-    const auto types = MixedConstants::GetArgInfoArray();
-    return {.layout_hash = {names.begin(), names.end()},
-            .arg_cpp_info = {types.begin(), types.end()},
-            .constant_layout = MixedConstants::GetConstantLayout()};
+    const auto arguments = MixedConstants::GetArgumentInfoArray();
+    return {
+        .arguments       = {arguments.begin(), arguments.end()},
+        .constant_layout = MixedConstants::GetConstantLayout()
+    };
 }
 
 void CheckPacking() {
@@ -80,7 +80,11 @@ void CheckPacking() {
     Require(std::memcmp(single.constants.data(), &data, sizeof(data)) == 0, "Single-struct constant upload changed");
     ArrayArguments short_data(6, 0, false);
     RequireRejected([&] { MixedConstants::InnerArgs::SetParam<float, MixedConstants::scale>(2.0f, short_data); });
-    PipelineShaderInfo empty{.constant_layout = NoConstants::GetConstantLayout()};
+    const auto         empty_arguments = NoConstants::GetArgumentInfoArray();
+    PipelineShaderInfo empty{
+        .arguments       = {empty_arguments.begin(), empty_arguments.end()},
+        .constant_layout = NoConstants::GetConstantLayout()
+    };
     Require(ValidatePipelineConstants(empty, 128) == 0, "Empty pipeline validation failed");
 }
 
@@ -95,7 +99,7 @@ ShaderCompilerInput MakeInput(EShaderType stage, const char* entry, EShaderPlatf
     input.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint(1));
     input.environment.SetDefine("MOER_PC_BYTE_SIZE", info.constant_layout.byte_size);
     for (const auto& argument : info.constant_layout.arguments) {
-        const auto name = info.layout_hash[argument.argument_index];
+        const auto name = info.arguments[argument.argument_index].name;
         input.environment.SetDefine("MOER_PC_OFFSET_" + std::string(name), argument.byte_offset);
         input.environment.SetDefine("MOER_PC_SIZE_" + std::string(name), argument.byte_size);
     }
@@ -131,7 +135,7 @@ void CheckReflection(EShaderPlatform platform) {
     wrong.constant_layout.arguments.pop_back();
     RequireRejected([&] { ValidatePipelineConstants(wrong, 128); });
     wrong = info;
-    wrong.arg_cpp_info[0].type = SDA_Buffer;
+    wrong.arguments[0].cpp_info.type = SDA_Buffer;
     RequireRejected([&] { ValidatePipelineConstants(wrong, 128); });
 
     const auto input = MakeInput(ST_COMPUTE, "ComputeMain", platform);

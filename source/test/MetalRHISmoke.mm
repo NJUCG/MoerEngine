@@ -543,16 +543,13 @@ void CheckGraphicsBindlessArguments() {
                               .shader_type = EShaderType::ST_FRAGMENT,
                               .shader_param_map = &reflection};
     PipelineShaderInfo shaders{.shaders = {vertex, fragment}};
-    shaders.layout_hash.emplace_back("scalar");
-    shaders.layout_hash.emplace_back("color");
-    shaders.layout_hash.emplace_back("linear");
-    shaders.layout_hash.emplace_back("bdls");
-    shaders.layout_hash.emplace_back("params");
-    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Buffer});
-    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Texture});
-    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Sampler});
-    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_BindlessArray});
-    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Constant});
+    shaders.arguments = {
+        {"scalar", {1, SDA_Buffer}},
+        {"color", {1, SDA_Texture}},
+        {"linear", {1, SDA_Sampler}},
+        {"bdls", {1, SDA_BindlessArray}},
+        {"params", {1, SDA_Constant}}
+    };
     shaders.constant_layout = {{{4, 0, sizeof(uint)}}, sizeof(uint)};
     GfxPsoCreateInfo info(
         RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
@@ -967,10 +964,7 @@ void CheckRHIComputeDispatch() {
         .compute_local_size = Moer::uint3{4, 1, 1}
     };
     PipelineShaderInfo shaders{.shaders = {compute}};
-    shaders.layout_hash.emplace_back("values");
-    shaders.layout_hash.emplace_back("increment");
-    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Buffer});
-    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Constant});
+    shaders.arguments       = {{"values", {1, SDA_Buffer}}, {"increment", {1, SDA_Constant}}};
     shaders.constant_layout = {{{1, 0, sizeof(uint)}}, sizeof(uint)};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
@@ -1025,8 +1019,7 @@ void CheckRHIComputeTextureViews() {
         .compute_local_size = Moer::uint3{1, 1, 1}
     };
     PipelineShaderInfo shaders{.shaders = {compute}};
-    shaders.layout_hash = {"src", "dst"};
-    shaders.arg_cpp_info = {{1, SDA_Texture}, {1, SDA_Texture}};
+    shaders.arguments       = {{"src", {1, SDA_Texture}}, {"dst", {1, SDA_Texture}}};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     TextureRef src = RenderDevice::Get().CreateTexture(
         Extent2D(2, 2), PF_R32_SFLOAT,
@@ -1107,8 +1100,7 @@ void CheckRHIComputeTexelBuffers() {
         .compute_local_size = Moer::uint3{1, 1, 1}
     };
     PipelineShaderInfo shaders{.shaders = {compute}};
-    shaders.layout_hash = {"histogram", "exposure"};
-    shaders.arg_cpp_info = {{1, SDA_Buffer}, {1, SDA_Buffer}};
+    shaders.arguments        = {{"histogram", {1, SDA_Buffer}}, {"exposure", {1, SDA_Buffer}}};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     BufferRef histogram = RenderDevice::Get().CreateBuffer<uint32_t>(
         "Metal histogram texel buffer", 256,
@@ -1200,8 +1192,9 @@ void CheckRHIComputeBindlessTexture() {
         .compute_local_size = Moer::uint3{1, 1, 1}
     };
     PipelineShaderInfo shaders{.shaders = {compute}};
-    shaders.layout_hash = {"output", "bdls", "params"};
-    shaders.arg_cpp_info = {{1, SDA_Buffer}, {1, SDA_BindlessArray}, {1, SDA_Constant}};
+    shaders.arguments = {
+        {"output", {1, SDA_Buffer}}, {"bdls", {1, SDA_BindlessArray}}, {"params", {1, SDA_Constant}}
+    };
     shaders.constant_layout = {{{2, 0, sizeof(uint)}}, sizeof(uint)};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     BufferRef output = RenderDevice::Get().CreateBuffer<Moer::float4>(
