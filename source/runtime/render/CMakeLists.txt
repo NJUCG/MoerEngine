@@ -108,6 +108,7 @@ if (APPLE)
     target_link_libraries(MetalRHISmoke PRIVATE Moer::Render glfw
         "-framework Metal" "-framework QuartzCore" "-framework AppKit")
     target_compile_options(MetalRHISmoke PRIVATE -fobjc-arc)
+    target_compile_definitions(MetalRHISmoke PRIVATE MOER_TEST_WORKSPACE="${BINARY_ROOT_DIR}/bin/$<CONFIG>")
 endif()
 
 if (WIN32)

@@ -24,7 +24,7 @@ class GeometryPassPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(GeometryPassPipeline);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(GeometryPassBindlessParam, param);
     DEFINE_SHADER_ARGS(bdls, param);
 
     MUTATION_BOOL(SHADOW_DEPTH_PASS);

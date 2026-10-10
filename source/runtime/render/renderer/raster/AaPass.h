@@ -16,35 +16,35 @@ namespace Moer::Render::Raster {
 class SmaaEdgeDetectionPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SmaaEdgeDetectionPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(SmaaSharedPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(SmaaSharedPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
 class SmaaBlendingWeightPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SmaaBlendingWeightPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(SmaaSharedPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(SmaaSharedPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
 class SmaaNeighborhoodBlendingPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SmaaNeighborhoodBlendingPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(SmaaSharedPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(SmaaSharedPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
 class SmaaT2xNeighborhoodBlendingPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SmaaT2xNeighborhoodBlendingPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(SmaaSharedPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(SmaaSharedPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
 class SmaaT2xResolvePipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SmaaT2xResolvePipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(SmaaSharedPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(SmaaSharedPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
@@ -52,7 +52,7 @@ public:
 class FxaaPrecomputePipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(FxaaPrecomputePipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(FxaaPrecomputePipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(FxaaPrecomputePipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
@@ -60,7 +60,7 @@ public:
 class FxaaPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(FxaaPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(FxaaPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(FxaaPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };

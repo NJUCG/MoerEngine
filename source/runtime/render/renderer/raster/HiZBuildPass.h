@@ -13,7 +13,7 @@ class HiZBuildPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(HiZBuildPipeline);
 
-    DEFINE_SHADER_CONSTANT_STRUCT(HiZBuildParam, param);
+    DEFINE_SHADER_CONSTANT(HiZBuildParam, param);
     DEFINE_SHADER_TEX(src_texture);
     DEFINE_SHADER_TEX(dst_texture);
 

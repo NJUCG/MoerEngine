@@ -650,7 +650,6 @@ void VulkanCmdList::UploadDescriptors(const PipelineHandle& _pso_handle) {}
 
 void VulkanCmdList::UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data) {
     auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
-    // auto  binding_info               = _pso_handle.binding_infos[_pso_handle.constant_idx];
     // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
 
     // vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
@@ -941,6 +940,9 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
     }
 
     if (push_constants_info.size > 0) {
+        if (arguments.constants.size() * sizeof(uint) < push_constants_info.size) {
+            throw std::invalid_argument("Push constant upload exceeds the source data buffer");
+        }
         vkCmdPushConstants(
             command_buffer,
             push_constants_info.layout,

@@ -11,6 +11,10 @@
 #include "rhi/RHIExecutor.h"
 #include "rhi/RHIImpl.h"
 #include "rhi/metal/MetalDevice.h"
+#include "config/ConfigManager.h"
+#include "shader/ShaderCompiler.h"
+#include "shader/ShaderResourceManager.h"
+#include "shaderheaders/shared/test/ShaderConstants.h"
 #include "taskgraph/TaskSystem.h"
 
 #include <algorithm>
@@ -26,6 +30,87 @@
 #include <vector>
 
 namespace {
+
+using namespace Moer;
+using namespace Moer::Render;
+
+class MultiConstantCompute : public Moer::Render::ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(MultiConstantCompute);
+    DEFINE_SHADER_BUFFER(values);
+    DEFINE_SHADER_CONSTANTS(SHADER_TEST_CONSTANTS)
+    DEFINE_SHADER_ARGS(scale, values, data, tint, transform, bias);
+};
+
+class MultiConstantGraphics : public Moer::Render::RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(MultiConstantGraphics);
+    DEFINE_SHADER_CONSTANTS(SHADER_TEST_CONSTANTS)
+    DEFINE_SHADER_ARGS(scale, data, tint, transform, bias);
+};
+
+void CheckMultipleConstants() {
+    using namespace Moer;
+    using namespace Moer::Render;
+    auto compute = ShaderManager::Get().Compute<MultiConstantCompute>(
+        "test/ShaderConstants.hlsl", "ComputeMain");
+    BufferRef output = RenderDevice::Get().CreateBuffer<float4>(
+        "Multiple constant readback", 1,
+        EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNORDERED_ACCESS);
+    const auto matrix = float4x4::Identity();
+    const float3 tint{0.25f, 0.5f, 0.75f};
+    const ConstantTestData data{3, 4};
+    for (uint bias : {5u, 17u}) {
+        CommandList commands(EQueueType::Graphics);
+        commands.Compute(compute, 2.0f, output, data, tint, matrix, bias).Dispatch(1);
+        RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit());
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        id<MTLBuffer> native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(output.Get());
+        const float expected[] = {float(5 + bias), 0.25f, 0.75f, 5.0f};
+        if (std::memcmp(native.contents, expected, sizeof(expected)) != 0) {
+            throw std::runtime_error("Multiple compute constant arguments returned incorrect values");
+        }
+    }
+
+    GfxPsoCreateInfo info(
+        RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
+        {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)});
+    auto graphics = ShaderManager::Get().Raster()
+        .Vertex("test/ShaderConstants.hlsl", "VertexMain")
+        .Pixel("test/ShaderConstantsSubset.hlsl", "PixelMain")
+        .Build<MultiConstantGraphics>(std::move(info));
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC);
+    Array<MeshDrawData> meshes;
+    meshes.emplace_back().EmplaceDraw(3, 0, 0);
+    CommandList draw(EQueueType::Graphics);
+    draw.Gfx(graphics, 1.0f, ConstantTestData{0, 0}, tint, matrix, 1u).Draw(
+        Rect2D(0, 0, 8, 8), std::move(meshes),
+        ColorAttachment{.target = texture.Get(), .action = AC_CLEAR_STORE,
+                        .clear_color = {0, 0, 0, 1}});
+    RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get());
+    id<MTLBuffer> readback = [native.device newBufferWithLength:256 * 8
+                                                     options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> command = [[native.device newCommandQueue] commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:native sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
+                toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+       destinationBytesPerImage:256 * 8];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    const auto* pixel = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        std::abs(int(pixel[0]) - 64) > 1 || std::abs(int(pixel[1]) - 128) > 1 ||
+        std::abs(int(pixel[2]) - 191) > 1 || pixel[3] != 255) {
+        throw std::runtime_error("Multiple graphics constant arguments returned an incorrect pixel");
+    }
+    std::cout << "multiple constants: compiled HLSL compute/graphics GPU readback success" << std::endl;
+}
 
 class SmokeWindowSource final : public Moer::Render::WindowSurfaceSource {
 public:
@@ -468,6 +553,7 @@ void CheckGraphicsBindlessArguments() {
     shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Sampler});
     shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_BindlessArray});
     shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Constant});
+    shaders.constant_layout = {{{4, 0, sizeof(uint)}}, sizeof(uint)};
     GfxPsoCreateInfo info(
         RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
         {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)}
@@ -885,6 +971,7 @@ void CheckRHIComputeDispatch() {
     shaders.layout_hash.emplace_back("increment");
     shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Buffer});
     shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Constant});
+    shaders.constant_layout = {{{1, 0, sizeof(uint)}}, sizeof(uint)};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
         "Metal compute dispatch smoke", BufferInfo{
@@ -1115,6 +1202,7 @@ void CheckRHIComputeBindlessTexture() {
     PipelineShaderInfo shaders{.shaders = {compute}};
     shaders.layout_hash = {"output", "bdls", "params"};
     shaders.arg_cpp_info = {{1, SDA_Buffer}, {1, SDA_BindlessArray}, {1, SDA_Constant}};
+    shaders.constant_layout = {{{2, 0, sizeof(uint)}}, sizeof(uint)};
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
     BufferRef output = RenderDevice::Get().CreateBuffer<Moer::float4>(
         "Metal compute bindless output", 1,
@@ -1919,6 +2007,8 @@ int main(int argc, char** argv) {
             std::cout << "smoke window id: " << native_window.windowNumber << std::endl;
 
             using namespace Moer::Render;
+            Moer::ConfigManager::GetInstance().Init(MOER_TEST_WORKSPACE);
+            ShaderCompiler::Init();
             Moer::TaskSystem::Init();
             task_system_initialized = true;
             RenderDevice::Init(DeviceInitInfo{.rhi_type = ERHIType::Metal, .name = "MetalRHISmoke"});
@@ -1955,6 +2045,7 @@ int main(int argc, char** argv) {
             CheckDepthGraphicsDraw(PF_D32_SFLOAT_S8_UINT, true);
             CheckComputePipeline();
             CheckRHIComputeDispatch();
+            CheckMultipleConstants();
             CheckRHIComputeTextureViews();
             CheckRHIComputeTexelBuffers();
             CheckRHIComputeBindlessTexture();

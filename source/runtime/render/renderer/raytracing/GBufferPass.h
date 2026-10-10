@@ -13,7 +13,7 @@ class RaytracingGBufferPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(RaytracingGBufferPipeline);
 
-    DEFINE_SHADER_CONSTANT_STRUCT(GBufferPassParams, param);
+    DEFINE_SHADER_CONSTANT(GBufferPassParams, param);
     DEFINE_SHADER_BUFFER(gbuffer_constants);
     DEFINE_SHADER_TEX(gbuffer_view_depth);
     DEFINE_SHADER_TEX(gbuffer_diffuse_albedo);

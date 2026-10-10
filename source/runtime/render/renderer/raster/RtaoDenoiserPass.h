@@ -16,7 +16,7 @@ namespace Moer::Render::Raster {
 class RtaoDenoiserPassPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(RtaoDenoiserPassPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(RtaoDenoiserPassBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(RtaoDenoiserPassBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
@@ -24,7 +24,7 @@ public:
 class CopyPassPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(CopyPassPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(CopyPassBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(CopyPassBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };

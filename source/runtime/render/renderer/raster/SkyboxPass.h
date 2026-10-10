@@ -13,7 +13,7 @@ namespace Moer::Render::Raster {
 class SkyboxPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SkyboxPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(SkyboxPassBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(SkyboxPassBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };

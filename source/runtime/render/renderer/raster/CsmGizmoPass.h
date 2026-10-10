@@ -18,7 +18,7 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(CsmGizmoPipeline);
 
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(CsmGizmoParam, param);
+    DEFINE_SHADER_CONSTANT(CsmGizmoParam, param);
     DEFINE_SHADER_ARGS(bdls, param);
 };
 

@@ -11,22 +11,23 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::LightingData> lighting_data;
-[[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
+#include "shared/raster/lighting_pass/Constants.h"
+DEFINE_SHADER_CONSTANTS(LIGHTING_PASS_CONSTANTS)
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: GBuffer
-    float3 albedo = TextureHandle(param.gbuffer_base_color).Sample2D<float3>(in_uv);
-    float3 metal_rough_ao = TextureHandle(param.gbuffer_metal_rough_ao).Sample2D<float3>(in_uv);
-    float  depth = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
+    float3 albedo = TextureHandle(moer_constants.param.gbuffer_base_color).Sample2D<float3>(in_uv);
+    float3 metal_rough_ao = TextureHandle(moer_constants.param.gbuffer_metal_rough_ao).Sample2D<float3>(in_uv);
+    float  depth = TextureHandle(moer_constants.param.gbuffer_depth).Sample2D<float>(in_uv);
     float3 N = normalize(
-        Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv))
+        Raster::UnpackNormal(TextureHandle(moer_constants.param.gbuffer_normal).Sample2D<float3>(in_uv))
     ); // 因为法线mipmap不满足线性关系，所以这里需要normalize
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.clip2world);
     float metallic = metal_rough_ao.x;
     float roughness = metal_rough_ao.y;
 
     // - Lights
-    ArrayBuffer light_buf = ArrayBuffer(param.light_buf_hdl);
+    ArrayBuffer light_buf = ArrayBuffer(moer_constants.param.light_buf_hdl);
 
     // MARK: Skybox(Deprecated)
     if (depth == 0.0) {
@@ -54,7 +55,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     );
 
     // - Shadow
-    float shadow = TextureHandle(param.shadow_mask_handle).Sample2D<float>(in_uv);
+    float shadow = TextureHandle(moer_constants.param.shadow_mask_handle).Sample2D<float>(in_uv);
 
     // MARK: Shading
     LightContext light_ctx;
@@ -71,8 +72,8 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 probe_gi = ProbeGIEvaluateDiffuse(lighting_data, position, N, brdf_ctx.albedo, metallic, shadow);
     color += probe_gi;
 
-    if (param.enable_extra_ambient) {
-        color += param.extra_ambient_intensity * param.extra_ambient_color * brdf_ctx.albedo;
+    if (moer_constants.param.enable_extra_ambient) {
+        color += moer_constants.extra_ambient_intensity * moer_constants.param.extra_ambient_color * brdf_ctx.albedo;
     }
 
     color = max(color, 0.0);

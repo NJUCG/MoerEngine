@@ -778,21 +778,32 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
         }
 
         for (auto& resource : resources.push_constant_buffers) {
-
             GET_RESOURCE_DEFAULT_INFOS(resource);
-            auto ranges = comp.get_active_buffer_ranges(resource.id);
-            auto block  = comp.get_decoration(resource.base_type_id, spv::DecorationBufferBlock);
-
-            uint  offset                     = 0;
-            uint  constant_size              = comp.get_declared_struct_size(type);
-            auto& param                      = reflect_map[name];
-            param.spirv.resources.stage_bits = uint(ToPipelineStageFlag(comp.get_execution_model()));
-            ReflectParamInfo::Constant constant{};
-            constant.size               = constant_size;
-            constant.padded_size        = constant_size;
-            constant.offset             = offset;
-            constant.custom_flag.active = is_active;
-            param.spirv.resources.data  = constant;
+            const auto record_constant = [&](const std::string& argument_name, uint offset, uint size, bool active) {
+                if (reflect_map.contains(argument_name)) {
+                    throw std::invalid_argument("Duplicate reflected shader parameter: " + argument_name);
+                }
+                auto& param = reflect_map[argument_name];
+                param.spirv.resources.stage_bits = uint(ToPipelineStageFlag(comp.get_execution_model()));
+                ReflectParamInfo::Constant constant{};
+                constant.size = constant.padded_size = size;
+                constant.offset = offset;
+                constant.custom_flag.active = active;
+                param.spirv.resources.data = constant;
+            };
+            if (name == ReflectParamInfo::constants_name) {
+                const auto ranges = comp.get_active_buffer_ranges(resource.id);
+                for (uint member = 0; member < type.member_types.size(); ++member) {
+                    const auto member_name = comp.get_member_name(type.self, member);
+                    const bool active = is_active && std::any_of(ranges.begin(), ranges.end(),
+                        [member](const auto& range) { return range.index == member; });
+                    record_constant(member_name, comp.type_struct_member_offset(type, member),
+                                    static_cast<uint>(comp.get_declared_struct_member_size(type, member)), active);
+                }
+            } else {
+                // Legacy single-argument shaders keep their block name and start at byte zero.
+                record_constant(name, 0, static_cast<uint>(comp.get_declared_struct_size(type)), is_active);
+            }
         }
 
         for (auto& resource : resources.acceleration_structures) {

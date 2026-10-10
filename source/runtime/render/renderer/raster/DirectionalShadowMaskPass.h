@@ -14,7 +14,7 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(DirectionalShadowMaskPassPipeline);
     DEFINE_SHADER_BUFFER(lighting_data);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(DirectionalShadowMaskPassBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(DirectionalShadowMaskPassBindlessParam, param);
     DEFINE_SHADER_ARGS(lighting_data, bdls, param);
 };
 

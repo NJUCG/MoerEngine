@@ -19,7 +19,7 @@ struct ComponentShuffleShader : public ComputePipeline {
 
     DEFINE_COMPUTE_PIPELINE_CLASS(ComponentShuffleShader);
 
-    DEFINE_SHADER_CONSTANT_STRUCT(Arg, args);
+    DEFINE_SHADER_CONSTANT(Arg, args);
     DEFINE_SHADER_BUFFER(indices);
     DEFINE_SHADER_BUFFER(src);
     DEFINE_SHADER_BUFFER(dst);

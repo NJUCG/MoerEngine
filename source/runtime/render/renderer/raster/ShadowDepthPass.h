@@ -21,7 +21,7 @@ class ShadowDepthPassPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(ShadowDepthPassPipeline);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(GeometryPassBindlessParam, param);
     DEFINE_SHADER_ARGS(bdls, param);
 
     MUTATION_BOOL(SHADOW_DEPTH_PASS);
@@ -33,7 +33,7 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(PointShadowMultiviewPipeline);
     DEFINE_SHADER_BUFFER(point_shadow_view_matrices);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(GeometryPassBindlessParam, param);
     DEFINE_SHADER_ARGS(point_shadow_view_matrices, bdls, param);
 
     MUTATION_BOOL(SHADOW_DEPTH_PASS);

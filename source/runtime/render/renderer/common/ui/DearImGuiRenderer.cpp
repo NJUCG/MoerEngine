@@ -104,7 +104,7 @@ public:
 
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_BUFFER(arg_buffer);
-    DEFINE_SHADER_CONSTANT_STRUCT(Constant, param);
+    DEFINE_SHADER_CONSTANT(Constant, param);
 
     DEFINE_SHADER_ARGS(arg_buffer, bdls, param);
 };

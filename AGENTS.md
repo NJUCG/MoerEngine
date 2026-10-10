@@ -64,7 +64,7 @@ source/
           VulkanDescriptor.cpp/h #    Descriptor pool & set management
         d3d12/                   #   D3D12 backend (partial)
       shader/
-        ShaderPipeline.h         # ★ Pipeline class macros (DEFINE_SHADER_CONSTANT_STRUCT, etc.)
+        ShaderPipeline.h         # ★ Pipeline class macros (DEFINE_SHADER_CONSTANT, etc.)
         ShaderCompiler.cpp/h     #   DXC invocation, SPIR-V generation
         ShaderManager.cpp        #   PSO caching, hot-reload
       shaderheaders/shared/      # ★ C++/HLSL SHARED HEADERS (dual-language via #ifdef __cplusplus)
@@ -132,7 +132,7 @@ Files in `shaderheaders/shared/` use `#ifdef __cplusplus` guards:
 class MyPipeline : public RasterPipeline {
     DEFINE_RASTER_PIPELINE_CLASS(MyPipeline);
     DEFINE_SHADER_BUFFER(lighting_data);             // [[vk::binding(N, S)]] ConstantBuffer / StructuredBuffer
-    DEFINE_SHADER_CONSTANT_STRUCT(MyParam, param);   // [[vk::push_constant]]
+    DEFINE_SHADER_CONSTANT(MyParam, param);          // [[vk::push_constant]]
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);              // Bindless heap
     DEFINE_SHADER_ARGS(lighting_data, bdls, param);  // Arg order must match Gfx() call order
 };

@@ -10,9 +10,14 @@
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
 #include "shader/ShaderParameterMacros.h"
+#include "shaderheaders/shared/ShaderConstants.h"
+#include <array>
 #include <cassert>
+#include <cstddef>
+#include <cstring>
 #include <limits>
 #include <string_view>
+#include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <typeindex>
@@ -56,7 +61,7 @@ using TConstsant [[deprecated("Use TConstant instead")]] = TConstant<T>;
 #define DEFINE_SHADER_BUFFER_ARRAY(name, max_num) \
     StringType(name) using name = ShaderArg<BufferArg<max_num>, GetStringType(name)>
 
-#define DEFINE_SHADER_CONSTANT_STRUCT(type, name) \
+#define DEFINE_SHADER_CONSTANT(type, name) \
     StringType(name) using name = ShaderArg<TConstant<type>, GetStringType(name)>
 
 #define DEFINE_SHADER_SAMPLER(name) StringType(name) using name = ShaderArg<SamplerArg, GetStringType(name)>
@@ -83,6 +88,7 @@ using TConstsant [[deprecated("Use TConstant instead")]] = TConstant<T>;
 #define DEFINE_SHADER_ARGS(...)                                                                           \
 public:                                                                                                   \
     using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                   \
+    static PipelineConstantLayout GetConstantLayout() { return InnerArgs::GetConstantLayout(); }          \
     template<typename... T>                                                                               \
     static ArrayArguments SetArgs(T&&... _args) {                                                         \
         return std::move(                                                                                 \
@@ -306,13 +312,64 @@ struct ShaderArgs {
     struct Index<T, std::tuple<U, Types...>> {
         static const std::size_t value = 1 + Index<T, std::tuple<Types...>>::value;
     };
-    template<typename T>
-    struct IsConstantType {
-        static constexpr bool value = !std::is_same_v<typename T::type::type, NonConstant>;
+    static constexpr size_t constant_count = (0 + ... + (Args::arg_type == SDA_Constant ? 1 : 0));
+    struct StaticConstantLayout {
+        std::array<ShaderConstantArgumentLayout, constant_count> arguments{};
+        uint byte_size = 0;
     };
 
+    static consteval StaticConstantLayout MakeConstantLayout() {
+        StaticConstantLayout layout;
+        uint argument_index = 0;
+        size_t constant_index = 0;
+        const auto append = [&]<typename TArg>() {
+            if constexpr (TArg::arg_type == SDA_Constant) {
+                using Payload = typename TArg::type::type;
+                // Moer's vectors have user-defined copy constructors, but their shared
+                // C++/HLSL representation is still a plain sequence of numeric values.
+                static_assert(std::is_standard_layout_v<Payload> && std::is_trivially_destructible_v<Payload>,
+                              "Shader constants must have a plain, layout-compatible representation");
+                static_assert(!std::is_pointer_v<Payload> && !std::is_same_v<Payload, bool>,
+                              "Use layout-compatible shader values; use uint for booleans");
+                static_assert(std::is_empty_v<Payload> || sizeof(Payload) % sizeof(uint) == 0,
+                              "Shader constant payloads must contain whole 32-bit words");
+                static_assert(!std::is_arithmetic_v<Payload> || sizeof(Payload) == sizeof(uint),
+                              "Only 32-bit scalar shader constants are supported");
+                // Empty legacy constant structs carry no shader data.
+                constexpr uint byte_size = std::is_empty_v<Payload> ? 0 : sizeof(Payload);
+                constexpr uint alignment = std::is_arithmetic_v<Payload> || byte_size == 0 ? 4 : 16;
+                const uint64 offset = (uint64(layout.byte_size) + alignment - 1) & ~uint64(alignment - 1);
+                if (offset + byte_size > std::numeric_limits<uint>::max()) {
+                    throw "Shader constant layout is too large";
+                }
+                layout.arguments[constant_index++] = {
+                    argument_index, static_cast<uint>(offset), byte_size
+                };
+                layout.byte_size = static_cast<uint>(offset + byte_size);
+            }
+            ++argument_index;
+        };
+        (append.template operator()<Args>(), ...);
+        return layout;
+    }
+
+    static constexpr auto constant_layout = MakeConstantLayout();
+
+    static PipelineConstantLayout GetConstantLayout() {
+        return {Array<ShaderConstantArgumentLayout>(constant_layout.arguments.begin(),
+                                                   constant_layout.arguments.end()),
+                constant_layout.byte_size};
+    }
+
     static constexpr uint32 GetConstantSize() {
-        return (0 + ... + (IsConstantType<Args>::value ? sizeof(typename Args::type) : 0)) / sizeof(uint);
+        return constant_layout.byte_size / sizeof(uint);
+    }
+
+    static constexpr ShaderConstantArgumentLayout GetConstantArgumentLayout(uint argument_index) {
+        for (const auto& argument : constant_layout.arguments) {
+            if (argument.argument_index == argument_index) return argument;
+        }
+        throw "Shader constant argument was not found";
     }
 
     static constexpr bool IsUsingBdls() {
@@ -372,13 +429,20 @@ struct ShaderArgs {
         } else if constexpr (std::is_same_v<CppArgType, TLASArg>) {
             _arg_setter[index] = std::forward<T>(_t);
         } else {
-            assert(_arg_setter.constants.size() == sizeof(T) / sizeof(uint) && "constant size mismatch");
-            std::memcpy(_arg_setter.constants.data(), &_t, sizeof(T));
+            constexpr auto layout = GetConstantArgumentLayout(index);
+            if constexpr (layout.byte_size == 0) return;
+            static_assert(std::is_empty_v<ValueType> || sizeof(ValueType) == layout.byte_size);
+            if (_arg_setter.constants.size() * sizeof(uint) < uint64(layout.byte_offset) + layout.byte_size) {
+                throw std::invalid_argument("Shader constant argument exceeds the packed data buffer");
+            }
+            auto* data = reinterpret_cast<std::byte*>(_arg_setter.constants.data());
+            std::memcpy(data + layout.byte_offset, &_t, layout.byte_size);
         }
     }
 
     template<typename... T, std::size_t... Is>
     static ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
+        static_assert(sizeof...(T) == arg_size, "Shader argument count does not match DEFINE_SHADER_ARGS");
         ArrayArguments arg_setter(arg_size, GetConstantSize(), IsUsingBdls());
         (..., SetParam<T, std::tuple_element_t<Is, tuple_helper>>((std::forward<T>(_args)), arg_setter));
         return arg_setter;
@@ -574,7 +638,7 @@ public:
     DEFINE_SHADER_BUFFER(SpecularBuffer);
     DEFINE_SHADER_TEX(DiffuseTexture);
     DEFINE_SHADER_TEX(SpecularTexture);
-    DEFINE_SHADER_CONSTANT_STRUCT(Constant, constant);
+    DEFINE_SHADER_CONSTANT(Constant, constant);
 
     DEFINE_SHADER_ARGS(
         PositionBuffer,

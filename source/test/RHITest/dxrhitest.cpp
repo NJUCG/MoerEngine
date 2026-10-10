@@ -58,7 +58,7 @@ class TestComputePipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(TestComputePipeline);
 
-    DEFINE_SHADER_CONSTANT_STRUCT(S0, cb0);
+    DEFINE_SHADER_CONSTANT(S0, cb0);
     //DEFINE_SHADER_BUFFER(cb0);
     DEFINE_SHADER_BUFFER(cb1);
     DEFINE_SHADER_BUFFER(sb0);

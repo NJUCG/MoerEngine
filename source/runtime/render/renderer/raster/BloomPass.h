@@ -15,7 +15,7 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(BloomPassPrefilterPipeline);
     DEFINE_SHADER_TEX(input_tex);
     DEFINE_SHADER_SAMPLER(linear_sampler);
-    DEFINE_SHADER_CONSTANT_STRUCT(BloomPrefilterParam, param);
+    DEFINE_SHADER_CONSTANT(BloomPrefilterParam, param);
     DEFINE_SHADER_ARGS(input_tex, linear_sampler, param);
 };
 
@@ -25,7 +25,7 @@ public:
     DEFINE_SHADER_TEX(upsample_tex);
     DEFINE_SHADER_TEX(downsample_tex);
     DEFINE_SHADER_SAMPLER(linear_sampler);
-    DEFINE_SHADER_CONSTANT_STRUCT(BloomUpsampleParam, param);
+    DEFINE_SHADER_CONSTANT(BloomUpsampleParam, param);
     DEFINE_SHADER_ARGS(upsample_tex, downsample_tex, linear_sampler, param);
 };
 
@@ -34,7 +34,7 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(BloomPassDownSamplePipeline);
     DEFINE_SHADER_TEX(src_tex);
     DEFINE_SHADER_SAMPLER(linear_sampler);
-    DEFINE_SHADER_CONSTANT_STRUCT(BloomDownsampleParam, param);
+    DEFINE_SHADER_CONSTANT(BloomDownsampleParam, param);
     DEFINE_SHADER_ARGS(src_tex, linear_sampler, param);
 };
 
@@ -43,7 +43,7 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(BloomApplyPipeline);
     DEFINE_SHADER_TEX(bloom_tex);
     DEFINE_SHADER_SAMPLER(linear_sampler);
-    DEFINE_SHADER_CONSTANT_STRUCT(BloomApplyParam, param);
+    DEFINE_SHADER_CONSTANT(BloomApplyParam, param);
     DEFINE_SHADER_ARGS(bloom_tex, linear_sampler, param);
 };
 

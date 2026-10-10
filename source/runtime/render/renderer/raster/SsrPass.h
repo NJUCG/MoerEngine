@@ -15,7 +15,7 @@ namespace Moer::Render::Raster {
 class SsrPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SsrPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(SsrPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(SsrPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };

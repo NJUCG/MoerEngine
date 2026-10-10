@@ -17,7 +17,7 @@ class TonemappingHistogramPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(TonemappingHistogramPipeline);
 
-    DEFINE_SHADER_CONSTANT_STRUCT(TonemappingPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(TonemappingPipelineBindlessParam, param);
     DEFINE_SHADER_TEX(input_image);  // input
     DEFINE_SHADER_BUFFER(histogram); // output
 
@@ -28,7 +28,7 @@ class TonemappingExposurePipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(TonemappingExposurePipeline);
 
-    DEFINE_SHADER_CONSTANT_STRUCT(TonemappingPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(TonemappingPipelineBindlessParam, param);
     DEFINE_SHADER_BUFFER(histogram); // input
     DEFINE_SHADER_BUFFER(exposure);  // output
 
@@ -39,7 +39,7 @@ class TonemappingPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(TonemappingPipeline);
 
-    DEFINE_SHADER_CONSTANT_STRUCT(TonemappingPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(TonemappingPipelineBindlessParam, param);
     DEFINE_SHADER_TEX(input_image); // input
     DEFINE_SHADER_BUFFER(exposure); // input
     DEFINE_SHADER_BUFFER(histogram);

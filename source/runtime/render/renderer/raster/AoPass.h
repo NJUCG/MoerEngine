@@ -15,7 +15,7 @@ namespace Moer::Render::Raster {
 class AoPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(AoPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(AoPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(AoPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
@@ -24,7 +24,7 @@ class RtaoPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(RtaoPipeline);
 
-    DEFINE_SHADER_CONSTANT_STRUCT(RtaoPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(RtaoPipelineBindlessParam, param);
     DEFINE_SHADER_TEX(rw_ao_only);
     DEFINE_SHADER_TEX(rw_camera_mv);
     DEFINE_SHADER_TLAS(tlas);
@@ -40,7 +40,7 @@ MUTATION_SET(RtaoSampleModeMacros, RtaoPipeline::RTAO_COSINE_WEIGHTED);
 class SsdoPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SsdoPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(SsdoPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(SsdoPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };
@@ -48,7 +48,7 @@ public:
 class AoCompositePipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(AoCompositePipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(AoCompositeParam, param);
+    DEFINE_SHADER_CONSTANT(AoCompositeParam, param);
     DEFINE_SHADER_TEX(rw_output);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(param, rw_output, bdls);

@@ -199,6 +199,9 @@ D3D12Device::~D3D12Device() {
 }
 
 PipelineHandle D3D12Device::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
+    if (_shaders.constant_layout.arguments.size() > 1) {
+        throw std::invalid_argument("D3D12 multiple logical constant arguments are not supported");
+    }
     return PipelineHandle();
 }
 
@@ -460,6 +463,9 @@ void D3D12PipelineState::BuildRootSignature(const PipelineLayout& _layout) {
 }
 
 PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
+    if (_shaders.constant_layout.arguments.size() > 1) {
+        throw std::invalid_argument("D3D12 multiple logical constant arguments are not supported");
+    }
     if (const auto error = ValidateComputeShaderStages(_shaders.shaders); !error.empty()) {
         LOG_ERROR("Cannot create D3D12 compute pipeline: {}", error);
         return {};

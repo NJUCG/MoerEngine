@@ -21,7 +21,7 @@ public:
     DEFINE_SHADER_BUFFER(probe_volume_data);
     DEFINE_SHADER_BUFFER(probe_brick_data);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
+    DEFINE_SHADER_CONSTANT(ProbeUpdateParam, param);
     DEFINE_SHADER_ARGS(
         rw_probe_data,
         rw_visibility_atlas,
@@ -49,7 +49,7 @@ public:
     DEFINE_SHADER_BUFFER(probe_volume_data);
     DEFINE_SHADER_BUFFER(probe_brick_data);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
+    DEFINE_SHADER_CONSTANT(ProbeUpdateParam, param);
     DEFINE_SHADER_ARGS(
         rw_probe_data,
         rw_visibility_atlas,

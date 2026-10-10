@@ -11,6 +11,7 @@
 #include "shader/ShaderResourceManager.h"
 #include <fstream>
 #include <ostream>
+#include <stdexcept>
 #include <string_view>
 
 namespace Moer::Render {
@@ -19,7 +20,22 @@ using std::move;
 namespace {
 
 constexpr uint32_t k_shader_cache_magic          = 0x4D534443; // "MSDC"
-constexpr uint32_t k_shader_cache_format_version = 2;
+constexpr uint32_t k_shader_cache_format_version = 3;
+
+void ConfigureShaderConstantLayout(ShaderAsset& asset, const PipelineShaderInfo& shader_info,
+                                  EShaderPlatform platform) {
+    const auto& layout = shader_info.constant_layout;
+    if (platform == SP_WIN_D3D_SM6 && layout.arguments.size() > 1) {
+        throw std::invalid_argument("D3D12 does not yet support multiple logical constant arguments");
+    }
+    asset.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint32_t(1));
+    asset.environment.SetDefine("MOER_PC_BYTE_SIZE", layout.byte_size);
+    for (const auto& argument : layout.arguments) {
+        const auto name = shader_info.layout_hash.at(argument.argument_index);
+        asset.environment.SetDefine("MOER_PC_OFFSET_" + std::string(name), argument.byte_offset);
+        asset.environment.SetDefine("MOER_PC_SIZE_" + std::string(name), argument.byte_size);
+    }
+}
 
 std::string_view GetShaderTypeName(EShaderType shader_type) {
     switch (shader_type) {
@@ -352,7 +368,8 @@ RTConstructor ShaderManager::Raytracing() {
 PipelineHandle RasterPipelineConstructor::CreatePipeline(
     GfxPsoCreateInfo&&        pso_info,
     Array<std::string_view>&& argument_names,
-    Array<ShaderArgCppInfo>&& argument_info
+    Array<ShaderArgCppInfo>&& argument_info,
+    PipelineConstantLayout&& constant_layout
 ) {
     const auto is_empty = [](const ShaderAssetOrCache& source) {
         if (const auto* shader = std::get_if<Shader*>(&source)) {
@@ -375,7 +392,8 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
         {ST_FRAGMENT, &pixel_path}
     };
     PipelineShaderInfo pipeline_shader_info{
-        .layout_hash = std::move(argument_names), .arg_cpp_info = std::move(argument_info)
+        .layout_hash = std::move(argument_names), .arg_cpp_info = std::move(argument_info),
+        .constant_layout = std::move(constant_layout)
     };
     for (const auto& stage : k_stage_sources) {
         if (!is_empty(*stage.source)) {
@@ -393,6 +411,7 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
             return **shader;
         }
         ShaderAsset asset = std::get<ShaderAsset>(source);
+        ConfigureShaderConstantLayout(asset, pipeline_shader_info, target_info);
         if (uses_tessellation && target_info == SP_METAL_MSL && shader_type == ST_VERTEX) {
             asset.environment.SetDefine("MOER_METAL_TESS_VS_CAPTURE", true);
             asset.environment.SetDefine("MOER_METAL_TESS_VS_GRID_BUFFER", true);
@@ -427,9 +446,13 @@ ComputeConstructor::ComputeConstructor(RenderDevice& _device, ShaderAsset&& _ass
 
 PipelineShaderInfo ComputeConstructor::CompileShaderInfo(
     Array<std::string_view>&& _hash_values,
-    Array<ShaderArgCppInfo>&& _arg_type_values
+    Array<ShaderArgCppInfo>&& _arg_type_values,
+    PipelineConstantLayout&& constant_layout
 ) {
-
+    PipelineShaderInfo sd_info{
+        .layout_hash = std::move(_hash_values), .arg_cpp_info = std::move(_arg_type_values),
+        .constant_layout = std::move(constant_layout)
+    };
     auto target_info       = device.GetShaderPlatform();
     auto get_shader_output = [&](const ShaderAssetOrCache& _info, EShaderType _type) -> Shader& {
         if (std::holds_alternative<ShaderAsset>(_info) == false) {
@@ -439,6 +462,7 @@ PipelineShaderInfo ComputeConstructor::CompileShaderInfo(
         }
 
         ShaderAsset asset = std::get<ShaderAsset>(_info);
+        ConfigureShaderConstantLayout(asset, sd_info, target_info);
         return shader_manager.CompileShader(_type, std::move(asset));
     };
     auto get_shader_info = [&](EShaderType _type, Shader& _output) {
@@ -456,18 +480,17 @@ PipelineShaderInfo ComputeConstructor::CompileShaderInfo(
     };
 
     auto&              output = get_shader_output(shader_info, ST_COMPUTE);
-    PipelineShaderInfo sd_info{
-        .layout_hash = std::move(_hash_values), .arg_cpp_info = std::move(_arg_type_values)
-    };
     sd_info.shaders.push_back(get_shader_info(ST_COMPUTE, output));
     return std::move(sd_info);
 }
 
 PipelineHandle ComputeConstructor::CreatePipeline(
     Array<std::string_view>&& _hash_values,
-    Array<ShaderArgCppInfo>&& _arg_type_values
+    Array<ShaderArgCppInfo>&& _arg_type_values,
+    PipelineConstantLayout&& constant_layout
 ) {
-    return device.CreatePipeline(CompileShaderInfo(std::move(_hash_values), std::move(_arg_type_values)));
+    return device.CreatePipeline(CompileShaderInfo(std::move(_hash_values), std::move(_arg_type_values),
+                                                std::move(constant_layout)));
 }
 
 #pragma endregion

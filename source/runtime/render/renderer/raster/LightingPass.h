@@ -2,7 +2,7 @@
 
 // 对几何缓冲和方向光阴影遮罩应用延迟 PBR 光照。
 #include "shader/ShaderPipeline.h"
-#include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
+#include "shaderheaders/shared/raster/lighting_pass/Constants.h"
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
@@ -16,8 +16,8 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(PbrMaterialShadingPipeline);
     DEFINE_SHADER_BUFFER(lighting_data);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(MaterialPassBindlessParam, param);
-    DEFINE_SHADER_ARGS(lighting_data, bdls, param);
+    DEFINE_SHADER_CONSTANTS(LIGHTING_PASS_CONSTANTS);
+    DEFINE_SHADER_ARGS(lighting_data, bdls, param, extra_ambient_intensity);
 };
 
 class LightingPass {
@@ -42,6 +42,7 @@ public:
      */
     struct RecordParameters {
         MaterialPassBindlessParam pass_param{};
+        float                     extra_ambient_intensity = 0.0f;
         BufferRef                 lighting_data{};
         BufferRef                 light_buffer_owner{};
         BindlessArrayRef          bindless{};
@@ -73,7 +74,7 @@ public:
         RecordParameters parameters{};
         auto&            pass_param = parameters.pass_param;
         pass_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
-        pass_param.extra_ambient_intensity = ui_config.shading_extra_ambient_intensity;
+        parameters.extra_ambient_intensity = ui_config.shading_extra_ambient_intensity;
         pass_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
         pass_param.shading_mode            = static_cast<uint>(ui_config.shading_mode);
 
@@ -107,7 +108,8 @@ public:
                 pipeline,
                 parameters.lighting_data,
                 parameters.bindless,
-                parameters.pass_param
+                parameters.pass_param,
+                parameters.extra_ambient_intensity
             )
             .Draw(
                 "Lighting Pass",

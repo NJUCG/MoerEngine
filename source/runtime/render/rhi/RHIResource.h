@@ -1146,7 +1146,6 @@ struct PipelineHandle {
     Array<ParamInfoFlags>      binding_infos;
     UnorderedMap<uint64, uint> hash_2_info_index; // not use
     uint64                     valid_bits   = 0;  // the pipeline actually used resource
-    int                        constant_idx = -1; // not use
 
     bool IsValid() const {
         return handle != 0;
@@ -1179,10 +1178,22 @@ struct ShaderArgCppInfo {
     EShaderArgType type;
 };
 
+struct ShaderConstantArgumentLayout {
+    uint argument_index = 0;
+    uint byte_offset = 0;
+    uint byte_size = 0;
+};
+
+struct PipelineConstantLayout {
+    Array<ShaderConstantArgumentLayout> arguments;
+    uint byte_size = 0;
+};
+
 struct PipelineShaderInfo {
     Array<SingleShaderInfo> shaders;
     Array<std::string_view> layout_hash;
     Array<ShaderArgCppInfo> arg_cpp_info;
+    PipelineConstantLayout constant_layout;
 };
 
 struct GfxPsoCreateInfo {

@@ -19,6 +19,7 @@ struct MetalRenderBindings {
     std::vector<std::pair<NSUInteger, uint>> bindless_sets;
     std::vector<MetalComputeBinding> scalar_bindings;
     NSUInteger constant_buffer_index{0};
+    uint constant_byte_size{0};
 };
 
 class MetalPipelineState final : public PipelineState {
@@ -50,6 +51,9 @@ public:
     id<MTLFunction> ComputeFunction() const noexcept { return compute_function_; }
     const std::vector<MetalComputeBinding>& ComputeBindings() const noexcept {
         return compute_bindings_layout_.scalar_bindings;
+    }
+    const MetalRenderBindings& ComputeBindingsLayout() const noexcept {
+        return compute_bindings_layout_;
     }
     const std::vector<std::pair<NSUInteger, uint>>& ComputeBindlessSets() const noexcept {
         return compute_bindings_layout_.bindless_sets;

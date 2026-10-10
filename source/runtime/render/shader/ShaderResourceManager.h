@@ -132,7 +132,8 @@ struct RasterPipelineConstructor {
             arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(ShaderArgCppInfo)
         );
         PipelineHandle handle =
-            CreatePipeline(std::move(_pso_info), std::move(hash_values), std::move(arg_type_values));
+            CreatePipeline(std::move(_pso_info), std::move(hash_values), std::move(arg_type_values),
+                           TPipeline::GetConstantLayout());
         return TPipeline(handle);
     };
 
@@ -140,7 +141,8 @@ private:
     RENDER_API PipelineHandle CreatePipeline(
         GfxPsoCreateInfo&&        _pso_info,
         Array<std::string_view>&& _hash_values,
-        Array<ShaderArgCppInfo>&& _arg_type_values
+        Array<ShaderArgCppInfo>&& _arg_type_values,
+        PipelineConstantLayout&& _constant_layout
     );
 
     ShaderAssetOrCache vertex_path;
@@ -167,7 +169,8 @@ struct ComputeConstructor {
         std::memcpy(
             arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(ShaderArgCppInfo)
         );
-        PipelineHandle handle = CreatePipeline(std::move(hash_values), std::move(arg_type_values));
+        PipelineHandle handle = CreatePipeline(std::move(hash_values), std::move(arg_type_values),
+                                               TPipeline::GetConstantLayout());
         return std::move(TPipeline(handle));
     };
 
@@ -185,14 +188,16 @@ struct ComputeConstructor {
         std::memcpy(
             arg_type_values.data(), arg_type_array.data(), arg_type_array.size() * sizeof(ShaderArgCppInfo)
         );
-        return CompileShaderInfo(std::move(hash_values), std::move(arg_type_values));
+        return CompileShaderInfo(std::move(hash_values), std::move(arg_type_values), TPipeline::GetConstantLayout());
     }
 
 private:
     RENDER_API PipelineHandle
-    CreatePipeline(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values);
+    CreatePipeline(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values,
+                   PipelineConstantLayout&& _constant_layout);
     PipelineShaderInfo
-    CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values);
+    CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values,
+                      PipelineConstantLayout&& _constant_layout);
 
     ShaderAssetOrCache    shader_info;
     Render::RenderDevice& device;

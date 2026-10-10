@@ -28,6 +28,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/ShaderStageUtils.h"
+#include "rhi/ShaderConstantLayout.h"
 
 #include "Core.h"
 #include "shader/ShaderResourceManager.h"
@@ -1714,7 +1715,6 @@ struct VulkanPipelineBindingInfo {
     Array<ParamInfoFlags>                                   argument_flags;
     UnorderedMap<uint64, uint>                              name_hash_to_argument_index;
     uint64                                                  active_argument_bits    = 0;
-    int                                                     constant_argument_index = -1;
 };
 
 VkPipelineStageFlags2 ToVulkanPipelineStageFlags(VkShaderStageFlagBits shader_stage) {
@@ -1832,9 +1832,7 @@ void AccumulatePushConstantBinding(
     VkShaderStageFlagBits             shader_stage,
     VulkanPipelineBindingInfo&        out_binding_info
 ) {
-    out_binding_info.constant_argument_index = argument_id;
-    out_binding_info.push_constant_range.size =
-        std::max(out_binding_info.push_constant_range.size, constant.size);
+    if (!constant.custom_flag.active) return;
     out_binding_info.push_constant_range.stageFlags |= shader_stage;
     MarkShaderArgumentActive(argument_id, constant.custom_flag.active, out_binding_info);
 }
@@ -2032,6 +2030,8 @@ void InitializeVulkanPipelineLayout(VulkanPipelineState& pipeline, VulkanPipelin
 
 PipelineHandle
 VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
+    const uint constant_byte_size = ValidatePipelineConstants(
+        _shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize);
     if (const auto error = ValidateGraphicsShaderStages(_shader_info.shaders); !error.empty()) {
         LOG_ERROR("Cannot create Vulkan graphics pipeline: {}", error);
         return {};
@@ -2077,6 +2077,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     const auto ordered_shaders = GetGraphicsShadersInStageOrder(_shader_info.shaders);
     auto binding_info =
         BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.layout_hash, _shader_info.arg_cpp_info);
+    binding_info.push_constant_range.size = constant_byte_size;
     VulkanPipelineState* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX);
 
     uint32_t attachment_count = _create_info.color_attachment_count;
@@ -2359,11 +2360,12 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
         .binding_infos     = std::move(binding_info.argument_flags),
         .hash_2_info_index = std::move(binding_info.name_hash_to_argument_index),
         .valid_bits        = binding_info.active_argument_bits,
-        .constant_idx      = binding_info.constant_argument_index
     };
 }
 
 PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
+    const uint constant_byte_size = ValidatePipelineConstants(
+        shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize);
     if (const auto error = ValidateComputeShaderStages(shader_info.shaders); !error.empty()) {
         LOG_ERROR("Cannot create Vulkan compute pipeline: {}", error);
         return {};
@@ -2372,6 +2374,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
     const std::span<const SingleShaderInfo* const> stages(&shader, 1);
     auto                                           binding_info =
         BuildVulkanPipelineBindingInfo(stages, shader_info.layout_hash, shader_info.arg_cpp_info);
+    binding_info.push_constant_range.size = constant_byte_size;
     auto* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute);
     auto  shader_stages = CreateVulkanShaderStages(m_device, stages);
     InitializeVulkanPipelineLayout(*vk_pso, binding_info);
@@ -2392,7 +2395,6 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
         .binding_infos     = std::move(binding_info.argument_flags),
         .hash_2_info_index = std::move(binding_info.name_hash_to_argument_index),
         .valid_bits        = binding_info.active_argument_bits,
-        .constant_idx      = binding_info.constant_argument_index
     };
 }
 

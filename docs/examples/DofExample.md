@@ -73,7 +73,7 @@ processing_image = tonemapping_pass->Process(raster_context, raster_config, proc
      class DofPipeline : public RasterPipeline {
      public:
          DEFINE_RASTER_PIPELINE_CLASS(DofPipeline);
-         DEFINE_SHADER_CONSTANT_STRUCT(DofPipelineBindlessParam, param);
+         DEFINE_SHADER_CONSTANT(DofPipelineBindlessParam, param);
          DEFINE_SHADER_BINDLESS_ARRAY(bdls);
          DEFINE_SHADER_ARGS(bdls, param);
      };

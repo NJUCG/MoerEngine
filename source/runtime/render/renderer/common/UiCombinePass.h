@@ -22,7 +22,7 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(CombineUIPipeline);
     DEFINE_SHADER_TEX(scene_color);
     DEFINE_SHADER_SAMPLER(linear_sampler);
-    DEFINE_SHADER_CONSTANT_STRUCT(Param, scene_rect);
+    DEFINE_SHADER_CONSTANT(Param, scene_rect);
 
     DEFINE_SHADER_ARGS(scene_color, linear_sampler, scene_rect);
 };

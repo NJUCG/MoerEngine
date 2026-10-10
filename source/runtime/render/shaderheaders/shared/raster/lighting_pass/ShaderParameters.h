@@ -271,7 +271,6 @@ struct CsmGizmoParam {
 
 struct MaterialPassBindlessParam {
     float3 extra_ambient_color;
-    float  extra_ambient_intensity;
     uint   enable_extra_ambient;
     uint   material_type;
     uint   light_buf_hdl;

@@ -15,7 +15,7 @@ namespace Moer::Render::Raster {
 class BilateralFilterDenoiserPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(BilateralFilterDenoiserPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(BilateralFilterDenoiserPipelineBindlessParam, param);
+    DEFINE_SHADER_CONSTANT(BilateralFilterDenoiserPipelineBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
 };

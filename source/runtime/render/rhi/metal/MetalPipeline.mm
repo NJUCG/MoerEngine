@@ -1,5 +1,6 @@
 #include "rhi/metal/MetalPipeline.h"
 #include "rhi/ShaderStageUtils.h"
+#include "rhi/ShaderConstantLayout.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -68,10 +69,6 @@ PipelineHandle MetalPipelineMetadata(const PipelineShaderInfo& shader_info) {
             }
             if (active) handle.valid_bits |= uint64(1) << index;
         }
-        if (shader_info.arg_cpp_info[index].type == SDA_Constant &&
-            (handle.valid_bits & (uint64(1) << index))) {
-            handle.constant_idx = index;
-        }
     }
     return handle;
 }
@@ -82,6 +79,14 @@ MetalRenderBindings MetalRenderStageBindings(
     MetalRenderBindings layout;
     if (shader.shader_param_map == nullptr) return layout;
     const auto& reflection = shader.shader_param_map->reflect_map;
+    for (const auto& argument : shader_info.constant_layout.arguments) {
+        const auto parameter = reflection.find(std::string(shader_info.layout_hash[argument.argument_index]));
+        if (parameter == reflection.end()) continue;
+        const auto* constant = std::get_if<ReflectParamInfo::Constant>(&parameter->second.spirv.resources.data);
+        if (constant != nullptr && constant->custom_flag.active) {
+            layout.constant_byte_size = shader_info.constant_layout.byte_size;
+        }
+    }
     const auto found = reflection.find(std::string(ReflectParamInfo::bdls_name));
     if (found != reflection.end()) {
         const auto& bindless = found->second.spirv.bindless;
@@ -132,6 +137,7 @@ MetalRenderBindings MetalRenderStageBindings(
 } // namespace
 
 PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInfo&& create_info, PipelineShaderInfo&& shader_info) {
+    ValidatePipelineConstants(shader_info, 4096);
     if (const auto error = ValidateGraphicsShaderStages(shader_info.shaders); !error.empty()) {
         throw std::runtime_error("Cannot create Metal graphics pipeline: " + std::string(error));
     }
@@ -287,6 +293,7 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
     }
 }
 PipelineHandle CreateMetalComputePipeline(id<MTLDevice> device, PipelineShaderInfo&& shader_info) {
+    ValidatePipelineConstants(shader_info, 4096);
     if (const auto error = ValidateComputeShaderStages(shader_info.shaders); !error.empty()) {
         throw std::runtime_error("Cannot create Metal compute pipeline: " + std::string(error));
     }

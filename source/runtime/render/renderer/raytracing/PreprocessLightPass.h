@@ -16,7 +16,7 @@ namespace Moer::Render::Raytracing {
 class PrepareLightShaderPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(PrepareLightShaderPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(PrepareLightsParams, param);
+    DEFINE_SHADER_CONSTANT(PrepareLightsParams, param);
     DEFINE_SHADER_BUFFER(light_data);
     DEFINE_SHADER_BUFFER(light_index_mapping);
     DEFINE_SHADER_TEX(local_light_pdf);

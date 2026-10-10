@@ -532,13 +532,22 @@ void EncodeSimpleDraw(
         [encoder setVertexBuffer:tess.factors offset:0 atIndex:26];
         [encoder setTessellationFactorBuffer:tess.factors offset:0 instanceStride:0];
     }
-    if (!draw.Args().constants.empty()) {
+    {
         const void* data = draw.Args().constants.data();
         const NSUInteger length = draw.Args().constants.size() * sizeof(uint);
-        [encoder setVertexBytes:data length:length
-                       atIndex:pipeline->VertexBindingsLayout().constant_buffer_index];
-        [encoder setFragmentBytes:data length:length
-                         atIndex:pipeline->FragmentBindingsLayout().constant_buffer_index];
+        const auto& vertex_layout = pipeline->VertexBindingsLayout();
+        const auto& fragment_layout = pipeline->FragmentBindingsLayout();
+        if (length < vertex_layout.constant_byte_size || length < fragment_layout.constant_byte_size) {
+            throw std::invalid_argument("Metal constant upload exceeds the source data buffer");
+        }
+        if (vertex_layout.constant_byte_size != 0) {
+            [encoder setVertexBytes:data length:vertex_layout.constant_byte_size
+                           atIndex:vertex_layout.constant_buffer_index];
+        }
+        if (fragment_layout.constant_byte_size != 0) {
+            [encoder setFragmentBytes:data length:fragment_layout.constant_byte_size
+                             atIndex:fragment_layout.constant_buffer_index];
+        }
     }
     const Rect2D& rect = pass.render_area;
     [encoder setViewport:MTLViewport{double(rect.offset.x), double(rect.offset.y),
@@ -772,9 +781,13 @@ void EncodeComputeDispatch(
         }
         [encoder setBuffer:table offset:0 atIndex:set];
     }
-    if (!args.constants.empty()) {
+    const uint constant_byte_size = pipeline->ComputeBindingsLayout().constant_byte_size;
+    if (args.constants.size() * sizeof(uint) < constant_byte_size) {
+        throw std::invalid_argument("Metal compute constant upload exceeds the source data buffer");
+    }
+    if (constant_byte_size != 0) {
         [encoder setBytes:args.constants.data()
-                  length:args.constants.size() * sizeof(uint)
+                  length:constant_byte_size
                  atIndex:pipeline->ConstantBufferIndex()];
     }
     [encoder dispatchThreadgroups:MTLSizeMake(groups.x, groups.y, groups.z)

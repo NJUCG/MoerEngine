@@ -251,7 +251,6 @@ struct VulkanSerialGoldenTrace::Impl {
     ) {
         _resources.push_back(RegisterPipeline(_pipeline));
         _hash.Add(_pipeline.valid_bits);
-        _hash.Add(static_cast<uint64_t>(static_cast<int64_t>(_pipeline.constant_idx)));
         _hash.Add(_pipeline.binding_infos.size());
         for (const ParamInfoFlags& info : _pipeline.binding_infos) {
             _hash.Add(info.state_flags);

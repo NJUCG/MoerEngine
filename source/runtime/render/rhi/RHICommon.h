@@ -1352,6 +1352,7 @@ struct ReflectParamInfo {
         CustomFlags custom_flag;
     };
     static constexpr std::string_view bdls_name = "bdls_114514";
+    static constexpr std::string_view constants_name = "moer_constants";
     struct Bindless {
         uint        set;
         uint        binding;

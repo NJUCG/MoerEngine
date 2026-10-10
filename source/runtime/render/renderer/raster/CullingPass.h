@@ -43,7 +43,7 @@ public:
     DEFINE_SHADER_BUFFER(counters);
     DEFINE_SHADER_BUFFER(cull_data);
     DEFINE_SHADER_BUFFER(cluster_groups);
-    DEFINE_SHADER_CONSTANT_STRUCT(CullParams, cull_params);
+    DEFINE_SHADER_CONSTANT(CullParams, cull_params);
 
     DEFINE_SHADER_ARGS(
         source_draw_commands,
@@ -72,7 +72,7 @@ public:
     DEFINE_SHADER_BUFFER(cull_data);
     DEFINE_SHADER_BUFFER(cluster_groups);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(CullParams, cull_params);
+    DEFINE_SHADER_CONSTANT(CullParams, cull_params);
 
     DEFINE_SHADER_ARGS(
         source_draw_commands,

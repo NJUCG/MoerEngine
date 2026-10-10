@@ -11,7 +11,7 @@ namespace Moer::Render::Raster {
 class CameraGizmoPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(CameraGizmoPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(CameraGizmoParam, param);
+    DEFINE_SHADER_CONSTANT(CameraGizmoParam, param);
     DEFINE_SHADER_ARGS(param);
 };
 

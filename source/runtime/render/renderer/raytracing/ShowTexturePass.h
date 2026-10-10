@@ -16,7 +16,7 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(ShowTexturePipeline);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_TEX(src_tex);
-    DEFINE_SHADER_CONSTANT_STRUCT(ShowTextureParams, param);
+    DEFINE_SHADER_CONSTANT(ShowTextureParams, param);
 
     DEFINE_SHADER_ARGS(param, src_tex, bdls);
 };

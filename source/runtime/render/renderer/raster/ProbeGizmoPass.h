@@ -23,7 +23,7 @@ public:
     DEFINE_RASTER_PIPELINE_CLASS(ProbeGizmoPipeline);
 
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT_STRUCT(ProbeGizmoParam, param);
+    DEFINE_SHADER_CONSTANT(ProbeGizmoParam, param);
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
