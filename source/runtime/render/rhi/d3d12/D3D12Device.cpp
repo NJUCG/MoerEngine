@@ -500,7 +500,7 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
             continue;
         }
 
-        auto& resource_info = reflect_map_iter->second.dxil;
+        auto& resource_info = reflect_map_iter->second.GetDxil();
         if (arg_info.type == EShaderArgType::SDA_Constant) {
             ASSERT(IsShaderVarConstantBuffer(resource_info));
             resource_info.type = uint(ED3D12ShaderVariableType::RootConstant);

@@ -52,19 +52,21 @@ PipelineHandle MetalPipelineMetadata(const PipelineShaderInfo& shader_info) {
             const auto  found =
                 reflection.find(std::string(bindless ? ReflectParamInfo::bdls_name : arguments[index].name));
             if (found == reflection.end()) continue;
+            const auto& parameter = found->second.GetSpirv();
             bool active = false;
             if (bindless) {
-                const auto& resources = found->second.spirv.bindless;
+                const auto& resources =
+                    parameter.Get<ReflectParamInfo::BindlessArray>(arguments[index].name, "BindlessArray");
                 active = (resources.array && resources.array->custom_flag.active) ||
                          (resources.buffer && resources.buffer->custom_flag.active) ||
                          (resources.image && resources.image->custom_flag.active) ||
                          (resources.sampler && resources.sampler->custom_flag.active);
-            } else if (const auto* resource = std::get_if<ReflectParamInfo::Resource>(
-                           &found->second.spirv.resources.data)) {
-                active = resource->custom_flag.active;
-            } else if (const auto* constant = std::get_if<ReflectParamInfo::Constant>(
-                           &found->second.spirv.resources.data)) {
-                active = constant->custom_flag.active;
+            } else if (arguments[index].cpp_info.type == SDA_Constant) {
+                active = parameter.Get<ReflectParamInfo::Constant>(arguments[index].name, "Constant")
+                             .custom_flag.active;
+            } else {
+                active = parameter.Get<ReflectParamInfo::Resource>(arguments[index].name, "Resource")
+                             .custom_flag.active;
             }
             if (active) handle.valid_bits |= uint64(1) << index;
         }
@@ -83,14 +85,16 @@ MetalRenderBindings MetalRenderStageBindings(
     for (const auto& argument : metadata.GetConstantLayouts()) {
         const auto parameter = reflection.find(std::string(arguments[argument.argument_index].name));
         if (parameter == reflection.end()) continue;
-        const auto* constant = std::get_if<ReflectParamInfo::Constant>(&parameter->second.spirv.resources.data);
+        const auto* constant = parameter->second.GetSpirv().TryGetConstant();
         if (constant != nullptr && constant->custom_flag.active) {
             layout.constant_byte_size = metadata.GetConstantByteSize();
         }
     }
     const auto found = reflection.find(std::string(ReflectParamInfo::bdls_name));
     if (found != reflection.end()) {
-        const auto& bindless = found->second.spirv.bindless;
+        const auto& bindless = found->second.GetSpirv().Get<ReflectParamInfo::BindlessArray>(
+            ReflectParamInfo::bdls_name, "BindlessArray"
+        );
         const auto add = [&](const std::optional<ReflectParamInfo::Bindless>& resource, uint table) {
             if (!resource || !resource->custom_flag.active) return;
             for (const auto& [set, existing_table] : layout.bindless_sets) {
@@ -122,8 +126,7 @@ MetalRenderBindings MetalRenderStageBindings(
         if (kind == SDA_BindlessArray) continue;
         const auto resource_it = reflection.find(std::string(arguments[index].name));
         if (resource_it == reflection.end()) continue;
-        const auto* resource = std::get_if<ReflectParamInfo::Resource>(
-            &resource_it->second.spirv.resources.data);
+        const auto* resource = resource_it->second.GetSpirv().TryGetResource();
         if (resource == nullptr || !resource->custom_flag.active) continue;
         layout.scalar_bindings[index] = MetalComputeBinding{
             resource->set, resource->binding, kind, true, false,

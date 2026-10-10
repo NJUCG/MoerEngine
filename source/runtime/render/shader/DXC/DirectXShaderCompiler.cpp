@@ -626,6 +626,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
     {
         std::span<Moer::uint> spirv_code_span((Moer::uint*)data, size / sizeof(Moer::uint));
         spirv_cross::Compiler        comp(spirv_code_span.data(), spirv_code_span.size());
+        const auto                   stage_bits = uint(ToPipelineStageFlag(comp.get_execution_model()));
         if (comp.get_execution_model() == spv::ExecutionModelGLCompute) {
             _param_map.compute_local_size = uint3{
                 comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, 0),
@@ -677,8 +678,15 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
         auto handle_bdls_res_tex =
             [&](spirv_cross::Resource& _res, EVulkanDescriptorType _desc_type, EShaderResourceType _srt) {
                 GET_RESOURCE_DEFAULT_INFOS(_res);
-                static constexpr std::string_view real_name  = ReflectParamInfo::bdls_name;
-                ReflectParamInfo::BindlessArray&  bdls_param = reflect_map[real_name.data()].spirv.bindless;
+                const auto [entry, inserted] = reflect_map.try_emplace(
+                    std::string(ReflectParamInfo::bdls_name),
+                    ReflectParamInfo{ReflectParamInfo::Spirv{stage_bits, ReflectParamInfo::BindlessArray{}}}
+                );
+                auto& spirv = entry->second.GetSpirv();
+                if (spirv.TryGetBindlessArray() == nullptr) {
+                    throw std::invalid_argument("Conflicting reflected bindless parameter: " + entry->first);
+                }
+                auto& bdls_param = std::get<ReflectParamInfo::BindlessArray>(spirv.data);
                 ReflectParamInfo::Bindless*       target     = nullptr;
 
                 if (_desc_type == VDT_STORAGE_BUFFER) {
@@ -708,15 +716,13 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 target->count         = count;
                 target->desc_type     = _desc_type;
                 target->resource_type = _srt;
-                target->stage_bits    = uint(ToPipelineStageFlag(comp.get_execution_model()));
+                target->stage_bits    = stage_bits;
                 target->custom_flag.active |= is_active;
             };
 
         auto handle_res =
             [&](spirv_cross::Resource& _res, EVulkanDescriptorType _desc_type, EShaderResourceType _srt) {
                 GET_RESOURCE_DEFAULT_INFOS(_res);
-                ReflectParamInfo& param = reflect_map[name];
-                param.spirv.resources.stage_bits |= uint(ToPipelineStageFlag(comp.get_execution_model()));
                 ReflectParamInfo::Resource res{};
                 res.set                    = set;
                 res.binding                = binding;
@@ -726,7 +732,11 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 res.count                  = count;
                 res.format                 = ToPixelFormat(type.image.format);
                 res.custom_flag.active     = is_active;
-                param.spirv.resources.data = res;
+                if (!reflect_map.try_emplace(
+                                    name, ReflectParamInfo{ReflectParamInfo::Spirv{stage_bits, res}}
+                    ).second) {
+                    throw std::invalid_argument("Duplicate reflected shader parameter: " + name);
+                }
             };
 
         auto handle_all_res =
@@ -779,17 +789,21 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
 
         for (auto& resource : resources.push_constant_buffers) {
             GET_RESOURCE_DEFAULT_INFOS(resource);
-            const auto record_constant = [&](const std::string& argument_name, uint offset, uint size, bool active) {
-                if (reflect_map.contains(argument_name)) {
-                    throw std::invalid_argument("Duplicate reflected shader parameter: " + argument_name);
-                }
-                auto& param = reflect_map[argument_name];
-                param.spirv.resources.stage_bits = uint(ToPipelineStageFlag(comp.get_execution_model()));
+            const auto record_constant = [&](const std::string& argument_name,
+                                             uint               offset,
+                                             uint               size,
+                                             bool               active) {
                 ReflectParamInfo::Constant constant{};
                 constant.size = constant.padded_size = size;
                 constant.offset = offset;
                 constant.custom_flag.active = active;
-                param.spirv.resources.data = constant;
+                if (!reflect_map
+                         .try_emplace(
+                             argument_name, ReflectParamInfo{ReflectParamInfo::Spirv{stage_bits, constant}}
+                         )
+                         .second) {
+                    throw std::invalid_argument("Duplicate reflected shader parameter: " + argument_name);
+                }
             };
             if (name == ReflectParamInfo::constants_name) {
                 const auto ranges = comp.get_active_buffer_ranges(resource.id);
@@ -864,7 +878,7 @@ void DXCompiler::Impl::ReflectDXIL(
         if (is_bdls_array(name)) {
             name = ReflectParamInfo::bdls_name; // Bindless 数组统一映射到内部保留名称。
         }
-        auto& param_info = reflect_map[name].dxil;
+        ReflectParamInfo::Dxil param_info{};
         param_info.slot  = shaderInputBindDesc.BindPoint;
         param_info.space = shaderInputBindDesc.Space;
         param_info.count = shaderInputBindDesc.BindCount;
@@ -990,8 +1004,10 @@ void DXCompiler::Impl::ReflectDXIL(
                 assert(false && "unsupported type");
                 break;
         }
+        if (!reflect_map.try_emplace(name, ReflectParamInfo{param_info}).second) {
+            throw std::invalid_argument("Duplicate reflected shader parameter: " + name);
+        }
     }
-
     _param_map.reflect_map.swap(reflect_map);
 }
 #endif

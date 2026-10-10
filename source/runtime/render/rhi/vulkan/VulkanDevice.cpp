@@ -1929,14 +1929,19 @@ void AccumulateShaderPipelineBindings(
             continue;
         }
 
-        const auto& parameter = reflected_parameter->second.spirv;
+        const auto& parameter = reflected_parameter->second.GetSpirv();
         switch (argument_info.type) {
             case SDA_BindlessArray:
-                AccumulateBindlessBindings(parameter.bindless, argument_id, shader_stage, out_binding_info);
+                AccumulateBindlessBindings(
+                    parameter.Get<ReflectParamInfo::BindlessArray>(argument_name, "BindlessArray"),
+                    argument_id,
+                    shader_stage,
+                    out_binding_info
+                );
                 break;
             case SDA_Constant:
                 AccumulatePushConstantBinding(
-                    std::get<ReflectParamInfo::Constant>(parameter.resources.data),
+                    parameter.Get<ReflectParamInfo::Constant>(argument_name, "Constant"),
                     argument_id,
                     shader_stage,
                     out_binding_info
@@ -1947,7 +1952,7 @@ void AccumulateShaderPipelineBindings(
             case SDA_TLAS:
             case SDA_Sampler:
                 AccumulateResourceBinding(
-                    std::get<ReflectParamInfo::Resource>(parameter.resources.data),
+                    parameter.Get<ReflectParamInfo::Resource>(argument_name, "Resource"),
                     argument_info,
                     argument_id,
                     shader_stage,

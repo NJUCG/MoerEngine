@@ -13,7 +13,13 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <variant>
+
+namespace Moer {
+struct InputStream;
+struct OutputStream;
+} // namespace Moer
 #pragma region CommonEnums
 
 enum class ERHIType : uint8_t {
@@ -1328,9 +1334,6 @@ struct RHIQueueTopology {
 };
 
 struct ReflectParamInfo {
-    ReflectParamInfo() {
-        memset(this, 0, sizeof(ReflectParamInfo));
-    };
     struct CustomFlags {
         uint active : 1;
         uint padding : 31;
@@ -1369,15 +1372,31 @@ struct ReflectParamInfo {
         std::optional<Bindless> sampler;
         std::optional<Bindless> acceleration_structure;
     };
-    struct Resources {
-        std::variant<Resource, Constant> data;
-        uint                             stage_bits;
-    };
     struct Spirv {
-        union {
-            Resources     resources;
-            BindlessArray bindless;
-        };
+        uint                                            stage_bits = 0;
+        std::variant<Resource, Constant, BindlessArray> data       = Resource{};
+
+        const Resource* TryGetResource() const {
+            return std::get_if<Resource>(&data);
+        }
+        const Constant* TryGetConstant() const {
+            return std::get_if<Constant>(&data);
+        }
+        const BindlessArray* TryGetBindlessArray() const {
+            return std::get_if<BindlessArray>(&data);
+        }
+
+        template<typename T>
+        const T& Get(std::string_view parameter_name, std::string_view expected_type) const {
+            const auto* value = std::get_if<T>(&data);
+            if (value == nullptr) {
+                throw std::invalid_argument(
+                    "Shader parameter type mismatch for '" + std::string(parameter_name) + "': expected " +
+                    std::string(expected_type)
+                );
+            }
+            return *value;
+        }
     };
     struct Dxil {
         uint slot;
@@ -1390,14 +1409,23 @@ struct ReflectParamInfo {
             return count == 0;
         }
     };
-    struct Memory {
-        byte data[sizeof(Spirv)];
-    };
-    union {
-        Spirv  spirv;
-        Dxil   dxil;
-        Memory memory;
-    };
+    std::variant<Spirv, Dxil> backend_data = Spirv{};
+
+    Spirv& GetSpirv() {
+        return std::get<Spirv>(backend_data);
+    }
+    const Spirv& GetSpirv() const {
+        return std::get<Spirv>(backend_data);
+    }
+    Dxil& GetDxil() {
+        return std::get<Dxil>(backend_data);
+    }
+    const Dxil& GetDxil() const {
+        return std::get<Dxil>(backend_data);
+    }
+
+    RENDER_API Moer::OutputStream& operator<<(Moer::OutputStream& stream) const;
+    RENDER_API Moer::InputStream& operator>>(Moer::InputStream& stream);
 };
 struct MeshletDesc {
     uint32_t vertex_offset;

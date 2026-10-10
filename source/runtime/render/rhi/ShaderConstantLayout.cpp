@@ -6,15 +6,6 @@
 namespace Moer::Render {
 namespace {
 
-const ReflectParamInfo::Constant*
-TryGetConstant(std::string_view parameter_name, const ReflectParamInfo& parameter) {
-    // Bindless parameters use a different union member.
-    if (parameter_name == ReflectParamInfo::bdls_name) {
-        return nullptr;
-    }
-    return std::get_if<ReflectParamInfo::Constant>(&parameter.spirv.resources.data);
-}
-
 const ShaderConstantArgumentLayout*
 FindCppConstantLayout(const PipelineArgumentMetadata& cpp_metadata, std::string_view parameter_name) {
     const auto cpp_arguments = cpp_metadata.GetArguments();
@@ -37,7 +28,7 @@ void ValidateConstantBindingTypes(
         if (reflected_parameter == shader_parameters.reflect_map.end()) {
             continue;
         }
-        if (TryGetConstant(reflected_parameter->first, reflected_parameter->second) == nullptr) {
+        if (reflected_parameter->second.GetSpirv().TryGetConstant() == nullptr) {
             throw std::invalid_argument(
                 "Shader constant argument has a resource binding: " + std::string(constant_name)
             );
@@ -71,7 +62,7 @@ bool ValidateShaderConstantUsage(
 ) {
     bool uses_constants = false;
     for (const auto& [parameter_name, parameter] : shader_parameters.reflect_map) {
-        const auto* shader_constant = TryGetConstant(parameter_name, parameter);
+        const auto* shader_constant = parameter.GetSpirv().TryGetConstant();
         if (shader_constant == nullptr || !shader_constant->custom_flag.active) {
             continue;
         }

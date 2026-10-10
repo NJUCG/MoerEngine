@@ -163,7 +163,7 @@ void CheckReflection(EShaderPlatform platform) {
     const auto active = [](const ShaderCompilerOutput& output, const char* name) {
         const auto found = output.parameter_map.reflect_map.find(name);
         if (found == output.parameter_map.reflect_map.end()) return false;
-        return std::get<ReflectParamInfo::Constant>(found->second.spirv.resources.data).custom_flag.active != 0;
+        return std::get<ReflectParamInfo::Constant>(found->second.GetSpirv().data).custom_flag.active != 0;
     };
     Require(active(vs, "scale") && active(ps, "scale"), "Shared constant lost stage visibility");
     Require(!active(vs, "tint") && active(ps, "tint"), "Unused stage constant marked active");
@@ -178,35 +178,32 @@ void CheckReflection(EShaderPlatform platform) {
             ValidatePipelineConstants(wrong, 128);
         });
     };
-    std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").spirv.resources.data)
-        .offset = 4;
+    std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").GetSpirv().data).offset = 4;
     reject_reflection();
     wrong_reflection = ps.parameter_map;
-    std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").spirv.resources.data).size =
-        8;
+    std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").GetSpirv().data).size = 8;
     reject_reflection();
     wrong_reflection = ps.parameter_map;
-    std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").spirv.resources.data).size =
-        0;
+    std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").GetSpirv().data).size = 0;
     reject_reflection();
     wrong_reflection = ps.parameter_map;
-    wrong_reflection.reflect_map["undeclared"].spirv.resources.data =
+    wrong_reflection.reflect_map["undeclared"].GetSpirv().data =
         ReflectParamInfo::Constant{.offset = 0, .size = 4, .custom_flag = {.active = 1}};
     reject_reflection();
     wrong_reflection = ps.parameter_map;
-    wrong_reflection.reflect_map.at("scale").spirv.resources.data =
+    wrong_reflection.reflect_map.at("scale").GetSpirv().data =
         ReflectParamInfo::Resource{.set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}};
     reject_reflection();
 
     // Binding kinds must match even when the shader does not use the parameter.
-    std::get<ReflectParamInfo::Resource>(wrong_reflection.reflect_map.at("scale").spirv.resources.data)
+    std::get<ReflectParamInfo::Resource>(wrong_reflection.reflect_map.at("scale").GetSpirv().data)
         .custom_flag.active = 0;
     reject_reflection();
 
     // Unused constants may have no meaningful reflected offset or size.
     wrong_reflection = ps.parameter_map;
     auto& unused_constant =
-        std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").spirv.resources.data);
+        std::get<ReflectParamInfo::Constant>(wrong_reflection.reflect_map.at("scale").GetSpirv().data);
     unused_constant.offset                         = 4;
     unused_constant.size                           = 0;
     unused_constant.custom_flag.active             = 0;

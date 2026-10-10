@@ -20,7 +20,7 @@ using std::move;
 namespace {
 
 constexpr uint32_t k_shader_cache_magic          = 0x4D534443; // "MSDC"
-constexpr uint32_t k_shader_cache_format_version = 3;
+constexpr uint32_t k_shader_cache_format_version = 4;
 
 void ConfigureShaderConstantLayout(ShaderAsset& asset, const PipelineShaderInfo& shader_info,
                                   EShaderPlatform platform) {
