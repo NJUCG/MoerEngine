@@ -1758,155 +1758,162 @@ VkPipelineStageFlags2 ToVulkanPipelineStageFlags(VkShaderStageFlagBits shader_st
     return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 }
 
-void MarkShaderArgumentActive(uint argument_id, bool is_active, VulkanPipelineBindingInfo& out_binding_info) {
+void MarkShaderArgumentActive(
+    uint                       argument_index,
+    bool                       is_active,
+    VulkanPipelineBindingInfo& out_binding_info
+) {
     if (is_active) {
-        out_binding_info.active_argument_bits |= uint64(1) << argument_id;
+        out_binding_info.active_argument_bits |= uint64(1) << argument_index;
     }
 }
 
-void AccumulateDescriptorBinding(
-    uint                                set_id,
-    uint                                argument_id,
-    const VkDescriptorSetLayoutBinding& binding_desc,
+void MergeDescriptorBinding(
+    uint                                set_index,
+    uint                                argument_index,
+    const VkDescriptorSetLayoutBinding& incoming_binding,
     VulkanPipelineBindingInfo&          out_binding_info
 ) {
-    auto& set_layout            = out_binding_info.descriptor_set_layouts.try_emplace(set_id).first->second;
-    auto [binding_it, inserted] = set_layout.bindings.try_emplace(
-        binding_desc.binding,
+    auto& bindings         = out_binding_info.descriptor_set_layouts[set_index].bindings;
+    auto [entry, inserted] = bindings.try_emplace(
+        incoming_binding.binding,
         VulkanDescriptorBindingInfo{
-            .vk_binding = binding_desc, .argument_index = static_cast<int>(argument_id)
+            .vk_binding = incoming_binding, .argument_index = static_cast<int>(argument_index)
         }
     );
     if (inserted) {
         return;
     }
 
-    auto& binding_info = binding_it->second;
-    if (binding_info.argument_index != static_cast<int>(argument_id)) {
+    auto& existing = entry->second;
+    if (existing.argument_index != static_cast<int>(argument_index)) {
         throw std::invalid_argument(
-            "Vulkan descriptor binding conflict at set " + std::to_string(set_id) + ", binding " +
-            std::to_string(binding_desc.binding) + ": C++ argument indices " +
-            std::to_string(binding_info.argument_index) + " and " + std::to_string(argument_id) + " differ."
+            "Vulkan descriptor binding conflict at set " + std::to_string(set_index) + ", binding " +
+            std::to_string(incoming_binding.binding) + ": C++ argument indices " +
+            std::to_string(existing.argument_index) + " and " + std::to_string(argument_index) + " differ."
         );
     }
-    auto& vk_binding = binding_info.vk_binding;
-    if (vk_binding.descriptorType != binding_desc.descriptorType ||
-        vk_binding.descriptorCount != binding_desc.descriptorCount ||
-        vk_binding.pImmutableSamplers != binding_desc.pImmutableSamplers) {
+    auto& existing_binding = existing.vk_binding;
+    if (existing_binding.descriptorType != incoming_binding.descriptorType ||
+        existing_binding.descriptorCount != incoming_binding.descriptorCount) {
         throw std::invalid_argument(
-            "Vulkan descriptor binding conflict at set " + std::to_string(set_id) + ", binding " +
-            std::to_string(binding_desc.binding) + ": descriptor descriptions differ."
+            "Vulkan descriptor binding conflict at set " + std::to_string(set_index) + ", binding " +
+            std::to_string(incoming_binding.binding) + ": descriptor descriptions differ."
         );
     }
     // Shared stages extend visibility while retaining the original descriptor and argument source.
-    vk_binding.stageFlags |= binding_desc.stageFlags;
+    existing_binding.stageFlags |= incoming_binding.stageFlags;
+}
+
+void RecordResourceUsage(
+    const ReflectParamInfo::Resource& resource,
+    uint                              argument_index,
+    VkShaderStageFlagBits             shader_stage,
+    VulkanPipelineBindingInfo&        out_binding_info
+) {
+    VulkanShaderResourceState resource_state(resource.desc_type, resource.resource_type, resource.format);
+    resource_state.b_sampled   = resource.sampled;
+    auto& argument_flags       = out_binding_info.argument_flags[argument_index];
+    argument_flags.state_flags = resource_state();
+    argument_flags.pipeline_flags |= ToVulkanPipelineStageFlags(shader_stage);
+    MarkShaderArgumentActive(argument_index, resource.custom_flag.active, out_binding_info);
 }
 
 void AccumulateResourceBinding(
     const ReflectParamInfo::Resource& resource,
-    const ShaderArgCppInfo&           argument_info,
-    uint                              argument_id,
+    const ShaderArgCppInfo&           cpp_argument_info,
+    uint                              argument_index,
     VkShaderStageFlagBits             shader_stage,
     VulkanPipelineBindingInfo&        out_binding_info
 ) {
     const VkDescriptorSetLayoutBinding binding{
         .binding         = resource.binding,
         .descriptorType  = METoVkDescriptorType(resource.desc_type),
-        .descriptorCount = std::max(resource.count, argument_info.array_size),
+        .descriptorCount = std::max(resource.count, cpp_argument_info.array_size),
         .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)
     };
-    AccumulateDescriptorBinding(resource.set, argument_id, binding, out_binding_info);
-
-    VulkanShaderResourceState resource_state(resource.desc_type, resource.resource_type, resource.format);
-    if (argument_info.type == SDA_Texture) {
-        resource_state.b_sampled = resource.sampled;
-    }
-    out_binding_info.argument_flags[argument_id].state_flags = resource_state();
-    out_binding_info.argument_flags[argument_id].pipeline_flags |= ToVulkanPipelineStageFlags(shader_stage);
-    MarkShaderArgumentActive(argument_id, resource.custom_flag.active, out_binding_info);
+    MergeDescriptorBinding(resource.set, argument_index, binding, out_binding_info);
+    RecordResourceUsage(resource, argument_index, shader_stage, out_binding_info);
 }
 
-void AccumulatePushConstantBinding(
+void RecordPushConstantUsage(
     const ReflectParamInfo::Constant& constant,
-    uint                              argument_id,
+    uint                              argument_index,
     VkShaderStageFlagBits             shader_stage,
     VulkanPipelineBindingInfo&        out_binding_info
 ) {
-    if (!constant.custom_flag.active) return;
+    if (!constant.custom_flag.active) {
+        return;
+    }
     out_binding_info.push_constant_range.stageFlags |= shader_stage;
-    MarkShaderArgumentActive(argument_id, constant.custom_flag.active, out_binding_info);
-}
-
-void AccumulateBindlessDescriptorBinding(
-    uint                                set_id,
-    uint                                argument_id,
-    const VkDescriptorSetLayoutBinding& binding_desc,
-    VulkanPipelineBindingInfo&          out_binding_info
-) {
-    AccumulateDescriptorBinding(set_id, argument_id, binding_desc, out_binding_info);
-    out_binding_info.descriptor_set_layouts.at(set_id).is_bindless = true;
+    MarkShaderArgumentActive(argument_index, constant.custom_flag.active, out_binding_info);
 }
 
 void AccumulateBindlessBindings(
     const ReflectParamInfo::BindlessArray& resources,
-    uint                                   argument_id,
+    uint                                   argument_index,
     VkShaderStageFlagBits                  shader_stage,
     VulkanPipelineBindingInfo&             out_binding_info
 ) {
+    out_binding_info.argument_flags[argument_index].pipeline_flags |=
+        ToVulkanPipelineStageFlags(shader_stage);
     // The bindless resource tables are paired with the indirect handle table.
-    if (resources.array) {
-        constexpr uint k_resource_descriptor_count = 5000;
-        constexpr uint k_sampler_descriptor_count  = 256;
-        assert(resources.array->binding == 0 && "Indirect Binding Slot Must be 0.");
-        AccumulateBindlessDescriptorBinding(
-            resources.array->set,
-            argument_id,
-            {.binding         = 0,
-             .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             .descriptorCount = 1,
+    if (!resources.array) {
+        return;
+    }
+
+    constexpr uint k_resource_descriptor_count = 5000;
+    constexpr uint k_sampler_descriptor_count  = 256;
+    const auto&    indirect_table              = *resources.array;
+    assert(indirect_table.binding == 0 && "Indirect Binding Slot Must be 0.");
+
+    const auto add_table_binding = [&](const ReflectParamInfo::Bindless& table,
+                                       uint                              set_index,
+                                       uint                              binding_index,
+                                       VkDescriptorType                  descriptor_type,
+                                       uint                              descriptor_count) {
+        MergeDescriptorBinding(
+            set_index,
+            argument_index,
+            {.binding         = binding_index,
+             .descriptorType  = descriptor_type,
+             .descriptorCount = descriptor_count,
              .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)},
             out_binding_info
         );
-        MarkShaderArgumentActive(argument_id, resources.array->custom_flag.active, out_binding_info);
-        if (resources.buffer) {
-            // Buffer descriptors share the indirect table's set at binding 1.
-            AccumulateBindlessDescriptorBinding(
-                resources.array->set,
-                argument_id,
-                {.binding         = 1,
-                 .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                 .descriptorCount = k_resource_descriptor_count,
-                 .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)},
-                out_binding_info
-            );
-            MarkShaderArgumentActive(argument_id, resources.buffer->custom_flag.active, out_binding_info);
-        }
-        if (resources.image) {
-            AccumulateBindlessDescriptorBinding(
-                resources.image->set,
-                argument_id,
-                {.binding         = 0,
-                 .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                 .descriptorCount = k_resource_descriptor_count,
-                 .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)},
-                out_binding_info
-            );
-            MarkShaderArgumentActive(argument_id, resources.image->custom_flag.active, out_binding_info);
-        }
-        if (resources.sampler) {
-            AccumulateBindlessDescriptorBinding(
-                resources.sampler->set,
-                argument_id,
-                {.binding         = 0,
-                 .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER,
-                 .descriptorCount = k_sampler_descriptor_count,
-                 .stageFlags      = static_cast<VkShaderStageFlags>(shader_stage)},
-                out_binding_info
-            );
-            MarkShaderArgumentActive(argument_id, resources.sampler->custom_flag.active, out_binding_info);
-        }
+        out_binding_info.descriptor_set_layouts.at(set_index).is_bindless = true;
+        MarkShaderArgumentActive(argument_index, table.custom_flag.active, out_binding_info);
+    };
+
+    add_table_binding(indirect_table, indirect_table.set, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);
+    if (resources.buffer) {
+        // Buffer descriptors share the indirect table's set at binding 1.
+        add_table_binding(
+            *resources.buffer,
+            indirect_table.set,
+            1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            k_resource_descriptor_count
+        );
     }
-    out_binding_info.argument_flags[argument_id].pipeline_flags |= ToVulkanPipelineStageFlags(shader_stage);
+    if (resources.image) {
+        add_table_binding(
+            *resources.image,
+            resources.image->set,
+            0,
+            VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+            k_resource_descriptor_count
+        );
+    }
+    if (resources.sampler) {
+        add_table_binding(
+            *resources.sampler,
+            resources.sampler->set,
+            0,
+            VK_DESCRIPTOR_TYPE_SAMPLER,
+            k_sampler_descriptor_count
+        );
+    }
 }
 
 // Match this shader's reflection to C++ arguments and accumulate the pipeline's layout and binding metadata.
@@ -1916,33 +1923,30 @@ void AccumulateShaderPipelineBindings(
     VkShaderStageFlagBits                 shader_stage,
     VulkanPipelineBindingInfo&            out_binding_info
 ) {
-    for (uint argument_id = 0; argument_id < arguments.size(); ++argument_id) {
-        const auto  argument_name = arguments[argument_id].name;
-        const auto& argument_info = arguments[argument_id].cpp_info;
-        out_binding_info.name_hash_to_argument_index[GetHash(argument_name)] = argument_id;
-
-        const auto& reflection = shader.shader_param_map->reflect_map;
+    const auto& reflection_map = shader.shader_param_map->reflect_map;
+    for (uint argument_index = 0; argument_index < arguments.size(); ++argument_index) {
+        const auto& argument = arguments[argument_index];
         const auto  reflection_name =
-            argument_info.type == SDA_BindlessArray ? ReflectParamInfo::bdls_name : argument_name;
-        const auto reflected_parameter = reflection.find(std::string(reflection_name));
-        if (reflected_parameter == reflection.end()) {
+            argument.cpp_info.type == SDA_BindlessArray ? ReflectParamInfo::bdls_name : argument.name;
+        const auto found = reflection_map.find(std::string(reflection_name));
+        if (found == reflection_map.end()) {
             continue;
         }
 
-        const auto& parameter = reflected_parameter->second.GetSpirvReflection();
-        switch (argument_info.type) {
+        const auto& reflection = found->second.GetSpirvReflection();
+        switch (argument.cpp_info.type) {
             case SDA_BindlessArray:
                 AccumulateBindlessBindings(
-                    parameter.Get<ReflectParamInfo::BindlessArray>(argument_name, "BindlessArray"),
-                    argument_id,
+                    reflection.Get<ReflectParamInfo::BindlessArray>(argument.name, "BindlessArray"),
+                    argument_index,
                     shader_stage,
                     out_binding_info
                 );
                 break;
             case SDA_Constant:
-                AccumulatePushConstantBinding(
-                    parameter.Get<ReflectParamInfo::Constant>(argument_name, "Constant"),
-                    argument_id,
+                RecordPushConstantUsage(
+                    reflection.Get<ReflectParamInfo::Constant>(argument.name, "Constant"),
+                    argument_index,
                     shader_stage,
                     out_binding_info
                 );
@@ -1952,9 +1956,9 @@ void AccumulateShaderPipelineBindings(
             case SDA_TLAS:
             case SDA_Sampler:
                 AccumulateResourceBinding(
-                    parameter.Get<ReflectParamInfo::Resource>(argument_name, "Resource"),
-                    argument_info,
-                    argument_id,
+                    reflection.Get<ReflectParamInfo::Resource>(argument.name, "Resource"),
+                    argument.cpp_info,
+                    argument_index,
                     shader_stage,
                     out_binding_info
                 );
@@ -1971,6 +1975,9 @@ VulkanPipelineBindingInfo BuildVulkanPipelineBindingInfo(
 ) {
     VulkanPipelineBindingInfo binding_info;
     binding_info.argument_flags.resize(arguments.size());
+    for (uint argument_index = 0; argument_index < arguments.size(); ++argument_index) {
+        binding_info.name_hash_to_argument_index[GetHash(arguments[argument_index].name)] = argument_index;
+    }
     for (const auto* shader : shaders) {
         const auto shader_stage = static_cast<VkShaderStageFlagBits>(
             VulkanEnumTranslator::METoVKShaderStageFlags(shader->shader_type)
