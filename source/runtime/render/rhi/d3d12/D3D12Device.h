@@ -202,28 +202,29 @@ inline bool IsShaderVarUav(ED3D12ShaderVariableType type) {
            type == ED3D12ShaderVariableType::RWTexture2DArray ||
            type == ED3D12ShaderVariableType::RWTexture3D;
 }
-inline bool IsShaderVarRootConstant(const ReflectParamInfo::Dxil& param) {
+inline bool IsShaderVarRootConstant(const ReflectParamInfo::DxilParameterReflection& param) {
     return IsShaderVarRootConstant(ED3D12ShaderVariableType(param.type));
 }
-inline bool IsShaderVarConstantBuffer(const ReflectParamInfo::Dxil& param) {
+inline bool IsShaderVarConstantBuffer(const ReflectParamInfo::DxilParameterReflection& param) {
     return IsShaderVarConstantBuffer(ED3D12ShaderVariableType(param.type));
 }
-inline bool IsShaderVarCommonBuffer(const ReflectParamInfo::Dxil& param) {
+inline bool IsShaderVarCommonBuffer(const ReflectParamInfo::DxilParameterReflection& param) {
     return IsShaderVarCommonBuffer(ED3D12ShaderVariableType(param.type));
 }
-inline bool IsShaderVarTexture(const ReflectParamInfo::Dxil& param) {
+inline bool IsShaderVarTexture(const ReflectParamInfo::DxilParameterReflection& param) {
     return IsShaderVarTexture(ED3D12ShaderVariableType(param.type));
 }
-inline bool IsShaderVarSampler(const ReflectParamInfo::Dxil& param) {
+inline bool IsShaderVarSampler(const ReflectParamInfo::DxilParameterReflection& param) {
     return IsShaderVarSampler(ED3D12ShaderVariableType(param.type));
 }
-inline bool IsShaderVarRaytracingAccelerationStructure(const ReflectParamInfo::Dxil& param) {
+inline bool IsShaderVarRaytracingAccelerationStructure(const ReflectParamInfo::DxilParameterReflection& param
+) {
     return IsShaderVarRaytracingAccelerationStructure(ED3D12ShaderVariableType(param.type));
 }
-inline bool IsShaderVarSrv(const ReflectParamInfo::Dxil& param) {
+inline bool IsShaderVarSrv(const ReflectParamInfo::DxilParameterReflection& param) {
     return IsShaderVarSrv(ED3D12ShaderVariableType(param.type));
 }
-inline bool IsShaderVarUav(const ReflectParamInfo::Dxil& param) {
+inline bool IsShaderVarUav(const ReflectParamInfo::DxilParameterReflection& param) {
     return IsShaderVarUav(ED3D12ShaderVariableType(param.type));
 }
 
@@ -309,10 +310,10 @@ public:
         // maybe lack some flexiblity?
 
         void
-        Add(uint8                         _idx_in_cpp_args,
-            const ShaderArgCppInfo&       _arg_cpp_info,
-            const ReflectParamInfo::Dxil& _resource_info,
-            bool                          _b_special_bindless);
+        Add(uint8                                            _idx_in_cpp_args,
+            const ShaderArgCppInfo&                          _arg_cpp_info,
+            const ReflectParamInfo::DxilParameterReflection& _resource_info,
+            bool                                             _b_special_bindless);
     };
 
 private:

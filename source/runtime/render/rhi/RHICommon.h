@@ -1372,7 +1372,7 @@ struct ReflectParamInfo {
         std::optional<Bindless> sampler;
         std::optional<Bindless> acceleration_structure;
     };
-    struct Spirv {
+    struct SpirvParameterReflection {
         uint                                            stage_bits = 0;
         std::variant<Resource, Constant, BindlessArray> data       = Resource{};
 
@@ -1398,7 +1398,7 @@ struct ReflectParamInfo {
             return *value;
         }
     };
-    struct Dxil {
+    struct DxilParameterReflection {
         uint slot;
         uint space;
         uint count;
@@ -1409,19 +1409,19 @@ struct ReflectParamInfo {
             return count == 0;
         }
     };
-    std::variant<Spirv, Dxil> backend_data = Spirv{};
+    std::variant<SpirvParameterReflection, DxilParameterReflection> backend_data = SpirvParameterReflection{};
 
-    Spirv& GetSpirv() {
-        return std::get<Spirv>(backend_data);
+    SpirvParameterReflection& GetSpirvReflection() {
+        return std::get<SpirvParameterReflection>(backend_data);
     }
-    const Spirv& GetSpirv() const {
-        return std::get<Spirv>(backend_data);
+    const SpirvParameterReflection& GetSpirvReflection() const {
+        return std::get<SpirvParameterReflection>(backend_data);
     }
-    Dxil& GetDxil() {
-        return std::get<Dxil>(backend_data);
+    DxilParameterReflection& GetDxilReflection() {
+        return std::get<DxilParameterReflection>(backend_data);
     }
-    const Dxil& GetDxil() const {
-        return std::get<Dxil>(backend_data);
+    const DxilParameterReflection& GetDxilReflection() const {
+        return std::get<DxilParameterReflection>(backend_data);
     }
 
     RENDER_API Moer::OutputStream& operator<<(Moer::OutputStream& stream) const;

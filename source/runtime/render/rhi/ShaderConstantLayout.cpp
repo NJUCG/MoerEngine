@@ -28,7 +28,7 @@ void ValidateConstantBindingTypes(
         if (reflected_parameter == shader_parameters.reflect_map.end()) {
             continue;
         }
-        if (reflected_parameter->second.GetSpirv().TryGetConstant() == nullptr) {
+        if (reflected_parameter->second.GetSpirvReflection().TryGetConstant() == nullptr) {
             throw std::invalid_argument(
                 "Shader constant argument has a resource binding: " + std::string(constant_name)
             );
@@ -62,7 +62,7 @@ bool ValidateShaderConstantUsage(
 ) {
     bool uses_constants = false;
     for (const auto& [parameter_name, parameter] : shader_parameters.reflect_map) {
-        const auto* shader_constant = parameter.GetSpirv().TryGetConstant();
+        const auto* shader_constant = parameter.GetSpirvReflection().TryGetConstant();
         if (shader_constant == nullptr || !shader_constant->custom_flag.active) {
             continue;
         }
@@ -83,8 +83,8 @@ bool ValidateShaderConstantUsage(
 } // namespace
 
 uint ValidatePipelineConstants(const PipelineShaderInfo& pipeline_shader_info, uint max_constant_byte_size) {
-    const auto& cpp_metadata     = pipeline_shader_info.argument_metadata;
-    uint        upload_byte_size = 0;
+    const auto& cpp_metadata            = pipeline_shader_info.argument_metadata;
+    bool        pipeline_uses_constants = false;
     for (const auto& shader : pipeline_shader_info.shaders) {
         if (shader.shader_param_map == nullptr) {
             continue;
@@ -92,10 +92,11 @@ uint ValidatePipelineConstants(const PipelineShaderInfo& pipeline_shader_info, u
         const auto& shader_parameters = *shader.shader_param_map;
         ValidateConstantBindingTypes(cpp_metadata, shader_parameters);
         if (ValidateShaderConstantUsage(cpp_metadata, shader_parameters, shader.name)) {
-            upload_byte_size = cpp_metadata.GetConstantByteSize();
+            pipeline_uses_constants = true;
         }
     }
 
+    const uint upload_byte_size = pipeline_uses_constants ? cpp_metadata.GetConstantByteSize() : 0;
     if (upload_byte_size > max_constant_byte_size) {
         throw std::invalid_argument(
             "Pipeline constants exceed the device limit: " + std::to_string(upload_byte_size) + " > " +

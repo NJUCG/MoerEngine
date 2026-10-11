@@ -563,19 +563,19 @@ void CheckGraphicsBindlessArguments() {
     )";
     std::vector<Moer::uint8> code(source.begin(), source.end());
     ShaderParametersInfoMap reflection{};
-    reflection.reflect_map["scalar"].GetSpirv().data =
+    reflection.reflect_map["scalar"].GetSpirvReflection().data =
         ReflectParamInfo::Resource{.set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}};
-    reflection.reflect_map["color"].GetSpirv().data =
+    reflection.reflect_map["color"].GetSpirvReflection().data =
         ReflectParamInfo::Resource{.set = 0, .binding = 1, .count = 1, .custom_flag = {.active = 1}};
-    reflection.reflect_map["linear"].GetSpirv().data =
+    reflection.reflect_map["linear"].GetSpirvReflection().data =
         ReflectParamInfo::Resource{.set = 0, .binding = 2, .count = 1, .custom_flag = {.active = 1}};
     auto& bindless = reflection.reflect_map[std::string(ReflectParamInfo::bdls_name)]
-                         .GetSpirv()
+                         .GetSpirvReflection()
                          .data.emplace<ReflectParamInfo::BindlessArray>();
     bindless.array = ReflectParamInfo::Bindless{
         .set = 3, .binding = 0, .custom_flag = {.active = 1}
     };
-    reflection.reflect_map["params"].GetSpirv().data = ReflectParamInfo::Constant{
+    reflection.reflect_map["params"].GetSpirvReflection().data = ReflectParamInfo::Constant{
         .offset = 0, .size = sizeof(uint), .padded_size = sizeof(uint), .custom_flag = {.active = 1}
     };
     SingleShaderInfo vertex{.entry_point = "draw_vertex", .shader_data = code,
@@ -984,11 +984,11 @@ void CheckRHIComputeDispatch() {
     )";
     std::vector<Moer::uint8> code(source.begin(), source.end());
     ShaderParametersInfoMap reflection{};
-    auto&                      buffer_info = reflection.reflect_map["values"].GetSpirv();
+    auto&                      buffer_info = reflection.reflect_map["values"].GetSpirvReflection();
     buffer_info.data = ReflectParamInfo::Resource{
         .set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}
     };
-    auto& constant_info = reflection.reflect_map["increment"].GetSpirv();
+    auto& constant_info = reflection.reflect_map["increment"].GetSpirvReflection();
     constant_info.data = ReflectParamInfo::Constant{
         .offset = 0, .size = sizeof(uint), .padded_size = sizeof(uint),
         .custom_flag = {.active = 1}
@@ -1041,9 +1041,9 @@ void CheckRHIComputeTextureViews() {
     )";
     std::vector<Moer::uint8> code(source.begin(), source.end());
     ShaderParametersInfoMap reflection{};
-    reflection.reflect_map["src"].GetSpirv().data =
+    reflection.reflect_map["src"].GetSpirvReflection().data =
         ReflectParamInfo::Resource{.set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}};
-    reflection.reflect_map["dst"].GetSpirv().data =
+    reflection.reflect_map["dst"].GetSpirvReflection().data =
         ReflectParamInfo::Resource{.set = 0, .binding = 1, .count = 1, .custom_flag = {.active = 1}};
     SingleShaderInfo compute{
         .entry_point = "compute_main", .shader_data = code,
@@ -1116,14 +1116,14 @@ void CheckRHIComputeTexelBuffers() {
     )";
     std::vector<Moer::uint8> code(source.begin(), source.end());
     ShaderParametersInfoMap reflection{};
-    reflection.reflect_map["histogram"].GetSpirv().data = ReflectParamInfo::Resource{
+    reflection.reflect_map["histogram"].GetSpirvReflection().data = ReflectParamInfo::Resource{
         .set         = 0,
         .binding     = 0,
         .count       = 1,
         .desc_type   = VDT_UNIFORM_TEXEL_BUFFER,
         .custom_flag = {.active = 1}
     };
-    reflection.reflect_map["exposure"].GetSpirv().data = ReflectParamInfo::Resource{
+    reflection.reflect_map["exposure"].GetSpirvReflection().data = ReflectParamInfo::Resource{
         .set         = 0,
         .binding     = 1,
         .count       = 1,
@@ -1205,10 +1205,10 @@ void CheckRHIComputeBindlessTexture() {
     )";
     std::vector<Moer::uint8> code(source.begin(), source.end());
     ShaderParametersInfoMap reflection{};
-    reflection.reflect_map["output"].GetSpirv().data =
+    reflection.reflect_map["output"].GetSpirvReflection().data =
         ReflectParamInfo::Resource{.set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}};
     auto& bindless = reflection.reflect_map[std::string(ReflectParamInfo::bdls_name)]
-                         .GetSpirv()
+                         .GetSpirvReflection()
                          .data.emplace<ReflectParamInfo::BindlessArray>();
     bindless.array = ReflectParamInfo::Bindless{
         .set = 1, .binding = 0, .custom_flag = {.active = 1}
@@ -1219,7 +1219,7 @@ void CheckRHIComputeBindlessTexture() {
     bindless.sampler = ReflectParamInfo::Bindless{
         .set = 3, .binding = 0, .custom_flag = {.active = 1}
     };
-    reflection.reflect_map["params"].GetSpirv().data = ReflectParamInfo::Constant{
+    reflection.reflect_map["params"].GetSpirvReflection().data = ReflectParamInfo::Constant{
         .offset = 0, .size = sizeof(uint), .padded_size = sizeof(uint), .custom_flag = {.active = 1}
     };
     SingleShaderInfo compute{

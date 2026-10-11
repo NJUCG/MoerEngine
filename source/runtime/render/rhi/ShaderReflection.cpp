@@ -69,25 +69,26 @@ ReflectParamInfo::BindlessArray ReadBindlessArray(InputStream& stream) {
 } // namespace
 
 OutputStream& ReflectParamInfo::operator<<(OutputStream& stream) const {
-    const auto* spirv = std::get_if<Spirv>(&backend_data);
-    if (spirv == nullptr) {
-        const auto& dxil = GetDxil();
-        stream << ReflectionBackendTag::Dxil << dxil.slot << dxil.space << dxil.count << uint16_t(dxil.type)
-               << uint16_t(dxil.byte_size);
+    const auto* spirv_reflection = std::get_if<SpirvParameterReflection>(&backend_data);
+    if (spirv_reflection == nullptr) {
+        const auto& dxil_reflection = GetDxilReflection();
+        stream << ReflectionBackendTag::Dxil << dxil_reflection.slot << dxil_reflection.space
+               << dxil_reflection.count << uint16_t(dxil_reflection.type)
+               << uint16_t(dxil_reflection.byte_size);
         return stream;
     }
 
     stream << ReflectionBackendTag::Spirv;
-    if (const auto* resource = spirv->TryGetResource()) {
-        stream << ReflectionParameterTag::Resource << spirv->stage_bits << resource->set << resource->binding
-               << resource->sampled << resource->desc_type << resource->resource_type << resource->count
-               << uint(resource->custom_flag.active) << uint(resource->format);
-    } else if (const auto* constant = spirv->TryGetConstant()) {
-        stream << ReflectionParameterTag::Constant << spirv->stage_bits << constant->offset << constant->size
-               << constant->padded_size << uint(constant->custom_flag.active);
+    if (const auto* resource = spirv_reflection->TryGetResource()) {
+        stream << ReflectionParameterTag::Resource << spirv_reflection->stage_bits << resource->set
+               << resource->binding << resource->sampled << resource->desc_type << resource->resource_type
+               << resource->count << uint(resource->custom_flag.active) << uint(resource->format);
+    } else if (const auto* constant = spirv_reflection->TryGetConstant()) {
+        stream << ReflectionParameterTag::Constant << spirv_reflection->stage_bits << constant->offset
+               << constant->size << constant->padded_size << uint(constant->custom_flag.active);
     } else {
-        stream << ReflectionParameterTag::BindlessArray << spirv->stage_bits;
-        WriteBindlessArray(stream, std::get<BindlessArray>(spirv->data));
+        stream << ReflectionParameterTag::BindlessArray << spirv_reflection->stage_bits;
+        WriteBindlessArray(stream, std::get<BindlessArray>(spirv_reflection->data));
     }
     return stream;
 }
@@ -97,13 +98,14 @@ InputStream& ReflectParamInfo::operator>>(InputStream& stream) {
     stream >> backend;
     switch (backend) {
         case ReflectionBackendTag::Dxil: {
-            Dxil     dxil{};
+            DxilParameterReflection dxil_reflection{};
             uint16_t type      = 0;
             uint16_t byte_size = 0;
-            stream >> dxil.slot >> dxil.space >> dxil.count >> type >> byte_size;
-            dxil.type      = type;
-            dxil.byte_size = byte_size;
-            backend_data   = dxil;
+            stream >> dxil_reflection.slot >> dxil_reflection.space >> dxil_reflection.count >> type >>
+                byte_size;
+            dxil_reflection.type      = type;
+            dxil_reflection.byte_size = byte_size;
+            backend_data              = dxil_reflection;
             return stream;
         }
         case ReflectionBackendTag::Spirv:
@@ -113,8 +115,8 @@ InputStream& ReflectParamInfo::operator>>(InputStream& stream) {
     }
 
     auto  kind = static_cast<ReflectionParameterTag>(0xff);
-    Spirv spirv;
-    stream >> kind >> spirv.stage_bits;
+    SpirvParameterReflection spirv_reflection;
+    stream >> kind >> spirv_reflection.stage_bits;
     switch (kind) {
         case ReflectionParameterTag::Resource: {
             Resource resource{};
@@ -124,23 +126,23 @@ InputStream& ReflectParamInfo::operator>>(InputStream& stream) {
             resource.custom_flag = ReadActiveFlag(stream);
             stream >> format;
             resource.format = static_cast<EPixelFormat>(format);
-            spirv.data      = resource;
+            spirv_reflection.data = resource;
             break;
         }
         case ReflectionParameterTag::Constant: {
             Constant constant{};
             stream >> constant.offset >> constant.size >> constant.padded_size;
             constant.custom_flag = ReadActiveFlag(stream);
-            spirv.data           = constant;
+            spirv_reflection.data = constant;
             break;
         }
         case ReflectionParameterTag::BindlessArray:
-            spirv.data = ReadBindlessArray(stream);
+            spirv_reflection.data = ReadBindlessArray(stream);
             break;
         default:
             throw std::invalid_argument("Invalid shader reflection parameter tag");
     }
-    backend_data = std::move(spirv);
+    backend_data = std::move(spirv_reflection);
     return stream;
 }
 

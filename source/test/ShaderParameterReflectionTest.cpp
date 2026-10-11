@@ -53,20 +53,20 @@ ReflectParamInfo Deserialize(const std::string& bytes) {
 
 void CheckTypedAccess() {
     ReflectParamInfo parameter;
-    auto&            spirv = parameter.GetSpirv();
+    auto&            spirv_reflection = parameter.GetSpirvReflection();
     Require(
-        spirv.TryGetResource() != nullptr && spirv.TryGetConstant() == nullptr &&
-            spirv.TryGetBindlessArray() == nullptr,
+        spirv_reflection.TryGetResource() != nullptr && spirv_reflection.TryGetConstant() == nullptr &&
+            spirv_reflection.TryGetBindlessArray() == nullptr,
         "Default reflection has no valid resource type"
     );
-    spirv.data = ReflectParamInfo::Constant{.size = 4, .custom_flag = {.active = 1}};
+    spirv_reflection.data = ReflectParamInfo::Constant{.size = 4, .custom_flag = {.active = 1}};
     Require(
-        spirv.TryGetConstant() != nullptr && spirv.TryGetResource() == nullptr &&
-            spirv.TryGetBindlessArray() == nullptr,
+        spirv_reflection.TryGetConstant() != nullptr && spirv_reflection.TryGetResource() == nullptr &&
+            spirv_reflection.TryGetBindlessArray() == nullptr,
         "Constant reflection has the wrong type"
     );
     try {
-        spirv.Get<ReflectParamInfo::Resource>("value", "Resource");
+        spirv_reflection.Get<ReflectParamInfo::Resource>("value", "Resource");
         throw std::runtime_error("Wrong reflection type was accepted");
     } catch (const std::invalid_argument& error) {
         const std::string message = error.what();
@@ -78,8 +78,9 @@ void CheckTypedAccess() {
 
     ShaderParametersInfoMap reflection;
     reflection.reflect_map.emplace(std::string(ReflectParamInfo::bdls_name), parameter);
-    reflection.reflect_map["arbitrary_table_name"].GetSpirv().data = ReflectParamInfo::BindlessArray{};
-    reflection.reflect_map["ordinary_resource"].GetSpirv().data    = ReflectParamInfo::Resource{};
+    reflection.reflect_map["arbitrary_table_name"].GetSpirvReflection().data =
+        ReflectParamInfo::BindlessArray{};
+    reflection.reflect_map["ordinary_resource"].GetSpirvReflection().data = ReflectParamInfo::Resource{};
     PipelineShaderInfo info{
         .shaders           = {{.name = "typed", .shader_param_map = &reflection}},
         .argument_metadata = ReservedNameConstant::GetArgumentMetadata()
@@ -87,21 +88,22 @@ void CheckTypedAccess() {
     Require(ValidatePipelineConstants(info, 128) == 4, "A parameter name was used as its type tag");
 
     auto copy = reflection;
-    copy.reflect_map.at(std::string(ReflectParamInfo::bdls_name)).GetSpirv().data =
+    copy.reflect_map.at(std::string(ReflectParamInfo::bdls_name)).GetSpirvReflection().data =
         ReflectParamInfo::BindlessArray{};
     info.shaders.front().shader_param_map = &copy;
     RequireRejected([&] {
         ValidatePipelineConstants(info, 128);
     });
     Require(
-        reflection.reflect_map.at(std::string(ReflectParamInfo::bdls_name)).GetSpirv().TryGetConstant() !=
-            nullptr,
+        reflection.reflect_map.at(std::string(ReflectParamInfo::bdls_name))
+                .GetSpirvReflection()
+                .TryGetConstant() != nullptr,
         "Copying reflection did not preserve ownership"
     );
 }
 
 void CheckSerialization() {
-    ReflectParamInfo resource{ReflectParamInfo::Spirv{
+    ReflectParamInfo resource{ReflectParamInfo::SpirvParameterReflection{
         17,
         ReflectParamInfo::Resource{
             .set           = 2,
@@ -116,11 +118,11 @@ void CheckSerialization() {
     }};
     const auto       resource_bytes    = Serialize(resource);
     const auto       restored_resource = Deserialize(resource_bytes);
-    const auto&      r                 = *restored_resource.GetSpirv().TryGetResource();
+    const auto&      r                 = *restored_resource.GetSpirvReflection().TryGetResource();
     Require(
-        restored_resource.GetSpirv().stage_bits == 17 && r.set == 2 && r.binding == 3 && r.sampled == 1 &&
-            r.desc_type == 4 && r.resource_type == 5 && r.count == 6 && r.custom_flag.active &&
-            r.format == PF_R32_SFLOAT,
+        restored_resource.GetSpirvReflection().stage_bits == 17 && r.set == 2 && r.binding == 3 &&
+            r.sampled == 1 && r.desc_type == 4 && r.resource_type == 5 && r.count == 6 &&
+            r.custom_flag.active && r.format == PF_R32_SFLOAT,
         "Resource cache lost fields"
     );
     Require(
@@ -128,15 +130,15 @@ void CheckSerialization() {
         "Resource cache does not use its fixed field format"
     );
 
-    ReflectParamInfo constant{ReflectParamInfo::Spirv{
+    ReflectParamInfo constant{ReflectParamInfo::SpirvParameterReflection{
         19,
         ReflectParamInfo::Constant{.offset = 16, .size = 12, .padded_size = 16, .custom_flag = {.active = 1}}
     }};
     const auto       constant_bytes    = Serialize(constant);
     const auto       restored_constant = Deserialize(constant_bytes);
-    const auto&      c                 = *restored_constant.GetSpirv().TryGetConstant();
+    const auto&      c                 = *restored_constant.GetSpirvReflection().TryGetConstant();
     Require(
-        restored_constant.GetSpirv().stage_bits == 19 && c.offset == 16 && c.size == 12 &&
+        restored_constant.GetSpirvReflection().stage_bits == 19 && c.offset == 16 && c.size == 12 &&
             c.padded_size == 16 && c.custom_flag.active,
         "Constant cache lost fields"
     );
@@ -145,17 +147,17 @@ void CheckSerialization() {
         "Constant cache does not use its fixed field format"
     );
 
-    ReflectParamInfo table{ReflectParamInfo::Spirv{23, ReflectParamInfo::BindlessArray{}}};
-    auto&            bindings       = std::get<ReflectParamInfo::BindlessArray>(table.GetSpirv().data);
+    ReflectParamInfo table{ReflectParamInfo::SpirvParameterReflection{23, ReflectParamInfo::BindlessArray{}}};
+    auto&            bindings = std::get<ReflectParamInfo::BindlessArray>(table.GetSpirvReflection().data);
     bindings.array                  = ReflectParamInfo::Bindless{2, 3, 4, 5, 6, 7, {.active = 1}};
     bindings.image                  = ReflectParamInfo::Bindless{8, 9, 10, 11, 12, 13, {.active = 0}};
     bindings.acceleration_structure = ReflectParamInfo::Bindless{14, 15, 16, 17, 18, 19, {.active = 1}};
     const auto  table_bytes         = Serialize(table);
     const auto  restored_table      = Deserialize(table_bytes);
-    const auto& b                   = *restored_table.GetSpirv().TryGetBindlessArray();
+    const auto& b                   = *restored_table.GetSpirvReflection().TryGetBindlessArray();
     Require(
-        restored_table.GetSpirv().stage_bits == 23 && b.array && b.image && b.acceleration_structure &&
-            !b.buffer && !b.sampler,
+        restored_table.GetSpirvReflection().stage_bits == 23 && b.array && b.image &&
+            b.acceleration_structure && !b.buffer && !b.sampler,
         "Bindless cache lost array presence"
     );
     const ReflectParamInfo::Bindless* restored[] = {&*b.array, &*b.image, &*b.acceleration_structure};
@@ -174,19 +176,19 @@ void CheckSerialization() {
     }
     Require(table_bytes[0] == 0 && table_bytes[1] == 2, "Bindless cache type tag changed");
 
-    ReflectParamInfo dxil{
-        ReflectParamInfo::Dxil{.slot = 2, .space = 3, .count = 4, .type = 0xabcd, .byte_size = 0x1234}
-    };
+    ReflectParamInfo dxil{ReflectParamInfo::DxilParameterReflection{
+        .slot = 2, .space = 3, .count = 4, .type = 0xabcd, .byte_size = 0x1234
+    }};
     const auto  dxil_bytes    = Serialize(dxil);
     const auto  restored_dxil = Deserialize(dxil_bytes);
-    const auto& d             = restored_dxil.GetDxil();
+    const auto&      d             = restored_dxil.GetDxilReflection();
     Require(
         d.slot == 2 && d.space == 3 && d.count == 4 && d.type == 0xabcd && d.byte_size == 0x1234,
         "DXIL cache lost fields"
     );
     Require(dxil_bytes.size() == 17 && dxil_bytes[0] == 1, "DXIL cache does not use its fixed field format");
     Require(
-        std::get_if<ReflectParamInfo::Spirv>(&restored_dxil.backend_data) == nullptr,
+        std::get_if<ReflectParamInfo::SpirvParameterReflection>(&restored_dxil.backend_data) == nullptr,
         "DXIL reflection was read as SPIR-V"
     );
 
@@ -248,12 +250,12 @@ void CheckCompilerReflection() {
     Require(output.b_succeeded, "Reflection shader did not compile");
     const auto& parameters = output.parameter_map.reflect_map;
     Require(
-        parameters.at("result").GetSpirv().TryGetResource() != nullptr &&
-            parameters.at("params").GetSpirv().TryGetConstant() != nullptr,
+        parameters.at("result").GetSpirvReflection().TryGetResource() != nullptr &&
+            parameters.at("params").GetSpirvReflection().TryGetConstant() != nullptr,
         "Compiler did not assign resource and constant types"
     );
     const auto* bindings =
-        parameters.at(std::string(ReflectParamInfo::bdls_name)).GetSpirv().TryGetBindlessArray();
+        parameters.at(std::string(ReflectParamInfo::bdls_name)).GetSpirvReflection().TryGetBindlessArray();
     Require(
         bindings && bindings->array && bindings->buffer && bindings->image && bindings->sampler,
         "Compiler did not aggregate bindless arrays"

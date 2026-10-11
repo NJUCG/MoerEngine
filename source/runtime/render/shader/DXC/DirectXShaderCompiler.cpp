@@ -680,13 +680,15 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 GET_RESOURCE_DEFAULT_INFOS(_res);
                 const auto [entry, inserted] = reflect_map.try_emplace(
                     std::string(ReflectParamInfo::bdls_name),
-                    ReflectParamInfo{ReflectParamInfo::Spirv{stage_bits, ReflectParamInfo::BindlessArray{}}}
+                    ReflectParamInfo{ReflectParamInfo::SpirvParameterReflection{
+                        stage_bits, ReflectParamInfo::BindlessArray{}
+                    }}
                 );
-                auto& spirv = entry->second.GetSpirv();
-                if (spirv.TryGetBindlessArray() == nullptr) {
+                auto& spirv_reflection = entry->second.GetSpirvReflection();
+                if (spirv_reflection.TryGetBindlessArray() == nullptr) {
                     throw std::invalid_argument("Conflicting reflected bindless parameter: " + entry->first);
                 }
-                auto& bdls_param = std::get<ReflectParamInfo::BindlessArray>(spirv.data);
+                auto& bdls_param = std::get<ReflectParamInfo::BindlessArray>(spirv_reflection.data);
                 ReflectParamInfo::Bindless*       target     = nullptr;
 
                 if (_desc_type == VDT_STORAGE_BUFFER) {
@@ -732,9 +734,12 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 res.count                  = count;
                 res.format                 = ToPixelFormat(type.image.format);
                 res.custom_flag.active     = is_active;
-                if (!reflect_map.try_emplace(
-                                    name, ReflectParamInfo{ReflectParamInfo::Spirv{stage_bits, res}}
-                    ).second) {
+                if (!reflect_map
+                         .try_emplace(
+                             name,
+                             ReflectParamInfo{ReflectParamInfo::SpirvParameterReflection{stage_bits, res}}
+                         )
+                         .second) {
                     throw std::invalid_argument("Duplicate reflected shader parameter: " + name);
                 }
             };
@@ -799,7 +804,9 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 constant.custom_flag.active = active;
                 if (!reflect_map
                          .try_emplace(
-                             argument_name, ReflectParamInfo{ReflectParamInfo::Spirv{stage_bits, constant}}
+                             argument_name,
+                             ReflectParamInfo{ReflectParamInfo::SpirvParameterReflection{stage_bits, constant}
+                             }
                          )
                          .second) {
                     throw std::invalid_argument("Duplicate reflected shader parameter: " + argument_name);
@@ -878,7 +885,7 @@ void DXCompiler::Impl::ReflectDXIL(
         if (is_bdls_array(name)) {
             name = ReflectParamInfo::bdls_name; // Bindless 数组统一映射到内部保留名称。
         }
-        ReflectParamInfo::Dxil param_info{};
+        ReflectParamInfo::DxilParameterReflection param_info{};
         param_info.slot  = shaderInputBindDesc.BindPoint;
         param_info.space = shaderInputBindDesc.Space;
         param_info.count = shaderInputBindDesc.BindCount;

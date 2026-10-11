@@ -52,7 +52,7 @@ PipelineHandle MetalPipelineMetadata(const PipelineShaderInfo& shader_info) {
             const auto  found =
                 reflection.find(std::string(bindless ? ReflectParamInfo::bdls_name : arguments[index].name));
             if (found == reflection.end()) continue;
-            const auto& parameter = found->second.GetSpirv();
+            const auto& parameter = found->second.GetSpirvReflection();
             bool active = false;
             if (bindless) {
                 const auto& resources =
@@ -85,14 +85,14 @@ MetalRenderBindings MetalRenderStageBindings(
     for (const auto& argument : metadata.GetConstantLayouts()) {
         const auto parameter = reflection.find(std::string(arguments[argument.argument_index].name));
         if (parameter == reflection.end()) continue;
-        const auto* constant = parameter->second.GetSpirv().TryGetConstant();
+        const auto* constant = parameter->second.GetSpirvReflection().TryGetConstant();
         if (constant != nullptr && constant->custom_flag.active) {
             layout.constant_byte_size = metadata.GetConstantByteSize();
         }
     }
     const auto found = reflection.find(std::string(ReflectParamInfo::bdls_name));
     if (found != reflection.end()) {
-        const auto& bindless = found->second.GetSpirv().Get<ReflectParamInfo::BindlessArray>(
+        const auto& bindless = found->second.GetSpirvReflection().Get<ReflectParamInfo::BindlessArray>(
             ReflectParamInfo::bdls_name, "BindlessArray"
         );
         const auto add = [&](const std::optional<ReflectParamInfo::Bindless>& resource, uint table) {
@@ -126,7 +126,7 @@ MetalRenderBindings MetalRenderStageBindings(
         if (kind == SDA_BindlessArray) continue;
         const auto resource_it = reflection.find(std::string(arguments[index].name));
         if (resource_it == reflection.end()) continue;
-        const auto* resource = resource_it->second.GetSpirv().TryGetResource();
+        const auto* resource = resource_it->second.GetSpirvReflection().TryGetResource();
         if (resource == nullptr || !resource->custom_flag.active) continue;
         layout.scalar_bindings[index] = MetalComputeBinding{
             resource->set, resource->binding, kind, true, false,

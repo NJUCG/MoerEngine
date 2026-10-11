@@ -205,8 +205,10 @@ PipelineHandle D3D12Device::CreatePipeline(GfxPsoCreateInfo&& _pso_info, Pipelin
     return PipelineHandle();
 }
 
-static bool
-CheckReflectionTypeMatch(const ReflectParamInfo::Dxil& resource_info, const ShaderArgCppInfo& arg_info) {
+static bool CheckReflectionTypeMatch(
+    const ReflectParamInfo::DxilParameterReflection& resource_info,
+    const ShaderArgCppInfo&                          arg_info
+) {
     if (arg_info.type ==
         EShaderArgType::
             SDA_BindlessArray) // !just a specical case.. not mean real bindless.  'StructuredBuffer<uint> g__array_114514_bdls'
@@ -235,10 +237,10 @@ uint D3D12PipelineState::PipelineLayout::RootDescriptorTable::GetTotalBindCount(
 }
 
 void D3D12PipelineState::PipelineLayout::Add(
-    uint8                         _idx_in_cpp_args,
-    const ShaderArgCppInfo&       _arg_cpp_info,
-    const ReflectParamInfo::Dxil& _resource_info,
-    bool                          _b_special_bindless
+    uint8                                            _idx_in_cpp_args,
+    const ShaderArgCppInfo&                          _arg_cpp_info,
+    const ReflectParamInfo::DxilParameterReflection& _resource_info,
+    bool                                             _b_special_bindless
 ) {
     if (_b_special_bindless) {
         the_bindless_array.emplace(
@@ -500,7 +502,7 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
             continue;
         }
 
-        auto& resource_info = reflect_map_iter->second.GetDxil();
+        auto& resource_info = reflect_map_iter->second.GetDxilReflection();
         if (arg_info.type == EShaderArgType::SDA_Constant) {
             ASSERT(IsShaderVarConstantBuffer(resource_info));
             resource_info.type = uint(ED3D12ShaderVariableType::RootConstant);

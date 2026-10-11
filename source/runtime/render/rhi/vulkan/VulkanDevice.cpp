@@ -1929,7 +1929,7 @@ void AccumulateShaderPipelineBindings(
             continue;
         }
 
-        const auto& parameter = reflected_parameter->second.GetSpirv();
+        const auto& parameter = reflected_parameter->second.GetSpirvReflection();
         switch (argument_info.type) {
             case SDA_BindlessArray:
                 AccumulateBindlessBindings(
