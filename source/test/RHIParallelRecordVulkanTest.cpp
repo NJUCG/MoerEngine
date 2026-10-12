@@ -119,13 +119,7 @@ public:
         EQueueType       _queue = EQueueType::Graphics
     ) :
         queue(_queue) {
-        usages.emplace_back(
-            std::move(_bindless),
-            ParamInfoFlags{
-                .state_flags    = 0,
-                .pipeline_flags = 0,
-            }
-        );
+        usages.emplace_back(std::move(_bindless), VulkanArgumentInfo{});
     }
 
     void Execute(const VkDispatchContext&) const override {}

@@ -28,11 +28,9 @@ public:
 };
 
 PipelineHandle MakePipeline() {
-    PipelineHandle pipeline;
-    // The fourth argument below is deliberately inactive and must not affect
-    // the estimate.
-    pipeline.valid_bits = (uint64{1} << 0) | (uint64{1} << 1) | (uint64{1} << 2);
-    return pipeline;
+    // The fourth argument below is deliberately inactive and must not affect the estimate.
+    static PipelineState state{(uint64{1} << 0) | (uint64{1} << 1) | (uint64{1} << 2)};
+    return PipelineHandle{&state};
 }
 
 ArrayArguments MakeArguments() {

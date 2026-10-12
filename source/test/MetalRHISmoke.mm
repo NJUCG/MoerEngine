@@ -287,7 +287,7 @@ void CheckGraphicsPipeline() {
     );
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders));
     if (!pipeline.IsValid()) throw std::runtime_error("Metal graphics pipeline was not created");
-    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    MoerDelete(pipeline.GetState());
     std::cout << "native Metal vertex/fragment pipeline with vertex input and blend: success"
               << std::endl;
 }
@@ -966,7 +966,7 @@ void CheckComputePipeline() {
         std::memcmp(values.contents, expected, sizeof(expected)) != 0) {
         throw std::runtime_error("Metal compute pipeline dispatch returned the wrong values");
     }
-    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    MoerDelete(pipeline.GetState());
     std::cout << "native Metal compute pipeline creation and dispatch: success" << std::endl;
 }
 
@@ -1022,7 +1022,7 @@ void CheckRHIComputeDispatch() {
     if (std::memcmp(native.contents, expected, sizeof(expected)) != 0) {
         throw std::runtime_error("Metal RHI compute dispatch returned the wrong values");
     }
-    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    MoerDelete(pipeline.GetState());
     std::cout << "RHI compute dispatch with argument buffer and constants: success" << std::endl;
 }
 
@@ -1096,7 +1096,7 @@ void CheckRHIComputeTextureViews() {
         *static_cast<const float*>(readback.contents) != values[0]) {
         throw std::runtime_error("Metal RHI compute texture mip view readback failed");
     }
-    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    MoerDelete(pipeline.GetState());
     std::cout << "RHI compute texture argument and mip view: success" << std::endl;
 }
 
@@ -1170,7 +1170,7 @@ void CheckRHIComputeTexelBuffers() {
     if (*static_cast<const uint32_t*>(native.contents) != 42) {
         throw std::runtime_error("Metal RHI texel buffer compute result was not 42");
     }
-    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    MoerDelete(pipeline.GetState());
     std::cout << "RHI compute R32Uint texel buffer read/write: success" << std::endl;
 }
 
@@ -1270,7 +1270,7 @@ void CheckRHIComputeBindlessTexture() {
         std::abs(result[3] - 1.0f) > 0.01f) {
         throw std::runtime_error("Metal RHI compute bindless texture result differs from upload");
     }
-    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    MoerDelete(pipeline.GetState());
     std::cout << "RHI compute bindless texture and sampler: success" << std::endl;
 }
 

@@ -1,4 +1,5 @@
 #include "rhi/vulkan/RHICmdReorderer.h"
+#include "shader/ShaderPipeline.h"
 
 #include <array>
 #include <exception>
@@ -15,6 +16,52 @@ void Expect(bool _condition, const char* _message) {
     if (!_condition) {
         throw std::runtime_error(_message);
     }
+}
+
+class TrackedPipelineState final : public PipelineState {
+public:
+    explicit TrackedPipelineState(uint& destruction_count) : destruction_count(destruction_count) {}
+
+    ~TrackedPipelineState() override {
+        ++destruction_count;
+    }
+
+private:
+    uint& destruction_count;
+};
+
+class TestComputePipeline final : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(TestComputePipeline);
+};
+
+template<typename TPipeline>
+void PipelineMovesReleaseEachStateOnce() {
+    uint destruction_count = 0;
+    {
+        auto*                state = MoerNew(TrackedPipelineState)(destruction_count);
+        const PipelineHandle reference{state};
+        {
+            const PipelineHandle copy = reference;
+            Expect(copy == reference, "copied pipeline reference changed identity");
+        }
+        Expect(destruction_count == 0, "non-owning handle released its pipeline");
+
+        TPipeline owner{reference};
+        TPipeline moved{std::move(owner)};
+        Expect(
+            !owner.handle.IsValid() && moved.handle == reference, "pipeline move left the source owning state"
+        );
+
+        TPipeline replacement{PipelineHandle{MoerNew(TrackedPipelineState)(destruction_count)}};
+        replacement = std::move(moved);
+        Expect(destruction_count == 1, "pipeline move assignment leaked the previous state");
+        Expect(
+            !moved.handle.IsValid() && replacement.handle == reference,
+            "pipeline move assignment lost ownership"
+        );
+    }
+    Expect(destruction_count == 2, "pipeline moves did not release each state exactly once");
 }
 
 class TestBuffer final : public Buffer {
@@ -61,8 +108,8 @@ void ExpectRange(
     Expect(it != _ranges.end() && it->second.min == _min && it->second.max == _max, _message);
 }
 
-bool FalseResourceFlag(uint64) {
-    return false;
+ERHIAccessFlags NoArgumentAccess(const PipelineHandle&, uint) {
+    return ERHIAccessFlags::UNDEFINED;
 }
 
 bool FalseBindlessMembership(uint64, uint64) {
@@ -105,9 +152,7 @@ void NoopBindlessLock(uint64) {}
 
 FunctionTable MakeFunctionTable() {
     return {
-        .is_resource_write       = &FalseResourceFlag,
-        .is_resource_read        = &FalseResourceFlag,
-        .is_texture_sampled      = &FalseResourceFlag,
+        .get_argument_access     = &NoArgumentAccess,
         .is_resource_in_bindless = &FalseBindlessMembership,
         .lock_bdls_array         = &NoopBindlessLock,
         .unlock_bdls_array       = &NoopBindlessLock,
@@ -172,6 +217,57 @@ int64 FindCommandLayer(const CmdReorderer& _reorderer, const Command* _command) 
         }
     }
     return -1;
+}
+
+void ShaderArgumentAccessUsesPipelineAndFullSlotIndex() {
+    struct ArgumentAccess : PipelineState {
+        ArgumentAccess(uint index, ERHIAccessFlags access) :
+            PipelineState(uint64{1} << index),
+            index(index),
+            access(access) {}
+        uint            index;
+        ERHIAccessFlags access;
+        uint            queries = 0;
+    };
+    constexpr uint argument_index = 40;
+    ArgumentAccess write_access{argument_index, ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE};
+    ArgumentAccess read_access{argument_index, ERHIAccessFlags::SHADER_READ};
+    FunctionTable  functions      = MakeFunctionTable();
+    functions.get_argument_access = [](const PipelineHandle& pipeline, uint index) {
+        auto& info = *static_cast<ArgumentAccess*>(pipeline.GetState());
+        Expect(index == info.index, "argument access query lost the C++ parameter slot");
+        ++info.queries;
+        return info.access;
+    };
+    TCachedArgArray cached_args;
+    CmdReorderer    reorderer(functions, cached_args);
+    TestBuffer      first_buffer(16, 4, EBufferUsageFlags::VERTEX_BUFFER);
+    TestBuffer      second_buffer(16, 4, EBufferUsageFlags::VERTEX_BUFFER);
+    PipelineHandle  writer{&write_access};
+    PipelineHandle  reader{&read_access};
+    ArrayArguments  write_args;
+    write_args.args.resize(argument_index + 1);
+    write_args.args[argument_index] =
+        BufferViewArray{BufferView(&first_buffer, 0, 16, 4), BufferView(&second_buffer, 0, 16, 4)};
+    ArrayArguments read_args;
+    read_args.args.resize(argument_index + 1);
+    read_args.args[argument_index] = BufferView(&second_buffer, 0, 16, 4);
+    DispatchCmd write(
+        TShaderArgArray{std::move(write_args)}, writer, uint3{1, 1, 1}, ProfileSection("ArgumentWrite")
+    );
+    DispatchCmd read(
+        TShaderArgArray{std::move(read_args)}, reader, uint3{1, 1, 1}, ProfileSection("ArgumentRead")
+    );
+    reorderer.AcceptCmd(&write);
+    reorderer.AcceptCmd(&read);
+    Expect(
+        write_access.queries == 1 && read_access.queries == 1,
+        "array access should be queried once per active parameter"
+    );
+    Expect(
+        FindCommandLayer(reorderer, &read) == FindCommandLayer(reorderer, &write) + 1,
+        "shader resource array write did not order the following read"
+    );
 }
 
 void ReadBarrierParticipatesInFollowingWarDependency() {
@@ -1309,6 +1405,9 @@ void CommandResourcePreprocessingIsTaskGraphIndependent() {
 
 int main() {
     try {
+        PipelineMovesReleaseEachStateOnce<ShaderPipeline>();
+        PipelineMovesReleaseEachStateOnce<TestComputePipeline>();
+        ShaderArgumentAccessUsesPipelineAndFullSlotIndex();
         AccessHazardsAreLayeredWithoutReadAfterReadEdges();
         ReadBarrierParticipatesInFollowingWarDependency();
         MultiResourceBarrierPublishesEveryAccessAtItsFinalLayer();

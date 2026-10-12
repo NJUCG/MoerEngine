@@ -1179,14 +1179,6 @@ public:
         return args;
     }
 
-    // Note: This function is never used, so I comment it out.
-    // void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
-    //     for (int i = 0; i < args.args.size(); i++) {
-    //         if (pipeline->valid_bits & (1 << i))
-    //             _func(args.args[i], pipeline->binding_infos[i]);
-    //     }
-    // }
-
     void IterateArgs(
         std::function<void(const TArg&, uint _idx)> _func,
         std::function<void(const TArg&, uint _idx)> _bdls_post_func
@@ -1597,15 +1589,15 @@ public:
     auto Param() const {
         return param;
     }
-    void IterateArgs(const std::function<void(const TArg&, ParamInfoFlags _flag)>& _func) const {
-        for (int i = 0; i < args.args.size(); i++) {
-            if (pipeline.valid_bits & (1 << i))
-                std::visit(
-                    [&_func, i, this](const auto& _arg) {
-                        _func(_arg, pipeline.binding_infos[i]);
-                    },
-                    args.args[i]
-                );
+    void IterateArgs(const std::function<void(const TArg&, uint)>& visit) const {
+        if (!pipeline.IsValid()) {
+            return;
+        }
+        const uint64 active_argument_bits = pipeline.GetState()->GetActiveArgumentBits();
+        for (uint index = 0; index < args.args.size() && index < 64; ++index) {
+            if (active_argument_bits & (uint64(1) << index)) {
+                visit(args.args[index], index);
+            }
         }
     }
 };
@@ -1922,28 +1914,10 @@ public:
 
 struct CustomDispatchCmd : public CustomCmd {
 public:
-    struct ResourceUsage {
-        TArg           resource;
-        ParamInfoFlags state_flags;
-        template<typename Arg>
-            requires(std::is_constructible_v<TArg, Arg &&>)
-        ResourceUsage(Arg&& _resource, ParamInfoFlags _state_flags) :
-            resource{std::forward<Arg>(_resource)},
-            state_flags{_state_flags} {}
-    };
-
-private:
-    virtual std::span<const ResourceUsage> GetResourceUsages() const = 0;
-
-public:
     CustomDispatchCmd() : CustomCmd(CustomCmdId::CUSTOM_DISPATCH) {}
     ~CustomDispatchCmd() = default;
 
-    void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _usage)> _func) const {
-        for (const auto& usage : GetResourceUsages()) {
-            _func(usage.resource, usage.state_flags);
-        }
-    }
+    virtual void IterateArgs(const std::function<void(const TArg&, ERHIAccessFlags)>& visit) const = 0;
 };
 
 class RenderDevice::Impl {

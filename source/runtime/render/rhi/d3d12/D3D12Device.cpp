@@ -481,7 +481,7 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
     auto& reflect_map = cs_info.shader_param_map->reflect_map;
 
     const auto            arguments = _shaders.argument_metadata.GetArguments();
-    Array<ParamInfoFlags> binding_infos(arguments.size());
+    Array<D3D12ArgumentInfo> argument_infos(arguments.size());
 
     D3D12PipelineState::PipelineLayout layout;
 
@@ -513,13 +513,14 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
             std::format("reflection mismatch for resource {} in shader {}", argument.name, cs_info.name)
         );
 
-        binding_infos[i].pipeline_flags = uint64(D3D12_BARRIER_SYNC_COMPUTE_SHADING);
-        binding_infos[i].state_flags    = uint64(resource_info.type);
+        argument_infos[i].sync          = D3D12_BARRIER_SYNC_COMPUTE_SHADING;
+        argument_infos[i].variable_type = static_cast<ED3D12ShaderVariableType>(resource_info.type);
 
         layout.Add(uint8(i), arg_info, resource_info, b_special_bindless);
     }
 
     D3D12PipelineState* pso = MoerNew(D3D12PipelineState)(this, D3D12PipelineState::Compute);
+    pso->argument_infos     = std::move(argument_infos);
     pso->BuildRootSignature(layout);
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc{};
@@ -535,7 +536,7 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
         &pso_desc, IID_PPV_ARGS(pso->pipeline_state.ReleaseAndGetAddressOf())
     ));
 
-    return PipelineHandle{.handle = reinterpret_cast<uint64>(pso), .binding_infos = std::move(binding_infos)};
+    return PipelineHandle{pso};
 }
 
 TextureRef D3D12Device::CreateTexture(
@@ -1182,9 +1183,9 @@ struct D3D12CommandPreprocessVisitor {
         }
     }
 
-    void VisitArgs(const TArg& _arg, uint64 _state_flag, uint64 _pipeline_flag) {
-        auto sync_flag = D3D12_BARRIER_SYNC(_pipeline_flag);
-        auto var_type  = ED3D12ShaderVariableType(_state_flag);
+    void VisitArgs(const TArg& _arg, const D3D12ArgumentInfo& info) {
+        const auto sync_flag = info.sync;
+        const auto var_type  = info.variable_type;
 
         Variant(_arg).Match(
             [&](const TInvalidArg&) {},
@@ -1212,12 +1213,12 @@ struct D3D12CommandPreprocessVisitor {
             },
             [&](const TextureViewArray& arg) {
                 for (auto&& i : arg) {
-                    VisitArgs(i, _state_flag, _pipeline_flag);
+                    VisitArgs(i, info);
                 }
             },
             [&](const BufferViewArray& arg) {
                 for (auto&& i : arg) {
-                    VisitArgs(i, _state_flag, _pipeline_flag);
+                    VisitArgs(i, info);
                 }
             },
             [&](const Sampler& arg) {},
@@ -1235,11 +1236,10 @@ struct D3D12CommandPreprocessVisitor {
     void Visit(const DispatchCmd& _cmd) {
         ASSERT(std::holds_alternative<uint3>(_cmd.Param())); // todo indirect buffer
         const auto& pipeline = _cmd.Pipeline();
+        const auto argument_infos = static_cast<D3D12PipelineState*>(pipeline.GetState())->GetArgumentInfos();
 
         auto func = [&](const TArg& _arg, uint _idx) {
-            VisitArgs(
-                _arg, pipeline.binding_infos[_idx].state_flags, pipeline.binding_infos[_idx].pipeline_flags
-            );
+            VisitArgs(_arg, argument_infos[_idx]);
         };
         auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
             // todo
@@ -1653,9 +1653,6 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     };
 
     //FunctionTable function_table{
-    //    .is_resource_write       = &IsBufferTextureWrite,
-    //    .is_resource_read        = &IsBufferTextureRead,
-    //    .is_texture_sampled      = &IsTextureSampled,
     //    .is_resource_in_bindless = &IsResourceInBindlessArray};
     //CmdReorderer reorderer{function_table};
     //for (const auto& cmd : _submit.cmds) {
@@ -2118,22 +2115,22 @@ void D3D12CommandList::End() {
     DX_CHECK_HRESULT(list->Close());
 }
 void D3D12CommandList::SetPso(const PipelineHandle& _handle) {
-    auto* pso = reinterpret_cast<D3D12PipelineState*>(_handle.handle);
+    auto* pso = static_cast<D3D12PipelineState*>(_handle.GetState());
     list->SetPipelineState(pso->Native());
     list->SetComputeRootSignature(pso->NativeRootSignature());
 }
 void D3D12CommandList::BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args) {
 
-    D3D12PipelineState* pso    = reinterpret_cast<D3D12PipelineState*>(_pso_handle.handle);
+    D3D12PipelineState* pso            = static_cast<D3D12PipelineState*>(_pso_handle.GetState());
     const auto&         layout = pso->GetLayout();
+    const auto          argument_infos = pso->GetArgumentInfos();
 
     if (layout.root_constant) {
         ASSERT(
             layout.root_constant->idx_in_cpp_args < _args.Size() &&
-            layout.root_constant->idx_in_cpp_args < _pso_handle.binding_infos.size()
+            layout.root_constant->idx_in_cpp_args < argument_infos.size()
         );
-        const ParamInfoFlags flags    = _pso_handle.binding_infos[layout.root_constant->idx_in_cpp_args];
-        const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+        const auto var_type = argument_infos[layout.root_constant->idx_in_cpp_args].variable_type;
         ASSERT(IsShaderVarRootConstant(var_type));
         const auto& constants = _args.constants;
         list->SetComputeRoot32BitConstants(
@@ -2142,11 +2139,8 @@ void D3D12CommandList::BindDescriptors(const PipelineHandle& _pso_handle, const 
     }
     if (layout.root_cbvs) {
         for (const auto& cbv : *layout.root_cbvs) {
-            ASSERT(
-                cbv.idx_in_cpp_args < _args.Size() && cbv.idx_in_cpp_args < _pso_handle.binding_infos.size()
-            );
-            const ParamInfoFlags flags    = _pso_handle.binding_infos[cbv.idx_in_cpp_args];
-            const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+            ASSERT(cbv.idx_in_cpp_args < _args.Size() && cbv.idx_in_cpp_args < argument_infos.size());
+            const auto var_type = argument_infos[cbv.idx_in_cpp_args].variable_type;
             ASSERT(IsShaderVarConstantBuffer(var_type));
             ASSERT(std::holds_alternative<BufferView>(_args[cbv.idx_in_cpp_args]));
             const auto&  buf_view = std::get<BufferView>(_args[cbv.idx_in_cpp_args]);
@@ -2159,9 +2153,6 @@ void D3D12CommandList::BindDescriptors(const PipelineHandle& _pso_handle, const 
     }
     if (layout.the_bindless_array) {
         FATAL("not implemented");
-        //ASSERT(layout.the_bindless_array->idx_in_cpp_args < _args.Size() && layout.the_bindless_array->idx_in_cpp_args < _pso_handle.binding_infos.size());
-        //const ParamInfoFlags flags    = _pso_handle.binding_infos[layout.the_bindless_array->idx_in_cpp_args];
-        //const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
         //ASSERT(IsShaderVarCommonBuffer(var_type) && IsShaderVarSrv(var_type));
         //ASSERT(std::holds_alternative<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]));
         //const auto&  buf_view = std::get<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]);
@@ -2173,9 +2164,8 @@ void D3D12CommandList::BindDescriptors(const PipelineHandle& _pso_handle, const 
         Array<DescriptorIndex> indices(layout.srv_table->GetTotalBindCount());
 
         for (const auto& e : layout.srv_table->entries) {
-            ASSERT(e.idx_in_cpp_args < _args.Size() && e.idx_in_cpp_args < _pso_handle.binding_infos.size());
-            const ParamInfoFlags flags    = _pso_handle.binding_infos[e.idx_in_cpp_args];
-            const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+            ASSERT(e.idx_in_cpp_args < _args.Size() && e.idx_in_cpp_args < argument_infos.size());
+            const auto var_type = argument_infos[e.idx_in_cpp_args].variable_type;
             ASSERT(IsShaderVarSrv(var_type));
 
             Variant(_args[e.idx_in_cpp_args])
@@ -2218,9 +2208,8 @@ void D3D12CommandList::BindDescriptors(const PipelineHandle& _pso_handle, const 
         Array<DescriptorIndex> indices(layout.uav_table->GetTotalBindCount());
 
         for (const auto& e : layout.uav_table->entries) {
-            ASSERT(e.idx_in_cpp_args < _args.Size() && e.idx_in_cpp_args < _pso_handle.binding_infos.size());
-            const ParamInfoFlags flags    = _pso_handle.binding_infos[e.idx_in_cpp_args];
-            const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+            ASSERT(e.idx_in_cpp_args < _args.Size() && e.idx_in_cpp_args < argument_infos.size());
+            const auto var_type = argument_infos[e.idx_in_cpp_args].variable_type;
             ASSERT(IsShaderVarUav(var_type));
 
             Variant(_args[e.idx_in_cpp_args])

@@ -25,27 +25,41 @@ struct MetalRenderBindings {
 class MetalPipelineState final : public PipelineState {
 public:
     MetalPipelineState(
-        id<MTLRenderPipelineState> pipeline,
+        id<MTLRenderPipelineState>  pipeline,
         std::vector<MTLPixelFormat> color_formats,
-        uint vertex_bindings,
-        RHIRasterizeInfo rasterizer,
-        MTLPixelFormat depth_format,
-        id<MTLDepthStencilState> depth_state,
-        id<MTLFunction> vertex_function,
-        id<MTLFunction> fragment_function,
-        MetalRenderBindings vertex_bindings_layout,
-        MetalRenderBindings fragment_bindings_layout
-    ) : render_(pipeline), color_formats_(std::move(color_formats)),
-        vertex_bindings_(vertex_bindings), rasterizer_(rasterizer),
-        depth_format_(depth_format), depth_state_(depth_state),
-        vertex_function_(vertex_function), fragment_function_(fragment_function),
+        uint                        vertex_bindings,
+        RHIRasterizeInfo            rasterizer,
+        MTLPixelFormat              depth_format,
+        id<MTLDepthStencilState>    depth_state,
+        id<MTLFunction>             vertex_function,
+        id<MTLFunction>             fragment_function,
+        MetalRenderBindings         vertex_bindings_layout,
+        MetalRenderBindings         fragment_bindings_layout,
+        uint64                      active_argument_bits
+    ) :
+        PipelineState(active_argument_bits),
+        render_(pipeline),
+        color_formats_(std::move(color_formats)),
+        vertex_bindings_(vertex_bindings),
+        rasterizer_(rasterizer),
+        depth_format_(depth_format),
+        depth_state_(depth_state),
+        vertex_function_(vertex_function),
+        fragment_function_(fragment_function),
         vertex_bindings_layout_(std::move(vertex_bindings_layout)),
         fragment_bindings_layout_(std::move(fragment_bindings_layout)) {}
     MetalPipelineState(
-        id<MTLComputePipelineState> pipeline, id<MTLFunction> function,
-        MetalRenderBindings bindings, MTLSize local_size
-    ) : compute_(pipeline), compute_function_(function),
-        compute_bindings_layout_(std::move(bindings)), local_size_(local_size) {}
+        id<MTLComputePipelineState> pipeline,
+        id<MTLFunction>             function,
+        MetalRenderBindings         bindings,
+        MTLSize                     local_size,
+        uint64                      active_argument_bits
+    ) :
+        PipelineState(active_argument_bits),
+        compute_(pipeline),
+        compute_function_(function),
+        compute_bindings_layout_(std::move(bindings)),
+        local_size_(local_size) {}
     id<MTLRenderPipelineState> NativeRender() const noexcept { return render_; }
     id<MTLComputePipelineState> NativeCompute() const noexcept { return compute_; }
     id<MTLFunction> ComputeFunction() const noexcept { return compute_function_; }

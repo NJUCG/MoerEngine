@@ -13,11 +13,12 @@
 #include "shaderheaders/shared/ShaderConstants.h"
 #include <array>
 #include <cassert>
+#include <concepts>
 #include <cstddef>
 #include <cstring>
 #include <limits>
-#include <string_view>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <typeindex>
@@ -96,20 +97,6 @@ public:                                                                         
         return std::move(                                                                             \
             InnerArgs::SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...) \
         );                                                                                            \
-    }                                                                                                 \
-                                                                                                      \
-private:                                                                                              \
-    template<size_t... idx>                                                                           \
-    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray(std::index_sequence<idx...>) {   \
-        return {std::tuple_element_t<idx, InnerArgs::tuple_helper>::GetHashCode()...};                \
-    }                                                                                                 \
-                                                                                                      \
-public:                                                                                               \
-    static StaticArray<uint64, InnerArgs::arg_size> GetHashCodeArray() {                              \
-        if constexpr (InnerArgs::arg_size == 0) {                                                     \
-            return {};                                                                                \
-        }                                                                                             \
-        return GetHashCodeArray(std::make_index_sequence<InnerArgs::arg_size>());                     \
     }
 
 #define StringType(in_name)                                \
@@ -180,9 +167,6 @@ struct ShaderArg {
     ShaderArg() {}
     static constexpr std::string_view GetName() {
         return name;
-    }
-    static uint64 GetHashCode() {
-        return GetHash(name);
     }
 
     static constexpr ShaderArgCppInfo GetArgInfo() {
@@ -452,23 +436,20 @@ protected:
         void                  SetParams() {}
     };
 
-private:
 public:
-    uint GetBindingIdx(uint64 _hash) {
-        return handle.hash_2_info_index[_hash];
-    }
-    ShaderPipeline(PipelineHandle _handle) : handle(std::move(_handle)) {}
+    ShaderPipeline(PipelineHandle _handle) : handle(_handle) {}
     PipelineHandle handle;
 
-    ShaderPipeline() : handle{} {}
-    ShaderPipeline(ShaderPipeline&& _other) {
-        handle = std::move(_other.handle);
-    }
+    ShaderPipeline() = default;
+    ShaderPipeline(ShaderPipeline&& _other) noexcept : handle(std::exchange(_other.handle, {})) {}
 
-    ShaderPipeline& operator=(ShaderPipeline&& _other) {
-        if (*this == _other)
-            return *this;
-        handle = std::move(_other.handle);
+    ShaderPipeline& operator=(ShaderPipeline&& _other) noexcept {
+        if (this != &_other) {
+            if (handle.IsValid()) {
+                MoerDelete(handle.GetState());
+            }
+            handle = std::exchange(_other.handle, {});
+        }
         return *this;
     }
 
@@ -477,28 +458,24 @@ public:
 
     virtual ~ShaderPipeline() {
         if (handle.IsValid())
-            MoerDelete((PipelineState*)handle.handle);
+            MoerDelete(handle.GetState());
     }
 
     bool operator==(const ShaderPipeline& _other) const {
-        return handle.handle == _other.handle.handle;
+        return handle == _other.handle;
     }
     bool IsValid() const {
-        return !handle.IsValid();
+        return handle.IsValid();
     }
 };
 
-#define MOVE_CONSTRUCTOR(name)                           \
-    name& operator=(name&& _other) {                     \
-        if (*this == _other)                             \
-            return *this;                                \
-        handle               = std::move(_other.handle); \
-        _other.handle.handle = 0;                        \
-        return *this;                                    \
-    }                                                    \
-    name(name&& _other) {                                \
-        handle               = std::move(_other.handle); \
-        _other.handle.handle = 0;                        \
+#define MOVE_CONSTRUCTOR(name)                        \
+    name& operator=(name&& _other) noexcept {         \
+        ShaderPipeline::operator=(std::move(_other)); \
+        return *this;                                 \
+    }                                                 \
+    name(name&& _other) noexcept {                    \
+        ShaderPipeline::operator=(std::move(_other)); \
     }
 
 #define NO_COPY_CONSTRUCTOR(name)                 \
@@ -571,8 +548,7 @@ using ParamterBlock [[deprecated("Use ParameterBlock instead")]] = ParameterBloc
 
 template<typename T>
 concept is_shader_pipeline = requires {
-    T::GetArgumentMetadata();
-    T::GetHashCodeArray();
+    { T::GetArgumentMetadata() } -> std::same_as<PipelineArgumentMetadata>;
 };
 
 class ShaderAsset {

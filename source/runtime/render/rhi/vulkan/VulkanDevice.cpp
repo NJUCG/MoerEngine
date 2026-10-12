@@ -1712,9 +1712,8 @@ namespace {
 struct VulkanPipelineBindingInfo {
     UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo> descriptor_set_layouts;
     VkPushConstantRange                                     push_constant_range{};
-    Array<ParamInfoFlags>                                   argument_flags;
-    UnorderedMap<uint64, uint>                              name_hash_to_argument_index;
-    uint64                                                  active_argument_bits    = 0;
+    Array<VulkanArgumentInfo>                               argument_infos;
+    uint64                                                  active_argument_bits = 0;
 };
 
 VkPipelineStageFlags2 ToVulkanPipelineStageFlags(VkShaderStageFlagBits shader_stage) {
@@ -1811,11 +1810,11 @@ void RecordResourceUsage(
     VkShaderStageFlagBits             shader_stage,
     VulkanPipelineBindingInfo&        out_binding_info
 ) {
-    VulkanShaderResourceState resource_state(resource.desc_type, resource.resource_type, resource.format);
-    resource_state.b_sampled   = resource.sampled;
-    auto& argument_flags       = out_binding_info.argument_flags[argument_index];
-    argument_flags.state_flags = resource_state();
-    argument_flags.pipeline_flags |= ToVulkanPipelineStageFlags(shader_stage);
+    auto& info          = out_binding_info.argument_infos[argument_index];
+    info.resource_type  = static_cast<EShaderResourceType>(resource.resource_type);
+    info.image_sampling = static_cast<VulkanImageSampling>(resource.sampled);
+    info.texel_format   = resource.format;
+    info.stages |= ToVulkanPipelineStageFlags(shader_stage);
     MarkShaderArgumentActive(argument_index, resource.custom_flag.active, out_binding_info);
 }
 
@@ -1855,8 +1854,7 @@ void AccumulateBindlessBindings(
     VkShaderStageFlagBits                  shader_stage,
     VulkanPipelineBindingInfo&             out_binding_info
 ) {
-    out_binding_info.argument_flags[argument_index].pipeline_flags |=
-        ToVulkanPipelineStageFlags(shader_stage);
+    out_binding_info.argument_infos[argument_index].stages |= ToVulkanPipelineStageFlags(shader_stage);
     // The bindless resource tables are paired with the indirect handle table.
     if (!resources.array) {
         return;
@@ -1974,10 +1972,7 @@ VulkanPipelineBindingInfo BuildVulkanPipelineBindingInfo(
     std::span<const PipelineArgumentInfo>    arguments
 ) {
     VulkanPipelineBindingInfo binding_info;
-    binding_info.argument_flags.resize(arguments.size());
-    for (uint argument_index = 0; argument_index < arguments.size(); ++argument_index) {
-        binding_info.name_hash_to_argument_index[GetHash(arguments[argument_index].name)] = argument_index;
-    }
+    binding_info.argument_infos.resize(arguments.size());
     for (const auto* shader : shaders) {
         const auto shader_stage = static_cast<VkShaderStageFlagBits>(
             VulkanEnumTranslator::METoVKShaderStageFlags(shader->shader_type)
@@ -2355,13 +2350,15 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
         BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.argument_metadata.GetArguments());
     binding_info.push_constant_range.size = constant_byte_size;
 
-    auto*                       vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX);
+    auto* vk_pso =
+        MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX, binding_info.active_argument_bits);
     VulkanGraphicsPipelineState states;
     InitializeGraphicsPipelineState(_create_info, states);
     vk_pso->b_uses_stencil_attachment = states.uses_stencil_attachment;
     vk_pso->view_mask                 = _create_info.view_mask;
 
     auto shader_stages = CreateVulkanShaderStages(m_device, ordered_shaders);
+    vk_pso->m_argument_infos = std::move(binding_info.argument_infos);
     InitializeVulkanPipelineLayout(*vk_pso, binding_info);
     const bool uses_tessellation = FindShaderStage(_shader_info.shaders, ST_HULL) != nullptr;
     const auto pipeline_create_info =
@@ -2373,12 +2370,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     for (const auto& shader_stage : shader_stages) {
         vkDestroyShaderModule(m_device, shader_stage.module, nullptr);
     }
-    return PipelineHandle{
-        .handle            = reinterpret_cast<uint64>(vk_pso),
-        .binding_infos     = std::move(binding_info.argument_flags),
-        .hash_2_info_index = std::move(binding_info.name_hash_to_argument_index),
-        .valid_bits        = binding_info.active_argument_bits,
-    };
+    return PipelineHandle{vk_pso};
 }
 
 PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
@@ -2392,8 +2384,10 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
     const std::span<const SingleShaderInfo* const> stages(&shader, 1);
     auto binding_info = BuildVulkanPipelineBindingInfo(stages, shader_info.argument_metadata.GetArguments());
     binding_info.push_constant_range.size = constant_byte_size;
-    auto* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute);
+    auto* vk_pso =
+        MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute, binding_info.active_argument_bits);
     auto  shader_stages = CreateVulkanShaderStages(m_device, stages);
+    vk_pso->m_argument_infos = std::move(binding_info.argument_infos);
     InitializeVulkanPipelineLayout(*vk_pso, binding_info);
 
     VkComputePipelineCreateInfo pipeline_create_info{};
@@ -2407,12 +2401,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
     ));
 
     vkDestroyShaderModule(m_device, shader_stages.front().module, nullptr);
-    return PipelineHandle{
-        .handle            = reinterpret_cast<uint64>(vk_pso),
-        .binding_infos     = std::move(binding_info.argument_flags),
-        .hash_2_info_index = std::move(binding_info.name_hash_to_argument_index),
-        .valid_bits        = binding_info.active_argument_bits,
-    };
+    return PipelineHandle{vk_pso};
 }
 
 CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) {

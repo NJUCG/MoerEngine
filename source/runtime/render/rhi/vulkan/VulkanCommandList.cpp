@@ -148,7 +148,6 @@ struct VulkanPipelineReflection {
     std::vector<VkPushConstantRange>   push_constant_ranges;
 };
 //RHICreateGfxPso<Texture, Texture, Buffer>? no RHICreateGfxPso<TPipelineLayout>(auto&& _init_info);
-//     VulkanShaderResourceState state(_flags);
 //     switch (state.resource_type) {
 //         case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
 //             return true;
@@ -649,7 +648,7 @@ void VulkanCmdList::DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset) {
 void VulkanCmdList::UploadDescriptors(const PipelineHandle& _pso_handle) {}
 
 void VulkanCmdList::UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data) {
-    auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
+    auto* vk_pso = static_cast<VulkanPipelineState*>(_pso_handle.GetState());
     // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
 
     // vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
@@ -662,7 +661,7 @@ VkImageLayout GetSamplerImageLayout(const TextureView& _view) {
 }
 
 void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const ArrayArguments& arguments) {
-    auto* pipeline = reinterpret_cast<VulkanPipelineState*>(pipeline_handle.handle);
+    auto* pipeline = static_cast<VulkanPipelineState*>(pipeline_handle.GetState());
 
     assert(pipeline && pipeline->binding_template != nullptr && "Pipeline state has no bind template!");
     // Pipeline metadata remains immutable across graphics/compute queues and
@@ -673,6 +672,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
     const auto&                          set_bindings        = binding_template.set_bindings;
     auto                                 descriptor_buffers  = binding_template.descriptor_buffers;
     const auto&                          push_constants_info = binding_template.push_constants_info;
+    const uint64                         active_argument_bits = pipeline->GetActiveArgumentBits();
     VulkanDescriptorHeap&                descriptor_heap     = device.GetGlobalDescriptorHeap();
 
     uint64 descriptor_allocation_size = 0;
@@ -717,16 +717,11 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                         }
                         const uint   argument_index      = resource_binding.argument_index;
                         const uint64 binding_byte_offset = set_byte_offset + resource_binding.byte_offset;
-                        if (argument_index >= 64 ||
-                            !(pipeline_handle.valid_bits & (uint64(1) << argument_index)))
+                        if (argument_index >= 64 || !(active_argument_bits & (uint64(1) << argument_index)))
                             continue;
 
                         VkFormat buffer_format =
-                            g_platform_pixel_formats[VulkanShaderResourceState(
-                                                         pipeline_handle.binding_infos[argument_index]
-                                                             .state_flags
-                                                     )
-                                                         .format]
+                            g_platform_pixel_formats[pipeline->GetArgumentInfo(argument_index).texel_format]
                                 .format;
                         switch (resource_binding.descriptor_type) {
                             case VK_DESCRIPTOR_TYPE_SAMPLER: {
@@ -955,7 +950,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
 }
 
 void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {
-    auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
+    auto* vk_pso = static_cast<VulkanPipelineState*>(_pso_handle.GetState());
     vkCmdBindPipeline(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetHandle());
 }
 

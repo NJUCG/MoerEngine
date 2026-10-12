@@ -19,16 +19,12 @@
 namespace Moer::Render {
 
 struct FunctionTable {
-    using IsResourceWrite      = bool (*)(uint64 _flag);
-    using IsResourceRead       = bool (*)(uint64 _flag);
-    using IsTextureSampled     = bool (*)(uint64 _flag);
+    using GetArgumentAccess    = ERHIAccessFlags (*)(const PipelineHandle&, uint);
     using IsResourceInBindless = bool (*)(uint64 _resource, uint64 _bdls_handle);
     using LockBdlsArray        = void (*)(uint64 _bdls_handle);
     using UnlockBdlsArray      = LockBdlsArray;
 
-    IsResourceWrite      is_resource_write;
-    IsResourceRead       is_resource_read;
-    IsTextureSampled     is_texture_sampled;
+    GetArgumentAccess    get_argument_access;
     IsResourceInBindless is_resource_in_bindless;
 
     LockBdlsArray   lock_bdls_array;
@@ -822,13 +818,14 @@ public:
         }
     }
 
-    void VisitArgs(const TArg& _arg, uint64 _flag) {
+    void VisitArgs(const TArg& _arg, ERHIAccessFlags access) {
+        const bool writes = (access & ERHIAccessFlags::SHADER_WRITE) != ERHIAccessFlags::UNDEFINED;
 
         std::visit(
             [&](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
                 if constexpr (std::is_same_v<T, BufferView>) {
-                    bool b_write = m_funcs.is_resource_write(_flag);
+                    bool b_write = writes;
                     EmplaceArg(
                         (uint64)(_arg.GetBuffer()),
                         ResourceType::Texture_Buffer,
@@ -836,7 +833,7 @@ public:
                         b_write
                     );
                 } else if constexpr (std::is_same_v<T, TextureView>) {
-                    bool b_write = m_funcs.is_resource_write(_flag);
+                    bool b_write = writes;
                     EmplaceArg(
                         (uint64)(_arg.GetTexture()),
                         ResourceType::Texture_Buffer,
@@ -849,7 +846,7 @@ public:
                             (uint64)(tex.GetTexture()),
                             ResourceType::Texture_Buffer,
                             Range(tex.mip_level, tex.num_mips, tex.array_layer, tex.num_array),
-                            m_funcs.is_resource_write(_flag)
+                            writes
                         );
                     }
                 } else if constexpr (std::is_same_v<T, BufferViewArray>) {
@@ -858,7 +855,7 @@ public:
                             (uint64)(buf.GetBuffer()),
                             ResourceType::Texture_Buffer,
                             Range(buf.GetByteOffset(), buf.GetByteSize()),
-                            m_funcs.is_resource_write(_flag)
+                            writes
                         );
                     }
                 }
@@ -1211,13 +1208,15 @@ public:
         temp_writed_resources.clear();
 
         const auto& pipeline = _cmd->Pipeline();
-        auto        func     = [&](const TArg& _arg, uint _idx) {
-            if (pipeline.valid_bits & (1 << _idx))
-                VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags);
+        const uint64 active_argument_bits =
+            pipeline.IsValid() ? pipeline.GetState()->GetActiveArgumentBits() : 0;
+        auto func = [&](const TArg& _arg, uint _idx) {
+            if (active_argument_bits & (uint64(1) << _idx))
+                VisitArgs(_arg, m_funcs.get_argument_access(pipeline, _idx));
         };
 
         auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-            if (pipeline.valid_bits & (1 << _idx)) {
+            if (active_argument_bits & (uint64(1) << _idx)) {
                 VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
                 b_use_bdls = true;
             }
@@ -1327,14 +1326,16 @@ public:
         UnorderedSet<const ArrayArguments*> param_set;
         for (const auto& draw_cmd : _cmd->draw_batch.draw_cmds) {
             const auto& pipeline = draw_cmd.handle;
+            const uint64 active_argument_bits =
+                pipeline.IsValid() ? pipeline.GetState()->GetActiveArgumentBits() : 0;
 
             auto func = [&](const TArg& _arg, uint _idx) {
-                if (pipeline.valid_bits & (1 << _idx))
-                    VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags);
+                if (active_argument_bits & (uint64(1) << _idx))
+                    VisitArgs(_arg, m_funcs.get_argument_access(pipeline, _idx));
             };
 
             auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-                if (pipeline.valid_bits & (1 << _idx)) {
+                if (active_argument_bits & (uint64(1) << _idx)) {
                     VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
                     b_use_bdls = true;
                 }
@@ -1439,7 +1440,6 @@ public:
 
     //     auto func = [&](const TArg& _arg, uint _idx) {
     //         for (const auto& [bitmask, pso] : _cmd->PipelineMap()) {
-    //             VisitArgs(_arg, pso.binding_infos[_idx].state_flags);
     //         }
     //     };
 
@@ -1528,14 +1528,16 @@ public:
         temp_writed_resources.clear();
 
         const auto& pipeline = _cmd->Pipeline();
+        const uint64 active_argument_bits =
+            pipeline.IsValid() ? pipeline.GetState()->GetActiveArgumentBits() : 0;
 
         auto func = [&](const TArg& _arg, uint _idx) {
-            if (pipeline.valid_bits & (1 << _idx))
-                VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags);
+            if (active_argument_bits & (uint64(1) << _idx))
+                VisitArgs(_arg, m_funcs.get_argument_access(pipeline, _idx));
         };
 
         auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-            if (pipeline.valid_bits & (1 << _idx)) {
+            if (active_argument_bits & (uint64(1) << _idx)) {
                 VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
                 b_use_bdls = true;
             }
@@ -1675,7 +1677,7 @@ public:
         layer_offset = m_cmd_lists.size(); // make sure the custom dispatch command is in a separate scope
         Array<BindlessArrayRef> bindless_arrays{};
         UnorderedSet<BindlessArray*> seen_bindless{};
-        auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+        auto                         func = [&](const TArg& _arg, ERHIAccessFlags access) {
             if (std::holds_alternative<BindlessArrayRef>(_arg)) {
                 const BindlessArrayRef& bindless =
                     std::get<BindlessArrayRef>(_arg);
@@ -1685,7 +1687,7 @@ public:
                 }
                 return;
             }
-            VisitArgs(_arg, _flag.state_flags);
+            VisitArgs(_arg, access);
         };
         _cmd->IterateArgs(func);
         for (const BindlessArrayRef& bindless : bindless_arrays) {

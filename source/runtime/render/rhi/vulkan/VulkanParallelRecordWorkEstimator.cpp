@@ -14,10 +14,14 @@ uint64 EstimateShaderArgumentRecordWorkUnits(
     const PipelineHandle& _pipeline,
     const ArrayArguments& _arguments
 ) {
+    if (!_pipeline.IsValid()) {
+        return 0;
+    }
+    const uint64 active_argument_bits = _pipeline.GetState()->GetActiveArgumentBits();
     uint64       work_units     = 0;
     const size_t argument_count = std::min<size_t>(_arguments.args.size(), 64);
     for (size_t index = 0; index < argument_count; ++index) {
-        if ((_pipeline.valid_bits & (uint64{1} << index)) == 0) {
+        if ((active_argument_bits & (uint64{1} << index)) == 0) {
             continue;
         }
         work_units += std::visit(

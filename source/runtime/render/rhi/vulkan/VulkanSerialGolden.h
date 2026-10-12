@@ -9,7 +9,7 @@
 namespace Moer::Render {
 
 struct ArrayArguments;
-struct PipelineHandle;
+class PipelineHandle;
 struct VulkanPipelineBindingTemplate;
 
 // Profile-only recorder for the Phase 9.0 serial baseline. Native handles are

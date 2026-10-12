@@ -133,7 +133,7 @@ struct VulkanSerialGoldenTrace::Impl {
             ++unresolved_count;
             return tokens.Register(StableObjectKind::Opaque, nullptr);
         }
-        const void* identity = reinterpret_cast<const void*>(uintptr_t(_pipeline.handle));
+        const void* identity = _pipeline.GetState();
         return tokens.Register(StableObjectKind::Pipeline, identity);
     }
 
@@ -250,11 +250,18 @@ struct VulkanSerialGoldenTrace::Impl {
         Array<StableSubmissionToken>& _resources
     ) {
         _resources.push_back(RegisterPipeline(_pipeline));
-        _hash.Add(_pipeline.valid_bits);
-        _hash.Add(_pipeline.binding_infos.size());
-        for (const ParamInfoFlags& info : _pipeline.binding_infos) {
-            _hash.Add(info.state_flags);
-            _hash.Add(info.pipeline_flags);
+        _hash.Add(_pipeline.IsValid() ? _pipeline.GetState()->GetActiveArgumentBits() : uint64{0});
+        if (!_pipeline.IsValid()) {
+            _hash.Add(uint64_t{0});
+            return;
+        }
+        const auto infos = static_cast<VulkanPipelineState*>(_pipeline.GetState())->GetArgumentInfos();
+        _hash.Add(infos.size());
+        for (const auto& info : infos) {
+            _hash.Add(info.stages);
+            _hash.Add(static_cast<uint8_t>(info.resource_type));
+            _hash.Add(static_cast<uint8_t>(info.image_sampling));
+            _hash.Add(static_cast<uint8_t>(info.texel_format));
         }
     }
 
@@ -949,18 +956,20 @@ struct VulkanSerialGoldenTrace::Impl {
         const VulkanPipelineBindingTemplate& binding_template
     ) {
         const StableSubmissionToken pipeline_token       = RegisterPipeline(pipeline_handle);
+        const uint64                active_argument_bits =
+            pipeline_handle.IsValid() ? pipeline_handle.GetState()->GetActiveArgumentBits() : 0;
         const uint32_t              invalid_layout_value = std::numeric_limits<uint32_t>::max();
         uint32_t                    pipeline_bind_point  = invalid_layout_value;
         if (pipeline_handle.IsValid()) {
             pipeline_bind_point = static_cast<uint32_t>(
-                reinterpret_cast<VulkanPipelineState*>(pipeline_handle.handle)->GetPipelineBindPoint()
+                static_cast<VulkanPipelineState*>(pipeline_handle.GetState())->GetPipelineBindPoint()
             );
         }
 
         // One sentinel per actual BindDescriptors call preserves empty binds and
         // multiple binds issued by a single MultiDraw command.
         Array<uint8_t> sentinel = DescriptorPrefix(pipeline_token);
-        AppendLe(sentinel, pipeline_handle.valid_bits);
+        AppendLe(sentinel, active_argument_bits);
         AppendLe(sentinel, arguments.constants.size());
         descriptor_builder.Add(
             descriptor_invocation,
@@ -1015,7 +1024,7 @@ struct VulkanSerialGoldenTrace::Impl {
                             }
                             const uint argument_index = resource_binding.argument_index;
                             if (argument_index >= arguments.args.size() || argument_index >= 64 ||
-                                !(pipeline_handle.valid_bits & (uint64_t(1) << argument_index))) {
+                                !(active_argument_bits & (uint64_t(1) << argument_index))) {
                                 if (argument_index >= arguments.args.size() || argument_index >= 64) {
                                     ++unresolved_count;
                                 }
@@ -1112,7 +1121,7 @@ struct VulkanSerialGoldenTrace::Impl {
                 ++unresolved_count;
                 return;
             }
-            auto* const vk_pipeline = reinterpret_cast<VulkanPipelineState*>(pipeline.handle);
+            auto* const vk_pipeline = static_cast<VulkanPipelineState*>(pipeline.GetState());
             if (vk_pipeline->binding_template == nullptr) {
                 ++unresolved_count;
                 return;

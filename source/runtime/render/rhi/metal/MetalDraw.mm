@@ -129,8 +129,7 @@ TessellationBuffers EncodeTessellation(
 } // namespace
 
 MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
-    auto* pipeline = dynamic_cast<MetalPipelineState*>(
-        reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
+    auto*                 pipeline = dynamic_cast<MetalPipelineState*>(draw.Pipeline().GetState());
     const RenderPassInfo& pass = draw.RenderPassInfo();
     if (pipeline == nullptr || pipeline->NativeRender() == nil ||
         (pipeline->ColorFormats().empty() && !pass.depth_attachment.Valid()) ||
@@ -349,8 +348,7 @@ void EncodeSimpleDraw(
     NSMutableArray<id<MTLTexture>>* texture_views,
     NSMutableArray<id<MTLSamplerState>>* sampler_states
 ) {
-    auto* pipeline = static_cast<MetalPipelineState*>(
-        reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
+    auto*                     pipeline   = static_cast<MetalPipelineState*>(draw.Pipeline().GetState());
     const RenderPassInfo& pass = draw.RenderPassInfo();
     const TessellationBuffers tess = pipeline->IsTessellation() ?
         EncodeTessellation(command_buffer, draw, *pipeline, staging_buffers) : TessellationBuffers{};
@@ -621,8 +619,7 @@ void EncodeSimpleDraw(
 MetalPipelineState* ValidateComputeDispatch(
     const DispatchCmd& dispatch, const TCachedArgArray& cached_args
 ) {
-    auto* pipeline = dynamic_cast<MetalPipelineState*>(
-        reinterpret_cast<PipelineState*>(dispatch.Pipeline().handle));
+    auto* pipeline = dynamic_cast<MetalPipelineState*>(dispatch.Pipeline().GetState());
     if (pipeline == nullptr || pipeline->NativeCompute() == nil ||
         !std::holds_alternative<uint3>(dispatch.Param())) {
         Unsupported("this compute dispatch pipeline or indirect layout");
@@ -639,8 +636,7 @@ MetalPipelineState* ValidateComputeDispatch(
     for (uint index = 0; index < bindings.size(); ++index) {
         const MetalComputeBinding& binding = bindings[index];
         if (binding.constant) {
-            if ((dispatch.Pipeline().valid_bits & (uint64(1) << index)) &&
-                args.constants.empty()) {
+            if ((pipeline->GetActiveArgumentBits() & (uint64(1) << index)) && args.constants.empty()) {
                 Unsupported("empty compute push constants");
             }
             continue;
@@ -703,8 +699,7 @@ void EncodeComputeDispatch(
     NSMutableArray<id<MTLTexture>>* texture_views,
     const DispatchCmd& dispatch, const TCachedArgArray& cached_args
 ) {
-    auto* pipeline = static_cast<MetalPipelineState*>(
-        reinterpret_cast<PipelineState*>(dispatch.Pipeline().handle));
+    auto*       pipeline = static_cast<MetalPipelineState*>(dispatch.Pipeline().GetState());
     const uint3 groups = std::get<uint3>(dispatch.Param());
     if (groups.x == 0 || groups.y == 0 || groups.z == 0) return;
     const ArrayArguments& args = dispatch.Args(cached_args);

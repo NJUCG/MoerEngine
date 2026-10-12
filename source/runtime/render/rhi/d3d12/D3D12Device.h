@@ -256,6 +256,11 @@ protected:
     // if need, we can do it explicitly
 };
 
+struct D3D12ArgumentInfo {
+    ED3D12ShaderVariableType variable_type = ED3D12ShaderVariableType::RootConstant;
+    D3D12_BARRIER_SYNC       sync          = D3D12_BARRIER_SYNC_NONE;
+};
+
 class D3D12PipelineState final : public PipelineState, public D3D12DeviceChild {
 public:
     enum EType {
@@ -318,6 +323,7 @@ public:
 
 private:
     friend class D3D12Device;
+    Array<D3D12ArgumentInfo>    argument_infos;
     ComPtr<ID3D12PipelineState> pipeline_state;
     ComPtr<ID3D12RootSignature> root_signature;
     PipelineLayout              layout;
@@ -334,6 +340,14 @@ public:
     void                  BuildRootSignature(const PipelineLayout& _layout);
     const PipelineLayout& GetLayout() const {
         return layout;
+    }
+
+    const D3D12ArgumentInfo& GetArgumentInfo(uint argument_index) const {
+        return argument_infos[argument_index];
+    }
+
+    std::span<const D3D12ArgumentInfo> GetArgumentInfos() const {
+        return argument_infos;
     }
 
     ID3D12PipelineState* Native() const {

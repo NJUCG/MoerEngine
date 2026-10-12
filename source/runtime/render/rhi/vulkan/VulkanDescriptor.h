@@ -39,29 +39,6 @@ struct VulkanDescriptorPushLease {
         return state != nullptr;
     }
 };
-struct VulkanShaderResourceState {
-    uint         desc_type;
-    uint8        resource_type; //SpvReflectResourceType
-    uint8        b_sampled;
-    EPixelFormat format;
-
-    VulkanShaderResourceState() = default;
-    VulkanShaderResourceState(uint _type, uint8 _resource_type, EPixelFormat _fmt) :
-        desc_type(_type),
-        resource_type(_resource_type),
-        b_sampled(0),
-        format(_fmt) {}
-
-    VulkanShaderResourceState(uint64 _value) {
-        memcpy(this, &_value, sizeof(VulkanShaderResourceState));
-    }
-    uint64 operator()() const {
-        uint64 value;
-        memcpy(&value, this, sizeof(VulkanShaderResourceState));
-        return value;
-    }
-};
-
 class VulkanDescriptorSetsLayout final : public VulkanDeviceObject {
 public:
     VulkanDescriptorSetsLayout(

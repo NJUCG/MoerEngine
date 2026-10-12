@@ -671,7 +671,7 @@ static bool PipelineUsesStencilAttachment(const PipelineHandle& pipeline) {
         return false;
     }
 
-    auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(pipeline.handle);
+    auto* vk_pso = static_cast<VulkanPipelineState*>(pipeline.GetState());
     return vk_pso->UsesStencilAttachment();
 }
 
@@ -680,7 +680,7 @@ static uint32_t PipelineViewMask(const PipelineHandle& pipeline) {
         return 0;
     }
 
-    auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(pipeline.handle);
+    auto* vk_pso = static_cast<VulkanPipelineState*>(pipeline.GetState());
     return vk_pso->GetViewMask();
 }
 
@@ -906,37 +906,15 @@ private:
     VkSampleCountFlagBits rasterization_samples{VK_SAMPLE_COUNT_1_BIT};
 };
 
-static bool IsBufferTextureWrite(VulkanShaderResourceState _state) {
-    switch (_state.resource_type) {
-        case SRT_UAV:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static bool IsBufferTextureWrite(uint64 _flags) {
-    return IsBufferTextureWrite(VulkanShaderResourceState(_flags));
-}
-
-static bool IsTextureSampled(uint64 _flags) {
-    VulkanShaderResourceState state(_flags);
-    return state.b_sampled;
+static ERHIAccessFlags GetArgumentAccess(const PipelineHandle& pipeline, uint argument_index) {
+    return static_cast<VulkanPipelineState*>(pipeline.GetState())
+        ->GetArgumentInfo(argument_index)
+        .GetAccess();
 }
 
 static bool IsResourceInBindlessArray(uint64 _res, uint64 _bdls_handle) {
     VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bdls_handle);
     return bindless_array->IsResourceAllocated(_res);
-}
-
-static bool IsBufferTextureRead(uint64 _flags) {
-    VulkanShaderResourceState state(_flags);
-    switch (state.resource_type) {
-        case SRT_SRV:
-            return true;
-        default:
-            return false;
-    }
 }
 
 static void LockBindlessArray(uint64 _handle) {
@@ -1370,8 +1348,8 @@ struct VkCmdPreprocessor {
         );
     }
 
-    static VkAccessFlagBits2 GetBufferAccess(VulkanShaderResourceState _flag) {
-        switch (_flag.resource_type) {
+    static VkAccessFlags2 GetBufferAccess(const VulkanArgumentInfo& _info) {
+        switch (_info.resource_type) {
             case SRT_CBV:
                 return VK_ACCESS_2_SHADER_READ_BIT;
             case SRT_SRV:
@@ -1383,8 +1361,8 @@ struct VkCmdPreprocessor {
         }
     }
 
-    static VkAccessFlagBits2 GetTextureAccess(VulkanShaderResourceState _flag) {
-        switch (_flag.resource_type) {
+    static VkAccessFlags2 GetTextureAccess(const VulkanArgumentInfo& _info) {
+        switch (_info.resource_type) {
             // case SRT_SAMPLER:
             //     return VK_ACCESS_2_SHADER_READ_BIT;
             case SRT_SRV:
@@ -1397,12 +1375,12 @@ struct VkCmdPreprocessor {
         }
     }
 
-    static VkImageLayout GetTextureLayout(VulkanShaderResourceState _flag) {
-        switch (_flag.resource_type) {
+    static VkImageLayout GetTextureLayout(const VulkanArgumentInfo& _info) {
+        switch (_info.resource_type) {
             // case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
             //     return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             case SRT_SRV: {
-                if (_flag.b_sampled)
+                if (_info.image_sampling != VulkanImageSampling::Unknown)
                     return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
                 return VK_IMAGE_LAYOUT_GENERAL;
@@ -1416,35 +1394,35 @@ struct VkCmdPreprocessor {
         }
     }
 
-    void VisitArgs(const TArg& _arg, VulkanShaderResourceState _flag, VkPipelineStageFlagBits2 _pipelines) {
-        if (_pipelines == VK_PIPELINE_STAGE_2_NONE)
+    void VisitArgs(const TArg& _arg, const VulkanArgumentInfo& _info) {
+        if (_info.stages == VK_PIPELINE_STAGE_2_NONE)
             return;
         std::visit(
             [&](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
                 if constexpr (std::is_same_v<T, BufferView>) {
-                    if (_flag.resource_type == SRT_INVALID)
+                    if (_info.resource_type == SRT_INVALID)
                         return;
                     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer());
-                    tracker.RecordState(vk_buffer, GetBufferAccess(_flag), _pipelines);
-                    if (IsBufferTextureWrite(_flag)) {
+                    tracker.RecordState(vk_buffer, GetBufferAccess(_info), _info.stages);
+                    if (_info.IsWritable()) {
                         writed_buffer_resources.insert(uint64(vk_buffer));
                     }
                 } else if constexpr (std::is_same_v<T, TextureView>) {
-                    if (_flag.resource_type == SRT_INVALID)
+                    if (_info.resource_type == SRT_INVALID)
                         return;
                     auto* vk_texture = ResourceCast(_arg.GetTexture());
                     tracker.RecordState(
                         vk_texture,
-                        GetTextureAccess(_flag),
-                        GetTextureLayout(_flag),
-                        _pipelines,
+                        GetTextureAccess(_info),
+                        GetTextureLayout(_info),
+                        _info.stages,
                         _arg.mip_level,
                         _arg.num_mips,
                         _arg.array_layer,
                         _arg.num_array
                     );
-                    if (IsBufferTextureWrite(_flag)) {
+                    if (_info.IsWritable()) {
                         ValidateSubresourceRange(
                             _arg.texture, _arg.mip_level, _arg.num_mips, _arg.array_layer, _arg.num_array
                         );
@@ -1455,21 +1433,23 @@ struct VkCmdPreprocessor {
                     }
                 } else if constexpr (std::is_same_v<T, TextureViewArray>) {
                     for (auto&& i : _arg) {
-                        VisitArgs(i, _flag, _pipelines);
+                        VisitArgs(i, _info);
                     }
                 } else if constexpr (std::is_same_v<T, BufferViewArray>) {
                     for (auto&& i : _arg) {
-                        VisitArgs(i, _flag, _pipelines);
+                        VisitArgs(i, _info);
                     }
                 }
 
                 else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                    // HandleBindless(_arg, _pipelines);
+                    // HandleBindless(_arg, _info.stages);
                     assert(false && "Bindless array not supported");
                 } else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
                     VulkanAccelerationStructure* vk_as = ResourceCast(_arg.Get());
                     tracker.RecordState(
-                        vk_as->underlying_buffer, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, _pipelines
+                        vk_as->underlying_buffer,
+                        VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+                        _info.stages
                     );
                 }
             },
@@ -1695,29 +1675,23 @@ struct VkCmdPreprocessor {
         );
 
         const auto& pipeline = _cmd->Pipeline();
+        const auto*  vk_pipeline          = static_cast<VulkanPipelineState*>(pipeline.GetState());
+        const auto   argument_infos       = vk_pipeline->GetArgumentInfos();
+        const uint64 active_argument_bits = vk_pipeline->GetActiveArgumentBits();
 
         writed_buffer_resources.clear();
         writed_texture_resources.clear();
 
         auto func = [&](const TArg& _arg, uint _idx) {
-            if (pipeline.valid_bits & (1 << _idx))
-                VisitArgs(
-                    _arg,
-                    pipeline.binding_infos[_idx].state_flags,
-                    pipeline.binding_infos[_idx].pipeline_flags
-                );
+            if (active_argument_bits & (uint64(1) << _idx))
+                VisitArgs(_arg, argument_infos[_idx]);
         };
         auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-            if (pipeline.valid_bits & (1 << _idx))
-                HandleBindless(std::get<BindlessArrayRef>(_arg), pipeline.binding_infos[_idx].pipeline_flags);
+            if (active_argument_bits & (uint64(1) << _idx))
+                HandleBindless(std::get<BindlessArrayRef>(_arg), argument_infos[_idx].stages);
         };
 
         IterateArgs(_cmd->Args(cached_args), func, bdls_post_func);
-
-        // auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
-        //     VisitArgs(_arg, _flag.state_flags, _flag.pipeline_flags);
-        // };
-        // _cmd->IterateArgs(func);
     }
 
     // void Visit(const SetParamsCmd* _cmd) {
@@ -2209,26 +2183,20 @@ struct VkCmdPreprocessor {
             );
         }
 
-        // auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
-        //     VisitArgs(_arg, (VulkanShaderResourceState)_flag.state_flags, _flag.pipeline_flags);
-        // };
-        // _cmd->IterateArgs(func);
-
         writed_buffer_resources.clear();
         writed_texture_resources.clear();
 
         const auto& pipeline = _cmd->Pipeline();
-        auto        func     = [&](const TArg& _arg, uint _idx) {
-            if (pipeline.valid_bits & (1 << _idx))
-                VisitArgs(
-                    _arg,
-                    pipeline.binding_infos[_idx].state_flags,
-                    pipeline.binding_infos[_idx].pipeline_flags
-                );
+        const auto*  vk_pipeline          = static_cast<VulkanPipelineState*>(pipeline.GetState());
+        const auto   argument_infos       = vk_pipeline->GetArgumentInfos();
+        const uint64 active_argument_bits = vk_pipeline->GetActiveArgumentBits();
+        auto         func                 = [&](const TArg& _arg, uint _idx) {
+            if (active_argument_bits & (uint64(1) << _idx))
+                VisitArgs(_arg, argument_infos[_idx]);
         };
         auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-            if (pipeline.valid_bits & (1 << _idx))
-                HandleBindless(std::get<BindlessArrayRef>(_arg), pipeline.binding_infos[_idx].pipeline_flags);
+            if (active_argument_bits & (uint64(1) << _idx))
+                HandleBindless(std::get<BindlessArrayRef>(_arg), argument_infos[_idx].stages);
         };
 
         _cmd->IterateArgs(func, bdls_post_func);
@@ -2304,19 +2272,16 @@ struct VkCmdPreprocessor {
         UnorderedSet<const ArrayArguments*> temp_arg_batch;
         for (const auto& draw_cmd : _cmd->draw_batch.draw_cmds) {
             const auto& pipeline = draw_cmd.handle;
-            auto        func     = [&](const TArg& _arg, uint _idx) {
-                if (pipeline.valid_bits & (1 << _idx))
-                    VisitArgs(
-                        _arg,
-                        pipeline.binding_infos[_idx].state_flags,
-                        pipeline.binding_infos[_idx].pipeline_flags
-                    );
+            const auto*  vk_pipeline          = static_cast<VulkanPipelineState*>(pipeline.GetState());
+            const auto   argument_infos       = vk_pipeline->GetArgumentInfos();
+            const uint64 active_argument_bits = vk_pipeline->GetActiveArgumentBits();
+            auto         func                 = [&](const TArg& _arg, uint _idx) {
+                if (active_argument_bits & (uint64(1) << _idx))
+                    VisitArgs(_arg, argument_infos[_idx]);
             };
             auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-                if (pipeline.valid_bits & (1 << _idx))
-                    HandleBindless(
-                        std::get<BindlessArrayRef>(_arg), pipeline.binding_infos[_idx].pipeline_flags
-                    );
+                if (active_argument_bits & (uint64(1) << _idx))
+                    HandleBindless(std::get<BindlessArrayRef>(_arg), argument_infos[_idx].stages);
             };
             const ArrayArguments* arg = std::holds_alternative<ArrayArguments>(draw_cmd.args) ?
                                             &std::get<ArrayArguments>(draw_cmd.args) :
@@ -2383,21 +2348,6 @@ struct VkCmdPreprocessor {
     //     }
 
     //     writed_resources.clear();
-
-    //     auto func = [&](const TArg& _arg, uint _idx) {
-    //         for (const auto& [bitmask, pso] : _cmd->PipelineMap()) {
-    //             if (pso.valid_bits & (1 << _idx))
-    //                 VisitArgs(_arg, pso.binding_infos[_idx].state_flags, pso.binding_infos[_idx].pipeline_flags);
-    //         }
-    //     };
-    //     auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-    //         for (const auto& [bitmask, pso] : _cmd->PipelineMap()) {
-    //             if (pso.valid_bits & (1 << _idx))
-    //                 HandleBindless(std::get<BindlessArrayRef>(_arg), pso.binding_infos[_idx].pipeline_flags);
-    //         }
-    //     };
-
-    //     _cmd->IterateArgs(func, bdls_post_func);
 
     //     for (const auto& rt : _cmd->RenderPassInfo().color_attachments) {
     //         auto* vk_texture = ResourceCast(rt.target);
@@ -2507,10 +2457,10 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const CustomDispatchCmd* _cmd) {
-        auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
-            VisitArgs(_arg, (VulkanShaderResourceState)_flag.state_flags, _flag.pipeline_flags);
-        };
-        _cmd->IterateArgs(func);
+        const auto* vk_command = static_cast<const VkCustomDispatchCmd*>(_cmd);
+        for (const auto& usage : vk_command->GetResourceUsages()) {
+            VisitArgs(usage.resource, usage.info);
+        }
     }
 };
 
@@ -4995,10 +4945,8 @@ BuildPresentationSourceStateProgram(
                         [&](Texture* _texture) {
                             record_texture(_texture, false);
                         };
-                    static_cast<const CustomDispatchCmd&>(
-                        custom
-                    ).IterateArgs(
-                        [&](const TArg& argument, ParamInfoFlags) {
+                    static_cast<const CustomDispatchCmd&>(custom).IterateArgs(
+                        [&](const TArg& argument, ERHIAccessFlags) {
                             VisitPresentationTextureArgument(
                                 argument,
                                 record_custom_texture,
@@ -8400,9 +8348,7 @@ void VkCommandQueue::ExecuteNow(
                                                std::chrono::steady_clock::time_point{};
     Timer reorder_timer{};
     FunctionTable function_table{
-        .is_resource_write       = &IsBufferTextureWrite,
-        .is_resource_read        = &IsBufferTextureRead,
-        .is_texture_sampled      = &IsTextureSampled,
+        .get_argument_access     = &GetArgumentAccess,
         .is_resource_in_bindless = &IsResourceInBindlessArray,
         .lock_bdls_array         = &LockBindlessArray,
         .unlock_bdls_array       = &UnlockBindlessArray
@@ -11674,9 +11620,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
         }
 
         FunctionTable function_table{
-            .is_resource_write       = &IsBufferTextureWrite,
-            .is_resource_read        = &IsBufferTextureRead,
-            .is_texture_sampled      = &IsTextureSampled,
+            .get_argument_access     = &GetArgumentAccess,
             .is_resource_in_bindless = &IsResourceInBindlessArray,
             .lock_bdls_array         = &LockBindlessArray,
             .unlock_bdls_array       = &UnlockBindlessArray

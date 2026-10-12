@@ -56,8 +56,8 @@ private:
     }
 };
 
-bool FalseResourceFlag(uint64) {
-    return false;
+ERHIAccessFlags NoArgumentAccess(const PipelineHandle&, uint) {
+    return ERHIAccessFlags::UNDEFINED;
 }
 
 bool FalseBindlessMembership(uint64, uint64) {
@@ -68,9 +68,7 @@ void NoopBindlessLock(uint64) {}
 
 FunctionTable MakeFunctionTable() {
     return {
-        .is_resource_write       = &FalseResourceFlag,
-        .is_resource_read        = &FalseResourceFlag,
-        .is_texture_sampled      = &FalseResourceFlag,
+        .get_argument_access     = &NoArgumentAccess,
         .is_resource_in_bindless = &FalseBindlessMembership,
         .lock_bdls_array         = &NoopBindlessLock,
         .unlock_bdls_array       = &NoopBindlessLock,

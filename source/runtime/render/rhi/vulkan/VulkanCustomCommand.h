@@ -3,12 +3,32 @@
 
 #include "../RHIImpl.h"
 
+#include "VulkanPipelineArgument.h"
 #include "VulkanPlatform.h"
 
 namespace Moer::Render {
 
 struct VkCustomDispatchCmd : public CustomDispatchCmd {
 public:
+    struct ResourceUsage {
+        TArg               resource;
+        VulkanArgumentInfo info;
+
+        template<typename Arg>
+            requires(std::is_constructible_v<TArg, Arg &&>)
+        ResourceUsage(Arg&& argument, const VulkanArgumentInfo& argument_info) :
+            resource(std::forward<Arg>(argument)),
+            info(argument_info) {}
+    };
+
+    virtual std::span<const ResourceUsage> GetResourceUsages() const = 0;
+
+    void IterateArgs(const std::function<void(const TArg&, ERHIAccessFlags)>& visit) const final {
+        for (const auto& usage : GetResourceUsages()) {
+            visit(usage.resource, usage.info.GetAccess());
+        }
+    }
+
     struct VkDispatchContext {
         VkInstance       instance;
         VkPhysicalDevice gpu;

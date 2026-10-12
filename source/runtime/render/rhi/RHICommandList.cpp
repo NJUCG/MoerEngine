@@ -444,16 +444,6 @@ CommandList::ManagedRecordingLease CommandList::AcquireManagedRecordingLease() {
     ++managed_recording_lease_count;
     return ManagedRecordingLease(*this);
 }
-// void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
-//     auto idx          = handle.GetBindingIdx(_index);
-//     temp_args[_index] = _buffer;
-// }
-
-// void CommandList::ArgSetter::SetTexture(uint64 _index, TextureView _texture) {
-//     auto idx          = handle.GetBindingIdx(_index);
-//     temp_args[_index] = _texture;
-// }
-
 // void CommandList::ArgSetter::SetConstant(void* _data, uint _size) {
 //     temp_constant.resize(_size);
 //     std::memcpy(temp_constant.data(), _data, _size);

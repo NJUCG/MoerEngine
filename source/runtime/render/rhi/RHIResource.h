@@ -1133,24 +1133,38 @@ struct RHIColorAttachmentInfo {
 };
 
 namespace Moer::Render {
-struct ParamInfoFlags {
-    uint64 state_flags;
-    uint64 pipeline_flags;
-};
-
 class PipelineState : public RHIResource {
 public:
-    PipelineState() : RHIResource(RRT_PIPELINE_STATE) {}
+    explicit PipelineState(uint64 active_argument_bits = 0) :
+        RHIResource(RRT_PIPELINE_STATE),
+        active_argument_bits(active_argument_bits) {}
+
+    uint64 GetActiveArgumentBits() const {
+        return active_argument_bits;
+    }
+
+private:
+    const uint64 active_argument_bits;
 };
-struct PipelineHandle {
-    uint64                     handle = 0;
-    Array<ParamInfoFlags>      binding_infos;
-    UnorderedMap<uint64, uint> hash_2_info_index; // not use
-    uint64                     valid_bits   = 0;  // the pipeline actually used resource
+
+// Non-owning reference. The owning pipeline must outlive commands using this handle.
+class PipelineHandle {
+public:
+    PipelineHandle() = default;
+    explicit PipelineHandle(PipelineState* state) : state(state) {}
+
+    PipelineState* GetState() const {
+        return state;
+    }
 
     bool IsValid() const {
-        return handle != 0;
+        return state != nullptr;
     }
+
+    bool operator==(const PipelineHandle&) const = default;
+
+private:
+    PipelineState* state = nullptr;
 };
 
 struct SingleShaderInfo {

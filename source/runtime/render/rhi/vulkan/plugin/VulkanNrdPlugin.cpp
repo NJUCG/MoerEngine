@@ -367,20 +367,13 @@ public:
                 continue;
             }
 
-            VulkanShaderResourceState pipeline_flags{};
-            pipeline_flags.b_sampled = 1;
-            if (slot < NRDInterface::EResourceSlot::OUT_DIFFUSE) {
-                pipeline_flags.desc_type     = VDT_SAMPLED_IMAGE;
-                pipeline_flags.resource_type = SRT_SRV;
-            } else {
-                pipeline_flags.desc_type     = VDT_STORAGE_IMAGE;
-                pipeline_flags.resource_type = SRT_UAV;
-            }
+            const bool is_input = slot < NRDInterface::EResourceSlot::OUT_DIFFUSE;
             resource_usages.emplace_back(
                 texture,
-                ParamInfoFlags{
-                    pipeline_flags(),
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                VulkanArgumentInfo{
+                    .stages         = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .resource_type  = is_input ? SRT_SRV : SRT_UAV,
+                    .image_sampling = is_input ? VulkanImageSampling::Sampled : VulkanImageSampling::Storage
                 }
             );
         }

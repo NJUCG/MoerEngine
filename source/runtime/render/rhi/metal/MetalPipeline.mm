@@ -36,15 +36,13 @@ id<MTLFunction> CompileMetalFunction(id<MTLDevice> device, const SingleShaderInf
     return function;
 }
 
-PipelineHandle MetalPipelineMetadata(const PipelineShaderInfo& shader_info) {
+uint64 GetMetalActiveArgumentBits(const PipelineShaderInfo& shader_info) {
     const auto arguments = shader_info.argument_metadata.GetArguments();
     if (arguments.size() > 64) {
         Unsupported("this pipeline argument layout");
     }
-    PipelineHandle handle{};
-    handle.binding_infos.resize(arguments.size());
+    uint64 active_argument_bits = 0;
     for (uint index = 0; index < arguments.size(); ++index) {
-        handle.hash_2_info_index[GetHash(arguments[index].name)] = index;
         for (const auto& shader : shader_info.shaders) {
             if (shader.shader_param_map == nullptr) continue;
             const auto& reflection = shader.shader_param_map->reflect_map;
@@ -68,10 +66,11 @@ PipelineHandle MetalPipelineMetadata(const PipelineShaderInfo& shader_info) {
                 active = parameter.Get<ReflectParamInfo::Resource>(arguments[index].name, "Resource")
                              .custom_flag.active;
             }
-            if (active) handle.valid_bits |= uint64(1) << index;
+            if (active)
+                active_argument_bits |= uint64(1) << index;
         }
     }
-    return handle;
+    return active_argument_bits;
 }
 
 MetalRenderBindings MetalRenderStageBindings(
@@ -269,19 +268,24 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
             depth_state = [device newDepthStencilStateWithDescriptor:depth_descriptor];
             if (depth_state == nil) throw std::runtime_error("Cannot create Metal depth state");
         }
-        PipelineHandle handle = MetalPipelineMetadata(shader_info);
+        const uint64                active_argument_bits = GetMetalActiveArgumentBits(shader_info);
         std::vector<MTLPixelFormat> color_formats;
         color_formats.reserve(create_info.color_attachment_count);
         for (uint index = 0; index < create_info.color_attachment_count; ++index) {
             color_formats.push_back(ToMetalFormat(create_info.color_attachments_info[index].pixel_format));
         }
         auto* pipeline = MoerNew(MetalPipelineState)(
-            native_pipeline, std::move(color_formats),
-            uint(create_info.vertex_stream.bindings.size()), create_info.rasterizer_info,
-            descriptor.depthAttachmentPixelFormat, depth_state,
-            tessellation ? domain : vertex, fragment,
+            native_pipeline,
+            std::move(color_formats),
+            uint(create_info.vertex_stream.bindings.size()),
+            create_info.rasterizer_info,
+            descriptor.depthAttachmentPixelFormat,
+            depth_state,
+            tessellation ? domain : vertex,
+            fragment,
             MetalRenderStageBindings(shader_info, tessellation ? *ds_info : vs),
-            MetalRenderStageBindings(shader_info, ps)
+            MetalRenderStageBindings(shader_info, ps),
+            active_argument_bits
         );
         if (tessellation) {
             pipeline->SetTessellation(
@@ -290,8 +294,7 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
                 MetalRenderStageBindings(shader_info, *hs_info),
                 create_info.patch_control_points, create_info.patch_control_point_stride);
         }
-        handle.handle = reinterpret_cast<uint64>(pipeline);
-        return handle;
+        return PipelineHandle{pipeline};
     }
 }
 PipelineHandle CreateMetalComputePipeline(id<MTLDevice> device, PipelineShaderInfo&& shader_info) {
@@ -309,20 +312,22 @@ PipelineHandle CreateMetalComputePipeline(id<MTLDevice> device, PipelineShaderIn
             throw std::runtime_error("Metal compute pipeline creation failed: " +
                 std::string(error.localizedDescription.UTF8String ?: "unknown error"));
         }
-        PipelineHandle handle = MetalPipelineMetadata(shader_info);
+        const uint64 active_argument_bits = GetMetalActiveArgumentBits(shader_info);
         auto bindings = MetalRenderStageBindings(shader_info, shader);
         const uint3 group = shader.compute_local_size;
-        handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(
-            native_pipeline, function, std::move(bindings),
-            MTLSizeMake(group.x, group.y, group.z)
-        ));
-        return handle;
+        auto*        pipeline             = MoerNew(MetalPipelineState)(
+            native_pipeline,
+            function,
+            std::move(bindings),
+            MTLSizeMake(group.x, group.y, group.z),
+            active_argument_bits
+        );
+        return PipelineHandle{pipeline};
     }
 }
 
 void* GetMetalNativeComputePipeline(PipelineHandle pipeline) noexcept {
-    auto* metal = dynamic_cast<MetalPipelineState*>(
-        reinterpret_cast<PipelineState*>(pipeline.handle));
+    auto* metal = dynamic_cast<MetalPipelineState*>(pipeline.GetState());
     return metal == nullptr ? nullptr : (__bridge void*)metal->NativeCompute();
 }
 

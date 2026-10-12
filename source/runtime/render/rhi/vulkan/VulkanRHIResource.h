@@ -14,8 +14,9 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 
-#include "VulkanPlatform.h"
 #include "VulkanFault.h"
+#include "VulkanPipelineArgument.h"
+#include "VulkanPlatform.h"
 #include "VulkanSwapChain.h"
 #include "VulkanTypeDefs.h"
 #include <atomic>
@@ -489,8 +490,8 @@ class VulkanPipelineState : public PipelineState, public VulkanDeviceObject {
     };
 
 public:
-    VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) :
-        PipelineState(),
+    VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX, uint64 active_argument_bits = 0) :
+        PipelineState(active_argument_bits),
         VulkanDeviceObject(_device),
         m_pipeline(VK_NULL_HANDLE),
         m_pipeline_layout(VK_NULL_HANDLE),
@@ -515,6 +516,14 @@ public:
 
     uint32_t GetViewMask() const {
         return view_mask;
+    }
+
+    const VulkanArgumentInfo& GetArgumentInfo(uint argument_index) const {
+        return m_argument_infos[argument_index];
+    }
+
+    std::span<const VulkanArgumentInfo> GetArgumentInfos() const {
+        return m_argument_infos;
     }
 
     void InitDescriptorSetLayouts(
@@ -543,6 +552,7 @@ public:
 
 protected:
     friend VulkanDevice;
+    Array<VulkanArgumentInfo>    m_argument_infos;
     VkPipeline                   m_pipeline;
     VkPipelineLayout             m_pipeline_layout;
     Array<VkDescriptorSetLayout> descriptor_set_layouts;
