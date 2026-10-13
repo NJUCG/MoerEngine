@@ -3498,7 +3498,7 @@ public:
         // {
         //     bindless_array->Lock();
         //     for (const VulkanBindlessArray::TextureUpdateInfo& texture : texture_slots) {
-        //         uint indirect_handle                       = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
+        //         uint indirect_handle                       = (m_device->GetSamplerIndex(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
         //         bindless_array->handles[texture.array_idx] = {texture.slot, 1, VulkanBindlessArray::Texture};
         //     }
         //     for (const auto& buffer : buffer_slots) {
@@ -3526,7 +3526,7 @@ public:
         // VulkanDescriptorHeap& heap = m_device->GetGlobalDescriptorHeap();
 
         //shuffle copy shader
-        auto& shuffle_sd = m_device->internal_shaders->sd_component_shuffle;
+        auto& shuffle_sd = m_device->GetInternalShaders().sd_component_shuffle;
 
         // byte* mapped_image_descs  = nullptr;
         // byte* mapped_buffer_descs = nullptr;
@@ -3555,7 +3555,7 @@ public:
         //         texture_indices_dat[i]       = {i, texture_slots[i].slot};
         //         array_indices_dat[array_idx] = {array_idx, texture_slots[i].array_idx};
 
-        //         uint indirect_handle = (m_device->GetSamplerIdx(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
+        //         uint indirect_handle = (m_device->GetSamplerIndex(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
         //         memcpy(array_dat.data() + array_idx * array_handle_stride, &indirect_handle, array_handle_stride);
         //         array_idx++;
         //     }
@@ -3855,7 +3855,7 @@ public:
             );
             cmd_list.CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
 
-            auto& shuffle_sd = m_device->internal_shaders->sd_component_shuffle;
+            auto& shuffle_sd = m_device->GetInternalShaders().sd_component_shuffle;
             cmd_list.SetPso(shuffle_sd.handle);
 
             ComponentShuffleShader::Arg arg;

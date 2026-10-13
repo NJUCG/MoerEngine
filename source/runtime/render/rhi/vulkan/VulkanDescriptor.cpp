@@ -155,7 +155,7 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     ),
     texture_desc_offset(
         _device.GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize *
-        VulkanDevice::bindless_sampler_cnt
+        VulkanDevice::bindless_sampler_count
     ) {
 
     buffer_desc_data.resize(s_offline_descriptor_capacity * buffer_desc_stride);
@@ -201,7 +201,7 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     );
 
     //fill offsets
-    ring_buffer_offsets.resize(descriptor_queue_count * m_device->cmd_alloc_limits);
+    ring_buffer_offsets.resize(descriptor_queue_count * m_device->command_allocator_slot_count);
 
     // Use descriptorBufferOffsetAlignment for ring buffer offset alignment
     uint64 alignment =
@@ -217,7 +217,7 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     vmaMapMemory(m_device->GetVmaAllocator(), ring_desc_buffer->GetAllocation(), (void**)&map_ptr);
 
     //fill sampler descs in image_data
-    for (uint32_t i = 0; i < VulkanDevice::bindless_sampler_cnt; ++i) {
+    for (uint32_t i = 0; i < VulkanDevice::bindless_sampler_count; ++i) {
         VkDescriptorImageInfo  sampler_info{.sampler = VK_NULL_HANDLE};
         VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
         if (i >= m_device->ImmutableSamplerCount()) {
@@ -426,7 +426,7 @@ void VulkanDescriptorHeap::FreeImageDescIdx(uint _idx) {
     image_free_list.push_back(_idx);
 }
 uint VulkanDescriptorHeap::GetSamplerDescIdx(Sampler _sampler) {
-    return m_device->GetSamplerIdx(_sampler) * sample_desc_stride;
+    return m_device->GetSamplerIndex(_sampler) * sample_desc_stride;
 }
 
 uint VulkanDescriptorHeap::GetAccelDescIdx(VulkanAccelerationStructure* _as) {
@@ -480,7 +480,7 @@ VulkanDescriptorPushLease VulkanDescriptorHeap::BeginPushDescriptors(EQueueType 
         "copy queues do not own descriptor push leases"
     );
     const uint32 queue_index = _queue_type == EQueueType::Graphics ? 0u : 1u;
-    const uint32 slot_count  = m_device->cmd_alloc_limits;
+    const uint32 slot_count  = m_device->command_allocator_slot_count;
     const uint32 first_slot  = queue_index * slot_count;
     std::unique_lock<std::mutex> lock(push_range_mutex);
     push_range_cv.wait(lock, [&, this] {

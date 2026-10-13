@@ -308,7 +308,7 @@ public:
         //       但是SMAA.hlsl并不支持我们的bindless后的rhi，所以我修改了SMAA.hlsl，并试图提取出了独立的texture和sampler
         //       因此，我需要texture index和sampler index
         //       texture index直接使用context.bdls->AllocateTexture就可以解决
-        //       sampler index是通过VulkanDevice::GetSamplerIdx()得到的，但这个函数所在的头文件并不能被include（因为不位于include目录下）
+        //       sampler index是通过VulkanDevice::GetSamplerIndex()得到的，但这个函数所在的头文件并不能被include（因为不位于include目录下）
         //       那么为了获取sampler index，我们有两种方案 1. 复制GetSamplerIdx的实现；2. 通过AllocateTexture得到handle后再解压出sampler index
         //       第一种方案可能导致代码不一致，而第二种方案过于不可控，而且我不确定是否有潜在的性能开销，所以我同时写了两种方案，并且写下了这段说明
         //       目前使用第一种

@@ -58,7 +58,7 @@ static constexpr std::string_view s_bdls_array_image_name       = "VkBindless::B
 static uint64 GetBindlessTextureDescriptorOffset(const VulkanDevice& _device) {
     const auto& properties = _device.GetOptionalProperties().descriptor_buffer_properties;
     const uint64 sampler_bytes =
-        static_cast<uint64>(properties.samplerDescriptorSize) * VulkanDevice::bindless_sampler_cnt;
+        static_cast<uint64>(properties.samplerDescriptorSize) * VulkanDevice::bindless_sampler_count;
     return Moer::AlignUp(sampler_bytes, properties.descriptorBufferOffsetAlignment);
 }
 
@@ -1470,7 +1470,7 @@ void VulkanPipelineState::InitPipelineLayout(
         {
             uint sampler_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize;
             // void* mapped_data;
-            Array<byte> data_array(m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * VulkanDevice::bindless_sampler_cnt);
+            Array<byte> data_array(m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * VulkanDevice::bindless_sampler_count);
             // vmaMapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), &mapped_data);
             const auto* samplers = m_device->GetImmutableSamplers();
             // byte* mapped_data_byte = reinterpret_cast<byte*>(mapped_data);
@@ -1478,13 +1478,13 @@ void VulkanPipelineState::InitPipelineLayout(
             descriptor_info.type = VK_DESCRIPTOR_TYPE_SAMPLER;
 
             VkDescriptorDataEXT& descriptor_data = descriptor_info.data;
-            for(uint i = 0; i < VulkanDevice::bindless_sampler_cnt; i++){
+            for(uint i = 0; i < VulkanDevice::bindless_sampler_count; i++){
                 descriptor_data.pSampler = i >= m_device->ImmutableSamplerCount() ? &samplers[0] : &samplers[i];
                 vkGetDescriptorEXT( m_device->GetDevice(), &descriptor_info, sampler_stride, data_array.data() + i * sampler_stride);
             }
             // std::memcpy(mapped_data_byte, data_array.data(), data_array.size());
             // vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
-            // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, VulkanDevice::bindless_sampler_cnt * sampler_stride);
+            // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, VulkanDevice::bindless_sampler_count * sampler_stride);
             cmd_list.CopyFrom(std::span<byte>(data_array.data(), data_array.size()), bindless_texture_descs->GetView(0, data_array.size()));
             RHIExecutor::Get().Submit(
                 EQueueType::Graphics, cmd_list.Submit(), ERHIExecSubmitFlags::FlushGPU
@@ -1719,7 +1719,7 @@ void VulkanPipelineState::InitPipelineLayout(
                                 }
 
                                 memcpy(texture_dat.data() + texture_cnt * texture_handle_stride, &heap.image_desc_data[src_idx], texture_handle_stride);
-                                uint indirect_handle = (m_device->GetSamplerIdx(_cmd.sampler) & 0xff) | (_cmd.slot & 0xffffff) << 8;
+                                uint indirect_handle = (m_device->GetSamplerIndex(_cmd.sampler) & 0xff) | (_cmd.slot & 0xffffff) << 8;
                                 memcpy(array_dat.data() + array_idx * array_handle_stride, &indirect_handle, array_handle_stride);
                                 array_indices_dat[array_idx] = {array_idx, _cmd.array_idx};
                                 texture_indices_dat[texture_cnt] = {texture_cnt, _cmd.slot};

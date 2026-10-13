@@ -100,7 +100,7 @@ VulkanDevice::VulkanDevice(const VulkanRHIConfig& _config) : RenderDevice::Impl(
 
     CreateInternalResources();
 
-    LoadDefaultExtensions();
+    RegisterDefaultPlugins();
     LogGpuEnvironment(_config.api_version);
 }
 
@@ -468,7 +468,7 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
     }
 
     // Query core memory properties
-    vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_device_info.memery_properties);
+    vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_device_info.memory_properties);
 
     // Query queue family info
     m_device_info.queue_family_indices = VulkanDevice::QueryQueueFamilyIndices(m_gpu);
@@ -623,19 +623,19 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
     volkLoadDevice(m_device);
 
-    vkGetDeviceQueue(m_device, graphics_family, 0, &m_graphics_queue);
+    vkGetDeviceQueue(m_device, graphics_family, 0, &m_graphics_queue_handle);
 
-    vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.present.value(), 0, &m_present_queue);
+    vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.present.value(), 0, &m_present_queue_handle);
     vkGetDeviceQueue(
         m_device,
         compute_family,
         compute_queue_index,
-        &m_compute_queue
+        &m_compute_queue_handle
     );
-    vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue);
-    vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
+    vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue_handle);
+    vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue_handle);
 
-    gfx_queue = MakeUnique<VkCommandQueue>(
+    m_graphics_command_queue = MakeUnique<VkCommandQueue>(
         *this,
         EQueueType::Graphics,
         rhi_thread_enabled,
@@ -647,24 +647,24 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
         parallel_record_min_work_units_per_job,
         parallel_record_worker_throw_trigger
     );
-    SetResourceName(uint64(m_graphics_queue), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
-    compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute, false);
-    SetResourceName(uint64(m_compute_queue), VK_OBJECT_TYPE_QUEUE, "ComputeQueue");
+    SetResourceName(uint64(m_graphics_queue_handle), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
+    m_compute_command_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute, false);
+    SetResourceName(uint64(m_compute_queue_handle), VK_OBJECT_TYPE_QUEUE, "ComputeQueue");
     // transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
-    copy_queue = MakeUnique<VkCopyQueue>(*this);
-    SetResourceName(uint64(m_transfer_queue), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
+    m_copy_queue = MakeUnique<VkCopyQueue>(*this);
+    SetResourceName(uint64(m_transfer_queue_handle), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
 
-    gfx_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_graphics_queue));
-    compute_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_compute_queue));
-    copy_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_transfer_queue));
+    m_graphics_command_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_graphics_queue_handle));
+    m_compute_command_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_compute_queue_handle));
+    m_copy_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_transfer_queue_handle));
 
-    if (m_graphics_queue == m_transfer_queue) {
+    if (m_graphics_queue_handle == m_transfer_queue_handle) {
         LOG_WARNING(
             "gfx and transfer share the same VkQueue handle. "
             "Using shared host synchronization for queue operations."
         );
     }
-    if (m_compute_queue == m_graphics_queue) {
+    if (m_compute_queue_handle == m_graphics_queue_handle) {
         LOG_WARNING(
             "compute and gfx share the same VkQueue handle. "
             "Using shared host synchronization for queue operations."
@@ -725,10 +725,10 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
 
     // 这里的代码是应vma要求写的，需要手动设置handleTypes，以便跨graphics api使用
     std::vector<VkExternalMemoryHandleTypeFlagsKHR> handleTypes(
-        m_device_info.memery_properties.memoryTypeCount
+        m_device_info.memory_properties.memoryTypeCount
     );
     for (uint i = 0; i < handleTypes.size(); i++) {
-        if ((m_device_info.memery_properties.memoryTypes[i].propertyFlags &
+        if ((m_device_info.memory_properties.memoryTypes[i].propertyFlags &
              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) > 0) {
             // 只针对gpu内存，设置winn32标记位
             handleTypes[i] = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
@@ -759,13 +759,13 @@ void VulkanDevice::CreateDescriptorHeap() {
 }
 
 void VulkanDevice::CreateInternalShaders() {
-    internal_shaders = MakeUnique<DeviceInternalShaders>();
-    internal_shaders->sd_component_shuffle =
+    m_internal_shaders = MakeUnique<DeviceInternalShaders>();
+    m_internal_shaders->sd_component_shuffle =
         ShaderManager::Get().Compute<ComponentShuffleShader>("core/utils/ShuffleBufferIndices.hlsl");
 }
 
 void VulkanDevice::DestroyInternalShaders() {
-    internal_shaders.reset();
+    m_internal_shaders.reset();
 }
 
 void VulkanDevice::CreateInternalResources() {
@@ -821,9 +821,9 @@ void VulkanDevice::Destroy() {
     // for (auto& cmd_allocator : m_command_allocators) {
     //     CHECK_AND_DELETE(cmd_allocator);
     // }
-    compute_queue.reset();
-    gfx_queue.reset();
-    copy_queue.reset();
+    m_compute_command_queue.reset();
+    m_graphics_command_queue.reset();
+    m_copy_queue.reset();
     shutdown_sync_completed.store(
         queue_sync_complete_count.load(std::memory_order_acquire) >= 3,
         std::memory_order_release
@@ -1223,19 +1223,19 @@ void VulkanDevice::WaitIdle() {
 
 std::mutex& VulkanDevice::GetQueueHostMutex(VkQueue _queue) {
     assert(_queue != VK_NULL_HANDLE);
-    if (_queue == m_graphics_queue) {
+    if (_queue == m_graphics_queue_handle) {
         return m_graphics_queue_mutex;
     }
-    if (_queue == m_present_queue) {
+    if (_queue == m_present_queue_handle) {
         return m_present_queue_mutex;
     }
-    if (_queue == m_compute_queue) {
+    if (_queue == m_compute_queue_handle) {
         return m_compute_queue_mutex;
     }
-    if (_queue == m_transfer_queue) {
+    if (_queue == m_transfer_queue_handle) {
         return m_transfer_queue_mutex;
     }
-    if (_queue == m_raytracing_queue) {
+    if (_queue == m_raytracing_queue_handle) {
         return m_raytracing_queue_mutex;
     }
     assert(false && "Unknown VkQueue handle");
@@ -1245,11 +1245,11 @@ std::mutex& VulkanDevice::GetQueueHostMutex(VkQueue _queue) {
 Array<std::mutex*> VulkanDevice::GetUniqueQueueHostMutexes() {
     Array<std::mutex*> mutexes;
     const VkQueue queues[] = {
-        m_graphics_queue,
-        m_present_queue,
-        m_compute_queue,
-        m_transfer_queue,
-        m_raytracing_queue,
+        m_graphics_queue_handle,
+        m_present_queue_handle,
+        m_compute_queue_handle,
+        m_transfer_queue_handle,
+        m_raytracing_queue_handle,
     };
     for (VkQueue queue : queues) {
         if (queue == VK_NULL_HANDLE) {
@@ -2413,24 +2413,24 @@ CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) {
 
     switch (_type) {
         case EQueueType::Graphics:
-            return *gfx_queue;
+            return *m_graphics_command_queue;
         case EQueueType::Compute:
-            return *compute_queue;
+            return *m_compute_command_queue;
         case EQueueType::Copy:
         default:
             assert(false && "Unknown queue type.");
     }
-    return *gfx_queue;
+    return *m_graphics_command_queue;
 }
 
 RHIQueueTopology VulkanDevice::GetQueueTopology() const {
     const uint32_t graphics_native_id = 0;
     const uint32_t compute_native_id =
-        m_compute_queue == m_graphics_queue ? graphics_native_id : 1u;
+        m_compute_queue_handle == m_graphics_queue_handle ? graphics_native_id : 1u;
     const uint32_t copy_native_id =
-        m_transfer_queue == m_graphics_queue ?
+        m_transfer_queue_handle == m_graphics_queue_handle ?
             graphics_native_id :
-        m_transfer_queue == m_compute_queue ?
+        m_transfer_queue_handle == m_compute_queue_handle ?
             compute_native_id :
             compute_native_id + 1;
 
@@ -2454,7 +2454,7 @@ RHIQueueTopology VulkanDevice::GetQueueTopology() const {
 }
 
 CopyQueue& VulkanDevice::GetCopyQueue() {
-    return *copy_queue;
+    return *m_copy_queue;
 }
 
 TextureRef VulkanDevice::CreateTexture(
@@ -2520,7 +2520,7 @@ void VulkanDevice::FlushDeferredReleases() {
 }
 
 VkSampler VulkanDevice::GetSampler(Sampler _sampler) const {
-    return immutable_samplers[GetSamplerIdx(_sampler)];
+    return immutable_samplers[GetSamplerIndex(_sampler)];
 }
 
 void VulkanDevice::SetResourceName(uint64 _handle, VkObjectType _type, const std::string_view _name) {
@@ -2533,17 +2533,18 @@ void VulkanDevice::SetResourceName(uint64 _handle, VkObjectType _type, const std
 }
 
 RuntimePlugin* VulkanDevice::LoadPlugin(std::string_view _name) {
-    auto ite = exts.find(_name.data());
-    if (ite == exts.end())
+    auto plugin_it = plugins.find(_name.data());
+    if (plugin_it == plugins.end()) {
         return nullptr;
-    auto& v = ite->second;
+    }
+    auto& plugin = plugin_it->second;
     {
-        std::lock_guard lck{ext_mutex};
-        if (v.ext == nullptr) {
-            v.ext = v.ctor(this);
+        std::lock_guard lock{plugins_mutex};
+        if (plugin.instance == nullptr) {
+            plugin.instance = plugin.create(this);
         }
     }
-    return v.ext;
+    return plugin.instance;
 }
 
 void VulkanDevice::CopyData(const BufferView& _dst, const void* _data, uint64 _size) {
@@ -2559,10 +2560,10 @@ void VulkanDevice::CopyData(void* _dst, const BufferView& _src, uint64 _size) {
     );
 }
 
-void VulkanDevice::LoadDefaultExtensions() {
+void VulkanDevice::RegisterDefaultPlugins() {
 
 #if WITH_NRD
-    exts.try_emplace(
+    plugins.try_emplace(
         Moer::Render::Ext::NRDPlugin::name.data(),
         [](VulkanDevice* _device) -> RuntimePlugin* {
             return MoerNew(Moer::Render::Ext::VkNRDPlugin(_device));
