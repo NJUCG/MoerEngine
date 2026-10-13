@@ -60,7 +60,7 @@
 namespace Moer::Render {
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
-VulkanDevice::VulkanDevice(const VulkanRHIConfig&& _config) : RenderDevice::Impl() {
+VulkanDevice::VulkanDevice(const VulkanRHIConfig& _config) : RenderDevice::Impl() {
     rhi_thread_enabled            = _config.rhi_thread && !_config.rhi_bypass;
     thread_profile_logging        = _config.thread_profile_logging;
     parallel_recording            = _config.parallel_recording;
@@ -2519,13 +2519,8 @@ void VulkanDevice::FlushDeferredReleases() {
     }
 }
 
-const VkSampler VulkanDevice::GetSampler(Sampler _sampler) const {
-    uint filter  = uint(_sampler.filter);
-    uint address = uint(_sampler.address_mode);
-    uint compare = uint(_sampler.compare_function);
-
-    uint idx = (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
-    return immutable_samplers[idx];
+VkSampler VulkanDevice::GetSampler(Sampler _sampler) const {
+    return immutable_samplers[GetSamplerIdx(_sampler)];
 }
 
 void VulkanDevice::SetResourceName(uint64 _handle, VkObjectType _type, const std::string_view _name) {

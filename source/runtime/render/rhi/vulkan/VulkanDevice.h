@@ -22,7 +22,6 @@
 #include "VulkanTypeDefs.h"
 #include "vulkanextension/VulkanExtension.h"
 
-// #include <vk_mem_alloc.h>
 #include "VulkanMemoryAllocator.h"
 
 #include <optional>
@@ -30,9 +29,6 @@
 #include <shared_mutex>
 
 namespace Moer::Render {
-class VulkanDescriptorSetsLayout;
-class VulkanDescriptorSetAllocator;
-class VulkanDescriptorSetWriter;
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
@@ -41,7 +37,7 @@ struct QueueFamilyIndices {
     std::optional<uint32_t> compute;
     std::optional<uint32_t> raytracing;
 
-    inline bool IsComplete() const {
+    bool IsComplete() const {
         return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value() &&
                raytracing.has_value();
     }
@@ -88,14 +84,16 @@ struct VulkanDeviceInfo {
 
 class VulkanDevice : public RenderDevice::Impl {
 public:
-    VulkanDevice(const VulkanRHIConfig&& _config);
-    virtual ~VulkanDevice();
+    // Lifecycle.
+    VulkanDevice(const VulkanRHIConfig& _config);
+    ~VulkanDevice() override;
 
-    PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
-    PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders) override;
+    // Shared resource limits.
+    static constexpr uint            bindless_sampler_cnt = 256;
+    static constexpr uint            cmd_alloc_limits     = 3;
 
-    TextureRef
-    CreateTexture(std::string_view _name, const TextureInfo& _info) override;
+    // RHI resource creation.
+    TextureRef CreateTexture(std::string_view _name, const TextureInfo& _info) override;
 
     BufferRef CreateBuffer(
         std::string_view  _name,
@@ -107,24 +105,26 @@ public:
 
     BindlessArrayRef CreateBindlessArray(uint _max_size) override;
     FenceRef         CreateFence() override;
-
-    // Raytracing
     RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) override;
 
     RaytracingSceneRef CreateRaytracingScene() override;
+    SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
+    IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;
+
+    // RHI pipeline creation.
+    PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
+    PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders) override;
+
+    // RHI queues and synchronization.
     CommandQueue& GetCommandQueue(EQueueType _type) override;
 
     CopyQueue& GetCopyQueue() override;
 
     RHIQueueTopology GetQueueTopology() const override;
+    void WaitIdle() override;
 
-    SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
-
-    IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;
-
-    void FlushDebugMessages() const override;
-
+    // RHI capabilities and extensions.
     bool SupportsTessellation() const override {
         return m_device_info.core_features.core_1_0.tessellationShader == VK_TRUE;
     }
@@ -147,7 +147,6 @@ public:
         return true;
     }
 
-    // Cooperative support related
     bool                            IsExtensionCooperativeEnabled() const override;
     const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const override;
     bool                            TryConvertCooperativeVectorMatrix(
@@ -156,95 +155,66 @@ public:
         std::span<byte>                        _dst_data
     ) const override;
 
-    // wait idle
-    void WaitIdle() override;
-
-    // 判断当前物理设备是否为 AMD（基于 vendorID）
-    bool IsAmdGpu() const;
-
-public:
-    void           EnqueueDeferredRelease(RHIResource* _object);
-    void           FlushDeferredReleases();
-    constexpr uint ImmutableSamplerCount() const {
-        return immutable_sampler_count;
-    }
-    const VkSampler* GetImmutableSamplers() const {
-        return immutable_samplers.data();
-    }
-    const VkSampler GetSampler(Sampler _sampler) const;
-    const uint      GetSamplerIdx(Sampler _sampler) const {
-        uint filter  = uint(_sampler.filter);
-        uint address = uint(_sampler.address_mode);
-        uint compare = uint(_sampler.compare_function);
-        return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
-    }
-
-    void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
-    void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
-    void CopyData(void* _dst, const BufferView& _src, uint64 _size);
-
-public:
+    void FlushDebugMessages() const override;
     RuntimePlugin* LoadPlugin(std::string_view _name) override;
 
-    struct Ext {
-        using Ctor = std::function<RuntimePlugin*(VulkanDevice*)>;
-        using Dtor = std::function<void(RuntimePlugin*)>;
-        RuntimePlugin* ext;
-        Ctor           ctor;
-        Dtor           dtor;
-        Ext(Ctor ctor, Dtor dtor) : ext{nullptr}, ctor{ctor}, dtor{dtor} {}
-        Ext(Ext const&) = delete;
-        Ext(Ext&& rhs) : ext{rhs.ext}, ctor{rhs.ctor}, dtor{rhs.dtor} {
-            rhs.ext = nullptr;
-        }
-        ~Ext() {
-            if (ext) {
-                dtor(ext);
-            }
-        }
-    };
-
-private:
-    std::mutex                     ext_mutex;
-    UnorderedMap<std::string, Ext> exts;
-    CooperativeExtensionInfo       m_cooperative_extension_info{};
-
-    void LoadDefaultExtensions();
-
-public:
-    inline VkPhysicalDevice GetGpu() const {
+    // Native Vulkan handles.
+    VkPhysicalDevice GetGpu() const {
         return m_gpu;
     }
-    inline VkInstance GetInstance() const {
+    VkInstance GetInstance() const {
         return m_instance;
     }
-    inline VkDevice GetDevice() const {
+    VkDevice GetDevice() const {
         return m_device;
     }
-    VulkanDescriptorHeap& GetGlobalDescriptorHeap() {
-        return m_global_descriptor_heap;
-    }
-    inline VmaAllocator GetVmaAllocator() const {
-        return m_allocator;
-    }
-    inline const VulkanOptionalDeviceExtensions& GetOptionalExtensions() const {
+
+    // Device properties and extension queries.
+    const VulkanOptionalDeviceExtensions& GetOptionalExtensions() const {
         return m_device_info.optional_extensions;
     }
-    inline const VulkanDeviceFeatures& GetCoreFeatures() const {
+    const VulkanDeviceFeatures& GetCoreFeatures() const {
         return m_device_info.core_features;
     }
-    inline const VulkanCoreDeviceProperties& GetCoreProperties() const {
+    const VulkanCoreDeviceProperties& GetCoreProperties() const {
         return m_device_info.core_properties;
     }
-    inline const VulkanOptionalDeviceProperties& GetOptionalProperties() const {
+    const VulkanOptionalDeviceProperties& GetOptionalProperties() const {
         return m_device_info.optional_properties;
     }
-    inline VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
+    VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
         return m_device_info.memery_properties;
     }
-    inline QueueFamilyIndices GetQueueFamilyIndices() const {
+    QueueFamilyIndices GetQueueFamilyIndices() const {
         return m_device_info.queue_family_indices;
     }
+    // 查询当前设备是否启用了指定的 device extension（基于已启用扩展列表）
+    bool HasDeviceExtension(std::string_view _ext_name) const;
+    bool IsAmdGpu() const;
+
+    // Native queues and timestamp queries.
+    uint GetQueueFamilyIndex(VkQueueFlags _queue_flags) {
+        return GetQueueFamilyIndex(m_device_info.queue_family_props, _queue_flags);
+    }
+
+    uint GetQueueFamilyIndex(EQueueType _queue_type) const;
+
+    VkQueue GetGraphicsQueue() const {
+        return m_graphics_queue;
+    }
+    VkQueue GetPresentQueue() const {
+        return m_present_queue;
+    }
+    VkQueue GetComputeQueue() const {
+        return m_compute_queue;
+    }
+    VkQueue GetTransferQueue() const {
+        return m_transfer_queue;
+    }
+    VkQueue GetRayTracingQueue() const {
+        return m_raytracing_queue;
+    }
+
     [[nodiscard]] RENDER_API uint32_t GetTimestampValidBits(
         EQueueType _queue_type
     ) const;
@@ -263,32 +233,37 @@ public:
     [[nodiscard]] RENDER_API bool SupportsTimestampQueries(
         EQueueType _queue_type
     ) const;
-    inline VkDescriptorSetLayout GetEmptyDescriptorSetLayout() const {
+
+    // Shared backend resources.
+    VulkanDescriptorHeap& GetGlobalDescriptorHeap() {
+        return m_global_descriptor_heap;
+    }
+    VmaAllocator GetVmaAllocator() const {
+        return m_allocator;
+    }
+
+    VkDescriptorSetLayout GetEmptyDescriptorSetLayout() const {
         return empty_descriptor_set_layout;
     }
-    // 查询当前设备是否启用了指定的 device extension（基于已启用扩展列表）
-    bool HasDeviceExtension(std::string_view _ext_name) const;
-    uint GetQueueFamilyIndex(VkQueueFlags _queue_flags) {
-        return GetQueueFamilyIndex(m_device_info.queue_family_props, _queue_flags);
+    constexpr uint ImmutableSamplerCount() const {
+        return immutable_sampler_count;
     }
+    const VkSampler* GetImmutableSamplers() const {
+        return immutable_samplers.data();
+    }
+    VkSampler GetSampler(Sampler _sampler) const;
+    uint GetSamplerIdx(Sampler _sampler) const {
+        uint filter  = uint(_sampler.filter);
+        uint address = uint(_sampler.address_mode);
+        uint compare = uint(_sampler.compare_function);
+        return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
+    }
+    void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
+    void CopyData(void* _dst, const BufferView& _src, uint64 _size);
+    void           EnqueueDeferredRelease(RHIResource* _object);
+    void           FlushDeferredReleases();
 
-    uint GetQueueFamilyIndex(EQueueType _queue_type) const;
-
-    inline VkQueue GetGraphicsQueue() const {
-        return m_graphics_queue;
-    }
-    inline VkQueue GetPresentQueue() const {
-        return m_present_queue;
-    }
-    inline VkQueue GetComputeQueue() const {
-        return m_compute_queue;
-    }
-    inline VkQueue GetTransferQueue() const {
-        return m_transfer_queue;
-    }
-    inline VkQueue GetRayTracingQueue() const {
-        return m_raytracing_queue;
-    }
+    // Native queue operations and admission.
     VulkanOperationResult SubmitOnQueue(
         VkQueue                       _queue,
         const VkSubmitInfo2&          _submit_info,
@@ -320,6 +295,7 @@ public:
         return FaultAdmissionLock(native_queue_gate);
     }
 
+    // Fault handling and diagnostics.
     bool TryLatchFirstFault(
         const VulkanOperationContext& _context,
         VkResult                      _result,
@@ -343,90 +319,31 @@ public:
     void RecordAllocatorQuarantine();
     void RecordSkippedCommandPoolReset();
     void RecordQueueSyncComplete();
+    void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
 
-private:
-    std::mutex& GetQueueHostMutex(VkQueue _queue);
-    Array<std::mutex*> GetUniqueQueueHostMutexes();
-    bool TryBeginFirstFault(VkResult _result);
-    void PublishFirstFaultLocked(
-        const VulkanOperationContext& _context,
-        VkResult                      _result,
-        bool                          _injected,
-        bool                          _predrained
-    );
-
-    VkInstance            m_instance                  = VK_NULL_HANDLE;
-    VkPhysicalDevice      m_gpu                       = VK_NULL_HANDLE;
-    VkDevice              m_device                    = VK_NULL_HANDLE;
-    VkQueue               m_graphics_queue            = VK_NULL_HANDLE;
-    VkQueue               m_present_queue             = VK_NULL_HANDLE;
-    VkQueue               m_compute_queue             = VK_NULL_HANDLE;
-    VkQueue               m_raytracing_queue          = VK_NULL_HANDLE;
-    VkQueue               m_transfer_queue            = VK_NULL_HANDLE;
-    VkDescriptorSetLayout empty_descriptor_set_layout = VK_NULL_HANDLE;
-    EventRef              init_event{};
-
-    VulkanDeviceInfo m_device_info{};
-
-    VkDebugUtilsMessengerEXT m_debug_utils_messenger = VK_NULL_HANDLE;
-    bool                     validation_layer_requested = false;
-    bool                     validation_layer_available = false;
-    bool                     validation_layer_enabled   = false;
-
-    VmaAllocator              m_allocator = VK_NULL_HANDLE;
-    VulkanDescriptorHeap      m_global_descriptor_heap{};
-    UniquePtr<VkCommandQueue> gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
-    UniquePtr<VkCommandQueue> compute_queue{};
-    UniquePtr<VkCopyQueue>    copy_queue{};
-    bool                      rhi_thread_enabled            = false;
-    bool                      thread_profile_logging       = false;
-    bool                      parallel_recording           = false;
-    uint32                    parallel_record_workers      = 0;
-    bool                      parallel_record_verify       = false;
-    bool                      parallel_record_profile      = false;
-    uint32                    parallel_record_min_work_units_per_job = 8;
-    uint64                    parallel_record_worker_throw_trigger = 0;
-    uint64                    present_submit_fault_trigger = 0;
-    bool                      surface_maintenance1_enabled = false;
-    std::atomic<uint64>       present_submit_attempts{0};
-
-    std::atomic<EVulkanFaultPublishState> fault_state{EVulkanFaultPublishState::Healthy};
-    std::atomic_bool                        device_lost_observed{false};
-    VulkanFaultRecord                       first_fault{};
-    std::atomic<uint32>                     first_fault_count{0};
-    std::atomic<uint64>                     native_submit_call_count{0};
-    std::atomic<uint64>                     native_present_call_count{0};
-    std::atomic<uint64>                     fault_submit_call_snapshot{0};
-    std::atomic<uint64>                     fault_present_call_snapshot{0};
-    std::atomic<uint64>                     rejected_submit_count{0};
-    std::atomic<uint64>                     rejected_present_count{0};
-    std::atomic<uint64>                     allocator_quarantine_count{0};
-    std::atomic<uint64>                     skipped_command_pool_reset_count{0};
-    std::atomic<uint64>                     queue_sync_complete_count{0};
-    std::atomic_bool                        shutdown_sync_completed{false};
-    std::atomic_bool                        emergency_exit_started{false};
-    // Shared access covers native calls; fault publication takes exclusive access.
-    std::shared_mutex                         native_queue_gate;
-    // Every host call operating on the same VkQueue must use the same mutex.
-    std::mutex                                m_graphics_queue_mutex;
-    std::mutex                                m_present_queue_mutex;
-    std::mutex                                m_compute_queue_mutex;
-    std::mutex                                m_transfer_queue_mutex;
-    std::mutex                                m_raytracing_queue_mutex;
-    LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
-    static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
-    StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
-
-public:
-    static constexpr uint            bindless_sampler_cnt = 256;
-    static constexpr uint            cmd_alloc_limits     = 3;
-    UniquePtr<DeviceInternalShaders> internal_shaders;
+    // Runtime plugin entry.
+    struct Ext {
+        using Ctor = std::function<RuntimePlugin*(VulkanDevice*)>;
+        using Dtor = std::function<void(RuntimePlugin*)>;
+        RuntimePlugin* ext;
+        Ctor           ctor;
+        Dtor           dtor;
+        Ext(Ctor ctor, Dtor dtor) : ext{nullptr}, ctor{ctor}, dtor{dtor} {}
+        Ext(Ext const&) = delete;
+        Ext(Ext&& rhs) : ext{rhs.ext}, ctor{rhs.ctor}, dtor{rhs.dtor} {
+            rhs.ext = nullptr;
+        }
+        ~Ext() {
+            if (ext) {
+                dtor(ext);
+            }
+        }
+    };
 
 private:
     friend VkCommandQueue;
-    //configs
 
-private:
+    // Initialization and shutdown.
     void             InitVulkanInstance(uint32 _api_version);
     VkPhysicalDevice SelectGpu(uint32 _api_version);
     void             InitGpu(uint32 _api_version);
@@ -455,11 +372,98 @@ private:
         VkQueueFlags                                _queue_flags
     ) const;
     QueueFamilyIndices QueryQueueFamilyIndices(VkPhysicalDevice _gpu) const;
-
-#pragma region[ debug ]
+    void LoadDefaultExtensions();
     void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info);
     void SetupDebugUtilsMessengerEXT();
-#pragma endregion
+
+    // Native synchronization and fault publication.
+    std::mutex& GetQueueHostMutex(VkQueue _queue);
+    Array<std::mutex*> GetUniqueQueueHostMutexes();
+    bool TryBeginFirstFault(VkResult _result);
+    void PublishFirstFaultLocked(
+        const VulkanOperationContext& _context,
+        VkResult                      _result,
+        bool                          _injected,
+        bool                          _predrained
+    );
+
+    // Plugin state.
+    std::mutex                     ext_mutex;
+    UnorderedMap<std::string, Ext> exts;
+    CooperativeExtensionInfo       m_cooperative_extension_info{};
+
+    // Native device and queue handles.
+    VkInstance            m_instance                  = VK_NULL_HANDLE;
+    VkPhysicalDevice      m_gpu                       = VK_NULL_HANDLE;
+    VkDevice              m_device                    = VK_NULL_HANDLE;
+    VkQueue               m_graphics_queue            = VK_NULL_HANDLE;
+    VkQueue               m_present_queue             = VK_NULL_HANDLE;
+    VkQueue               m_compute_queue             = VK_NULL_HANDLE;
+    VkQueue               m_raytracing_queue          = VK_NULL_HANDLE;
+    VkQueue               m_transfer_queue            = VK_NULL_HANDLE;
+    VkDescriptorSetLayout empty_descriptor_set_layout = VK_NULL_HANDLE;
+
+    // Device properties.
+    VulkanDeviceInfo m_device_info{};
+
+    // Validation diagnostics.
+    VkDebugUtilsMessengerEXT m_debug_utils_messenger = VK_NULL_HANDLE;
+    bool                     validation_layer_requested = false;
+    bool                     validation_layer_available = false;
+    bool                     validation_layer_enabled   = false;
+
+    // Shared resources and command queues.
+    VmaAllocator              m_allocator = VK_NULL_HANDLE;
+    VulkanDescriptorHeap      m_global_descriptor_heap{};
+    UniquePtr<VkCommandQueue> gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
+    UniquePtr<VkCommandQueue> compute_queue{};
+    UniquePtr<VkCopyQueue>    copy_queue{};
+
+    // Runtime configuration.
+    bool                      rhi_thread_enabled            = false;
+    bool                      thread_profile_logging       = false;
+    bool                      parallel_recording           = false;
+    uint32                    parallel_record_workers      = 0;
+    bool                      parallel_record_verify       = false;
+    bool                      parallel_record_profile      = false;
+    uint32                    parallel_record_min_work_units_per_job = 8;
+    uint64                    parallel_record_worker_throw_trigger = 0;
+    uint64                    present_submit_fault_trigger = 0;
+    bool                      surface_maintenance1_enabled = false;
+    std::atomic<uint64>       present_submit_attempts{0};
+
+    // Fault publication and diagnostics.
+    std::atomic<EVulkanFaultPublishState> fault_state{EVulkanFaultPublishState::Healthy};
+    std::atomic_bool                        device_lost_observed{false};
+    VulkanFaultRecord                       first_fault{};
+    std::atomic<uint32>                     first_fault_count{0};
+    std::atomic<uint64>                     native_submit_call_count{0};
+    std::atomic<uint64>                     native_present_call_count{0};
+    std::atomic<uint64>                     fault_submit_call_snapshot{0};
+    std::atomic<uint64>                     fault_present_call_snapshot{0};
+    std::atomic<uint64>                     rejected_submit_count{0};
+    std::atomic<uint64>                     rejected_present_count{0};
+    std::atomic<uint64>                     allocator_quarantine_count{0};
+    std::atomic<uint64>                     skipped_command_pool_reset_count{0};
+    std::atomic<uint64>                     queue_sync_complete_count{0};
+    std::atomic_bool                        shutdown_sync_completed{false};
+    std::atomic_bool                        emergency_exit_started{false};
+    // Shared access covers native calls; fault publication takes exclusive access.
+    std::shared_mutex                         native_queue_gate;
+    // Every host call operating on the same VkQueue must use the same mutex.
+    std::mutex                                m_graphics_queue_mutex;
+    std::mutex                                m_present_queue_mutex;
+    std::mutex                                m_compute_queue_mutex;
+    std::mutex                                m_transfer_queue_mutex;
+    std::mutex                                m_raytracing_queue_mutex;
+
+    // Deferred release and immutable samplers.
+    LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
+    static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
+    StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
+
+public:
+    UniquePtr<DeviceInternalShaders> internal_shaders;
 };
 } // namespace Moer::Render
 #endif // VULKAN_DEVICE_H
