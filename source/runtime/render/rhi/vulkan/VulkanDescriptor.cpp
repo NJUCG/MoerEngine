@@ -2,6 +2,7 @@
 
 #include "PixelFormat.h"
 #include "VulkanDevice.h"
+#include "VulkanQueue.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanPlatform.h"

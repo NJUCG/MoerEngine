@@ -1,34 +1,33 @@
 #ifndef VULKAN_DEVICE_H
 #define VULKAN_DEVICE_H
 
-#include "PixelFormat.h"
-#include "misc/STL.h"
-#include "taskgraph/Event.h"
-
-#include "../RHIImpl.h"
-#include "rhi/RHI.h"
-#include "rhi/RHICommand.h"
-#include "rhi/RHICommon.h"
-#include "rhi/RHIMultiview.h"
-#include "rhi/RHIResource.h"
-
-#include "VulkanCommand.h"
+#include "VulkanCommon.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDeviceFeature.h"
-#include "VulkanFault.h"
 #include "VulkanDeviceProperty.h"
-#include "VulkanPlatform.h"
-#include "VulkanQueue.h"
+#include "VulkanFault.h"
+#include "VulkanMemoryAllocator.h"
 #include "VulkanTypeDefs.h"
 #include "vulkanextension/VulkanExtension.h"
 
-#include "VulkanMemoryAllocator.h"
+#include "misc/LockFree.h"
+#include "misc/STL.h"
+#include "rhi/RHIImpl.h"
+#include "rhi/RHIMultiview.h"
 
-#include <optional>
 #include <atomic>
+#include <functional>
+#include <mutex>
+#include <optional>
 #include <shared_mutex>
+#include <span>
+#include <string>
+#include <string_view>
 
 namespace Moer::Render {
+
+class VkCommandQueue;
+class VkCopyQueue;
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
