@@ -20,6 +20,7 @@
 
 #include "log/LogSystem.h"
 // #include "misc/MacroUtils.h"
+#include "misc/RAII.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -2177,14 +2178,15 @@ VkPipelineDepthStencilStateCreateInfo ToVulkanDepthStencilState(const RHIDepthSt
     return state;
 }
 
-// Owns every array referenced by the Vulkan state structures until pipeline creation completes.
-struct VulkanGraphicsPipelineState {
+// Temporary native graphics-pipeline descriptions and their backing arrays, used only during creation.
+struct VulkanGraphicsPipelineCreateData {
     Array<VkFormat>                            color_attachment_formats;
     Array<VkPipelineColorBlendAttachmentState> color_blend_attachments;
     Array<VkVertexInputBindingDescription>     vertex_bindings;
     Array<VkVertexInputAttributeDescription>   vertex_attributes;
     StaticArray<VkDynamicState, 2> dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
 
+    VkGraphicsPipelineCreateInfo vk_create_info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     VkPipelineRenderingCreateInfo        rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     VkPipelineVertexInputStateCreateInfo vertex_input{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
@@ -2208,31 +2210,31 @@ struct VulkanGraphicsPipelineState {
     VkPipelineDynamicStateCreateInfo    dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     bool                                uses_stencil_attachment = false;
 
-    VulkanGraphicsPipelineState() = default;
+    VulkanGraphicsPipelineCreateData() = default;
     // Internal pointers refer to this object's storage, so its address must remain stable.
-    VulkanGraphicsPipelineState(const VulkanGraphicsPipelineState&)            = delete;
-    VulkanGraphicsPipelineState& operator=(const VulkanGraphicsPipelineState&) = delete;
-    VulkanGraphicsPipelineState(VulkanGraphicsPipelineState&&)                 = delete;
-    VulkanGraphicsPipelineState& operator=(VulkanGraphicsPipelineState&&)      = delete;
+    VulkanGraphicsPipelineCreateData(const VulkanGraphicsPipelineCreateData&)            = delete;
+    VulkanGraphicsPipelineCreateData& operator=(const VulkanGraphicsPipelineCreateData&) = delete;
+    VulkanGraphicsPipelineCreateData(VulkanGraphicsPipelineCreateData&&)                 = delete;
+    VulkanGraphicsPipelineCreateData& operator=(VulkanGraphicsPipelineCreateData&&)      = delete;
 };
 
 void InitializeGraphicsAttachmentState(
-    const GfxPsoCreateInfo&      create_info,
-    VulkanGraphicsPipelineState& states
+    const GfxPsoCreateInfo&           create_info,
+    VulkanGraphicsPipelineCreateData& create_data
 ) {
     const uint32_t attachment_count = create_info.color_attachment_count;
-    states.color_attachment_formats.resize(attachment_count);
-    states.color_blend_attachments.resize(attachment_count);
+    create_data.color_attachment_formats.resize(attachment_count);
+    create_data.color_blend_attachments.resize(attachment_count);
     for (uint32_t index = 0; index < attachment_count; ++index) {
-        const auto& attachment                 = create_info.color_attachments_info[index];
-        states.color_attachment_formats[index] = VulkanEnumTranslator::METoVKFormat(attachment.pixel_format);
-        states.color_blend_attachments[index]  = ToVulkanBlendAttachment(attachment.blend_state_info);
+        const RHIColorAttachmentInfo& attachment = create_info.color_attachments_info[index];
+        create_data.color_attachment_formats[index] = VulkanEnumTranslator::METoVKFormat(attachment.pixel_format);
+        create_data.color_blend_attachments[index]  = ToVulkanBlendAttachment(attachment.blend_state_info);
     }
 
-    states.rendering.viewMask                = create_info.view_mask;
-    states.rendering.colorAttachmentCount    = attachment_count;
-    states.rendering.pColorAttachmentFormats = states.color_attachment_formats.data();
-    states.rendering.depthAttachmentFormat =
+    create_data.rendering.viewMask                = create_info.view_mask;
+    create_data.rendering.colorAttachmentCount    = attachment_count;
+    create_data.rendering.pColorAttachmentFormats = create_data.color_attachment_formats.data();
+    create_data.rendering.depthAttachmentFormat =
         VulkanEnumTranslator::METoVKFormat(create_info.depth_stencil_format);
 
     // Only declare a stencil attachment when the PSO actually enables stencil tests.
@@ -2242,28 +2244,28 @@ void InitializeGraphicsAttachmentState(
                                    create_info.depth_stencil_format == PF_S8_UINT;
     const bool stencil_enabled = create_info.depth_stencil_info.b_enable_front_face_stencil ||
                                  create_info.depth_stencil_info.b_enable_back_face_stencil;
-    states.uses_stencil_attachment = depth_has_stencil && stencil_enabled;
-    states.rendering.stencilAttachmentFormat =
-        states.uses_stencil_attachment ? states.rendering.depthAttachmentFormat : VK_FORMAT_UNDEFINED;
+    create_data.uses_stencil_attachment = depth_has_stencil && stencil_enabled;
+    create_data.rendering.stencilAttachmentFormat =
+        create_data.uses_stencil_attachment ? create_data.rendering.depthAttachmentFormat : VK_FORMAT_UNDEFINED;
 
-    states.color_blend.logicOp         = VK_LOGIC_OP_COPY;
-    states.color_blend.logicOpEnable   = VK_FALSE;
-    states.color_blend.attachmentCount = attachment_count;
-    states.color_blend.pAttachments    = states.color_blend_attachments.data();
+    create_data.color_blend.logicOp         = VK_LOGIC_OP_COPY;
+    create_data.color_blend.logicOpEnable   = VK_FALSE;
+    create_data.color_blend.attachmentCount = attachment_count;
+    create_data.color_blend.pAttachments    = create_data.color_blend_attachments.data();
 }
 
 void InitializeGraphicsVertexInputState(
-    const GfxPsoCreateInfo&      create_info,
-    VulkanGraphicsPipelineState& states
+    const GfxPsoCreateInfo&           create_info,
+    VulkanGraphicsPipelineCreateData& create_data
 ) {
     uint binding_index = 0;
-    states.vertex_bindings.reserve(create_info.vertex_stream.bindings.size());
+    create_data.vertex_bindings.reserve(create_info.vertex_stream.bindings.size());
     uint attribute_count = 0;
-    for (const auto& binding : create_info.vertex_stream.bindings) {
+    for (const VertexBinding& binding : create_info.vertex_stream.bindings) {
         attribute_count += binding.vertex_elements.size();
     }
     uint attribute_location = 0;
-    states.vertex_attributes.reserve(attribute_count);
+    create_data.vertex_attributes.reserve(attribute_count);
     for (const VertexBinding& binding : create_info.vertex_stream.bindings) {
         uint binding_stride   = 0;
         uint attribute_offset = 0;
@@ -2272,66 +2274,65 @@ void InitializeGraphicsVertexInputState(
             if (format == VK_FORMAT_UNDEFINED) {
                 throw std::invalid_argument("Invalid Vulkan vertex attribute format");
             }
-            states.vertex_attributes.emplace_back(
+            create_data.vertex_attributes.emplace_back(
                 attribute_location++, binding_index, format, attribute_offset
             );
             attribute_offset += GetVertexFormatByteSize(attribute.format);
             binding_stride = attribute_offset;
         }
-        states.vertex_bindings.emplace_back(
+        create_data.vertex_bindings.emplace_back(
             binding_index, binding_stride, VulkanEnumTranslator::METoVKVertexInputRate(binding.input_rate)
         );
         ++binding_index;
     }
-    states.vertex_input.vertexBindingDescriptionCount   = uint(states.vertex_bindings.size());
-    states.vertex_input.pVertexBindingDescriptions      = states.vertex_bindings.data();
-    states.vertex_input.vertexAttributeDescriptionCount = uint(states.vertex_attributes.size());
-    states.vertex_input.pVertexAttributeDescriptions    = states.vertex_attributes.data();
+    create_data.vertex_input.vertexBindingDescriptionCount   = uint(create_data.vertex_bindings.size());
+    create_data.vertex_input.pVertexBindingDescriptions      = create_data.vertex_bindings.data();
+    create_data.vertex_input.vertexAttributeDescriptionCount = uint(create_data.vertex_attributes.size());
+    create_data.vertex_input.pVertexAttributeDescriptions    = create_data.vertex_attributes.data();
 }
 
-void InitializeGraphicsPipelineState(
-    const GfxPsoCreateInfo&      create_info,
-    VulkanGraphicsPipelineState& states
-) {
-    InitializeGraphicsAttachmentState(create_info, states);
-    InitializeGraphicsVertexInputState(create_info, states);
-
-    states.input_assembly.topology =
-        VulkanEnumTranslator::METoVKPrimitiveTopology(create_info.primitive_topology);
-    states.input_assembly.primitiveRestartEnable = VK_FALSE;
-    states.viewport.viewportCount                = create_info.multi_view_count;
-    states.viewport.scissorCount                 = create_info.multi_view_count;
-    states.rasterization                         = ToVulkanRasterizationState(create_info.rasterizer_info);
-    states.multisample                           = ToVulkanMultisampleState(create_info.multisample_info);
-    states.tessellation.patchControlPoints       = create_info.patch_control_points;
-    states.depth_stencil                         = ToVulkanDepthStencilState(create_info.depth_stencil_info);
-    states.dynamic.dynamicStateCount             = states.dynamic_states.size();
-    states.dynamic.pDynamicStates                = states.dynamic_states.data();
-}
-
-VkGraphicsPipelineCreateInfo MakeGraphicsPipelineCreateInfo(
-    const VulkanGraphicsPipelineState&               states,
+void InitializeGraphicsPipelineCreateData(
+    const GfxPsoCreateInfo&                          create_info,
     std::span<const VkPipelineShaderStageCreateInfo> shader_stages,
     VkPipelineLayout                                 layout,
-    bool                                             uses_tessellation
+    VulkanGraphicsPipelineCreateData&                create_data
 ) {
-    VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    info.pNext               = &states.rendering;
+    InitializeGraphicsAttachmentState(create_info, create_data);
+    InitializeGraphicsVertexInputState(create_info, create_data);
+
+    create_data.input_assembly.topology =
+        VulkanEnumTranslator::METoVKPrimitiveTopology(create_info.primitive_topology);
+    create_data.input_assembly.primitiveRestartEnable = VK_FALSE;
+    create_data.viewport.viewportCount                = create_info.multi_view_count;
+    create_data.viewport.scissorCount                 = create_info.multi_view_count;
+    create_data.rasterization                         = ToVulkanRasterizationState(create_info.rasterizer_info);
+    create_data.multisample                           = ToVulkanMultisampleState(create_info.multisample_info);
+    create_data.tessellation.patchControlPoints       = create_info.patch_control_points;
+    create_data.depth_stencil                         = ToVulkanDepthStencilState(create_info.depth_stencil_info);
+    create_data.dynamic.dynamicStateCount             = create_data.dynamic_states.size();
+    create_data.dynamic.pDynamicStates                = create_data.dynamic_states.data();
+
+    const bool uses_tessellation = std::ranges::any_of(
+        shader_stages, [](const VkPipelineShaderStageCreateInfo& stage) {
+            return stage.stage == VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+        }
+    );
+    VkGraphicsPipelineCreateInfo& info = create_data.vk_create_info;
+    info.pNext               = &create_data.rendering;
     info.flags               = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
     info.stageCount          = static_cast<uint32_t>(shader_stages.size());
     info.pStages             = shader_stages.data();
-    info.pVertexInputState   = &states.vertex_input;
-    info.pInputAssemblyState = &states.input_assembly;
-    info.pTessellationState  = uses_tessellation ? &states.tessellation : nullptr;
-    info.pViewportState      = &states.viewport;
-    info.pRasterizationState = &states.rasterization;
-    info.pMultisampleState   = &states.multisample;
-    info.pDepthStencilState  = &states.depth_stencil;
-    info.pColorBlendState    = &states.color_blend;
-    info.pDynamicState       = &states.dynamic;
+    info.pVertexInputState   = &create_data.vertex_input;
+    info.pInputAssemblyState = &create_data.input_assembly;
+    info.pTessellationState  = uses_tessellation ? &create_data.tessellation : nullptr;
+    info.pViewportState      = &create_data.viewport;
+    info.pRasterizationState = &create_data.rasterization;
+    info.pMultisampleState   = &create_data.multisample;
+    info.pDepthStencilState  = &create_data.depth_stencil;
+    info.pColorBlendState    = &create_data.color_blend;
+    info.pDynamicState       = &create_data.dynamic;
     info.layout              = layout;
     info.basePipelineIndex   = -1;
-    return info;
 }
 
 } // namespace
@@ -2345,48 +2346,52 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
         return {};
     }
 
-    const auto ordered_shaders = GetGraphicsShadersInStageOrder(_shader_info.shaders);
-    auto       binding_info =
+    const Array<const SingleShaderInfo*> ordered_shaders =
+        GetGraphicsShadersInStageOrder(_shader_info.shaders);
+    VulkanPipelineBindingInfo binding_info =
         BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.argument_metadata.GetArguments());
     binding_info.push_constant_range.size = constant_byte_size;
 
-    auto* vk_pso =
-        MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX, binding_info.active_argument_bits);
-    VulkanGraphicsPipelineState states;
-    InitializeGraphicsPipelineState(_create_info, states);
-    vk_pso->b_uses_stencil_attachment = states.uses_stencil_attachment;
-    vk_pso->view_mask                 = _create_info.view_mask;
-
-    auto shader_stages = CreateVulkanShaderStages(m_device, ordered_shaders);
+    UniquePtr<VulkanPipelineState> vk_pso = MakeUnique<VulkanPipelineState>(
+        this, VulkanPipelineState::GFX, binding_info.active_argument_bits
+    );
+    Array<VkPipelineShaderStageCreateInfo> shader_stages = CreateVulkanShaderStages(m_device, ordered_shaders);
+    auto shader_module_cleanup = OnScopeExit([&]() {
+        for (const VkPipelineShaderStageCreateInfo& shader_stage : shader_stages) {
+            vkDestroyShaderModule(m_device, shader_stage.module, nullptr);
+        }
+    });
     vk_pso->m_argument_infos = std::move(binding_info.argument_infos);
     InitializeVulkanPipelineLayout(*vk_pso, binding_info);
-    const bool uses_tessellation = FindShaderStage(_shader_info.shaders, ST_HULL) != nullptr;
-    const auto pipeline_create_info =
-        MakeGraphicsPipelineCreateInfo(states, shader_stages, vk_pso->GetPipelineLayout(), uses_tessellation);
+
+    VulkanGraphicsPipelineCreateData create_data;
+    InitializeGraphicsPipelineCreateData(
+        _create_info, shader_stages, vk_pso->GetPipelineLayout(), create_data
+    );
+    vk_pso->b_uses_stencil_attachment = create_data.uses_stencil_attachment;
+    vk_pso->view_mask                 = _create_info.view_mask;
     VK_CHECK_RESULT(vkCreateGraphicsPipelines(
-        m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline
+        m_device, VK_NULL_HANDLE, 1, &create_data.vk_create_info, nullptr, &vk_pso->m_pipeline
     ));
 
-    for (const auto& shader_stage : shader_stages) {
-        vkDestroyShaderModule(m_device, shader_stage.module, nullptr);
-    }
-    return PipelineHandle{vk_pso};
+    return PipelineHandle{vk_pso.release()};
 }
 
 PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
     const uint constant_byte_size = ValidatePipelineConstants(
         shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize);
-    if (const auto error = ValidateComputeShaderStages(shader_info.shaders); !error.empty()) {
+    if (const std::string_view error = ValidateComputeShaderStages(shader_info.shaders); !error.empty()) {
         LOG_ERROR("Cannot create Vulkan compute pipeline: {}", error);
         return {};
     }
     const SingleShaderInfo* shader = &shader_info.shaders.front();
     const std::span<const SingleShaderInfo* const> stages(&shader, 1);
-    auto binding_info = BuildVulkanPipelineBindingInfo(stages, shader_info.argument_metadata.GetArguments());
+    VulkanPipelineBindingInfo binding_info =
+        BuildVulkanPipelineBindingInfo(stages, shader_info.argument_metadata.GetArguments());
     binding_info.push_constant_range.size = constant_byte_size;
-    auto* vk_pso =
+    VulkanPipelineState* vk_pso =
         MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute, binding_info.active_argument_bits);
-    auto  shader_stages = CreateVulkanShaderStages(m_device, stages);
+    Array<VkPipelineShaderStageCreateInfo> shader_stages = CreateVulkanShaderStages(m_device, stages);
     vk_pso->m_argument_infos = std::move(binding_info.argument_infos);
     InitializeVulkanPipelineLayout(*vk_pso, binding_info);
 
