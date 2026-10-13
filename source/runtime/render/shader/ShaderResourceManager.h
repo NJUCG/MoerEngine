@@ -36,87 +36,87 @@ struct ShaderInfo {
     }
 };
 
-using ShaderAssetOrCache = std::variant<ShaderAsset, Shader*>;
+using ShaderSource = std::variant<ShaderAsset, Shader*>;
 struct RasterPipelineConstructor {
     RasterPipelineConstructor(Render::RenderDevice& _device, class ShaderManager&);
 
     template<typename... Ts>
         requires std::is_constructible<ShaderAsset, Ts...>::value
     RasterPipelineConstructor& Vertex(Ts... _args) {
-        vertex_path = ShaderAsset(std::forward<Ts>(_args)...);
+        vertex_shader_source = ShaderAsset(std::forward<Ts>(_args)...);
         return *this;
     }
 
     RasterPipelineConstructor& Vertex(Shader& _shader) {
-        vertex_path = &_shader;
+        vertex_shader_source = &_shader;
         return *this;
     }
 
     template<typename... Ts>
         requires std::is_constructible<ShaderAsset, Ts...>::value
     RasterPipelineConstructor& Pixel(Ts... _args) {
-        pixel_path = ShaderAsset(std::forward<Ts>(_args)...);
+        pixel_shader_source = ShaderAsset(std::forward<Ts>(_args)...);
         return *this;
     }
 
     RasterPipelineConstructor& Pixel(Shader& _shader) {
-        pixel_path = &_shader;
+        pixel_shader_source = &_shader;
         return *this;
     }
 
     template<typename... Ts>
         requires std::is_constructible<ShaderAsset, Ts...>::value
     RasterPipelineConstructor& Geometry(Ts... _args) {
-        geometry_path = ShaderAsset(std::forward<Ts>(_args)...);
+        geometry_shader_source = ShaderAsset(std::forward<Ts>(_args)...);
         return *this;
     }
     RasterPipelineConstructor& Geometry(Shader& _shader) {
-        geometry_path = &_shader;
+        geometry_shader_source = &_shader;
         return *this;
     }
 
     template<typename... Ts>
         requires std::is_constructible<ShaderAsset, Ts...>::value
     RasterPipelineConstructor& Hull(Ts... _args) {
-        hull_path = ShaderAsset(std::forward<Ts>(_args)...);
+        hull_shader_source = ShaderAsset(std::forward<Ts>(_args)...);
         return *this;
     }
     RasterPipelineConstructor& Hull(Shader& _shader) {
-        hull_path = &_shader;
+        hull_shader_source = &_shader;
         return *this;
     }
 
     template<typename... Ts>
         requires std::is_constructible<ShaderAsset, Ts...>::value
     RasterPipelineConstructor& Domain(Ts... _args) {
-        domain_path = ShaderAsset(std::forward<Ts>(_args)...);
+        domain_shader_source = ShaderAsset(std::forward<Ts>(_args)...);
         return *this;
     }
     RasterPipelineConstructor& Domain(Shader& _shader) {
-        domain_path = &_shader;
+        domain_shader_source = &_shader;
         return *this;
     }
 
     template<typename... Ts>
         requires std::is_constructible<ShaderAsset, Ts...>::value
     RasterPipelineConstructor& Mesh(Ts... _args) {
-        mesh_path = ShaderAsset(std::forward<Ts>(_args)...);
+        mesh_shader_source = ShaderAsset(std::forward<Ts>(_args)...);
         return *this;
     }
     RasterPipelineConstructor& Mesh(Shader& _shader) {
-        mesh_path = &_shader;
+        mesh_shader_source = &_shader;
         return *this;
     }
 
     template<typename... Ts>
         requires std::is_constructible<ShaderAsset, Ts...>::value
     RasterPipelineConstructor& Task(Ts... _args) {
-        task_path = ShaderAsset(std::forward<Ts>(_args)...);
+        task_shader_source = ShaderAsset(std::forward<Ts>(_args)...);
         return *this;
     }
 
     RasterPipelineConstructor& Task(Shader& _shader) {
-        task_path = &_shader;
+        task_shader_source = &_shader;
         return *this;
     }
 
@@ -131,13 +131,13 @@ private:
     RENDER_API PipelineHandle
     CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineArgumentMetadata&& argument_metadata);
 
-    ShaderAssetOrCache vertex_path;
-    ShaderAssetOrCache pixel_path;
-    ShaderAssetOrCache geometry_path;
-    ShaderAssetOrCache hull_path;
-    ShaderAssetOrCache domain_path;
-    ShaderAssetOrCache mesh_path;
-    ShaderAssetOrCache task_path;
+    ShaderSource vertex_shader_source;
+    ShaderSource pixel_shader_source;
+    ShaderSource geometry_shader_source;
+    ShaderSource hull_shader_source;
+    ShaderSource domain_shader_source;
+    ShaderSource mesh_shader_source;
+    ShaderSource task_shader_source;
 
     Render::RenderDevice& device;
     class ShaderManager&  shader_manager;
@@ -147,10 +147,10 @@ struct ComputeConstructor {
         requires std::is_base_of_v<ComputePipeline, TPipeline>
     TPipeline Build() {
         PipelineHandle handle = CreatePipeline(TPipeline::GetArgumentMetadata());
-        return std::move(TPipeline(handle));
+        return TPipeline(handle);
     };
 
-    RENDER_API ComputeConstructor(RenderDevice&, ShaderAsset&& _assert, ShaderManager& _mgr);
+    RENDER_API ComputeConstructor(RenderDevice&, ShaderAsset&& _asset, ShaderManager& _mgr);
 
     template<typename TPipeline>
         requires std::is_base_of_v<ComputePipeline, TPipeline>
@@ -162,7 +162,7 @@ private:
     RENDER_API PipelineHandle CreatePipeline(PipelineArgumentMetadata&& argument_metadata);
     PipelineShaderInfo        CompileShaderInfo(PipelineArgumentMetadata&& argument_metadata);
 
-    ShaderAssetOrCache    shader_info;
+    ShaderSource          compute_shader_source;
     Render::RenderDevice& device;
     ShaderManager&        shader_manager;
 };
@@ -208,7 +208,7 @@ struct ShaderResourcesCache {
 
     bool HasCache(const ShaderCompilerInput& _input) const;
 
-    void RegisterCache(const ShaderCompilerInput& _input, ShaderCompilerOutput&& _output);
+    Shader& RegisterCache(const ShaderCompilerInput& _input, ShaderCompilerOutput&& _output);
 
     std::pair<Shader*, bool> TryGetShader(const ShaderCompilerInput& _input) {
         auto& cache = code_cache[_input.target_info.shader_type].shader_cache;
@@ -267,16 +267,12 @@ public:
     RasterPipelineConstructor Raster();
     template<typename TPipeline>
     TPipeline Compute(std::string_view _path, std::string_view _entry_name = "main") {
-        return std::move(
-            ComputeConstructor(GetDevice(), ShaderAsset(_path, _entry_name), *this).Build<TPipeline>()
-        );
+        return ComputeConstructor(GetDevice(), ShaderAsset(_path, _entry_name), *this).Build<TPipeline>();
     }
 
     template<typename TPipeline, is_shader_mutation TMacro>
     TPipeline Compute(std::string_view _path, TMacro _mut, std::string_view _entry_name = "main") {
-        return std::move(
-            ComputeConstructor(GetDevice(), ShaderAsset(_path, _entry_name, _mut), *this).Build<TPipeline>()
-        );
+        return ComputeConstructor(GetDevice(), ShaderAsset(_path, _entry_name, _mut), *this).Build<TPipeline>();
     }
     RTConstructor Raytracing();
 
@@ -325,6 +321,11 @@ public:
     static void           ShutDown();
 
 private:
+    Shader& ResolvePipelineShader(
+        ShaderSource                    source,
+        EShaderType                     shader_type,
+        const PipelineArgumentMetadata& argument_metadata
+    );
     Shader& CompileShader(EShaderType _type, ShaderAsset&& _asset);
     void    DumpCache(std::filesystem::path _path);
     void    LoadCache(std::filesystem::path _path);

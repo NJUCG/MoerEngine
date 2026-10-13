@@ -93,6 +93,22 @@ public:
     DEFINE_SHADER_ARGS(output, bdls, params);
 };
 
+void CheckShaderCompileFailure() {
+    ShaderManager& manager          = ShaderManager::Get();
+    bool           failure_reported = false;
+    try {
+        manager.CompileShader(
+            ST_COMPUTE, "test/ShaderConstants.hlsl", TShaderMutationSet<>{}, "MissingShaderManagerEntry"
+        );
+    } catch (const std::runtime_error& error) {
+        failure_reported = std::string_view(error.what()).starts_with("Shader compile failed:");
+    }
+    if (!failure_reported) {
+        throw std::runtime_error("ShaderManager did not report shader compilation failure");
+    }
+    std::cout << "shader compilation failure: exception reported without aborting" << std::endl;
+}
+
 void CheckMultipleConstants() {
     using namespace Moer;
     using namespace Moer::Render;
@@ -2071,6 +2087,7 @@ int main(int argc, char** argv) {
             CheckDepthGraphicsDraw(PF_D32_SFLOAT_S8_UINT, true);
             CheckComputePipeline();
             CheckRHIComputeDispatch();
+            CheckShaderCompileFailure();
             CheckMultipleConstants();
             CheckRHIComputeTextureViews();
             CheckRHIComputeTexelBuffers();

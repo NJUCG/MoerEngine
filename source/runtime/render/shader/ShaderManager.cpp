@@ -9,6 +9,8 @@
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include <algorithm>
+#include <format>
 #include <fstream>
 #include <ostream>
 #include <stdexcept>
@@ -22,19 +24,102 @@ namespace {
 constexpr uint32_t k_shader_cache_magic          = 0x4D534443; // "MSDC"
 constexpr uint32_t k_shader_cache_format_version = 4;
 
-void ConfigureShaderConstantLayout(ShaderAsset& asset, const PipelineShaderInfo& shader_info,
-                                  EShaderPlatform platform) {
-    const auto& metadata = shader_info.argument_metadata;
+void ApplyShaderConstantLayoutDefines(
+    ShaderAsset&                    asset,
+    const PipelineArgumentMetadata& metadata,
+    EShaderPlatform                 platform
+) {
     if (platform == SP_WIN_D3D_SM6 && metadata.GetConstantLayouts().size() > 1) {
         throw std::invalid_argument("D3D12 does not yet support multiple logical constant arguments");
     }
     asset.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint32_t(1));
     asset.environment.SetDefine("MOER_PC_BYTE_SIZE", metadata.GetConstantByteSize());
-    for (const auto& argument : metadata.GetConstantLayouts()) {
-        const auto name = metadata.GetArguments()[argument.argument_index].name;
+    for (const ShaderConstantArgumentLayout& argument : metadata.GetConstantLayouts()) {
+        const std::string_view name = metadata.GetArguments()[argument.argument_index].name;
         asset.environment.SetDefine("MOER_PC_OFFSET_" + std::string(name), argument.byte_offset);
         asset.environment.SetDefine("MOER_PC_SIZE_" + std::string(name), argument.byte_size);
     }
+}
+
+struct ShaderStageSource {
+    EShaderType         shader_type;
+    const ShaderSource* source;
+};
+
+bool IsShaderSourceEmpty(const ShaderSource& source) {
+    if (const auto* shader = std::get_if<Shader*>(&source)) {
+        return *shader == nullptr;
+    }
+    const ShaderAsset& asset = std::get<ShaderAsset>(source);
+    return asset.path.empty() || asset.entry_name.empty();
+}
+
+Array<ShaderStageSource> CollectGraphicsShaderSources(std::span<const ShaderStageSource> candidates) {
+    Array<ShaderStageSource> stages;
+    stages.reserve(candidates.size());
+    for (const ShaderStageSource& stage : candidates) {
+        if (!IsShaderSourceEmpty(*stage.source)) {
+            stages.push_back(stage);
+        }
+    }
+    return stages;
+}
+
+std::string_view ValidateGraphicsShaderSources(std::span<const ShaderStageSource> stages) {
+    // Only stage types are needed to reject invalid combinations before compilation.
+    Array<SingleShaderInfo> stage_infos;
+    stage_infos.reserve(stages.size());
+    for (const ShaderStageSource& stage : stages) {
+        stage_infos.push_back(SingleShaderInfo{.shader_type = stage.shader_type});
+    }
+    return ValidateGraphicsShaderStages(stage_infos);
+}
+
+void ApplyGraphicsShaderDefines(
+    ShaderSource&   source,
+    EShaderType     shader_type,
+    EShaderPlatform platform,
+    bool            uses_tessellation
+) {
+    if (!uses_tessellation || platform != SP_METAL_MSL || shader_type != ST_VERTEX) {
+        return;
+    }
+    if (ShaderAsset* asset = std::get_if<ShaderAsset>(&source)) {
+        asset->environment.SetDefine("MOER_METAL_TESS_VS_CAPTURE", true);
+        asset->environment.SetDefine("MOER_METAL_TESS_VS_GRID_BUFFER", true);
+    }
+}
+
+SingleShaderInfo BuildSingleShaderInfo(ShaderManager& manager, Shader& shader) {
+    ShaderEntry& entry = manager.GetShaderEntry(shader);
+    return SingleShaderInfo{
+        .name               = shader.shader_path,
+        .entry_point        = shader.entry_name,
+        .shader_data        = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
+        .shader_type        = shader.type,
+        .shader_param_map   = &shader.reflection,
+        .compute_local_size = shader.reflection.compute_local_size
+    };
+}
+
+std::string FormatShaderCompileDiagnostic(std::string diagnostic) {
+    constexpr std::string_view asset_prefixes[] = {
+        "target/bin/Debug/asset/",
+        "target/bin/Release/asset/",
+        "target/Debug/bin/asset/",
+        "target/Release/bin/asset/"
+    };
+    for (std::string_view prefix : asset_prefixes) {
+        size_t position = 0;
+        while ((position = diagnostic.find(prefix)) != std::string::npos) {
+            diagnostic.erase(position, prefix.size());
+        }
+    }
+    constexpr std::string_view shared_directory = "shaderheaders";
+    if (const size_t position = diagnostic.find(shared_directory); position != std::string::npos) {
+        diagnostic.replace(position, shared_directory.size(), "source/runtime/render/shaderheaders");
+    }
+    return diagnostic;
 }
 
 std::string_view GetShaderTypeName(EShaderType shader_type) {
@@ -95,20 +180,30 @@ bool ShaderResourcesCache::HasCache(const ShaderCompilerInput& _input) const {
     return it != code_cache[_input.target_info.shader_type].shader_cache.end();
 }
 
-void ShaderResourcesCache::RegisterCache(const ShaderCompilerInput& _input, ShaderCompilerOutput&& _output) {
+Shader& ShaderResourcesCache::RegisterCache(
+    const ShaderCompilerInput& _input,
+    ShaderCompilerOutput&&     _output
+) {
     auto& cache = code_cache[_input.target_info.shader_type];
-    auto  it    = cache.shader_cache.find(_input);
-    if (it == cache.shader_cache.end()) {
+    if (const auto existing_shader = cache.shader_cache.find(_input);
+        existing_shader != cache.shader_cache.end()) {
+        return *existing_shader->second;
+    }
 
-        ShaderEntryKey key = cache.AllocateShaderKey(_input);
-
-        cache.shader_entry_cache[key] = MakeShared<ShaderEntry>(
+    const ShaderEntryKey key = cache.AllocateShaderKey(_input);
+    // Recompilation reuses the key and replaces its outdated bytecode.
+    cache.shader_entry_cache.insert_or_assign(
+        key,
+        MakeShared<ShaderEntry>(
             (EShaderType)_input.target_info.shader_type,
             (EShaderPlatform)_input.target_info.shader_platform,
             std::move(_output.shader_code)
-        );
+        )
+    );
 
-        cache.shader_cache[_input] = MakeShared<Shader>(
+    const auto registered_shader = cache.shader_cache.try_emplace(
+        _input,
+        MakeShared<Shader>(
             _output.parameter_map,
             _output.mutation_id,
             (EShaderType)_input.target_info.shader_type,
@@ -118,8 +213,9 @@ void ShaderResourcesCache::RegisterCache(const ShaderCompilerInput& _input, Shad
             _input.relative_source_file_path,
             key,
             std::move(_output.source_dependencies)
-        );
-    }
+        )
+    ).first;
+    return *registered_shader->second;
 }
 
 #pragma endregion
@@ -273,52 +369,16 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
         .environment               = std::move(_asset.environment)
     };
 
-    auto it = shader_resources_cache.TryGetShader(input);
-
-    // LOG_DEBUG("ShaderManager::CompileShader, FileName: {}, EntryName: {}, MutationID: {}, Environment: {} <=> {}",
-    //           input.relative_source_file_path,
-    //           input.entry_point,
-    //           input.mutation_id,
-    //           input.environment.ToString(),
-    //           (it.first != nullptr ? "Cached" : "Compile"));
-
-    static auto get_all_removed_target_strings =
-        [](std::string input_string, const Array<std::string>& target_substring_array) -> std::string {
-        for (const auto& target_substring : target_substring_array) {
-            while (true) {
-                size_t pos = input_string.find(target_substring);
-                if (pos != std::string::npos) {
-                    input_string =
-                        input_string.substr(0, pos) + input_string.substr(pos + target_substring.length());
-                } else {
-                    break;
-                }
-            }
-        }
-        return input_string;
-    };
-
-    static auto replace_shared_directry_strings = [](std::string input_string) -> std::string {
-        // shaderheaders
-        // => source/runtime/render/shaderheaders
-        size_t pos = input_string.find("shaderheaders");
-        if (pos != std::string::npos) {
-            input_string = input_string.substr(0, pos) + "source/runtime/render/shaderheaders" +
-                           input_string.substr(pos + 13);
-        }
-        return input_string;
-    };
-
-    if (it.first != nullptr) {
-        return *it.first;
+    if (Shader* cached_shader = shader_resources_cache.TryGetShader(input).first) {
+        return *cached_shader;
     }
 
-    const std::string     shader_path       = input.relative_source_file_path;
-    const std::string     entry_point       = input.entry_point;
-    const uint32_t        mutation_id       = input.mutation_id;
+    const std::string      shader_path       = input.relative_source_file_path;
+    const std::string      entry_point       = input.entry_point;
+    const uint32_t         mutation_id       = input.mutation_id;
     const std::string_view shader_type_name = GetShaderTypeName(_type);
 
-    auto&& output = ShaderCompiler::Compile(std::move(input));
+    ShaderCompilerOutput output = ShaderCompiler::Compile(std::move(input));
 
     if (!output.b_succeeded) {
         LOG_WARNING(
@@ -329,25 +389,34 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
             mutation_id
         );
         for (const auto& error : output.errors) {
-            std::string error_string = get_all_removed_target_strings(
-                error,
-                {"target/bin/Debug/asset/",
-                 "target/bin/Release/asset/",
-                 "target/Debug/bin/asset/",
-                 "target/Release/bin/asset/"}
-            );
-            error_string = replace_shared_directry_strings(error_string);
-
-            LOG_ERROR("Shader Compile Error: {}", error_string);
+            LOG_ERROR("Shader Compile Error: {}", FormatShaderCompileDiagnostic(error));
         }
-        assert(
-            false &&
-            std::format("Shader Compile Error, FileName: {}", input.relative_source_file_path).c_str()
-        );
-        return *it.first;
+        throw std::runtime_error(std::format(
+            "Shader compile failed: type={}, path={}, entry={}, mutation_id={}",
+            shader_type_name,
+            shader_path,
+            entry_point,
+            mutation_id
+        ));
     }
-    shader_resources_cache.RegisterCache(input, std::move(output));
-    return *shader_resources_cache.TryGetShader(input).first;
+    return shader_resources_cache.RegisterCache(input, std::move(output));
+}
+
+Shader& ShaderManager::ResolvePipelineShader(
+    ShaderSource                    source,
+    EShaderType                     shader_type,
+    const PipelineArgumentMetadata& argument_metadata
+) {
+    if (const auto* shader = std::get_if<Shader*>(&source)) {
+        if (*shader == nullptr || (*shader)->type != shader_type) {
+            throw std::invalid_argument("Pipeline shader source is null or has an unexpected stage");
+        }
+        return **shader;
+    }
+
+    ShaderAsset& asset = std::get<ShaderAsset>(source);
+    ApplyShaderConstantLayoutDefines(asset, argument_metadata, impl->device.GetShaderPlatform());
+    return CompileShader(shader_type, std::move(asset));
 }
 
 RenderDevice& ShaderManager::GetDevice() {
@@ -369,65 +438,33 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
     GfxPsoCreateInfo&&         pso_info,
     PipelineArgumentMetadata&& argument_metadata
 ) {
-    const auto is_empty = [](const ShaderAssetOrCache& source) {
-        if (const auto* shader = std::get_if<Shader*>(&source)) {
-            return *shader == nullptr;
-        }
-        const auto& asset = std::get<ShaderAsset>(source);
-        return asset.path.empty() || asset.entry_name.empty();
+    const ShaderStageSource candidates[] = {
+        {ST_VERTEX, &vertex_shader_source},
+        {ST_HULL, &hull_shader_source},
+        {ST_DOMAIN, &domain_shader_source},
+        {ST_GEOMETRY, &geometry_shader_source},
+        {ST_AMPLIFICATION, &task_shader_source},
+        {ST_MESH, &mesh_shader_source},
+        {ST_FRAGMENT, &pixel_shader_source}
     };
-    struct StageSource {
-        EShaderType         shader_type;
-        ShaderAssetOrCache* source;
-    };
-    const StageSource k_stage_sources[] = {
-        {ST_VERTEX, &vertex_path},
-        {ST_HULL, &hull_path},
-        {ST_DOMAIN, &domain_path},
-        {ST_GEOMETRY, &geometry_path},
-        {ST_AMPLIFICATION, &task_path},
-        {ST_MESH, &mesh_path},
-        {ST_FRAGMENT, &pixel_path}
-    };
-    PipelineShaderInfo pipeline_shader_info{.argument_metadata = std::move(argument_metadata)};
-    for (const auto& stage : k_stage_sources) {
-        if (!is_empty(*stage.source)) {
-            pipeline_shader_info.shaders.push_back(SingleShaderInfo{.shader_type = stage.shader_type});
-        }
-    }
-    if (const auto error = ValidateGraphicsShaderStages(pipeline_shader_info.shaders); !error.empty()) {
+    const Array<ShaderStageSource> stage_sources = CollectGraphicsShaderSources(candidates);
+    if (const std::string_view error = ValidateGraphicsShaderSources(stage_sources); !error.empty()) {
         LOG_ERROR("Cannot create raster pipeline: {}", error);
         return {};
     }
-    const bool uses_tessellation = FindShaderStage(pipeline_shader_info.shaders, ST_HULL) != nullptr;
-    const auto target_info       = device.GetShaderPlatform();
-    const auto get_shader_output = [&](const ShaderAssetOrCache& source, EShaderType shader_type) -> Shader& {
-        if (const auto* shader = std::get_if<Shader*>(&source)) {
-            return **shader;
-        }
-        ShaderAsset asset = std::get<ShaderAsset>(source);
-        ConfigureShaderConstantLayout(asset, pipeline_shader_info, target_info);
-        if (uses_tessellation && target_info == SP_METAL_MSL && shader_type == ST_VERTEX) {
-            asset.environment.SetDefine("MOER_METAL_TESS_VS_CAPTURE", true);
-            asset.environment.SetDefine("MOER_METAL_TESS_VS_GRID_BUFFER", true);
-        }
-        return shader_manager.CompileShader(shader_type, std::move(asset));
-    };
-    size_t shader_id = 0;
-    for (const auto& stage : k_stage_sources) {
-        if (is_empty(*stage.source)) {
-            continue;
-        }
-        Shader&      output                       = get_shader_output(*stage.source, stage.shader_type);
-        ShaderEntry& entry                        = shader_manager.GetShaderEntry(output);
-        pipeline_shader_info.shaders[shader_id++] = SingleShaderInfo{
-            .name               = output.shader_path,
-            .entry_point        = output.entry_name,
-            .shader_data        = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
-            .shader_type        = stage.shader_type,
-            .shader_param_map   = &output.reflection,
-            .compute_local_size = output.reflection.compute_local_size
-        };
+    const bool uses_tessellation = std::ranges::any_of(stage_sources, [](const ShaderStageSource& stage) {
+        return stage.shader_type == ST_HULL;
+    });
+    const EShaderPlatform platform = device.GetShaderPlatform();
+    PipelineShaderInfo pipeline_shader_info{.argument_metadata = std::move(argument_metadata)};
+    pipeline_shader_info.shaders.reserve(stage_sources.size());
+    for (const ShaderStageSource& stage : stage_sources) {
+        ShaderSource source = *stage.source;
+        ApplyGraphicsShaderDefines(source, stage.shader_type, platform, uses_tessellation);
+        Shader& shader = shader_manager.ResolvePipelineShader(
+            std::move(source), stage.shader_type, pipeline_shader_info.argument_metadata
+        );
+        pipeline_shader_info.shaders.push_back(BuildSingleShaderInfo(shader_manager, shader));
     }
     return device.CreatePipeline(std::move(pso_info), std::move(pipeline_shader_info));
 }
@@ -435,41 +472,17 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
 #pragma region[ compute pipeline ]
 
 ComputeConstructor::ComputeConstructor(RenderDevice& _device, ShaderAsset&& _asset, ShaderManager& _mgr) :
+    compute_shader_source(std::move(_asset)),
     device(_device),
-    shader_manager(_mgr),
-    shader_info(std::move(_asset)) {}
+    shader_manager(_mgr) {}
 
 PipelineShaderInfo ComputeConstructor::CompileShaderInfo(PipelineArgumentMetadata&& argument_metadata) {
-    PipelineShaderInfo sd_info{.argument_metadata = std::move(argument_metadata)};
-    auto target_info       = device.GetShaderPlatform();
-    auto get_shader_output = [&](const ShaderAssetOrCache& _info, EShaderType _type) -> Shader& {
-        if (std::holds_alternative<ShaderAsset>(_info) == false) {
-            Shader& shader = *std::get<Shader*>(_info);
-
-            return shader;
-        }
-
-        ShaderAsset asset = std::get<ShaderAsset>(_info);
-        ConfigureShaderConstantLayout(asset, sd_info, target_info);
-        return shader_manager.CompileShader(_type, std::move(asset));
-    };
-    auto get_shader_info = [&](EShaderType _type, Shader& _output) {
-        ShaderEntry& entry = shader_manager.GetShaderEntry(_output);
-        return std::move(
-            SingleShaderInfo{
-                .name             = _output.shader_path,
-                .entry_point      = _output.entry_name,
-                .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
-                .shader_type      = _type,
-                .shader_param_map = &_output.reflection,
-                .compute_local_size = _output.reflection.compute_local_size
-            }
-        );
-    };
-
-    auto&              output = get_shader_output(shader_info, ST_COMPUTE);
-    sd_info.shaders.push_back(get_shader_info(ST_COMPUTE, output));
-    return std::move(sd_info);
+    PipelineShaderInfo pipeline_shader_info{.argument_metadata = std::move(argument_metadata)};
+    Shader& shader = shader_manager.ResolvePipelineShader(
+        compute_shader_source, ST_COMPUTE, pipeline_shader_info.argument_metadata
+    );
+    pipeline_shader_info.shaders.push_back(BuildSingleShaderInfo(shader_manager, shader));
+    return pipeline_shader_info;
 }
 
 PipelineHandle ComputeConstructor::CreatePipeline(PipelineArgumentMetadata&& argument_metadata) {

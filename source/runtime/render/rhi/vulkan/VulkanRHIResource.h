@@ -409,7 +409,7 @@ struct VulkanDescriptorSetBinding {
 
 struct VulkanPipelineBindingTemplate {
     UnorderedMap<uint, VulkanDescriptorSetBinding> set_bindings;
-    VkPushConstantsInfoKHR                         push_constants_info;
+    VkPushConstantsInfoKHR                         push_constants_info{};
     //descriptor buffer bind template
     Array<VkDescriptorBufferBindingInfoEXT> descriptor_buffers;
 };
@@ -529,7 +529,7 @@ public:
     void InitDescriptorSetLayouts(
         Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings
     );
-    void                CreatePipelineLayout(const VkPipelineLayoutCreateInfo& pipeline_layout_info);
+    void CreatePipelineLayout(const std::optional<VkPushConstantRange>& push_constant_range);
     VkPipelineBindPoint GetPipelineBindPoint() {
         switch (m_type) {
             case GFX:

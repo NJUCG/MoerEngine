@@ -802,7 +802,16 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         m_descriptor_sets_layout = MoerNew(VulkanDescriptorSetsLayout)(m_device, _descriptor_bindings);
     }
 
-void VulkanPipelineState::CreatePipelineLayout(const VkPipelineLayoutCreateInfo& pipeline_layout_info) {
+void VulkanPipelineState::CreatePipelineLayout(
+    const std::optional<VkPushConstantRange>& push_constant_range
+) {
+    const bool has_push_constants = push_constant_range && push_constant_range->size != 0;
+
+    VkPipelineLayoutCreateInfo pipeline_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pipeline_layout_info.setLayoutCount         = descriptor_set_layouts.size();
+    pipeline_layout_info.pSetLayouts            = descriptor_set_layouts.data();
+    pipeline_layout_info.pushConstantRangeCount = has_push_constants ? 1 : 0;
+    pipeline_layout_info.pPushConstantRanges    = has_push_constants ? &*push_constant_range : nullptr;
     VK_CHECK_RESULT(
         vkCreatePipelineLayout(m_device->GetDevice(), &pipeline_layout_info, nullptr, &m_pipeline_layout)
     );
@@ -1022,6 +1031,24 @@ void InitializeDescriptorBufferBindingTemplate(
     }
 }
 
+void InitializePushConstantBindingTemplate(
+    VkPipelineLayout                         layout,
+    const std::optional<VkPushConstantRange>& push_constant_range,
+    VulkanPipelineBindingTemplate&           binding_template
+) {
+    if (!push_constant_range || push_constant_range->size == 0) {
+        return;
+    }
+
+    VkPushConstantsInfoKHR& constants_info = binding_template.push_constants_info;
+
+    constants_info.sType      = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR;
+    constants_info.layout     = layout;
+    constants_info.stageFlags = push_constant_range->stageFlags;
+    constants_info.offset     = push_constant_range->offset;
+    constants_info.size       = push_constant_range->size;
+}
+
 } // namespace
 
 void VulkanPipelineState::InitPipelineLayout(
@@ -1033,23 +1060,10 @@ void VulkanPipelineState::InitPipelineLayout(
     InitializePipelineSetBindings(set_layout_infos, *binding_template);
     descriptor_set_layouts = CreateDescriptorSetLayouts(*m_device, set_layout_infos, *binding_template);
 
-    const bool has_push_constants = push_constant_range && push_constant_range->size != 0;
-    VkPipelineLayoutCreateInfo pipeline_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pipeline_layout_info.setLayoutCount         = descriptor_set_layouts.size();
-    pipeline_layout_info.pSetLayouts            = descriptor_set_layouts.data();
-    pipeline_layout_info.pushConstantRangeCount = has_push_constants ? 1 : 0;
-    pipeline_layout_info.pPushConstantRanges    = has_push_constants ? &*push_constant_range : nullptr;
-    CreatePipelineLayout(pipeline_layout_info);
+    CreatePipelineLayout(push_constant_range);
 
     InitializeDescriptorBufferBindingTemplate(*m_device, *binding_template);
-    if (has_push_constants) {
-        auto& constants_info      = binding_template->push_constants_info;
-        constants_info.sType      = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR;
-        constants_info.layout     = m_pipeline_layout;
-        constants_info.stageFlags = push_constant_range->stageFlags;
-        constants_info.offset     = push_constant_range->offset;
-        constants_info.size       = push_constant_range->size;
-    }
+    InitializePushConstantBindingTemplate(m_pipeline_layout, push_constant_range, *binding_template);
 }
 
 #pragma endregion
