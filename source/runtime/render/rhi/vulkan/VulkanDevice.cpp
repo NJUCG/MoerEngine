@@ -359,7 +359,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
                 LOG_ERROR("GPU Device type is invalid!");
         }
 
-        auto indices = QueryQueueFamilyIndices(gpu);
+        auto indices = SelectQueueFamilyIndices(gpu);
         if (indices.IsComplete() && is_extensions_required_supported(gpu) &&
             is_core_features_supported(gpu)) {
             priority += 100;
@@ -470,8 +470,8 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
     // Query core memory properties
     vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_device_info.memory_properties);
 
-    // Query queue family info
-    m_device_info.queue_family_indices = VulkanDevice::QueryQueueFamilyIndices(m_gpu);
+    // Select queue families, then retain their hardware properties.
+    m_device_info.queue_family_indices = SelectQueueFamilyIndices(m_gpu);
     m_device_info.queue_family_props   = VulkanDevice::GetQueueFamilyProperties(m_gpu);
 
     LOG_INFO("VulkanRHI: GPU initialized.");
@@ -890,54 +890,19 @@ TQueueFamilyPropertiesArray VulkanDevice::GetQueueFamilyProperties(VkPhysicalDev
     return queue_family_props;
 }
 
-static uint32_t GetQueueFamilyIndice(
+static int32_t FindQueueFamilyIndex(
     std::span<const VkQueueFamilyProperties> _queue_family_props,
-    VkQueueFlags                             _target_queue_flags,
+    VkQueueFlags                             _required_queue_flags,
     VkQueueFlags                             _exclude_queue_flags
 ) {
     for (uint32_t i = 0; i < _queue_family_props.size(); ++i) {
-        if (_queue_family_props[i].queueFlags & _target_queue_flags &&
-            !(_queue_family_props[i].queueFlags & _exclude_queue_flags)) {
-            return i;
+        const VkQueueFlags flags = _queue_family_props[i].queueFlags;
+        if ((flags & _required_queue_flags) == _required_queue_flags &&
+            (flags & _exclude_queue_flags) == 0) {
+            return static_cast<int32_t>(i);
         }
     }
     return -1;
-}
-
-int32_t VulkanDevice::GetQueueFamilyIndex(
-    const Moer::Array<VkQueueFamilyProperties>& queue_family_props,
-    VkQueueFlags                                _queue_flags
-) const {
-    // Dedicated queue for transfer
-    if ((_queue_flags & VK_QUEUE_TRANSFER_BIT) == _queue_flags) {
-        for (uint32_t i = 0; i < queue_family_props.size(); ++i) {
-            if ((queue_family_props[i].queueFlags & VK_QUEUE_TRANSFER_BIT) &&
-                (queue_family_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
-                return i;
-            }
-        }
-    }
-
-    // Dedicated queue for compute
-    if ((_queue_flags & VK_QUEUE_COMPUTE_BIT) == _queue_flags) {
-        for (uint32_t i = 0; i < queue_family_props.size(); ++i) {
-            if ((queue_family_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
-                (queue_family_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0 &&
-                (queue_family_props[i].queueFlags & VK_QUEUE_TRANSFER_BIT) == 0) {
-                return i;
-            }
-        }
-    }
-
-    // Default queue
-    for (uint32_t i = 0; i < queue_family_props.size(); ++i) {
-        if ((queue_family_props[i].queueFlags & _queue_flags) == _queue_flags) {
-            return i;
-        }
-    }
-
-    return -1;
-    // CRITICAL_AND_THROW("No suitable queue family found for " + std::to_string(_queue_flags));
 }
 
 uint VulkanDevice::GetQueueFamilyIndex(EQueueType _type) const {
@@ -1020,7 +985,7 @@ bool VulkanDevice::SupportsTimestampQueries(
            EVulkanTimestampQueryResetMode::Unsupported;
 }
 
-QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) const {
+QueueFamilyIndices VulkanDevice::SelectQueueFamilyIndices(VkPhysicalDevice _gpu) const {
     QueueFamilyIndices indices;
 
     auto queue_family_props = GetQueueFamilyProperties(_gpu);
@@ -1030,14 +995,15 @@ QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) 
     vkGetPhysicalDeviceProperties(_gpu, &gpu_props);
     const bool is_amd = (gpu_props.vendorID == 0x1002);
 
-    auto graphics = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_GRAPHICS_BIT, VkQueueFlagBits(0));
-    if (graphics >= 0) {
-        indices.graphics   = graphics;
-        indices.raytracing = graphics;
-        indices.present    = graphics;
+    const int32_t graphics = FindQueueFamilyIndex(queue_family_props, VK_QUEUE_GRAPHICS_BIT, 0);
+    if (graphics < 0) {
+        return indices;
     }
+    indices.graphics   = graphics;
+    indices.raytracing = graphics;
+    indices.present    = graphics;
     if (is_amd) {
-        indices.transfer = indices.graphics.value();
+        indices.transfer = graphics;
         LOG_WARNING(
             "AMD GPU '{}' (vendorID={:#x}) detected. "
             "Forcing transfer queue = graphics to avoid DMA queue VK_ERROR_DEVICE_LOST.",
@@ -1045,23 +1011,23 @@ QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) 
             gpu_props.vendorID
         );
     } else {
-        auto transfer = GetQueueFamilyIndice(
+        int32_t transfer = FindQueueFamilyIndex(
             queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT
         );
         if (transfer < 0) {
-            transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT);
+            transfer = FindQueueFamilyIndex(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT);
         }
         if (transfer < 0) {
-            transfer = indices.graphics.value();
+            transfer = graphics;
         }
         indices.transfer = transfer;
     }
 
-    auto compute = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
+    const int32_t compute = FindQueueFamilyIndex(queue_family_props, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
     if (compute >= 0) {
         indices.compute = compute;
     } else {
-        indices.compute = indices.graphics.value();
+        indices.compute = graphics;
     }
 
     return indices;

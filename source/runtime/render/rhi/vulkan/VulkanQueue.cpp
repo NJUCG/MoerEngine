@@ -1989,30 +1989,8 @@ struct VkCmdPreprocessor {
             return;
         }
 
-        uint src_queue_family = VK_QUEUE_FAMILY_IGNORED;
-        uint dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
-
-        auto get_queue_idx = [&](EQueueType _type) {
-            switch (_type) {
-                case EQueueType::Graphics:
-                    return device.GetQueueFamilyIndex(VK_QUEUE_GRAPHICS_BIT);
-                    break;
-                case EQueueType::Compute:
-                    return device.GetQueueFamilyIndex(VK_QUEUE_COMPUTE_BIT);
-                    break;
-                case EQueueType::Copy:
-                    return device.GetQueueFamilyIndex(VK_QUEUE_TRANSFER_BIT);
-                    break;
-                case EQueueType::Ignore:
-                    return VK_QUEUE_FAMILY_IGNORED;
-                default:
-                    assert(false && "Invalid queue type");
-            }
-            return VK_QUEUE_FAMILY_IGNORED;
-        };
-
-        src_queue_family = get_queue_idx(_cmd->GetSrcQueue());
-        dst_queue_family = get_queue_idx(_cmd->GetDstQueue());
+        const uint src_queue_family = device.GetQueueFamilyIndex(_cmd->GetSrcQueue());
+        const uint dst_queue_family = device.GetQueueFamilyIndex(_cmd->GetDstQueue());
 
         for (auto& barrier : _cmd->ReadBuffers()) {
             auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);

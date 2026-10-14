@@ -1341,9 +1341,8 @@ BufferView VulkanAllocator::AllocateShaderBuffer(uint64 _size) {
 VulkanCmdAllocator::VulkanCmdAllocator(VulkanDevice* _device, EQueueType _queue_type) :
     VulkanDeviceObject(_device),
     queue_type(VulkanEnumTranslator::METoVKQueueFlagBits(_queue_type)) {
-    // 必须使用 GetQueueFamilyIndex(EQueueType) 而非 GetQueueFamilyIndex(VkQueueFlags)。
-    // 后者根据硬件能力搜索，可能返回不同的 family（如 AMD 上返回 compute family），
-    // 而前者使用引擎已确定的、可能经过 override 的 family index。
+    // Use the selected queue-role mapping, including vendor overrides, so the
+    // command pool belongs to the same family as the actual submission queue.
     uint32_t family_index = m_device->GetQueueFamilyIndex(_queue_type);
 
     VkCommandPoolCreateInfo pool_info = {

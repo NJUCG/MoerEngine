@@ -192,10 +192,7 @@ public:
     bool IsAmdGpu() const;
 
     // Native queues and timestamp queries.
-    uint GetQueueFamilyIndex(VkQueueFlags _queue_flags) {
-        return GetQueueFamilyIndex(m_device_info.queue_family_props, _queue_flags);
-    }
-
+    // Read the family selected for an engine queue role during initialization.
     uint GetQueueFamilyIndex(EQueueType _queue_type) const;
 
     VkQueue GetGraphicsQueue() const {
@@ -372,11 +369,7 @@ private:
     static Set<std::string> GetGpuExtensions(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
     static TQueueFamilyPropertiesArray GetQueueFamilyProperties(VkPhysicalDevice _gpu);
 
-    int32_t GetQueueFamilyIndex(
-        const Moer::Array<VkQueueFamilyProperties>& queue_family_props,
-        VkQueueFlags                                _queue_flags
-    ) const;
-    QueueFamilyIndices QueryQueueFamilyIndices(VkPhysicalDevice _gpu) const;
+    QueueFamilyIndices SelectQueueFamilyIndices(VkPhysicalDevice _gpu) const;
     void RegisterDefaultPlugins();
     void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info);
     void SetupDebugUtilsMessengerEXT();
