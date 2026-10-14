@@ -350,7 +350,7 @@ private:
     VkPhysicalDevice SelectGpu(uint32 _api_version);
     void             InitGpu(uint32 _api_version);
     void             LogGpuEnvironment(uint32 _requested_api_version) const;
-    void             CreateDevice(uint32 _api_version);
+    void             CreateDevice();
     void             CreateMemoryAllocator(VkInstance _instance, uint32 _api_version);
     void             CreateDescriptorHeap();
     void             DestroyDescriptorHeap();

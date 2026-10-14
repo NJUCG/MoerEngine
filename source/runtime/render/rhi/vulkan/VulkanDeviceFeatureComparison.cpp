@@ -163,7 +163,9 @@ bool SupportsRequiredMembers(
 } // namespace
 
 bool VulkanDeviceFeatures::SupportsAll(const VulkanDeviceFeatures& _required_features) const {
-    return SupportsRequiredMembers(core_1_0, _required_features.core_1_0, core_1_0_members) &&
+    return SupportsRequiredMembers(
+               features2.features, _required_features.features2.features, core_1_0_members
+           ) &&
            SupportsRequiredMembers(core_1_1, _required_features.core_1_1, core_1_1_members) &&
            SupportsRequiredMembers(core_1_2, _required_features.core_1_2, core_1_2_members) &&
            SupportsRequiredMembers(core_1_3, _required_features.core_1_3, core_1_3_members);

@@ -6,7 +6,6 @@
 #include "PixelFormat.h"
 #include "VulkanCommand.h"
 #include "VulkanDebugCallback.h"
-#include "VulkanDeviceFeatureChain.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
@@ -96,7 +95,7 @@ VulkanDevice::VulkanDevice(const VulkanRHIConfig& _config) : RenderDevice::Impl(
     m_gpu = SelectGpu(_config.api_version);
     InitGpu(_config.api_version);
 
-    CreateDevice(_config.api_version);
+    CreateDevice();
     CreateMemoryAllocator(m_instance, _config.api_version);
 
     CreateInternalResources();
@@ -556,7 +555,7 @@ void VulkanDevice::LogGpuEnvironment(uint32 _requested_api_version) const {
     );
 }
 
-void VulkanDevice::CreateDevice(uint32 _api_version) {
+void VulkanDevice::CreateDevice() {
     const uint32_t graphics_family =
         m_device_info.queue_family_indices.graphics.value();
     const uint32_t compute_family =
@@ -611,8 +610,8 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     device_create_info.enabledExtensionCount   = static_cast<uint32>(extensions_loaded.size());
     device_create_info.ppEnabledExtensionNames = extensions_loaded.data();
 
-    VulkanDeviceFeatureChain feature_chain(m_device_info.core_features, _api_version);
-    feature_chain.AttachToDeviceCreateInfo(device_create_info);
+    VulkanDeviceFeatures enabled_features = m_device_info.core_features;
+    enabled_features.AttachToDeviceCreateInfo(device_create_info);
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
     volkLoadDevice(m_device);
 

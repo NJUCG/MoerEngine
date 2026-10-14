@@ -1,21 +1,22 @@
 #include "rhi/vulkan/VulkanDeviceFeature.h"
-#include "rhi/vulkan/VulkanDeviceFeatureChain.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace {
 
-using Moer::Render::VulkanDeviceFeatureChain;
 using Moer::Render::VulkanDeviceFeatures;
 
 static_assert(std::is_copy_constructible_v<VulkanDeviceFeatures>);
 static_assert(std::is_move_constructible_v<VulkanDeviceFeatures>);
-static_assert(!std::is_copy_constructible_v<VulkanDeviceFeatureChain>);
-static_assert(!std::is_move_constructible_v<VulkanDeviceFeatureChain>);
+static_assert(std::is_nothrow_move_constructible_v<VulkanDeviceFeatures>);
+static_assert(std::is_nothrow_move_assignable_v<VulkanDeviceFeatures>);
 
 void Check(bool _condition, const char* _message) {
     if (!_condition) {
@@ -77,16 +78,103 @@ T& ChainNode(void* _node, VkStructureType _expected_type) {
     return node;
 }
 
-void CheckSnapshotPointers(const VulkanDeviceFeatures& _features) {
-    Check(_features.GetCore11Features().pNext == nullptr, "snapshot retained a 1.1 chain pointer");
-    Check(_features.GetCore12Features().pNext == nullptr, "snapshot retained a 1.2 chain pointer");
-    Check(_features.GetCore13Features().pNext == nullptr, "snapshot retained a 1.3 chain pointer");
+void CheckOwnedChain(const VulkanDeviceFeatures& _features, uint32_t _api_version) {
+    Check(
+        _features.GetFeatures2().sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+        "feature root had the wrong type"
+    );
+    const auto begin      = reinterpret_cast<uintptr_t>(&_features);
+    const auto end        = begin + sizeof(_features);
+    uint32_t   node_count = 0;
+    for (auto* node = static_cast<const VkBaseOutStructure*>(_features.GetFeatures2().pNext); node;
+         node       = node->pNext) {
+        Check(node_count < 6, "feature chain contained a cycle");
+        const auto address = reinterpret_cast<uintptr_t>(node);
+        Check(address >= begin && address < end, "feature chain pointed outside its owning object");
+        ++node_count;
+    }
+    const uint32_t expected_count = _api_version >= VK_API_VERSION_1_3 ? 3 :
+                                    _api_version >= VK_API_VERSION_1_2 ? 2 :
+                                    _api_version >= VK_API_VERSION_1_1 ? 6 :
+                                                                         0;
+    Check(node_count == expected_count, "feature chain used the wrong API version");
+    if (_api_version >= VK_API_VERSION_1_2) {
+        Check(_features.GetFeatures2().pNext == &_features.GetCore11Features(), "wrong 1.1 node address");
+        Check(
+            _features.GetCore11Features().pNext == &_features.GetCore12Features(), "wrong 1.2 node address"
+        );
+        Check(
+            _features.GetCore12Features().pNext ==
+                (_api_version >= VK_API_VERSION_1_3 ? &_features.GetCore13Features() : nullptr),
+            "wrong 1.3 node address"
+        );
+    } else {
+        Check(_features.GetCore11Features().pNext == nullptr, "inactive aggregate retained a chain link");
+        Check(_features.GetCore12Features().pNext == nullptr, "inactive aggregate retained a chain link");
+    }
+    Check(_features.GetCore13Features().pNext == nullptr, "feature chain retained an extension tail");
+}
+
+void CheckCopiesAndMoves(const VulkanDeviceFeatures& _source, uint32_t _api_version) {
+    const VulkanDeviceFeatures copy = _source;
+    CheckOwnedChain(copy, _api_version);
+    Check(copy.SupportsAll(_source) && _source.SupportsAll(copy), "copy construction changed feature values");
+
+    VulkanDeviceFeatures assigned(VK_API_VERSION_1_3);
+    assigned = _source;
+    CheckOwnedChain(assigned, _api_version);
+    VulkanDeviceFeatures moved(std::move(assigned));
+    CheckOwnedChain(moved, _api_version);
+    CheckOwnedChain(assigned, _api_version);
+    assigned = std::move(moved);
+    CheckOwnedChain(assigned, _api_version);
+    CheckOwnedChain(moved, _api_version);
+    Check(
+        assigned.SupportsAll(_source) && _source.SupportsAll(assigned),
+        "assignment or move changed feature values"
+    );
+
+    auto& same_object = assigned;
+    assigned          = same_object;
+    assigned          = std::move(same_object);
+    CheckOwnedChain(assigned, _api_version);
+
+    // Reallocation moves the objects to new addresses; internal links must follow.
+    std::vector<VulkanDeviceFeatures> relocated;
+    relocated.reserve(1);
+    relocated.push_back(_source);
+    relocated.push_back(_source);
+    for (const auto& features : relocated) {
+        CheckOwnedChain(features, _api_version);
+        Check(features.SupportsAll(_source), "container relocation lost a feature value");
+    }
+
+    // Copies of a create-time object must not retain its borrowed extension tail.
+    VulkanDeviceFeatures detached;
+    VulkanDeviceFeatures moved_detached;
+    {
+        VulkanDeviceFeatures                        enabled_features = _source;
+        VkPhysicalDeviceDescriptorBufferFeaturesEXT extension{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT
+        };
+        VkDeviceCreateInfo create_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+        create_info.pNext = &extension;
+        enabled_features.AttachToDeviceCreateInfo(create_info);
+        detached       = enabled_features;
+        moved_detached = std::move(enabled_features);
+        CheckOwnedChain(_source, _api_version);
+    }
+    CheckOwnedChain(detached, _api_version);
+    CheckOwnedChain(moved_detached, _api_version);
+    Check(
+        detached.SupportsAll(_source) && moved_detached.SupportsAll(_source), "detached copy lost a feature"
+    );
 }
 
 void CheckVulkan10Chain() {
-    VulkanDeviceFeatures source;
+    VulkanDeviceFeatures source(VK_API_VERSION_1_0);
     NativeFeatures(source, &VulkanDeviceFeatures::GetCore10Features).samplerAnisotropy = VK_TRUE;
-    VulkanDeviceFeatureChain chain(source, VK_API_VERSION_1_0);
+    VulkanDeviceFeatures chain                                                         = source;
     Check(chain.GetFeatures2().pNext == nullptr, "1.0 used a features2 extension chain");
     VkDeviceCreateInfo                          create_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     VkPhysicalDeviceDescriptorBufferFeaturesEXT extension{
@@ -96,13 +184,13 @@ void CheckVulkan10Chain() {
     chain.AttachToDeviceCreateInfo(create_info);
     Check(create_info.pNext == &extension, "1.0 discarded the existing extension chain");
     Check(create_info.pEnabledFeatures == &chain.GetFeatures2().features, "1.0 did not use pEnabledFeatures");
-    Check(
-        chain.CaptureFeatures().GetCore10Features().samplerAnisotropy == VK_TRUE, "1.0 feature value was lost"
-    );
+    Check(chain.GetCore10Features().samplerAnisotropy == VK_TRUE, "1.0 feature value was lost");
+    CheckCopiesAndMoves(source, VK_API_VERSION_1_0);
 }
 
 void CheckVulkan11Chain() {
-    VulkanDeviceFeatures source;
+    const uint32_t       api_version = VK_MAKE_API_VERSION(0, 1, 1, 7);
+    VulkanDeviceFeatures source(api_version);
     auto&                features     = NativeFeatures(source, &VulkanDeviceFeatures::GetCore11Features);
     features.storageBuffer16BitAccess = VK_TRUE;
     features.uniformAndStorageBuffer16BitAccess = VK_TRUE;
@@ -119,8 +207,8 @@ void CheckVulkan11Chain() {
 
     VulkanDeviceFeatures snapshot;
     {
-        VulkanDeviceFeatureChain chain(source, VK_MAKE_API_VERSION(0, 1, 1, 7));
-        auto&                    storage = ChainNode<VkPhysicalDevice16BitStorageFeatures>(
+        VulkanDeviceFeatures chain   = source;
+        auto&                storage = ChainNode<VkPhysicalDevice16BitStorageFeatures>(
             chain.GetFeatures2().pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES
         );
         auto& multiview = ChainNode<VkPhysicalDeviceMultiviewFeatures>(
@@ -155,7 +243,7 @@ void CheckVulkan11Chain() {
         Check(create_info.pNext == &chain.GetFeatures2(), "1.1 root was not attached");
         Check(create_info.pEnabledFeatures == nullptr, "features2 was combined with pEnabledFeatures");
         Check(draw_parameters.pNext == &extension, "1.1 discarded the extension tail");
-        snapshot = chain.CaptureFeatures();
+        snapshot = chain;
     }
     Check(
         snapshot.SupportsAll(source) && source.SupportsAll(snapshot), "1.1 round trip changed feature values"
@@ -163,20 +251,22 @@ void CheckVulkan11Chain() {
     Check(
         snapshot.GetCore12Features().timelineSemaphore == VK_FALSE, "1.1 captured an unavailable 1.2 feature"
     );
-    CheckSnapshotPointers(snapshot);
+    CheckOwnedChain(snapshot, api_version);
+    CheckCopiesAndMoves(snapshot, api_version);
 }
 
 void CheckModernChain(uint32_t _api_version, bool _has_vulkan13) {
-    VulkanDeviceFeatures source;
+    VulkanDeviceFeatures source(_api_version);
     NativeFeatures(source, &VulkanDeviceFeatures::GetCore10Features).robustBufferAccess = VK_TRUE;
     NativeFeatures(source, &VulkanDeviceFeatures::GetCore11Features).multiview          = VK_TRUE;
     NativeFeatures(source, &VulkanDeviceFeatures::GetCore12Features).timelineSemaphore  = VK_TRUE;
-    NativeFeatures(source, &VulkanDeviceFeatures::GetCore13Features).dynamicRendering   = VK_TRUE;
+    NativeFeatures(source, &VulkanDeviceFeatures::GetCore13Features).dynamicRendering =
+        _has_vulkan13 ? VK_TRUE : VK_FALSE;
 
     VulkanDeviceFeatures snapshot;
     {
-        VulkanDeviceFeatureChain chain(source, _api_version);
-        auto&                    core11 = ChainNode<VkPhysicalDeviceVulkan11Features>(
+        VulkanDeviceFeatures chain  = source;
+        auto&                core11 = ChainNode<VkPhysicalDeviceVulkan11Features>(
             chain.GetFeatures2().pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES
         );
         auto& core12 = ChainNode<VkPhysicalDeviceVulkan12Features>(
@@ -204,8 +294,8 @@ void CheckModernChain(uint32_t _api_version, bool _has_vulkan13) {
         Check(create_info.pNext == &chain.GetFeatures2(), "modern root was not attached");
         Check(create_info.pEnabledFeatures == nullptr, "modern chain retained pEnabledFeatures");
         Check(*tail == &extension, "modern chain discarded the extension tail");
-        snapshot = chain.CaptureFeatures();
-        CheckSnapshotPointers(source);
+        snapshot = chain;
+        CheckOwnedChain(source, _api_version);
     }
     Check(
         snapshot.GetCore10Features().robustBufferAccess && snapshot.GetCore11Features().multiview &&
@@ -216,13 +306,8 @@ void CheckModernChain(uint32_t _api_version, bool _has_vulkan13) {
         (snapshot.GetCore13Features().synchronization2 == VK_TRUE) == _has_vulkan13,
         "snapshot captured the wrong core version"
     );
-    CheckSnapshotPointers(snapshot);
-    const VulkanDeviceFeatures copy = snapshot;
-    VulkanDeviceFeatures       assigned;
-    assigned = copy;
-    Check(assigned.SupportsAll(snapshot), "snapshot copy changed feature values");
-    CheckSnapshotPointers(copy);
-    CheckSnapshotPointers(assigned);
+    CheckOwnedChain(snapshot, _api_version);
+    CheckCopiesAndMoves(snapshot, _api_version);
 }
 
 uint32_t mock_gpu_api_version   = VK_API_VERSION_1_3;
@@ -270,7 +355,30 @@ VKAPI_ATTR void VKAPI_CALL MockGetFeatures2(VkPhysicalDevice, VkPhysicalDeviceFe
         auto& multiview = ChainNode<VkPhysicalDeviceMultiviewFeatures>(
             storage.pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES
         );
-        multiview.multiview = VK_TRUE;
+        auto& pointers = ChainNode<VkPhysicalDeviceVariablePointersFeatures>(
+            multiview.pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES
+        );
+        auto& protected_memory = ChainNode<VkPhysicalDeviceProtectedMemoryFeatures>(
+            pointers.pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_FEATURES
+        );
+        auto& ycbcr = ChainNode<VkPhysicalDeviceSamplerYcbcrConversionFeatures>(
+            protected_memory.pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES
+        );
+        auto& draw_parameters = ChainNode<VkPhysicalDeviceShaderDrawParametersFeatures>(
+            ycbcr.pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES
+        );
+        storage.storageBuffer16BitAccess           = VK_TRUE;
+        storage.uniformAndStorageBuffer16BitAccess = VK_TRUE;
+        storage.storagePushConstant16              = VK_TRUE;
+        storage.storageInputOutput16               = VK_TRUE;
+        multiview.multiview                        = VK_TRUE;
+        multiview.multiviewGeometryShader          = VK_TRUE;
+        multiview.multiviewTessellationShader      = VK_TRUE;
+        pointers.variablePointersStorageBuffer     = VK_TRUE;
+        pointers.variablePointers                  = VK_TRUE;
+        protected_memory.protectedMemory           = VK_TRUE;
+        ycbcr.samplerYcbcrConversion               = VK_TRUE;
+        draw_parameters.shaderDrawParameters       = VK_TRUE;
     }
 }
 
@@ -324,7 +432,19 @@ void CheckSupportedQuery(uint32_t _requested_version, uint32_t _gpu_version, uin
         extended_query_count == (_expected_version >= VK_API_VERSION_1_1 ? 1u : 0u),
         "wrong extended query entry point count"
     );
-    CheckSnapshotPointers(snapshot);
+    if (_expected_version >= VK_API_VERSION_1_1 && _expected_version < VK_API_VERSION_1_2) {
+        const auto& core11 = snapshot.GetCore11Features();
+        Check(
+            core11.storageBuffer16BitAccess && core11.uniformAndStorageBuffer16BitAccess &&
+                core11.storagePushConstant16 && core11.storageInputOutput16 && core11.multiview &&
+                core11.multiviewGeometryShader && core11.multiviewTessellationShader &&
+                core11.variablePointersStorageBuffer && core11.variablePointers && core11.protectedMemory &&
+                core11.samplerYcbcrConversion && core11.shaderDrawParameters,
+            "1.1 query did not expose all individual feature results"
+        );
+    }
+    CheckOwnedChain(snapshot, _expected_version);
+    CheckCopiesAndMoves(snapshot, _expected_version);
 }
 
 void CheckRequiredFeatures() {
@@ -344,7 +464,7 @@ void CheckRequiredFeatures() {
         required.GetCore13Features().synchronization2 && required.GetCore13Features().dynamicRendering,
         "1.3 requirements changed"
     );
-    CheckSnapshotPointers(required);
+    CheckOwnedChain(required, VK_API_VERSION_1_3);
 }
 
 } // namespace
