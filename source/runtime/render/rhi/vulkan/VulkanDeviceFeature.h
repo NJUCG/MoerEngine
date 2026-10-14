@@ -19,12 +19,8 @@ public:
 
     bool SupportsAll(const VulkanDeviceFeatures& _required_features) const;
 
-    const VkPhysicalDeviceFeatures2& GetFeatures2() const {
-        return features2;
-    }
-
     const VkPhysicalDeviceFeatures& GetCore10Features() const {
-        return features2.features;
+        return core_1_0;
     }
 
     const VkPhysicalDeviceVulkan11Features& GetCore11Features() const {
@@ -76,11 +72,11 @@ private:
         VkPhysicalDeviceShaderDrawParametersFeatures* const tail = &shader_draw_parameters;
     };
 
-    void RebuildFeatureChain();
+    void* RebuildFeatureChain();
 
     // Copies and moves rebuild pNext links to this object's own members.
     uint32_t                         api_version;
-    VkPhysicalDeviceFeatures2        features2{};
+    VkPhysicalDeviceFeatures         core_1_0{};
     VkPhysicalDeviceVulkan11Features core_1_1{};
     VkPhysicalDeviceVulkan12Features core_1_2{};
     VkPhysicalDeviceVulkan13Features core_1_3{};
