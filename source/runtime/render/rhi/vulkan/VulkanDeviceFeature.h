@@ -1,41 +1,43 @@
 #ifndef VULKAN_DEVICE_FEATURE_H
 #define VULKAN_DEVICE_FEATURE_H
 
-#include "VulkanPlatform.h"
+#include "VulkanCommon.h"
 
 namespace Moer::Render {
 
 class VulkanDeviceFeatures {
 public:
-    VulkanDeviceFeatures() : core_1_0(), core_1_1(), core_1_2(), core_1_3() {}
-    VulkanDeviceFeatures(const VulkanDeviceFeatures& _other) = default;
+    static VulkanDeviceFeatures QuerySupportedFeatures(VkPhysicalDevice _gpu, uint32_t _api_version);
 
-    static VulkanDeviceFeatures GetGpuFeatures(VkPhysicalDevice _gpu, uint32_t _api_version);
+    static VulkanDeviceFeatures BuildRequiredFeatures(uint32_t _api_version);
 
-    static VulkanDeviceFeatures GetMERequiredFeatures(uint32_t _api_version);
+    bool SupportsAll(const VulkanDeviceFeatures& _required_features) const;
 
-    bool Contains(const VulkanDeviceFeatures& _other) const;
+    const VkPhysicalDeviceFeatures& GetCore10Features() const {
+        return core_1_0;
+    }
 
-    inline const VkPhysicalDeviceVulkan11Features& GetCore11Features() const {
+    const VkPhysicalDeviceVulkan11Features& GetCore11Features() const {
         return core_1_1;
     }
 
-    inline const VkPhysicalDeviceVulkan12Features& GetCore12Features() const {
+    const VkPhysicalDeviceVulkan12Features& GetCore12Features() const {
         return core_1_2;
     }
 
-    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version);
+    const VkPhysicalDeviceVulkan13Features& GetCore13Features() const {
+        return core_1_3;
+    }
 
-    VkPhysicalDeviceFeatures         core_1_0;
-    VkPhysicalDeviceVulkan11Features core_1_1;
+    void AttachFeatureChain(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version);
 
 private:
-    // Anything above Core 1.1 cannot be assumed, they should only be used by the device at init time
-    VkPhysicalDeviceVulkan12Features core_1_2;
-    VkPhysicalDeviceVulkan13Features core_1_3;
+    VkPhysicalDeviceFeatures         core_1_0{};
+    VkPhysicalDeviceVulkan11Features core_1_1{};
+    VkPhysicalDeviceVulkan12Features core_1_2{};
+    VkPhysicalDeviceVulkan13Features core_1_3{};
 
     friend class VulkanDevice;
-    friend class VulkanDeviceFeature;
 };
 
 bool operator>=(const VkPhysicalDeviceFeatures& _lhs, const VkPhysicalDeviceFeatures& _rhs);

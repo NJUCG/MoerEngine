@@ -36,7 +36,7 @@ static constexpr uint32           s_offline_descriptor_capacity = 10086;
 static uint GetBufferDescriptorSize(const VulkanDevice& _device, VkDescriptorType _type) {
     const auto& properties = _device.GetOptionalProperties().descriptor_buffer_properties;
     const bool robust_buffer_access =
-        _device.GetCoreFeatures().core_1_0.robustBufferAccess == VK_TRUE;
+        _device.GetCoreFeatures().GetCore10Features().robustBufferAccess == VK_TRUE;
     switch (_type) {
         case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
             return static_cast<uint>(

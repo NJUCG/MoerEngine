@@ -125,7 +125,7 @@ public:
 
     // RHI capabilities and extensions.
     bool SupportsTessellation() const override {
-        return m_device_info.core_features.core_1_0.tessellationShader == VK_TRUE;
+        return m_device_info.core_features.GetCore10Features().tessellationShader == VK_TRUE;
     }
 
     uint32_t GetMaxTessellationFactor() const override {
@@ -136,7 +136,7 @@ public:
 
     bool SupportsMultiview(uint32_t view_count) const override {
         return Multiview::SupportsViewCount(
-            m_device_info.core_features.core_1_1.multiview == VK_TRUE,
+            m_device_info.core_features.GetCore11Features().multiview == VK_TRUE,
             m_device_info.core_properties.core_1_1.maxMultiviewViewCount,
             view_count
         );

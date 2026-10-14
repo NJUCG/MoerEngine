@@ -655,7 +655,7 @@ void VulkanAllocator::RecordOcclusionQuery(
         // without occlusionQueryPrecise, but do not expose their
         // implementation-defined nonzero value as an exact sample count.
         const bool precise =
-            m_device->GetCoreFeatures().core_1_0.occlusionQueryPrecise ==
+            m_device->GetCoreFeatures().GetCore10Features().occlusionQueryPrecise ==
             VK_TRUE;
         const VkQueryControlFlags flags =
             precise ? VK_QUERY_CONTROL_PRECISE_BIT : 0;

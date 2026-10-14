@@ -13071,7 +13071,7 @@ void RunOcclusionQueryCompletionOwnership() {
         static_cast<const VulkanDevice*>(device.GetImpl());
     const bool precise_sample_count =
         vulkan_device != nullptr &&
-        vulkan_device->GetCoreFeatures().core_1_0.occlusionQueryPrecise ==
+        vulkan_device->GetCoreFeatures().GetCore10Features().occlusionQueryPrecise ==
             VK_TRUE;
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC |

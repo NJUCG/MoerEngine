@@ -10,14 +10,12 @@
 
 namespace Moer::Render {
 
-class VulkanDeviceFeatures;
-
 class VulkanGenericPlatform {
 public:
     static void GetInstanceLayers(Moer::Array<std::string>& _layers) {}
     static void GetDeviceLayers(Moer::Array<std::string>& _layers) {}
     // Allow the platform code to restrict the device features
-    static void RestrictEnabledPhysicalDeviceFeatures(VulkanDeviceFeatures* _gpu_features);
+    static void RestrictEnabledPhysicalDeviceFeatures(VkPhysicalDeviceFeatures& _features);
 };
 
 } // namespace Moer::Render

@@ -308,10 +308,10 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         return true;
     };
 
-    const auto& features_required          = VulkanDeviceFeatures::GetMERequiredFeatures(_api_version);
+    const auto& features_required          = VulkanDeviceFeatures::BuildRequiredFeatures(_api_version);
     const auto& is_core_features_supported = [&](VkPhysicalDevice _gpu) {
-        auto gpu_features = VulkanDeviceFeatures::GetGpuFeatures(_gpu, _api_version);
-        bool ok           = gpu_features.Contains(features_required);
+        auto gpu_features = VulkanDeviceFeatures::QuerySupportedFeatures(_gpu, _api_version);
+        bool ok           = gpu_features.SupportsAll(features_required);
         if (!ok) {
             LOG_ERROR("GPU does NOT satisfy required core Vulkan features.");
         }
@@ -436,7 +436,7 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
     }
 
     // Query core features
-    m_device_info.core_features = VulkanDeviceFeatures::GetGpuFeatures(m_gpu, _api_version);
+    m_device_info.core_features = VulkanDeviceFeatures::QuerySupportedFeatures(m_gpu, _api_version);
     // 先从 core feature 中提取 cooperative bundle 需要的前置能力。
     UpdateCooperativePrerequisites(m_device_info.core_features, m_device_info.optional_extensions);
     // Query advanced features, use advanced features as GPU supported, and developers cannot specify them.
@@ -613,12 +613,12 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     VkPhysicalDeviceFeatures2 features_loaded;
     if (_api_version > VK_API_VERSION_1_0) {
         features_loaded.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features_loaded.features = m_device_info.core_features.core_1_0;
+        features_loaded.features = m_device_info.core_features.GetCore10Features();
         features_loaded.pNext    = &m_device_info.core_features.core_1_1;
-        m_device_info.core_features.PreCreateDevice(device_create_info, _api_version);
+        m_device_info.core_features.AttachFeatureChain(device_create_info, _api_version);
         device_create_info.pNext = &features_loaded;
     } else {
-        device_create_info.pEnabledFeatures = &m_device_info.core_features.core_1_0;
+        device_create_info.pEnabledFeatures = &m_device_info.core_features.GetCore10Features();
     }
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
     volkLoadDevice(m_device);
@@ -962,7 +962,7 @@ VulkanDevice::GetTimestampQueryResetMode(
     // vkCreateDevice. A supported hostQueryReset value is therefore also the
     // enabled value used by this native host-reset path.
     if ((queue_flags & VK_QUEUE_TRANSFER_BIT) != 0 &&
-        m_device_info.core_features.core_1_2.hostQueryReset ==
+        m_device_info.core_features.GetCore12Features().hostQueryReset ==
             VK_TRUE) {
         return EVulkanTimestampQueryResetMode::Host;
     }
@@ -2012,7 +2012,7 @@ bool ValidateGraphicsPipelineCreateInfo(
             create_info.view_mask,
             required_view_count,
             device_info.core_properties.core_1_1.maxMultiviewViewCount,
-            device_info.core_features.core_1_1.multiview == VK_TRUE
+            device_info.core_features.GetCore11Features().multiview == VK_TRUE
         );
         return false;
     }

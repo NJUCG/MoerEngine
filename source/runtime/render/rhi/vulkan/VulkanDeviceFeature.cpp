@@ -3,55 +3,55 @@
 
 namespace Moer::Render {
 
-VulkanDeviceFeatures VulkanDeviceFeatures::GetMERequiredFeatures(uint32_t _api_version) {
-    VulkanDeviceFeatures enabled_features;
+VulkanDeviceFeatures VulkanDeviceFeatures::BuildRequiredFeatures(uint32_t _api_version) {
+    VulkanDeviceFeatures required_features;
 
     // 1.0 features
-    enabled_features.core_1_0.samplerAnisotropy = VK_TRUE;
-    enabled_features.core_1_0.sampleRateShading = VK_TRUE;
-    enabled_features.core_1_0.depthClamp        = VK_TRUE;
+    required_features.core_1_0.samplerAnisotropy = VK_TRUE;
+    required_features.core_1_0.sampleRateShading = VK_TRUE;
+    required_features.core_1_0.depthClamp        = VK_TRUE;
     // 1.1 features
     if (_api_version >= VK_API_VERSION_1_1) {
-        enabled_features.core_1_1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        required_features.core_1_1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     }
 
     // 1.2 features
     if (_api_version >= VK_API_VERSION_1_2) {
 
-        enabled_features.core_1_2.timelineSemaphore   = VK_TRUE;
-        enabled_features.core_1_2.bufferDeviceAddress = VK_TRUE;
+        required_features.core_1_2.timelineSemaphore   = VK_TRUE;
+        required_features.core_1_2.bufferDeviceAddress = VK_TRUE;
         // MARK: need fallback to non-bindless if not supported
         // descriptor indexing features
-        enabled_features.core_1_2.descriptorIndexing = VK_TRUE;
+        required_features.core_1_2.descriptorIndexing = VK_TRUE;
         // uniform
-        enabled_features.core_1_2.shaderUniformBufferArrayNonUniformIndexing    = VK_TRUE;
-        enabled_features.core_1_2.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
+        required_features.core_1_2.shaderUniformBufferArrayNonUniformIndexing    = VK_TRUE;
+        required_features.core_1_2.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
         // sampler
-        enabled_features.core_1_2.shaderSampledImageArrayNonUniformIndexing    = VK_TRUE;
-        enabled_features.core_1_2.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+        required_features.core_1_2.shaderSampledImageArrayNonUniformIndexing    = VK_TRUE;
+        required_features.core_1_2.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
         // image
-        enabled_features.core_1_2.shaderStorageImageArrayNonUniformIndexing    = VK_TRUE;
-        enabled_features.core_1_2.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+        required_features.core_1_2.shaderStorageImageArrayNonUniformIndexing    = VK_TRUE;
+        required_features.core_1_2.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
         // buffer
-        enabled_features.core_1_2.shaderStorageBufferArrayNonUniformIndexing    = VK_TRUE;
-        enabled_features.core_1_2.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
-        enabled_features.core_1_2.drawIndirectCount                             = VK_TRUE;
+        required_features.core_1_2.shaderStorageBufferArrayNonUniformIndexing    = VK_TRUE;
+        required_features.core_1_2.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+        required_features.core_1_2.drawIndirectCount                             = VK_TRUE;
     }
 
     // 1.3 features
     if (_api_version >= VK_API_VERSION_1_3) {
 
-        enabled_features.core_1_3.synchronization2 = VK_TRUE;
-        enabled_features.core_1_3.dynamicRendering = VK_TRUE;
+        required_features.core_1_3.synchronization2 = VK_TRUE;
+        required_features.core_1_3.dynamicRendering = VK_TRUE;
     }
 
     // Apply platform restrictions
-    VulkanPlatform::RestrictEnabledPhysicalDeviceFeatures(&enabled_features);
+    VulkanPlatform::RestrictEnabledPhysicalDeviceFeatures(required_features.core_1_0);
 
-    return enabled_features;
+    return required_features;
 }
 
-VulkanDeviceFeatures VulkanDeviceFeatures::GetGpuFeatures(VkPhysicalDevice _gpu, uint32_t _api_version) {
+VulkanDeviceFeatures VulkanDeviceFeatures::QuerySupportedFeatures(VkPhysicalDevice _gpu, uint32_t _api_version) {
     VulkanDeviceFeatures gpu_features;
 
     VkPhysicalDeviceFeatures2 gpu_features_2{};
@@ -80,12 +80,12 @@ VulkanDeviceFeatures VulkanDeviceFeatures::GetGpuFeatures(VkPhysicalDevice _gpu,
     return gpu_features;
 }
 
-bool VulkanDeviceFeatures::Contains(const VulkanDeviceFeatures& _other) const {
-    return core_1_0 >= _other.core_1_0 && core_1_1 >= _other.core_1_1 && core_1_2 >= _other.core_1_2 &&
-           core_1_3 >= _other.core_1_3;
+bool VulkanDeviceFeatures::SupportsAll(const VulkanDeviceFeatures& _required_features) const {
+    return core_1_0 >= _required_features.core_1_0 && core_1_1 >= _required_features.core_1_1 &&
+           core_1_2 >= _required_features.core_1_2 && core_1_3 >= _required_features.core_1_3;
 }
 
-void VulkanDeviceFeatures::PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version) {
+void VulkanDeviceFeatures::AttachFeatureChain(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version) {
     if (_api_version >= VK_API_VERSION_1_3) {
         core_1_3.pNext = (void*)_device_create_info.pNext;
         core_1_2.pNext = &core_1_3;
