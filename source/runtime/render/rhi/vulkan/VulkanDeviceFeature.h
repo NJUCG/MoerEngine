@@ -29,15 +29,13 @@ public:
         return core_1_3;
     }
 
-    void AttachFeatureChain(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version);
-
 private:
     VkPhysicalDeviceFeatures         core_1_0{};
     VkPhysicalDeviceVulkan11Features core_1_1{};
     VkPhysicalDeviceVulkan12Features core_1_2{};
     VkPhysicalDeviceVulkan13Features core_1_3{};
 
-    friend class VulkanDevice;
+    friend class VulkanDeviceFeatureChain;
 };
 
 } // namespace Moer::Render

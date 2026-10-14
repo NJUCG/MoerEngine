@@ -603,7 +603,9 @@ add_test(NAME VulkanHeaderContract COMMAND $<TARGET_FILE:${test_target}>)
 set(test_target TestVulkanDeviceFeatures)
 add_executable(${test_target}
     "VulkanDeviceFeaturesTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanDeviceFeature.cpp"
     "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanDeviceFeatureComparison.cpp"
+    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanDeviceFeatureChain.cpp"
 )
 target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})

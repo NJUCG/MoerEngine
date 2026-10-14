@@ -148,8 +148,8 @@ constexpr std::array core_1_3_members{
 
 template<typename T, size_t N>
 bool SupportsRequiredMembers(
-    const T&                          _supported,
-    const T&                          _required,
+    const T&                            _supported,
+    const T&                            _required,
     const std::array<VkBool32 T::*, N>& _members
 ) {
     for (const auto member : _members) {
@@ -170,4 +170,3 @@ bool VulkanDeviceFeatures::SupportsAll(const VulkanDeviceFeatures& _required_fea
 }
 
 } // namespace Moer::Render
-

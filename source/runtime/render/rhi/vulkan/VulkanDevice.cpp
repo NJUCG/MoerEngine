@@ -6,6 +6,7 @@
 #include "PixelFormat.h"
 #include "VulkanCommand.h"
 #include "VulkanDebugCallback.h"
+#include "VulkanDeviceFeatureChain.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
@@ -610,16 +611,8 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     device_create_info.enabledExtensionCount   = static_cast<uint32>(extensions_loaded.size());
     device_create_info.ppEnabledExtensionNames = extensions_loaded.data();
 
-    VkPhysicalDeviceFeatures2 features_loaded;
-    if (_api_version > VK_API_VERSION_1_0) {
-        features_loaded.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features_loaded.features = m_device_info.core_features.GetCore10Features();
-        features_loaded.pNext    = &m_device_info.core_features.core_1_1;
-        m_device_info.core_features.AttachFeatureChain(device_create_info, _api_version);
-        device_create_info.pNext = &features_loaded;
-    } else {
-        device_create_info.pEnabledFeatures = &m_device_info.core_features.GetCore10Features();
-    }
+    VulkanDeviceFeatureChain feature_chain(m_device_info.core_features, _api_version);
+    feature_chain.AttachToDeviceCreateInfo(device_create_info);
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
     volkLoadDevice(m_device);
 
