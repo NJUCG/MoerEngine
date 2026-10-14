@@ -44,9 +44,39 @@ public:
     void AttachToDeviceCreateInfo(VkDeviceCreateInfo& _device_create_info);
 
 private:
+    struct Vulkan11FeatureNodes {
+        void WriteFrom(const VkPhysicalDeviceVulkan11Features& _features);
+        void WriteInto(VkPhysicalDeviceVulkan11Features& _features) const;
+
+        VkPhysicalDevice16BitStorageFeatures storage_16bit{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+            &multiview
+        };
+        VkPhysicalDeviceMultiviewFeatures multiview{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES,
+            &variable_pointers
+        };
+        VkPhysicalDeviceVariablePointersFeatures variable_pointers{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES,
+            &protected_memory
+        };
+        VkPhysicalDeviceProtectedMemoryFeatures protected_memory{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_FEATURES,
+            &sampler_ycbcr
+        };
+        VkPhysicalDeviceSamplerYcbcrConversionFeatures sampler_ycbcr{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
+            &shader_draw_parameters
+        };
+        VkPhysicalDeviceShaderDrawParametersFeatures shader_draw_parameters{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES
+        };
+
+        VkPhysicalDevice16BitStorageFeatures* const         head = &storage_16bit;
+        VkPhysicalDeviceShaderDrawParametersFeatures* const tail = &shader_draw_parameters;
+    };
+
     void RebuildFeatureChain();
-    void InitializeVulkan11Chain();
-    void ReadVulkan11Features();
 
     // Copies and moves rebuild pNext links to this object's own members.
     uint32_t                         api_version;
@@ -55,14 +85,9 @@ private:
     VkPhysicalDeviceVulkan12Features core_1_2{};
     VkPhysicalDeviceVulkan13Features core_1_3{};
 
-    // The 1.1 query path uses individual structures. core_1_1 provides the
-    // same observation interface after their query results are read back.
-    VkPhysicalDevice16BitStorageFeatures           storage_16bit{};
-    VkPhysicalDeviceMultiviewFeatures              multiview{};
-    VkPhysicalDeviceVariablePointersFeatures       variable_pointers{};
-    VkPhysicalDeviceProtectedMemoryFeatures        protected_memory{};
-    VkPhysicalDeviceSamplerYcbcrConversionFeatures sampler_ycbcr{};
-    VkPhysicalDeviceShaderDrawParametersFeatures   shader_draw_parameters{};
+    // Each object initializes its own node links. Copies transfer feature values
+    // through core_1_1; the compatibility nodes never borrow another object's links.
+    Vulkan11FeatureNodes core_1_1_nodes{};
 };
 
 } // namespace Moer::Render
