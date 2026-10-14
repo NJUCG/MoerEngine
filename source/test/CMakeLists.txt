@@ -598,6 +598,18 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanHeaderContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# CPU-only feature checks are built from the platform-independent implementation
+# so padding and capability regressions can be tested without a Vulkan GPU.
+set(test_target TestVulkanDeviceFeatures)
+add_executable(${test_target}
+    "VulkanDeviceFeaturesTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanDeviceFeatureComparison.cpp"
+)
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanDeviceFeaturesContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(VulkanDeviceFeaturesContract PROPERTIES TIMEOUT 60)
+
 # Vulkan integration seam for ordered multi-primary submission and the
 # recoverable worker-failure path. It is intentionally run explicitly because
 # it requires a Vulkan-capable machine; the CPU-only contracts above remain in

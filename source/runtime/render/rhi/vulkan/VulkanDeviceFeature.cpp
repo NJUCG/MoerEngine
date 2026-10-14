@@ -80,11 +80,6 @@ VulkanDeviceFeatures VulkanDeviceFeatures::QuerySupportedFeatures(VkPhysicalDevi
     return gpu_features;
 }
 
-bool VulkanDeviceFeatures::SupportsAll(const VulkanDeviceFeatures& _required_features) const {
-    return core_1_0 >= _required_features.core_1_0 && core_1_1 >= _required_features.core_1_1 &&
-           core_1_2 >= _required_features.core_1_2 && core_1_3 >= _required_features.core_1_3;
-}
-
 void VulkanDeviceFeatures::AttachFeatureChain(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version) {
     if (_api_version >= VK_API_VERSION_1_3) {
         core_1_3.pNext = (void*)_device_create_info.pNext;
@@ -96,50 +91,6 @@ void VulkanDeviceFeatures::AttachFeatureChain(VkDeviceCreateInfo& _device_create
     } else {
         core_1_1.pNext = (void*)_device_create_info.pNext;
     }
-}
-
-bool operator>=(const VkPhysicalDeviceFeatures& _lhs, const VkPhysicalDeviceFeatures& _rhs) {
-    auto* lp = (VkBool32*)&_lhs;
-    auto* rp = (VkBool32*)&_rhs;
-    for (size_t i = 0; i < sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32); ++i) {
-        if (lp[i] < rp[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool operator>=(const VkPhysicalDeviceVulkan11Features& _lhs, const VkPhysicalDeviceVulkan11Features& _rhs) {
-    auto* lp = (VkBool32*)&_lhs;
-    auto* rp = (VkBool32*)&_rhs;
-    for (size_t i = 4; i < sizeof(VkPhysicalDeviceVulkan11Features) / sizeof(VkBool32); ++i) {
-        if (lp[i] < rp[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool operator>=(const VkPhysicalDeviceVulkan12Features& _lhs, const VkPhysicalDeviceVulkan12Features& _rhs) {
-    auto* lp = (VkBool32*)&_lhs;
-    auto* rp = (VkBool32*)&_rhs;
-    for (size_t i = 4; i < sizeof(VkPhysicalDeviceVulkan12Features) / sizeof(VkBool32); ++i) {
-        if (lp[i] < rp[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool operator>=(const VkPhysicalDeviceVulkan13Features& _lhs, const VkPhysicalDeviceVulkan13Features& _rhs) {
-    auto* lp = (VkBool32*)&_lhs;
-    auto* rp = (VkBool32*)&_rhs;
-    for (size_t i = 4; i < sizeof(VkPhysicalDeviceVulkan13Features) / sizeof(VkBool32); ++i) {
-        if (lp[i] < rp[i]) {
-            return false;
-        }
-    }
-    return true;
 }
 
 } // namespace Moer::Render
