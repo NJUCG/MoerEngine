@@ -44,9 +44,9 @@ bool InvokeAllocatorCompletionCallbacksNoexcept(
 
 } // namespace
 
-VulkanCmdAllocator::VulkanCmdAllocator(VulkanDevice* _device, EQueueType _queue_type) :
+VulkanCommandPool::VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_type) :
     VulkanDeviceObject(_device),
-    queue_type(VulkanEnumTranslator::METoVKQueueFlagBits(_queue_type)) {
+    queue_flags(VulkanEnumTranslator::METoVKQueueFlagBits(_queue_type)) {
     // Use the selected queue-role mapping, including vendor overrides, so the
     // command pool belongs to the same family as the actual submission queue.
     uint32_t family_index = m_device->GetQueueFamilyIndex(_queue_type);
@@ -61,14 +61,14 @@ VulkanCmdAllocator::VulkanCmdAllocator(VulkanDevice* _device, EQueueType _queue_
     VK_CHECK_RESULT(vkCreateCommandPool(_device->GetDevice(), &pool_info, nullptr, &command_pool));
 }
 
-VulkanCmdAllocator::~VulkanCmdAllocator() {
+VulkanCommandPool::~VulkanCommandPool() {
     if (command_pool != VK_NULL_HANDLE) {
         vkDestroyCommandPool(m_device->GetDevice(), command_pool, nullptr);
         command_pool = VK_NULL_HANDLE;
     }
 }
-std::string_view VulkanCmdAllocator::GetQueueName() const {
-    return VK_TYPE_TO_STRING(VkQueueFlagBits, static_cast<VkQueueFlagBits>(queue_type));
+std::string_view VulkanCommandPool::GetQueueName() const {
+    return VK_TYPE_TO_STRING(VkQueueFlagBits, static_cast<VkQueueFlagBits>(queue_flags));
 }
 
 VkTmpBufferAllocator::VkTmpBufferAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device) {}
@@ -112,8 +112,8 @@ uint64 VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usag
 
     VkBufferUsageFlags       usage{};
     VmaAllocationCreateFlags flags{};
-    VmaMemoryUsage           mem_usage     = VMA_MEMORY_USAGE_AUTO;
-    bool                     devce_address = false;
+    VmaMemoryUsage           mem_usage      = VMA_MEMORY_USAGE_AUTO;
+    bool                     device_address = false;
     switch (_usage) {
 
         case EVkInternalBufferUsage::Upload:
@@ -126,23 +126,23 @@ uint64 VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usag
         case EVkInternalBufferUsage::Scratch: {
             usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            flags         = VMA_ALLOCATION_CREATE_STRATEGY_BEST_FIT_BIT;
-            mem_usage     = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            devce_address = true;
+            flags          = VMA_ALLOCATION_CREATE_STRATEGY_BEST_FIT_BIT;
+            mem_usage      = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            device_address = true;
             break;
         }
         case EVkInternalBufferUsage::ShaderBuffer: {
-            usage         = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            flags         = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            mem_usage     = VMA_MEMORY_USAGE_AUTO;
-            devce_address = true;
+            usage          = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            flags          = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+            mem_usage      = VMA_MEMORY_USAGE_AUTO;
+            device_address = true;
             break;
         }
         case EVkInternalBufferUsage::ShaderBuffer_Constant: {
-            usage         = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            flags         = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            mem_usage     = VMA_MEMORY_USAGE_AUTO;
-            devce_address = true;
+            usage          = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            flags          = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+            mem_usage      = VMA_MEMORY_USAGE_AUTO;
+            device_address = true;
             break;
         }
     }
@@ -188,7 +188,7 @@ uint64 VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usag
         buffer_alloc.buffer,
         buffer_alloc.alloc,
         false,
-        devce_address
+        device_address
     );
     return reinterpret_cast<uint64>(vk_buffer);
 }
@@ -311,21 +311,21 @@ VulkanAllocatorBase::VulkanAllocatorBase(VulkanDevice* _device, EQueueType _type
     VulkanDeviceObject(_device),
     queue_type(_type),
     tracker(_type) {
-    cmd_allocator.emplace(_device, _type);
-    cmd_list.emplace(&cmd_allocator.value(), *_device);
+    command_pool.emplace(_device, _type);
+    cmd_list.emplace(&command_pool.value(), *_device);
 }
 
 VulkanAllocatorBase::~VulkanAllocatorBase() {
     secondary_cmd_list.reset();
     cmd_list.reset();
-    cmd_allocator.reset();
+    command_pool.reset();
     on_complete.clear();
     tracker.Reset();
 }
 
 VulkanCmdList& VulkanAllocatorBase::PrepareSecondaryCmdList() {
     if (!secondary_cmd_list.has_value()) {
-        secondary_cmd_list.emplace(&cmd_allocator.value(), *m_device, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
+        secondary_cmd_list.emplace(&command_pool.value(), *m_device, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
     }
     return secondary_cmd_list.value();
 }
@@ -352,7 +352,7 @@ bool VulkanAllocatorBase::ResetCmdList() {
     }
 
     const VkResult result = m_device->ResetCommandPool(
-        cmd_allocator->GetHandle(),
+        command_pool->GetHandle(),
         VulkanOperationContext{
             .operation  = EVulkanFaultOperation::CommandPoolReset,
             .queue_type = queue_type,
@@ -448,87 +448,72 @@ void VulkanAllocator::ScratchAllocator::Reset() {
     allocated_buffers.clear();
 }
 
-VulkanAllocator::StackAllocator::StackAllocator(
-    VkTmpBufferAllocator* _alloc,
-    uint64                _init_cap,
-    double                _grouth_factor
+VulkanAllocator::LinearBufferAllocator::LinearBufferAllocator(
+    VkTmpBufferAllocator* _allocator,
+    uint64                _initial_capacity,
+    double                _growth_factor
 ) :
-    allocator(_alloc),
-    init_capacity(_init_cap),
-    growth_factor(_grouth_factor),
-    stack_memory_id(0) {
-    capacity = std::max<uint64>(init_capacity, 1);
-    allocated_buffers.push_back({allocator->Allocate(capacity, GetStackBufferName()), capacity, 0});
+    allocator(_allocator),
+    next_block_capacity(std::max<uint64>(_initial_capacity, 1)),
+    growth_factor(_growth_factor) {
+    allocated_buffers.push_back(
+        {allocator->Allocate(next_block_capacity, MakeBufferName()), next_block_capacity, 0}
+    );
 }
 
-VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate(uint64 _size, uint _align) {
+VulkanAllocator::LinearBufferAllocator::BufferSlice
+VulkanAllocator::LinearBufferAllocator::Allocate(uint64 _size, uint _alignment) {
 
-    uint64 align_size = std::max(_align, 16u);
-    for (auto& alloc_buf : allocated_buffers) {
-        auto offset = Moer::AlignUp(alloc_buf.offset, align_size);
-        if (alloc_buf.size - offset >= _size) {
-            alloc_buf.offset = offset + _size;
-            return {alloc_buf.handle, offset};
+    uint64 align_size = std::max(_alignment, 16u);
+    for (auto& block : allocated_buffers) {
+        auto offset = Moer::AlignUp(block.used_bytes, align_size);
+        if (block.size_bytes - offset >= _size) {
+            block.used_bytes = offset + _size;
+            return {block.handle, offset};
         }
     }
 
     align_size = std::max(align_size, _size);
 
-    if (capacity < align_size) {
-        capacity = std::max<uint64>(capacity * growth_factor, align_size);
+    if (next_block_capacity < align_size) {
+        next_block_capacity = std::max<uint64>(next_block_capacity * growth_factor, align_size);
     }
 
-    auto buffer = allocator->Allocate(capacity, GetStackBufferName());
-    allocated_buffers.push_back({buffer, capacity, align_size});
+    auto buffer = allocator->Allocate(next_block_capacity, MakeBufferName());
+    allocated_buffers.push_back({buffer, next_block_capacity, align_size});
     return {buffer, 0};
 }
 
-VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate(uint64 _size) {
-    for (auto& alloc_buf : allocated_buffers) {
-        if (alloc_buf.size - alloc_buf.offset >= _size) {
-            auto offset = alloc_buf.offset;
-            alloc_buf.offset += _size;
-            return {alloc_buf.handle, offset};
-        }
-    }
-
-    if (capacity < _size) {
-        capacity = std::max<uint64>(capacity * growth_factor, _size);
-    }
-
-    auto buffer = allocator->Allocate(capacity, GetStackBufferName());
-    allocated_buffers.push_back({buffer, capacity, _size});
-    return {buffer, 0};
-}
-
-void VulkanAllocator::StackAllocator::Reset() {
+void VulkanAllocator::LinearBufferAllocator::Reset() {
     if (allocated_buffers.size() == 1) {
-        allocated_buffers.back().offset = 0;
+        allocated_buffers.back().used_bytes = 0;
     }
     if (allocated_buffers.size() > 1) {
-        //pack all staging buffer to one
-        uint64 sum_size = 0;
-        for (auto& alloc_buf : allocated_buffers) {
-            sum_size += alloc_buf.size;
-            allocator->DeAllocate(alloc_buf.handle);
+        // Consolidate staging blocks for the next recording.
+        uint64 total_size_bytes = 0;
+        for (auto& block : allocated_buffers) {
+            total_size_bytes += block.size_bytes;
+            allocator->DeAllocate(block.handle);
         }
         allocated_buffers.clear();
 
-        stack_memory_id = 0;
+        next_buffer_name_id = 0;
 
-        allocated_buffers.push_back({allocator->Allocate(sum_size, GetStackBufferName()), sum_size, 0});
+        allocated_buffers.push_back(
+            {allocator->Allocate(total_size_bytes, MakeBufferName()), total_size_bytes, 0}
+        );
     }
 }
 
-void VulkanAllocator::StackAllocator::Dispose() {
-    for (auto& alloc_buf : allocated_buffers) {
-        allocator->DeAllocate(alloc_buf.handle);
+void VulkanAllocator::LinearBufferAllocator::Dispose() {
+    for (auto& block : allocated_buffers) {
+        allocator->DeAllocate(block.handle);
     }
     allocated_buffers.clear();
 }
 
-std::string VulkanAllocator::StackAllocator::GetStackBufferName() {
-    return std::format("VkBackend::StackAllocBuffer_{}", stack_memory_id++);
+std::string VulkanAllocator::LinearBufferAllocator::MakeBufferName() {
+    return std::format("VkBackend::LinearAllocBuffer_{}", next_buffer_name_id++);
 }
 
 VulkanAllocator::ShaderBufferAllocator::ShaderBufferAllocator(
@@ -581,9 +566,9 @@ VulkanAllocator::~VulkanAllocator() {
 BufferView VulkanAllocator::AllocateUploadBuffer(uint64 _size, uint _alignment) {
     _size = std::max<uint64>(_size, _alignment);
     if (_size < small_block_size) {
-        auto          handle = upload_allocator.Allocate(_size, _alignment);
-        VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
-        return {buffer, handle.offset, _size, 1u};
+        const LinearBufferAllocator::BufferSlice slice  = upload_allocator.Allocate(_size, _alignment);
+        VulkanBuffer*                            buffer = reinterpret_cast<VulkanBuffer*>(slice.handle);
+        return {buffer, slice.byte_offset, _size, 1u};
     }
     auto          handle = allocator.Allocate(_size, std::format("VkBackend::LargeUploadBuffer_{}", _size));
     VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
@@ -594,9 +579,9 @@ BufferView VulkanAllocator::AllocateUploadBuffer(uint64 _size, uint _alignment) 
 BufferView VulkanAllocator::AllocateReadbackBuffer(uint64 _size, uint _alignment) {
     _size = std::max<uint64>(_size, _alignment);
     if (_size < small_block_size) {
-        auto          handle = readback_allocator.Allocate(_size, _alignment);
-        VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
-        return {buffer, handle.offset, _size, 1u};
+        const LinearBufferAllocator::BufferSlice slice  = readback_allocator.Allocate(_size, _alignment);
+        VulkanBuffer*                            buffer = reinterpret_cast<VulkanBuffer*>(slice.handle);
+        return {buffer, slice.byte_offset, _size, 1u};
     }
     auto          handle = allocator.Allocate(_size, std::format("VkBackend::LargeReadbackBuffer_{}", _size));
     VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);

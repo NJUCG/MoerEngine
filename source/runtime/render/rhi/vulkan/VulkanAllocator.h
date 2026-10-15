@@ -19,22 +19,28 @@ namespace Moer::Render {
 
 struct QueryCmd;
 
-class VulkanCmdAllocator : public VulkanDeviceObject {
-private:
-    VkQueueFlags  queue_type;
-    VkCommandPool command_pool;
-
+class VulkanCommandPool : public VulkanDeviceObject {
 public:
-    VulkanCmdAllocator(VulkanDevice* _device, EQueueType _queue_type);
-    ~VulkanCmdAllocator();
+    VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_type);
+    ~VulkanCommandPool();
+    VulkanCommandPool(const VulkanCommandPool&)            = delete;
+    VulkanCommandPool& operator=(const VulkanCommandPool&) = delete;
+    VulkanCommandPool(VulkanCommandPool&&)                 = delete;
+    VulkanCommandPool& operator=(VulkanCommandPool&&)      = delete;
+
     VkCommandPool GetHandle() const {
         return command_pool;
     }
-    VkQueueFlags GetQueueType() const {
-        return queue_type;
+    VkQueueFlags GetQueueFlags() const {
+        return queue_flags;
     }
     std::string_view GetQueueName() const;
+
+private:
+    VkQueueFlags  queue_flags;
+    VkCommandPool command_pool{VK_NULL_HANDLE};
 };
+
 enum class EVkInternalBufferUsage {
     Upload,
     Readback,
@@ -93,6 +99,10 @@ class VulkanAllocatorBase : public VulkanDeviceObject {
 public:
     VulkanAllocatorBase(VulkanDevice* _device, EQueueType _queue_type);
     virtual ~VulkanAllocatorBase();
+    VulkanAllocatorBase(const VulkanAllocatorBase&)            = delete;
+    VulkanAllocatorBase& operator=(const VulkanAllocatorBase&) = delete;
+    VulkanAllocatorBase(VulkanAllocatorBase&&)                 = delete;
+    VulkanAllocatorBase& operator=(VulkanAllocatorBase&&)      = delete;
 
     VulkanCmdList& GetCmdList() {
         return cmd_list.value();
@@ -126,9 +136,9 @@ public:
     bool ResetAbandoned();
 
 protected:
-    std::optional<VulkanCmdAllocator> cmd_allocator;
-    std::optional<VulkanCmdList>      cmd_list;
-    std::optional<VulkanCmdList>      secondary_cmd_list;
+    std::optional<VulkanCommandPool> command_pool;
+    std::optional<VulkanCmdList>     cmd_list;
+    std::optional<VulkanCmdList>     secondary_cmd_list;
 
     Array<std::function<void()>> on_complete;
 
@@ -139,7 +149,7 @@ protected:
 class VulkanPresentor : public VulkanAllocatorBase {
 public:
     VulkanPresentor(VulkanDevice* _device, EQueueType _queue_type);
-    virtual ~VulkanPresentor();
+    ~VulkanPresentor() override;
 
     [[nodiscard]] VkSemaphore GetImageReadySemaphore() const noexcept {
         return image_ready_semaphore;
@@ -156,7 +166,7 @@ class VulkanAllocator : public VulkanAllocatorBase {
 
 public:
     VulkanAllocator(VulkanDevice* _device, EQueueType _queue_type);
-    virtual ~VulkanAllocator();
+    ~VulkanAllocator() override;
     BufferView AllocateUploadBuffer(uint64 _size, uint _align);
     BufferView AllocateReadbackBuffer(uint64 _size, uint _align);
 
@@ -221,36 +231,42 @@ private:
         uint64                alignment;
         VkTmpBufferAllocator* allocator = nullptr;
     };
-    struct StackAllocator {
-        uint64 init_capacity;
-        uint64 capacity;
-        uint64 stack_memory_id;
-        double growth_factor;
-        struct Chunk {
+    struct LinearBufferAllocator {
+        struct BufferSlice {
             uint64 handle;
-            uint64 offset;
+            uint64 byte_offset;
         };
-        struct Buffer {
+
+        LinearBufferAllocator(
+            VkTmpBufferAllocator* _allocator,
+            uint64                _initial_capacity,
+            double                _growth_factor
+        );
+        BufferSlice Allocate(uint64 _size, uint _alignment);
+        void        Reset();
+        void        Dispose();
+
+    private:
+        struct BufferBlock {
             uint64 handle;
-            uint64 size;
-            uint64 offset;
+            uint64 size_bytes;
+            uint64 used_bytes;
         };
-        StackAllocator(VkTmpBufferAllocator*, uint64 _init_capacity, double _growth_factor);
+
+        std::string MakeBufferName();
 
         VkTmpBufferAllocator* allocator;
-        Array<Buffer>         allocated_buffers;
-        Chunk                 Allocate(uint64 _size, uint _align);
-        Chunk                 Allocate(uint64 _size);
-        void                  Reset();
-        void                  Dispose();
-        std::string           GetStackBufferName();
+        Array<BufferBlock>    allocated_buffers;
+        uint64                next_block_capacity;
+        uint64                next_buffer_name_id{0};
+        double                growth_factor;
     };
     // Temporary buffers live until this command recording is retired.
     Array<VulkanBuffer*> large_buffers;
     VkTmpBufferAllocator allocator;
 
-    StackAllocator upload_allocator;
-    StackAllocator readback_allocator;
+    LinearBufferAllocator upload_allocator;
+    LinearBufferAllocator readback_allocator;
 
     ScratchAllocator      scratch_allocator;
     ShaderBufferAllocator shader_buffer_allocator;

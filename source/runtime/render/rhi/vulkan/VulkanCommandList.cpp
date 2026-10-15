@@ -156,17 +156,17 @@ struct VulkanPipelineReflection {
 // }
 
 VulkanCmdList::VulkanCmdList(
-    VulkanCmdAllocator*  _alloc,
+    VulkanCommandPool*   _command_pool,
     VulkanDevice&        _device,
     VkCommandBufferLevel _level
 ) :
-    allocator(_alloc),
+    command_pool(_command_pool),
     device(_device),
     level(_level) {
     VkCommandBufferAllocateInfo command_buffer_info = {
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext              = nullptr,
-        .commandPool        = allocator->GetHandle(),
+        .commandPool        = command_pool->GetHandle(),
         .level              = level,
         .commandBufferCount = 1
     };
@@ -177,13 +177,13 @@ VulkanCmdList::VulkanCmdList(
         std::format(
             "{}CommandBuffer_{}",
             level == VK_COMMAND_BUFFER_LEVEL_PRIMARY ? "Primary" : "Secondary",
-            allocator->GetQueueName()
+            command_pool->GetQueueName()
         )
     );
 }
 
 VulkanCmdList::~VulkanCmdList() {
-    vkFreeCommandBuffers(device.GetDevice(), allocator->GetHandle(), 1, &command_buffer);
+    vkFreeCommandBuffers(device.GetDevice(), command_pool->GetHandle(), 1, &command_buffer);
 }
 VkResult VulkanCmdList::Begin() {
     assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);

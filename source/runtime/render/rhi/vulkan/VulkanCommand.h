@@ -14,6 +14,7 @@
 
 namespace Moer::Render {
 class VulkanDevice;
+class VulkanCommandPool;
 class VulkanDescriptorSetAllocator;
 class VulkanRHIGraphicsPipelineState;
 struct VulkanDescriptorPushLeaseState;
@@ -24,14 +25,14 @@ class VulkanCmdList {
 
 private:
     VkCommandBuffer           command_buffer;
-    class VulkanCmdAllocator* allocator;
+    VulkanCommandPool*        command_pool;
     VulkanDevice&             device;
     VkCommandBufferLevel      level;
     std::shared_ptr<VulkanDescriptorPushLeaseState> descriptor_push_lease;
 
 public:
     VulkanCmdList(
-        VulkanCmdAllocator*   _allocator,
+        VulkanCommandPool*    _command_pool,
         VulkanDevice&         _device,
         VkCommandBufferLevel  _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY
     );
