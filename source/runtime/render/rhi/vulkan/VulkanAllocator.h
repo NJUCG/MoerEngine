@@ -210,27 +210,29 @@ public:
 
 private:
     // Temporary buffer allocation strategies.
-    struct ScratchAllocator : VulkanDeviceObject {
-        ScratchAllocator(VulkanDevice* _device, VkTmpBufferAllocator* _allocator);
-        uint64 Allocate(uint64 _size);
-        void   Deallocate(uint64 _handle);
-        void   Reset();
+    template<EVkInternalBufferUsage Usage>
+    class DedicatedBufferAllocator {
+    public:
+        explicit DedicatedBufferAllocator(VkTmpBufferAllocator& _allocator) : allocator(_allocator) {}
 
+        uint64 Allocate(uint64 _size) {
+            const uint64 handle = allocator.Allocate(_size, Usage);
+            allocated_buffers.push_back(handle);
+            return handle;
+        }
+
+        void Reset() {
+            for (uint64 handle : allocated_buffers) {
+                allocator.DeAllocate(handle);
+            }
+            allocated_buffers.clear();
+        }
+
+    private:
+        VkTmpBufferAllocator& allocator;
         Array<uint64>         allocated_buffers;
-        uint64                alignment;
-        VkTmpBufferAllocator* allocator = nullptr;
     };
 
-    struct ShaderBufferAllocator : VulkanDeviceObject {
-        ShaderBufferAllocator(VulkanDevice* _device, VkTmpBufferAllocator* _allocator);
-        uint64 Allocate(uint64 _size);
-        void   Deallocate(uint64 _handle);
-        void   Reset();
-
-        Array<uint64>         allocated_buffers;
-        uint64                alignment;
-        VkTmpBufferAllocator* allocator = nullptr;
-    };
     struct LinearBufferAllocator {
         struct BufferSlice {
             uint64 handle;
@@ -268,8 +270,8 @@ private:
     LinearBufferAllocator upload_allocator;
     LinearBufferAllocator readback_allocator;
 
-    ScratchAllocator      scratch_allocator;
-    ShaderBufferAllocator shader_buffer_allocator;
+    DedicatedBufferAllocator<EVkInternalBufferUsage::Scratch>      scratch_allocator;
+    DedicatedBufferAllocator<EVkInternalBufferUsage::ShaderBuffer> shader_buffer_allocator;
 
     // Query recording and completion state.
     struct TimestampQueryRecord {

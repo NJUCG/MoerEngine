@@ -424,30 +424,6 @@ bool VulkanPresentor::CompleteSuccess() noexcept {
     return InvokeAllocatorCompletionCallbacksNoexcept(on_complete, "presentor");
 }
 
-VulkanAllocator::ScratchAllocator::ScratchAllocator(VulkanDevice* _device, VkTmpBufferAllocator* _allocator) :
-    VulkanDeviceObject(_device),
-    allocator(_allocator) {
-    alignment = _device->GetOptionalProperties()
-                    .acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment;
-}
-
-uint64 VulkanAllocator::ScratchAllocator::Allocate(uint64 _size) {
-    uint64 handle = allocator->Allocate(_size, EVkInternalBufferUsage::Scratch);
-    allocated_buffers.push_back(handle);
-    return handle;
-}
-
-void VulkanAllocator::ScratchAllocator::Deallocate(uint64 _handle) {
-    allocator->DeAllocate(_handle);
-}
-
-void VulkanAllocator::ScratchAllocator::Reset() {
-    for (uint64 handle : allocated_buffers) {
-        Deallocate(handle);
-    }
-    allocated_buffers.clear();
-}
-
 VulkanAllocator::LinearBufferAllocator::LinearBufferAllocator(
     VkTmpBufferAllocator* _allocator,
     uint64                _initial_capacity,
@@ -516,38 +492,14 @@ std::string VulkanAllocator::LinearBufferAllocator::MakeBufferName() {
     return std::format("VkBackend::LinearAllocBuffer_{}", next_buffer_name_id++);
 }
 
-VulkanAllocator::ShaderBufferAllocator::ShaderBufferAllocator(
-    VulkanDevice*         _device,
-    VkTmpBufferAllocator* _allocator
-) :
-    VulkanDeviceObject(_device),
-    allocator(_allocator) {}
-
-uint64 VulkanAllocator::ShaderBufferAllocator::Allocate(uint64 _size) {
-    uint64 handle = allocator->Allocate(_size, EVkInternalBufferUsage::ShaderBuffer);
-    allocated_buffers.push_back(handle);
-    return handle;
-}
-
-void VulkanAllocator::ShaderBufferAllocator::Deallocate(uint64 _handle) {
-    allocator->DeAllocate(_handle);
-}
-
-void VulkanAllocator::ShaderBufferAllocator::Reset() {
-    for (uint64 handle : allocated_buffers) {
-        Deallocate(handle);
-    }
-    allocated_buffers.clear();
-}
-
 // VulkanAllocator
 VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) :
     VulkanAllocatorBase(_device, _type),
     allocator(_device),
     upload_allocator(&allocator, small_block_size, 1.5),
     readback_allocator(&allocator, small_block_size, 1.5),
-    scratch_allocator(_device, &allocator),
-    shader_buffer_allocator(_device, &allocator),
+    scratch_allocator(allocator),
+    shader_buffer_allocator(allocator),
     timestamp_valid_bits(_device->GetTimestampValidBits(_type)),
     timestamp_reset_mode(_device->GetTimestampQueryResetMode(_type)),
     timestamp_period_ns(_device->GetCoreProperties().core_1_0.limits.timestampPeriod) {}
