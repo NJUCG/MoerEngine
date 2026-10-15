@@ -28,13 +28,10 @@ public:
     VkCommandPool GetHandle() const {
         return command_pool;
     }
-    VkQueueFlags GetQueueFlags() const {
-        return queue_flags;
-    }
     std::string_view GetQueueName() const;
 
 private:
-    VkQueueFlags  queue_flags;
+    EQueueType    queue_type;
     VkCommandPool command_pool{VK_NULL_HANDLE};
 };
 
@@ -44,12 +41,6 @@ enum class EVkInternalBufferUsage {
     Scratch,
     ShaderBuffer,
     ShaderBuffer_Constant
-};
-struct VkTmpBufferAllocator : VulkanDeviceObject {
-    VkTmpBufferAllocator(VulkanDevice* _device);
-    uint64 Allocate(uint64 _size, std::string_view _name);
-    uint64 Allocate(uint64 _size, EVkInternalBufferUsage _usage);
-    void   DeAllocate(uint64 _handle);
 };
 
 class VulkanAllocatorBase : public VulkanDeviceObject {
@@ -162,67 +153,39 @@ private:
     // Temporary buffer allocation strategies.
     struct LinearBufferAllocator {
         struct BufferSlice {
-            uint64 handle;
-            uint64 byte_offset;
+            VulkanBuffer* buffer;
+            uint64        byte_offset;
         };
 
-        LinearBufferAllocator(
-            VkTmpBufferAllocator* _allocator,
-            uint64                _initial_capacity,
-            double                _growth_factor
-        );
+        LinearBufferAllocator(VulkanDevice& _device, uint64 _initial_capacity, double _growth_factor);
         BufferSlice Allocate(uint64 _size, uint _alignment);
         void        Reset();
         void        Dispose();
 
     private:
         struct BufferBlock {
-            uint64 handle;
-            uint64 size_bytes;
-            uint64 used_bytes;
+            VulkanBuffer* buffer;
+            uint64        size_bytes;
+            uint64        used_bytes;
         };
 
         std::string MakeBufferName();
 
-        VkTmpBufferAllocator* allocator;
-        Array<BufferBlock>    allocated_buffers;
-        uint64                next_block_capacity;
-        uint64                next_buffer_name_id{0};
-        double                growth_factor;
+        VulkanDevice&      device;
+        Array<BufferBlock> allocated_buffers;
+        uint64             next_block_capacity;
+        uint64             next_buffer_name_id{0};
+        double             growth_factor;
     };
 
-    template<EVkInternalBufferUsage Usage>
-    class DedicatedBufferAllocator {
-    public:
-        explicit DedicatedBufferAllocator(VkTmpBufferAllocator& _allocator) : allocator(_allocator) {}
+    void ReleaseTemporaryBuffers();
 
-        uint64 Allocate(uint64 _size) {
-            const uint64 handle = allocator.Allocate(_size, Usage);
-            allocated_buffers.push_back(handle);
-            return handle;
-        }
-
-        void Reset() {
-            for (uint64 handle : allocated_buffers) {
-                allocator.DeAllocate(handle);
-            }
-            allocated_buffers.clear();
-        }
-
-    private:
-        VkTmpBufferAllocator& allocator;
-        Array<uint64>         allocated_buffers;
-    };
-
-    // Temporary buffers live until this command recording is retired.
-    VkTmpBufferAllocator allocator;
-    Array<VulkanBuffer*> large_buffers;
-
+    // Linear blocks remain owned by their allocator across recording resets.
     LinearBufferAllocator upload_allocator;
     LinearBufferAllocator readback_allocator;
 
-    DedicatedBufferAllocator<EVkInternalBufferUsage::Scratch>      scratch_allocator;
-    DedicatedBufferAllocator<EVkInternalBufferUsage::ShaderBuffer> shader_buffer_allocator;
+    // Independent buffers are released together when this recording retires.
+    Array<VulkanBuffer*> temporary_buffers;
 
     // Query state follows the lifetime of this command recording.
     VulkanCommandQueries queries;

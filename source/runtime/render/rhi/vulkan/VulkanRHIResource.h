@@ -459,8 +459,6 @@ public:
 
     static VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
 
-    static VkQueueFlagBits METoVKQueueFlagBits(EQueueType _type);
-
     //Raytracing
     static VkGeometryTypeKHR  METoVKGeometryType(ERayTracingGeometryType _type);
     static VkGeometryFlagsKHR METoVKGeometryFlags(ERayTracingGeometryFlags _flags);
