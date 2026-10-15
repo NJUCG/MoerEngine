@@ -3,6 +3,7 @@
 #include "VulkanCommon.h"
 #include "VulkanAllocator.h"
 #include "VulkanCommand.h"
+#include "VulkanCommandQueries.h"
 #include "VulkanDescriptor.h"
 #include "VulkanFault.h"
 // #include "VulkanDevice.h"

@@ -10,9 +10,10 @@
 #error "Moer::Render must propagate VK_NO_PROTOTYPES to every consumer."
 #endif
 
+#include "rhi/vulkan/VulkanCommandQueries.h"
+#include "rhi/vulkan/VulkanAllocator.h"
 #include "rhi/RHIWindowSurface.h"
 #include "window/WindowFrameSnapshot.h"
-#include "rhi/vulkan/VulkanAllocator.h"
 #include "rhi/vulkan/VulkanDebugCallback.h"
 #include "rhi/vulkan/VulkanDeviceFeature.h"
 #include "rhi/vulkan/VulkanFault.h"
@@ -37,6 +38,10 @@ static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanAllocatorBase>);
 static_assert(!std::is_move_constructible_v<Moer::Render::VulkanAllocatorBase>);
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanPresentor>);
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanAllocator>);
+
+static_assert(!std::is_copy_constructible_v<Moer::Render::VkNativeQueryPool>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandQueries>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandQueries>);
 
 int main() {
     return VK_SUCCESS == 0 ? 0 : 1;

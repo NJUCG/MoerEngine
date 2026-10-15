@@ -1,5 +1,6 @@
 #pragma once
 #include "VulkanCommand.h"
+#include "VulkanCommandQueries.h"
 #include "VulkanCommon.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
@@ -8,16 +9,12 @@
 #include "rhi/RHIQuery.h"
 
 #include <functional>
-#include <limits>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 
 namespace Moer::Render {
-
-struct QueryCmd;
 
 class VulkanCommandPool : public VulkanDeviceObject {
 public:
@@ -53,46 +50,6 @@ struct VkTmpBufferAllocator : VulkanDeviceObject {
     uint64 Allocate(uint64 _size, std::string_view _name);
     uint64 Allocate(uint64 _size, EVkInternalBufferUsage _usage);
     void   DeAllocate(uint64 _handle);
-};
-
-class VkNativeQueryPool {
-public:
-    VkNativeQueryPool(VulkanDevice& _device, VkQueryType _type, uint32 _count, EQueueType _queue_type);
-    ~VkNativeQueryPool();
-    VkNativeQueryPool(const VkNativeQueryPool&)            = delete;
-    VkNativeQueryPool& operator=(const VkNativeQueryPool&) = delete;
-
-    VkQueryPool GetHandle() const {
-        return query_pool;
-    }
-    uint32 GetCount() const {
-        return count;
-    }
-    [[nodiscard]] VkResult GetResults(
-        std::span<uint64>  _results,
-        uint32             _first_query,
-        uint32             _query_count,
-        VkQueryResultFlags _flags
-    );
-    VulkanDevice& GetDevice() const {
-        return device;
-    }
-
-private:
-    friend class VulkanAllocator;
-
-    [[nodiscard]] VkQueryPool CreatePool(uint32 _query_count);
-    // The owning allocator may grow or host-reset an idle pool only before
-    // command-buffer recording starts. Keeping both operations private makes
-    // its single-owner synchronization contract explicit.
-    void EnsureCapacity(uint32 _required_count);
-    void ResetHost(uint32 _first_query, uint32 _query_count);
-
-    VulkanDevice& device;
-    VkQueryPool   query_pool{VK_NULL_HANDLE};
-    uint32        count{0};
-    VkQueryType   type;
-    EQueueType    queue_type{EQueueType::Ignore};
 };
 
 class VulkanAllocatorBase : public VulkanDeviceObject {
@@ -162,11 +119,10 @@ private:
 };
 
 class VulkanAllocator : public VulkanAllocatorBase {
-    constexpr static uint64_t small_block_size = 64 * 1024;
-
 public:
     VulkanAllocator(VulkanDevice* _device, EQueueType _queue_type);
     ~VulkanAllocator() override;
+
     BufferView AllocateUploadBuffer(uint64 _size, uint _align);
     BufferView AllocateReadbackBuffer(uint64 _size, uint _align);
 
@@ -175,64 +131,35 @@ public:
 
     void ResetBufferAlloc();
 
-    // Query slots and their tokens are allocator-local. The allocator is the
-    // native command-buffer owner and already travels in the atomic Submission
-    // -> Completion packet, so query state never needs a global active-
-    // recording map or lock. Timestamp boundaries consume one slot each;
-    // every occlusion begin/end pair shares one slot.
+    // Query recording. Slots and tokens belong to this allocator's recording.
     void EnsureQueryCapacity(size_t _timestamp_slot_count, size_t _occlusion_pair_count);
-    // Queue-owned recording capability is refreshed before Copy recording so
-    // a recycled allocator can move between native and capability-degraded
-    // test paths without retaining stale state. This is legal only before any
-    // query boundary has been recorded for the current command buffer.
     void
     ConfigureTimestampCapabilityForRecording(uint32 _valid_bits, EVulkanTimestampQueryResetMode _reset_mode);
     void RecordQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
-    // GPU completion is a two-stage transaction. Prepare performs native
-    // readback and fault classification without publishing user callbacks.
-    // The queue Completion owner later terminalizes submit signals, invokes
-    // allocator retirement callbacks, publishes every query in the batch, and
-    // only then releases Query callbacks.
-    [[nodiscard]] VkResult PrepareQueriesAfterGpuCompletion(const VulkanOperationContext& _context) noexcept;
-    void                   PublishQueriesAfterGpuCompletion(
-                          QueryPublishBatch _batch,
-                          bool              _gpu_success,
-                          std::string_view  _failure_reason
-                      ) noexcept;
-    void               NotifyQueriesAfterGpuCompletion(QueryPublishBatch _batch) noexcept;
-    bool               CompleteSuccessCallbacks() noexcept;
+
     [[nodiscard]] bool HasQueries() const noexcept {
-        return !timestamp_query_records.empty() || !occlusion_query_records.empty();
+        return queries.HasQueries();
     }
+
+    // Completion separates native readback, result publication, and callbacks.
+    [[nodiscard]] VkResult PrepareQueriesAfterGpuCompletion(const VulkanOperationContext& _context) noexcept;
+
+    bool CompleteSuccessCallbacks() noexcept;
+
+    void PublishQueriesAfterGpuCompletion(
+        QueryPublishBatch _batch,
+        bool              _gpu_success,
+        std::string_view  _failure_reason
+    ) noexcept;
+    void NotifyQueriesAfterGpuCompletion(QueryPublishBatch _batch) noexcept;
 
     bool CompleteSuccess() noexcept override;
     bool Reset() override;
 
 private:
+    static constexpr uint64 small_block_size = 64 * 1024;
+
     // Temporary buffer allocation strategies.
-    template<EVkInternalBufferUsage Usage>
-    class DedicatedBufferAllocator {
-    public:
-        explicit DedicatedBufferAllocator(VkTmpBufferAllocator& _allocator) : allocator(_allocator) {}
-
-        uint64 Allocate(uint64 _size) {
-            const uint64 handle = allocator.Allocate(_size, Usage);
-            allocated_buffers.push_back(handle);
-            return handle;
-        }
-
-        void Reset() {
-            for (uint64 handle : allocated_buffers) {
-                allocator.DeAllocate(handle);
-            }
-            allocated_buffers.clear();
-        }
-
-    private:
-        VkTmpBufferAllocator& allocator;
-        Array<uint64>         allocated_buffers;
-    };
-
     struct LinearBufferAllocator {
         struct BufferSlice {
             uint64 handle;
@@ -263,9 +190,33 @@ private:
         uint64                next_buffer_name_id{0};
         double                growth_factor;
     };
+
+    template<EVkInternalBufferUsage Usage>
+    class DedicatedBufferAllocator {
+    public:
+        explicit DedicatedBufferAllocator(VkTmpBufferAllocator& _allocator) : allocator(_allocator) {}
+
+        uint64 Allocate(uint64 _size) {
+            const uint64 handle = allocator.Allocate(_size, Usage);
+            allocated_buffers.push_back(handle);
+            return handle;
+        }
+
+        void Reset() {
+            for (uint64 handle : allocated_buffers) {
+                allocator.DeAllocate(handle);
+            }
+            allocated_buffers.clear();
+        }
+
+    private:
+        VkTmpBufferAllocator& allocator;
+        Array<uint64>         allocated_buffers;
+    };
+
     // Temporary buffers live until this command recording is retired.
-    Array<VulkanBuffer*> large_buffers;
     VkTmpBufferAllocator allocator;
+    Array<VulkanBuffer*> large_buffers;
 
     LinearBufferAllocator upload_allocator;
     LinearBufferAllocator readback_allocator;
@@ -273,78 +224,7 @@ private:
     DedicatedBufferAllocator<EVkInternalBufferUsage::Scratch>      scratch_allocator;
     DedicatedBufferAllocator<EVkInternalBufferUsage::ShaderBuffer> shader_buffer_allocator;
 
-    // Query recording and completion state.
-    struct TimestampQueryRecord {
-        enum class EPreparedState : uint8 {
-            Unprepared,
-            Ready,
-            InvalidValidBits,
-            Incomplete,
-            Unavailable,
-            NativeFault,
-        };
-
-        QueryToken           token{};
-        uint32               begin_slot{std::numeric_limits<uint32>::max()};
-        uint32               end_slot{std::numeric_limits<uint32>::max()};
-        EPreparedState       prepared_state{EPreparedState::Unprepared};
-        TimestampQueryResult prepared_result{};
-    };
-
-    struct OcclusionQueryRecord {
-        enum class EPreparedState : uint8 {
-            Unprepared,
-            Ready,
-            Incomplete,
-            Unavailable,
-            NativeFault,
-        };
-
-        QueryToken           token{};
-        uint32               slot{std::numeric_limits<uint32>::max()};
-        bool                 ended{false};
-        bool                 precise{false};
-        EPreparedState       prepared_state{EPreparedState::Unprepared};
-        OcclusionQueryResult prepared_result{};
-    };
-
-    void                  EnsureTimestampQueryCapacity(size_t _required_count);
-    void                  EnsureOcclusionQueryCapacity(size_t _required_count);
-    void                  RecordTimestampQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
-    void                  RecordOcclusionQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
-    TimestampQueryRecord* FindTimestampQueryRecord(uint64 _token_id) noexcept;
-    OcclusionQueryRecord* FindOcclusionQueryRecord(uint64 _token_id) noexcept;
-    uint32                AllocateTimestampQuerySlot();
-    uint32                AllocateOcclusionQuerySlot();
-    [[nodiscard]] VkResult
-    PrepareTimestampQueriesAfterGpuCompletion(const VulkanOperationContext& _context) noexcept;
-    [[nodiscard]] VkResult
-         PrepareOcclusionQueriesAfterGpuCompletion(const VulkanOperationContext& _context) noexcept;
-    void PublishTimestampQueriesAfterGpuCompletion(
-        QueryPublishBatch _batch,
-        bool              _gpu_success,
-        std::string_view  _failure_reason
-    ) noexcept;
-    void PublishOcclusionQueriesAfterGpuCompletion(
-        QueryPublishBatch _batch,
-        bool              _gpu_success,
-        std::string_view  _failure_reason
-    ) noexcept;
-    void NotifyTimestampQueriesAfterGpuCompletion(QueryPublishBatch _batch) noexcept;
-    void NotifyOcclusionQueriesAfterGpuCompletion(QueryPublishBatch _batch) noexcept;
-    void ClearQueries() noexcept;
-
-    Array<TimestampQueryRecord>    timestamp_query_records;
-    Array<OcclusionQueryRecord>    occlusion_query_records;
-    uint32                         next_timestamp_query{0};
-    uint32                         next_occlusion_query{0};
-    uint32                         timestamp_valid_bits{0};
-    EVulkanTimestampQueryResetMode timestamp_reset_mode{EVulkanTimestampQueryResetMode::Unsupported};
-    double                         timestamp_period_ns{0.0};
-    // Most allocators never record an explicit Query command. Lazily creating
-    // this pool avoids adding a native driver object to every ordinary,
-    // parallel-worker, fallback, and Copy allocator.
-    std::optional<VkNativeQueryPool> timestamp_pool;
-    std::optional<VkNativeQueryPool> occlusion_pool;
+    // Query state follows the lifetime of this command recording.
+    VulkanCommandQueries queries;
 };
 } // namespace Moer::Render
