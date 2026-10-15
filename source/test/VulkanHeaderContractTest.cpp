@@ -12,6 +12,7 @@
 
 #include "rhi/RHIWindowSurface.h"
 #include "window/WindowFrameSnapshot.h"
+#include "rhi/vulkan/VulkanAllocator.h"
 #include "rhi/vulkan/VulkanDebugCallback.h"
 #include "rhi/vulkan/VulkanDeviceFeature.h"
 #include "rhi/vulkan/VulkanFault.h"

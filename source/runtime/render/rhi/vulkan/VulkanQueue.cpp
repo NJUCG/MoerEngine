@@ -1,4 +1,5 @@
 #include "VulkanQueue.h"
+#include "VulkanMacroUtils.h"
 #include "PixelFormat.h"
 #include "RHICmdReorderer.h"
 #include "VulkanAllocator.h"
