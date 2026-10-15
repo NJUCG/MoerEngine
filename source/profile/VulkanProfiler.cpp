@@ -9,22 +9,14 @@ class VulkanBuffer;
 enum class EVkInternalBufferUsage;
 } // namespace Moer::Render
 
-using TemporaryBufferUsage                = Moer::Render::EVkInternalBufferUsage;
-using PFN_CreateNamedTemporaryBuffer      = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
-                                                                       uint64_t,
-                                                                       std::string_view);
-using PFN_CreateUsageTemporaryBuffer      = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
-                                                                       uint64_t,
-                                                                       TemporaryBufferUsage);
-using PFN_CreateNamedUsageTemporaryBuffer = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
-                                                                            uint64_t,
-                                                                            std::string_view,
-                                                                            TemporaryBufferUsage);
-using PFN_DestroyTemporaryBuffer          = void (*)(Moer::Render::VulkanBuffer*);
-PFN_CreateNamedTemporaryBuffer      orig_CreateNamedTemporaryBuffer      = nullptr;
-PFN_CreateUsageTemporaryBuffer      orig_CreateUsageTemporaryBuffer      = nullptr;
-PFN_CreateNamedUsageTemporaryBuffer orig_CreateNamedUsageTemporaryBuffer = nullptr;
-PFN_DestroyTemporaryBuffer          orig_DestroyTemporaryBuffer          = nullptr;
+using TemporaryBufferUsage       = Moer::Render::EVkInternalBufferUsage;
+using PFN_CreateTemporaryBuffer  = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
+                                                                  uint64_t,
+                                                                  std::string_view,
+                                                                  TemporaryBufferUsage);
+using PFN_DestroyTemporaryBuffer = void (*)(Moer::Render::VulkanBuffer*);
+PFN_CreateTemporaryBuffer  orig_CreateTemporaryBuffer  = nullptr;
+PFN_DestroyTemporaryBuffer orig_DestroyTemporaryBuffer = nullptr;
 
 namespace {
 
@@ -64,30 +56,13 @@ void RecordTemporaryBufferAllocation(
 
 } // namespace
 
-Moer::Render::VulkanBuffer*
-CreateNamedTemporaryBufferHook(Moer::Render::VulkanDevice& _device, uint64_t _size, std::string_view _name) {
-    auto* buffer = orig_CreateNamedTemporaryBuffer(_device, _size, _name);
-    RecordTemporaryBufferAllocation(buffer, _size, _name, 0xFFFFFFFF);
-    return buffer;
-}
-
-Moer::Render::VulkanBuffer* CreateUsageTemporaryBufferHook(
-    Moer::Render::VulkanDevice& _device,
-    uint64_t                    _size,
-    TemporaryBufferUsage        _usage
-) {
-    auto* buffer = orig_CreateUsageTemporaryBuffer(_device, _size, _usage);
-    RecordTemporaryBufferAllocation(buffer, _size, {}, static_cast<uint32_t>(_usage));
-    return buffer;
-}
-
-Moer::Render::VulkanBuffer* CreateNamedUsageTemporaryBufferHook(
+Moer::Render::VulkanBuffer* CreateTemporaryBufferHook(
     Moer::Render::VulkanDevice& _device,
     uint64_t                    _size,
     std::string_view            _name,
     TemporaryBufferUsage        _usage
 ) {
-    auto* buffer = orig_CreateNamedUsageTemporaryBuffer(_device, _size, _name, _usage);
+    auto* buffer = orig_CreateTemporaryBuffer(_device, _size, _name, _usage);
     RecordTemporaryBufferAllocation(buffer, _size, _name, static_cast<uint32_t>(_usage));
     return buffer;
 }
@@ -792,51 +767,19 @@ PFN_OnFinishPresent orig_OnFinishPresent = nullptr;
 
 void SetupVulkanHooks(HMODULE vklib) {
     MH_STATUS status;
-    // The creation overloads need exact symbols to avoid resolving the wrong ABI.
-    void* named_create = GetProcAddressFromPdb(
-        "?CreateTemporaryBuffer@Render@Moer@@YAPEAVVulkanBuffer@12@AEAVVulkanDevice@12@_KV?$basic_string_"
-        "view@DU?$char_traits@D@std@@@std@@@Z"
-    );
-    if (named_create) {
-        status = MH_CreateHook(
-            named_create,
-            reinterpret_cast<void*>(&CreateNamedTemporaryBufferHook),
-            reinterpret_cast<void**>(&orig_CreateNamedTemporaryBuffer)
-        );
-        if (status == MH_OK) {
-            status = MH_EnableHook(named_create);
-        }
-        printf("[Profiler] EnableHook CreateTemporaryBuffer(name): %s\n", MH_StatusToString(status));
-    }
-
-    void* usage_create = GetProcAddressFromPdb(
-        "?CreateTemporaryBuffer@Render@Moer@@YAPEAVVulkanBuffer@12@AEAVVulkanDevice@12@_"
-        "KW4EVkInternalBufferUsage@12@@Z"
-    );
-    if (usage_create) {
-        status = MH_CreateHook(
-            usage_create,
-            reinterpret_cast<void*>(&CreateUsageTemporaryBufferHook),
-            reinterpret_cast<void**>(&orig_CreateUsageTemporaryBuffer)
-        );
-        if (status == MH_OK) {
-            status = MH_EnableHook(usage_create);
-        }
-        printf("[Profiler] EnableHook CreateTemporaryBuffer(usage): %s\n", MH_StatusToString(status));
-    }
-
-    void* named_usage_create = GetProcAddressFromPdb(
+    // Resolve the exact creation symbol used by this hook's ABI.
+    void* create_buffer = GetProcAddressFromPdb(
         "?CreateTemporaryBuffer@Render@Moer@@YAPEAVVulkanBuffer@12@AEAVVulkanDevice@12@_KV?$basic_string_"
         "view@DU?$char_traits@D@std@@@std@@W4EVkInternalBufferUsage@12@@Z"
     );
-    if (named_usage_create) {
+    if (create_buffer) {
         status = MH_CreateHook(
-            named_usage_create,
-            reinterpret_cast<void*>(&CreateNamedUsageTemporaryBufferHook),
-            reinterpret_cast<void**>(&orig_CreateNamedUsageTemporaryBuffer)
+            create_buffer,
+            reinterpret_cast<void*>(&CreateTemporaryBufferHook),
+            reinterpret_cast<void**>(&orig_CreateTemporaryBuffer)
         );
         if (status == MH_OK) {
-            status = MH_EnableHook(named_usage_create);
+            status = MH_EnableHook(create_buffer);
         }
         printf("[Profiler] EnableHook CreateTemporaryBuffer(name, usage): %s\n", MH_StatusToString(status));
     }

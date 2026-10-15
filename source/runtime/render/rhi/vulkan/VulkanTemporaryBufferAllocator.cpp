@@ -73,28 +73,6 @@ VulkanBufferAllocationInfo BuildTemporaryBufferAllocationInfo(EVkInternalBufferU
 #define MOER_TEMP_BUFFER_NOINLINE __attribute__((noinline))
 #endif
 
-MOER_TEMP_BUFFER_NOINLINE VulkanBuffer*
-CreateTemporaryBuffer(VulkanDevice& _device, uint64 _size, std::string_view _name) {
-    const BufferInfo info(_size, 1, EBufferUsageFlags::CPU_VISIBLE);
-    return MoerNew(VulkanBuffer)(
-        _name, info, _device, BuildTemporaryBufferAllocationInfo(EVkInternalBufferUsage::Upload), false
-    );
-}
-
-MOER_TEMP_BUFFER_NOINLINE VulkanBuffer*
-CreateTemporaryBuffer(VulkanDevice& _device, uint64 _size, EVkInternalBufferUsage _usage) {
-    const VulkanBufferAllocationInfo  allocation_info = BuildTemporaryBufferAllocationInfo(_usage);
-    const BufferInfo                  info(_size, 1, EBufferUsageFlags::NONE);
-    static constexpr std::string_view usage_names[] = {
-        "VkBackend::Upload",
-        "VkBackend::Readback",
-        "VkBackend::Scratch",
-        "VkBackend::ShaderBuffer",
-        "VkBackend::ShaderBuffer_Constant"
-    };
-    return MoerNew(VulkanBuffer)(usage_names[uint(_usage)], info, _device, allocation_info, false);
-}
-
 MOER_TEMP_BUFFER_NOINLINE VulkanBuffer* CreateTemporaryBuffer(
     VulkanDevice&          _device,
     uint64                 _size,
@@ -178,10 +156,7 @@ void VulkanTemporaryBufferAllocator::LinearBufferAllocator::Dispose() {
 }
 
 VulkanBuffer* VulkanTemporaryBufferAllocator::LinearBufferAllocator::CreateBufferBlock(uint64 _size) {
-    if (buffer_usage == EVkInternalBufferUsage::Readback) {
-        return CreateTemporaryBuffer(device, _size, MakeBufferName(), buffer_usage);
-    }
-    return CreateTemporaryBuffer(device, _size, MakeBufferName());
+    return CreateTemporaryBuffer(device, _size, MakeBufferName(), buffer_usage);
 }
 
 std::string VulkanTemporaryBufferAllocator::LinearBufferAllocator::MakeBufferName() {
@@ -205,8 +180,9 @@ BufferView VulkanTemporaryBufferAllocator::AllocateUploadBuffer(uint64 _size, ui
         const LinearBufferAllocator::BufferSlice slice = upload_allocator.Allocate(_size, _alignment);
         return {slice.buffer, slice.byte_offset, _size, 1u};
     }
-    VulkanBuffer* buffer =
-        CreateTemporaryBuffer(device, _size, std::format("VkBackend::LargeUploadBuffer_{}", _size));
+    VulkanBuffer* buffer = CreateTemporaryBuffer(
+        device, _size, std::format("VkBackend::LargeUploadBuffer_{}", _size), EVkInternalBufferUsage::Upload
+    );
     temporary_buffers.push_back(buffer);
     return {buffer, 0, _size, 1u};
 }
@@ -229,13 +205,15 @@ BufferView VulkanTemporaryBufferAllocator::AllocateReadbackBuffer(uint64 _size, 
 }
 
 BufferView VulkanTemporaryBufferAllocator::AllocateScratch(uint64 _size) {
-    VulkanBuffer* buffer = CreateTemporaryBuffer(device, _size, EVkInternalBufferUsage::Scratch);
+    VulkanBuffer* buffer =
+        CreateTemporaryBuffer(device, _size, "VkBackend::Scratch", EVkInternalBufferUsage::Scratch);
     temporary_buffers.push_back(buffer);
     return {buffer, 0, buffer->GetNumElement(), 1u};
 }
 
 BufferView VulkanTemporaryBufferAllocator::AllocateShaderBuffer(uint64 _size) {
-    VulkanBuffer* buffer = CreateTemporaryBuffer(device, _size, EVkInternalBufferUsage::ShaderBuffer);
+    VulkanBuffer* buffer =
+        CreateTemporaryBuffer(device, _size, "VkBackend::ShaderBuffer", EVkInternalBufferUsage::ShaderBuffer);
     temporary_buffers.push_back(buffer);
     return {buffer, 0, buffer->GetNumElement(), 1u};
 }
