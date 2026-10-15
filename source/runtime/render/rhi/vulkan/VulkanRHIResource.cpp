@@ -1271,7 +1271,7 @@ void VulkanPipelineState::InitPipelineLayout(
                 .vk_usage = VulkanEnumTranslator::METoVKBufferUsageFlags(_info.usage) |
                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                .allocation_flags     = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+                .allocation_flags     = VulkanMemoryManager::MEGenerateVmaMemoryFlags(_info.usage),
                 .memory_usage         = VulkanMemoryManager::MEGenerateVmaMemoryUsage(),
                 .needs_device_address = true,
             },
