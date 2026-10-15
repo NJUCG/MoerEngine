@@ -9,18 +9,22 @@ class VulkanBuffer;
 enum class EVkInternalBufferUsage;
 } // namespace Moer::Render
 
-using TemporaryBufferUsage           = Moer::Render::EVkInternalBufferUsage;
-using PFN_CreateNamedTemporaryBuffer = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
+using TemporaryBufferUsage                = Moer::Render::EVkInternalBufferUsage;
+using PFN_CreateNamedTemporaryBuffer      = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
                                                                        uint64_t,
                                                                        std::string_view);
-using PFN_CreateUsageTemporaryBuffer = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
+using PFN_CreateUsageTemporaryBuffer      = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
                                                                        uint64_t,
                                                                        TemporaryBufferUsage);
-using PFN_DestroyTemporaryBuffer     = void (*)(Moer::Render::VulkanBuffer*);
-
-PFN_CreateNamedTemporaryBuffer orig_CreateNamedTemporaryBuffer = nullptr;
-PFN_CreateUsageTemporaryBuffer orig_CreateUsageTemporaryBuffer = nullptr;
-PFN_DestroyTemporaryBuffer     orig_DestroyTemporaryBuffer     = nullptr;
+using PFN_CreateNamedUsageTemporaryBuffer = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
+                                                                            uint64_t,
+                                                                            std::string_view,
+                                                                            TemporaryBufferUsage);
+using PFN_DestroyTemporaryBuffer          = void (*)(Moer::Render::VulkanBuffer*);
+PFN_CreateNamedTemporaryBuffer      orig_CreateNamedTemporaryBuffer      = nullptr;
+PFN_CreateUsageTemporaryBuffer      orig_CreateUsageTemporaryBuffer      = nullptr;
+PFN_CreateNamedUsageTemporaryBuffer orig_CreateNamedUsageTemporaryBuffer = nullptr;
+PFN_DestroyTemporaryBuffer          orig_DestroyTemporaryBuffer          = nullptr;
 
 namespace {
 
@@ -74,6 +78,17 @@ Moer::Render::VulkanBuffer* CreateUsageTemporaryBufferHook(
 ) {
     auto* buffer = orig_CreateUsageTemporaryBuffer(_device, _size, _usage);
     RecordTemporaryBufferAllocation(buffer, _size, {}, static_cast<uint32_t>(_usage));
+    return buffer;
+}
+
+Moer::Render::VulkanBuffer* CreateNamedUsageTemporaryBufferHook(
+    Moer::Render::VulkanDevice& _device,
+    uint64_t                    _size,
+    std::string_view            _name,
+    TemporaryBufferUsage        _usage
+) {
+    auto* buffer = orig_CreateNamedUsageTemporaryBuffer(_device, _size, _name, _usage);
+    RecordTemporaryBufferAllocation(buffer, _size, _name, static_cast<uint32_t>(_usage));
     return buffer;
 }
 
@@ -808,6 +823,22 @@ void SetupVulkanHooks(HMODULE vklib) {
             status = MH_EnableHook(usage_create);
         }
         printf("[Profiler] EnableHook CreateTemporaryBuffer(usage): %s\n", MH_StatusToString(status));
+    }
+
+    void* named_usage_create = GetProcAddressFromPdb(
+        "?CreateTemporaryBuffer@Render@Moer@@YAPEAVVulkanBuffer@12@AEAVVulkanDevice@12@_KV?$basic_string_"
+        "view@DU?$char_traits@D@std@@@std@@W4EVkInternalBufferUsage@12@@Z"
+    );
+    if (named_usage_create) {
+        status = MH_CreateHook(
+            named_usage_create,
+            reinterpret_cast<void*>(&CreateNamedUsageTemporaryBufferHook),
+            reinterpret_cast<void**>(&orig_CreateNamedUsageTemporaryBuffer)
+        );
+        if (status == MH_OK) {
+            status = MH_EnableHook(named_usage_create);
+        }
+        printf("[Profiler] EnableHook CreateTemporaryBuffer(name, usage): %s\n", MH_StatusToString(status));
     }
 
     void* destroy_buffer = GetProcAddressFromPdb(

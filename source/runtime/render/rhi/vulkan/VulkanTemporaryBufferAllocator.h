@@ -45,7 +45,12 @@ private:
             uint64        byte_offset;
         };
 
-        LinearBufferAllocator(VulkanDevice& _device, uint64 _initial_capacity, double _growth_factor);
+        LinearBufferAllocator(
+            VulkanDevice&          _device,
+            EVkInternalBufferUsage _buffer_usage,
+            uint64                 _initial_capacity,
+            double                 _growth_factor
+        );
         BufferSlice Allocate(uint64 _size, uint _alignment);
         void        Reset();
         void        Dispose();
@@ -57,13 +62,15 @@ private:
             uint64        used_bytes;
         };
 
-        std::string MakeBufferName();
+        VulkanBuffer* CreateBufferBlock(uint64 _size);
+        std::string   MakeBufferName();
 
-        VulkanDevice&      device;
-        Array<BufferBlock> allocated_buffers;
-        uint64             next_block_capacity;
-        uint64             next_buffer_name_id{0};
-        double             growth_factor;
+        VulkanDevice&          device;
+        EVkInternalBufferUsage buffer_usage;
+        Array<BufferBlock>     allocated_buffers;
+        uint64                 next_block_capacity;
+        uint64                 next_buffer_name_id{0};
+        double                 growth_factor;
     };
 
     void ReleaseTemporaryBuffers();
