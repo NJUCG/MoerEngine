@@ -30,6 +30,7 @@
 #include "vulkan/vk_enum_string_helper.h"
 
 #include <algorithm>
+#include <format>
 #include <limits>
 #include <ranges>
 
@@ -1261,36 +1262,82 @@ void VulkanPipelineState::InitPipelineLayout(
         }
     }
 
-    VulkanBuffer::VulkanBuffer(std::string_view _name,const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device) {
-        VkBufferCreateInfo buffer_create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        buffer_create_info.size  = _info.size * _info.stride;
-        buffer_create_info.usage = VulkanEnumTranslator::METoVKBufferUsageFlags(_info.usage) |
-                                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-        buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        buffer_create_info.flags       = 0;
+    VulkanBuffer::VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device) :
+        VulkanBuffer(
+            _name,
+            _info,
+            _device,
+            VulkanBufferAllocationInfo{
+                .vk_usage = VulkanEnumTranslator::METoVKBufferUsageFlags(_info.usage) |
+                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                .allocation_flags     = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+                .memory_usage         = VulkanMemoryManager::MEGenerateVmaMemoryUsage(),
+                .needs_device_address = true,
+            },
+            true
+        ) {}
 
-#if WITH_CUDA
-        buffer_create_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
-#endif
-
-        VmaAllocationCreateInfo alloc_create_info{};
-        alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT ;
-        alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
-
-        VmaAllocator allocator = m_device->GetVmaAllocator();
-        auto result = vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &m_alloc.buffer, &m_alloc.alloc, nullptr);
-        if (result == VkResult::VK_ERROR_INITIALIZATION_FAILED) {
-            LOG_CRITICAL("Failed to create buffer, buffer size: {} = {} * {}", buffer_create_info.size, _info.size, _info.stride);
-        } else {
-            VK_CHECK_RESULT(result);
+    VulkanBuffer::VulkanBuffer(
+        std::string_view                  _name,
+        const BufferInfo&                 _info,
+        VulkanDevice&                     _device,
+        const VulkanBufferAllocationInfo& _allocation_info,
+        bool                              _defer_destroy
+    ) :
+        Buffer(_info),
+        VulkanDeviceObject(&_device) {
+        if (_info.size == 0 || _info.stride == 0) {
+            throw std::invalid_argument("Vulkan buffer size and stride must be nonzero");
         }
-
-        //get device address
-        VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-        info.buffer      = m_alloc.buffer;
-        m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
-        m_descriptor_type = VulkanEnumTranslator::METoVkBufferDescriptorType(_info.usage);
-        SetName(_name);
+        if (_info.size > std::numeric_limits<VkDeviceSize>::max() / _info.stride) {
+            throw std::overflow_error("Vulkan buffer byte size exceeds VkDeviceSize");
+        }
+        VkBufferCreateInfo buffer_info{
+            .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size        = _info.size * _info.stride,
+            .usage       = _allocation_info.vk_usage,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        };
+#if WITH_CUDA
+        buffer_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
+        const VmaAllocationCreateInfo allocation_info{
+            .flags = _allocation_info.allocation_flags,
+            .usage = _allocation_info.memory_usage,
+        };
+        const VkResult result = vmaCreateBuffer(
+            _device.GetVmaAllocator(),
+            &buffer_info,
+            &allocation_info,
+            &m_alloc.buffer,
+            &m_alloc.alloc,
+            nullptr
+        );
+        if (result != VK_SUCCESS) {
+            throw std::runtime_error(std::format(
+                "failed to create Vulkan buffer '{}' ({} bytes, VkResult {})",
+                _name,
+                buffer_info.size,
+                static_cast<int>(result)
+            ));
+        }
+        try {
+            b_deferred_delete = _defer_destroy;
+            m_descriptor_type = VulkanEnumTranslator::METoVkBufferDescriptorType(_info.usage);
+            if (_allocation_info.needs_device_address) {
+                const VkBufferDeviceAddressInfo address_info{
+                    .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+                    .buffer = m_alloc.buffer,
+                };
+                m_device_address = vkGetBufferDeviceAddress(_device.GetDevice(), &address_info);
+            }
+            SetName(_name);
+        } catch (...) {
+            vmaDestroyBuffer(_device.GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc);
+            m_alloc = {};
+            throw;
+        }
     }
 
     uint64 VulkanBuffer::DeviceAddress() const { return m_device_address; }

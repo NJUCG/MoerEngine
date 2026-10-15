@@ -19,39 +19,13 @@ namespace Moer::Render {
 
 MOER_TEMP_BUFFER_NOINLINE VulkanBuffer*
 CreateTemporaryBuffer(VulkanDevice& _device, uint64 _size, std::string_view _name) {
-    VkBufferCreateInfo buffer_info = {
-        .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .pNext                 = nullptr,
-        .flags                 = 0,
-        .size                  = _size,
-        .usage                 = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0,
-        .pQueueFamilyIndices   = nullptr
+    const BufferInfo                 info(_size, 1, EBufferUsageFlags::CPU_VISIBLE);
+    const VulkanBufferAllocationInfo allocation_info{
+        .vk_usage         = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .allocation_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .memory_usage     = VMA_MEMORY_USAGE_AUTO,
     };
-
-#if WITH_CUDA
-    buffer_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
-#endif
-
-    VmaAllocationCreateInfo alloc_info{
-        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, .usage = VMA_MEMORY_USAGE_AUTO
-    };
-    VulkanBuffer::BufferAlloc buffer_alloc;
-    BufferInfo                info(_size, 1, EBufferUsageFlags::CPU_VISIBLE);
-
-    VK_CHECK_RESULT(vmaCreateBuffer(
-        _device.GetVmaAllocator(),
-        &buffer_info,
-        &alloc_info,
-        &buffer_alloc.buffer,
-        &buffer_alloc.alloc,
-        nullptr
-    ));
-    VulkanBuffer* vk_buffer =
-        MoerNew(VulkanBuffer)(_name, info, _device, buffer_alloc.buffer, buffer_alloc.alloc, false);
-
-    return vk_buffer;
+    return MoerNew(VulkanBuffer)(_name, info, _device, allocation_info, false);
 }
 
 MOER_TEMP_BUFFER_NOINLINE VulkanBuffer*
@@ -93,33 +67,13 @@ CreateTemporaryBuffer(VulkanDevice& _device, uint64 _size, EVkInternalBufferUsag
             break;
         }
     }
-    VkBufferCreateInfo buffer_info = {
-        .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .pNext                 = nullptr,
-        .flags                 = 0,
-        .size                  = _size,
-        .usage                 = usage,
-        .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0,
-        .pQueueFamilyIndices   = nullptr
+    const BufferInfo                 info(_size, 1, EBufferUsageFlags::NONE);
+    const VulkanBufferAllocationInfo allocation_info{
+        .vk_usage             = usage,
+        .allocation_flags     = flags,
+        .memory_usage         = mem_usage,
+        .needs_device_address = device_address,
     };
-
-#if WITH_CUDA
-    buffer_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
-#endif
-
-    VmaAllocationCreateInfo   alloc_info{.flags = flags, .usage = mem_usage};
-    VulkanBuffer::BufferAlloc buffer_alloc;
-    BufferInfo                info(_size, 1, EBufferUsageFlags::NONE);
-
-    VK_CHECK_RESULT(vmaCreateBuffer(
-        _device.GetVmaAllocator(),
-        &buffer_info,
-        &alloc_info,
-        &buffer_alloc.buffer,
-        &buffer_alloc.alloc,
-        nullptr
-    ));
 
     static constexpr std::string_view usage_str[] = {
         "VkBackend::Upload",
@@ -128,9 +82,8 @@ CreateTemporaryBuffer(VulkanDevice& _device, uint64 _size, EVkInternalBufferUsag
         "VkBackend::ShaderBuffer",
         "VkBackend::ShaderBuffer_Constant"
     };
-    VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(
-        usage_str[uint(_usage)], info, _device, buffer_alloc.buffer, buffer_alloc.alloc, false, device_address
-    );
+    VulkanBuffer* vk_buffer =
+        MoerNew(VulkanBuffer)(usage_str[uint(_usage)], info, _device, allocation_info, false);
     return vk_buffer;
 }
 

@@ -592,11 +592,19 @@ struct VkBufferDescKey {
 using VulkanBufferDescriptorIndices =
     UnorderedMap<VkBufferDescKey, uint, VkBufferDescKey::Hasher>;
 
+// Native allocation policy used during creation; resource lifetime stays with its owner.
+struct VulkanBufferAllocationInfo {
+    VkBufferUsageFlags       vk_usage{0};
+    VmaAllocationCreateFlags allocation_flags{0};
+    VmaMemoryUsage           memory_usage{VMA_MEMORY_USAGE_AUTO};
+    bool                     needs_device_address{false};
+};
+
 class VulkanBuffer : public Buffer, VulkanDeviceObject {
 public:
     struct BufferAlloc {
-        VkBuffer      buffer;
-        VmaAllocation alloc;
+        VkBuffer      buffer{VK_NULL_HANDLE};
+        VmaAllocation alloc{VK_NULL_HANDLE};
     };
     VulkanBuffer() = delete;
     virtual ~VulkanBuffer();
@@ -607,6 +615,13 @@ public:
     }
 
     VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device);
+    VulkanBuffer(
+        std::string_view                  _name,
+        const BufferInfo&                 _info,
+        VulkanDevice&                     _device,
+        const VulkanBufferAllocationInfo& _allocation_info,
+        bool                              _defer_destroy
+    );
     VulkanBuffer(
         std::string_view  _name,
         const BufferInfo& _info,
