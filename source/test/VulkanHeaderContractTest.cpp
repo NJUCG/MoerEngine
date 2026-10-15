@@ -10,16 +10,17 @@
 #error "Moer::Render must propagate VK_NO_PROTOTYPES to every consumer."
 #endif
 
-#include "rhi/vulkan/VulkanCommandQueries.h"
-#include "rhi/vulkan/VulkanAllocator.h"
 #include "rhi/RHIWindowSurface.h"
-#include "window/WindowFrameSnapshot.h"
+#include "rhi/vulkan/VulkanCommandContext.h"
+#include "rhi/vulkan/VulkanCommandQueries.h"
 #include "rhi/vulkan/VulkanDebugCallback.h"
 #include "rhi/vulkan/VulkanDeviceFeature.h"
 #include "rhi/vulkan/VulkanFault.h"
 #include "rhi/vulkan/VulkanMemoryAllocator.h"
 #include "rhi/vulkan/VulkanPlatform.h"
+#include "rhi/vulkan/VulkanTemporaryBufferAllocator.h"
 #include "rhi/vulkan/VulkanTypeDefs.h"
+#include "window/WindowFrameSnapshot.h"
 
 #include "platform/Platform.h"
 
@@ -34,10 +35,13 @@ static_assert(std::is_base_of_v<Moer::Render::VulkanGenericPlatform, Moer::Rende
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandPool>);
 static_assert(!std::is_copy_assignable_v<Moer::Render::VulkanCommandPool>);
 static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandPool>);
-static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanAllocatorBase>);
-static_assert(!std::is_move_constructible_v<Moer::Render::VulkanAllocatorBase>);
-static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanPresentor>);
-static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanAllocator>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandContextBase>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandContextBase>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanPresentContext>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandContext>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandContext>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanTemporaryBufferAllocator>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanTemporaryBufferAllocator>);
 
 static_assert(!std::is_copy_constructible_v<Moer::Render::VkNativeQueryPool>);
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandQueries>);

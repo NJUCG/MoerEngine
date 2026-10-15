@@ -14,12 +14,31 @@
 
 namespace Moer::Render {
 class VulkanDevice;
-class VulkanCommandPool;
 class VulkanDescriptorSetAllocator;
 class VulkanRHIGraphicsPipelineState;
 struct VulkanDescriptorPushLeaseState;
 
 struct PushConstantInfo;
+
+class VulkanCommandPool : public VulkanDeviceObject {
+public:
+    VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_type);
+    ~VulkanCommandPool();
+    VulkanCommandPool(const VulkanCommandPool&)            = delete;
+    VulkanCommandPool& operator=(const VulkanCommandPool&) = delete;
+    VulkanCommandPool(VulkanCommandPool&&)                 = delete;
+    VulkanCommandPool& operator=(VulkanCommandPool&&)      = delete;
+
+    VkCommandPool GetHandle() const {
+        return command_pool;
+    }
+    std::string_view GetQueueName() const;
+
+private:
+    EQueueType    queue_type;
+    VkCommandPool command_pool{VK_NULL_HANDLE};
+};
+
 class VulkanCmdList {
     friend struct VkCustomDispatchCmd;
 

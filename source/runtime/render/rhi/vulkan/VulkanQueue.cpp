@@ -1,22 +1,22 @@
 #include "VulkanQueue.h"
-#include "VulkanMacroUtils.h"
 #include "PixelFormat.h"
 #include "RHICmdReorderer.h"
-#include "VulkanAllocator.h"
 #include "VulkanCommand.h"
+#include "VulkanCommandContext.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
+#include "VulkanMacroUtils.h"
 #include "VulkanParallelRecordWorkEstimator.h"
 #include "VulkanRHIResource.h"
 #include "VulkanSerialGolden.h"
 #include "VulkanSubmissionDiagnostics.h"
-#include "rhi/ExternalCpuJoinPool.h"
+#include "log/LogSystem.h"
 #include "misc/Alignment.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
 #include "misc/Traits.h"
-#include "log/LogSystem.h"
 #include "platform/Platform.h"
+#include "rhi/ExternalCpuJoinPool.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIExecutorBackend.h"
@@ -1210,11 +1210,11 @@ public:
 
 #pragma region[ preprocessor ]
 struct VkCmdPreprocessor {
-    VkTracker&       tracker;
-    FunctionTable    m_funcs;
-    VulkanAllocator& allocator;
-    VulkanDevice&    device;
-    EQueueType       current_queue;
+    VkTracker&                      tracker;
+    FunctionTable                   m_funcs;
+    VulkanTemporaryBufferAllocator& buffer_allocator;
+    VulkanDevice&                   device;
+    EQueueType                      current_queue;
 
     UnorderedSet<uint64> writed_buffer_resources;
     UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
@@ -1222,16 +1222,16 @@ struct VkCmdPreprocessor {
     const TCachedArgArray& cached_args;
 
     VkCmdPreprocessor(
-        VulkanDevice&          _device,
-        VkTracker&             _tracker,
-        VulkanAllocator&       _allocator,
-        FunctionTable          _funcs,
-        const TCachedArgArray& _cached_args,
-        EQueueType             _current_queue = EQueueType::Graphics
+        VulkanDevice&                   _device,
+        VkTracker&                      _tracker,
+        VulkanTemporaryBufferAllocator& _buffer_allocator,
+        FunctionTable                   _funcs,
+        const TCachedArgArray&          _cached_args,
+        EQueueType                      _current_queue = EQueueType::Graphics
     ) :
         device(_device),
         tracker(_tracker),
-        allocator(_allocator),
+        buffer_allocator(_buffer_allocator),
         m_funcs(_funcs),
         cached_args(_cached_args),
         current_queue(_current_queue) {}
@@ -1531,7 +1531,7 @@ struct VkCmdPreprocessor {
 
     void Visit(const UploadBufferCmd* _cmd) {
         auto data_span  = _cmd->Data();
-        auto tmp_buffer = allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer = buffer_allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
         device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
         _cmd->staging_buffer = tmp_buffer;
 
@@ -1548,7 +1548,8 @@ struct VkCmdPreprocessor {
     }
     void Visit(const UploadTextureCmd* _cmd) {
         auto data_span  = _cmd->Data();
-        auto tmp_buffer = allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
+        auto tmp_buffer =
+            buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
         device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
         _cmd->staging_buffer = tmp_buffer;
 
@@ -1628,7 +1629,7 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const CopyBackBufferCmd* _cmd) {
-        auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer = buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
         auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
@@ -1639,7 +1640,7 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const CopyBackTextureCmd* _cmd) {
-        auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer = buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
         auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
@@ -1715,7 +1716,7 @@ struct VkCmdPreprocessor {
             }
             scratch_size += scratch_alignment;
 
-            scratch = allocator.AllocateScratch(scratch_size);
+            scratch = buffer_allocator.AllocateScratch(scratch_size);
         }
         tracker.RecordState(
             ResourceCast(scratch.GetBuffer()),
@@ -2454,7 +2455,7 @@ class VkCmdVisitor : VulkanDeviceObject {
         Common
     } state = EState::Common;
     VulkanCmdList&         cmd_list;
-    VulkanAllocator&       allocator;
+    VulkanCommandContext&  command_context;
     VkTracker&             tracker;
     const TCachedArgArray& cached_args;
     ProfilerStorage*       profiler = nullptr;
@@ -2485,16 +2486,16 @@ class VkCmdVisitor : VulkanDeviceObject {
 public:
     VkCmdVisitor(
         VulkanDevice&          _device,
-        VulkanAllocator&       _allocator,
+        VulkanCommandContext&  _command_context,
         VkTracker&             _tracker,
         VulkanCmdList&         _cmd_list,
         const TCachedArgArray& _cached_args,
-        ProfilerStorage*       _profiler = nullptr,
-        bool                   _query_profiling_enabled = false,
+        ProfilerStorage*       _profiler                   = nullptr,
+        bool                   _query_profiling_enabled    = false,
         bool                   _inside_inherited_rendering = false
     ) :
         VulkanDeviceObject(&_device),
-        allocator(_allocator),
+        command_context(_command_context),
         tracker(_tracker),
         cmd_list(_cmd_list),
         cached_args(_cached_args),
@@ -2634,7 +2635,7 @@ public:
         if (_cmd.HasOwningReadback()) {
             const ReadbackToken readback = _cmd.OwningReadback();
             const uint64 logical_size = _cmd.ByteSize();
-            allocator.AddOnComplete(
+            command_context.AddOnComplete(
                 [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
                     struct WriterContext {
                         VulkanCmdList* command_list{};
@@ -2664,11 +2665,8 @@ public:
                 }
             );
         } else {
-            allocator.AddOnComplete(
-                [tmp_buffer,
-                 &cmd_list(cmd_list),
-                 destination(_cmd.Data()),
-                 logical_size = _cmd.ByteSize()] {
+            command_context.AddOnComplete(
+                [tmp_buffer, &cmd_list(cmd_list), destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
                     cmd_list.CopyData(
                         destination, tmp_buffer, logical_size
                     );
@@ -2698,7 +2696,7 @@ public:
         if (_cmd.HasOwningReadback()) {
             const ReadbackToken readback = _cmd.OwningReadback();
             const uint64 logical_size = _cmd.ByteSize();
-            allocator.AddOnComplete(
+            command_context.AddOnComplete(
                 [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
                     struct WriterContext {
                         VulkanCmdList* command_list{};
@@ -2728,11 +2726,8 @@ public:
                 }
             );
         } else {
-            allocator.AddOnComplete(
-                [tmp_buffer,
-                 &cmd_list(cmd_list),
-                 destination(_cmd.Data()),
-                 logical_size = _cmd.ByteSize()] {
+            command_context.AddOnComplete(
+                [tmp_buffer, &cmd_list(cmd_list), destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
                     cmd_list.CopyData(
                         destination.data(), tmp_buffer, logical_size
                     );
@@ -3440,16 +3435,12 @@ public:
         // completion. This covers prior packets on every queue, prevents
         // descriptor-slot reuse while old work can still read it, and
         // gives record rejection a one-shot finalization token.
-        allocator.AddOnComplete(
-            [array_ref = std::move(array_ref),
-             updates = std::move(updates),
-             finalized = std::move(finalized),
-             update_is_current]() mutable {
-                FinalizeBindlessUpdatesOnce(
-                    array_ref, updates, finalized, update_is_current
-                );
-            }
-        );
+        command_context.AddOnComplete([array_ref = std::move(array_ref),
+                                       updates   = std::move(updates),
+                                       finalized = std::move(finalized),
+                                       update_is_current]() mutable {
+            FinalizeBindlessUpdatesOnce(array_ref, updates, finalized, update_is_current);
+        });
         if (!update_is_current) {
             LOG_WARNING(
                 "Rejecting command submission containing a stale bindless update batch"
@@ -3620,7 +3611,7 @@ public:
 
             staging_size = current_offset;
 
-            staging_buffer = allocator.AllocateShaderBuffer(staging_size);
+            staging_buffer = command_context.GetBufferAllocator().AllocateShaderBuffer(staging_size);
 
             //copy cpu data to staging buffer
             if (b_array) {
@@ -3717,7 +3708,7 @@ public:
             cmd_list.EndLabel();
         }
 
-        // allocator.AddOnComplete([bindless_array,
+        // command_context.AddOnComplete([bindless_array,
         //                          free_slots(_cmd.StealFreeSlots()),
         //                          free_buffers(_cmd.StealFreeBuffers()),
         //                          free_textures(std::move(_cmd.StealFreeTextures()))]() {
@@ -3742,7 +3733,7 @@ public:
     }
 
     void Visit(const QueryCmd& _cmd) {
-        allocator.RecordQuery(cmd_list, _cmd);
+        command_context.RecordQuery(cmd_list, _cmd);
     }
 
     void Visit(const BuildAccelerationStructuresCmd& _cmd) {
@@ -3816,9 +3807,12 @@ public:
         uint64           alignment_offset       = aligned_device_address - raw_device_address;
 
         if (to_update.size() != 0) {
-            BufferView staging =
-                allocator.AllocateShaderBuffer(to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
-            BufferView indices = allocator.AllocateShaderBuffer(to_update.size() * sizeof(uint32) * 2);
+            BufferView staging = command_context.GetBufferAllocator().AllocateShaderBuffer(
+                to_update.size() * sizeof(VkAccelerationStructureInstanceKHR)
+            );
+            BufferView indices = command_context.GetBufferAllocator().AllocateShaderBuffer(
+                to_update.size() * sizeof(uint32) * 2
+            );
 
             Array<std::pair<uint, uint>> to_update_indices(to_update.size());
 
@@ -5333,33 +5327,29 @@ static void TerminalizeUnsubmittedSignals(
 }
 
 static QueryPublishBatch PublishUnsubmittedQueryErrors(
-    CmdSubmit&             _submit,
-    VulkanAllocatorBatch*  _allocators,
-    std::string_view       _reason
+    CmdSubmit&                 _submit,
+    VulkanCommandContextBatch* _command_contexts,
+    std::string_view           _reason
 ) noexcept {
     const QueryPublishBatch query_batch =
         _submit.query_publish_batch.Valid() ?
             _submit.query_publish_batch :
             QueryBackendAccess::BeginPublishBatch();
 
-    if (_allocators != nullptr) {
-        for (auto& allocator : _allocators->submitted) {
-            if (allocator) {
-                allocator->PublishQueriesAfterGpuCompletion(
-                    query_batch, false, _reason
-                );
+    if (_command_contexts != nullptr) {
+        for (auto& command_context : _command_contexts->submitted) {
+            if (command_context) {
+                command_context->PublishQueriesAfterGpuCompletion(query_batch, false, _reason);
             }
         }
-        for (auto& allocator : _allocators->abandoned) {
-            if (allocator) {
-                allocator->PublishQueriesAfterGpuCompletion(
-                    query_batch, false, _reason
-                );
+        for (auto& command_context : _command_contexts->abandoned) {
+            if (command_context) {
+                command_context->PublishQueriesAfterGpuCompletion(query_batch, false, _reason);
             }
         }
     }
     // The submit-token pass is also the malformed/native-record fallback in
-    // the opposite direction: a token without an allocator record still
+    // the opposite direction: a token without a command context record still
     // becomes terminal in the same transaction.
     _submit.PublishPendingQueryErrors(_reason, query_batch);
     return query_batch;
@@ -5568,20 +5558,20 @@ VkCommandQueue::~VkCommandQueue() {
     queue_cv.notify_all();
     completion_thread.join();
 
-    Array<VulkanAllocator*> allocs;
-    allocators.PopAll(allocs);
-    for (auto* allocator : allocs) {
-        MoerDelete(allocator);
+    Array<VulkanCommandContext*> recycled_command_contexts;
+    command_contexts.PopAll(recycled_command_contexts);
+    for (auto* command_context : recycled_command_contexts) {
+        MoerDelete(command_context);
     }
 
-    Array<VulkanPresentor*> presents;
-    presentors.PopAll(presents);
-    for (auto* presentor : presents) {
-        MoerDelete(presentor);
+    Array<VulkanPresentContext*> presents;
+    present_contexts.PopAll(presents);
+    for (auto* present_context : presents) {
+        MoerDelete(present_context);
     }
 
-    allocator_quarantine.clear();
-    presentor_quarantine.clear();
+    command_context_quarantine.clear();
+    present_context_quarantine.clear();
     MoerDelete(timeline);
     vk_device.RecordQueueSyncComplete();
 }
@@ -5967,7 +5957,7 @@ void VkCommandQueue::RejectForRuntime(
             false,
             false,
             std::move(_submit),
-            VulkanAllocatorBatch{},
+            VulkanCommandContextBatch{},
             std::optional<VulkanDescriptorPushLease>{},
             Array<RHIResource*>{},
             std::move(_batch_completion)
@@ -6103,7 +6093,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
                 scripted.outcome,
                 context,
                 false,
-                EVulkanPresentorRetirementState::Unused,
+                EVulkanPresentContextRetirementState::Unused,
                 {},
                 std::move(_swapchain),
                 std::move(source_texture),
@@ -6336,9 +6326,8 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
     assert(!_recorded.completion_committed);
     try {
         if (!_outcome.WasSubmitted()) {
-            _recorded.allocators.abandoned.reserve(
-                _recorded.allocators.abandoned.size() +
-                _recorded.allocators.submitted.size()
+            _recorded.command_contexts.abandoned.reserve(
+                _recorded.command_contexts.abandoned.size() + _recorded.command_contexts.submitted.size()
             );
             const std::string_view rejection_reason =
                 "Vulkan submission was rejected before GPU completion";
@@ -6349,11 +6338,7 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
             _recorded.submit.PublishPendingGpuCompletionErrors(
                 rejection_reason, completion_batch
             );
-            PublishUnsubmittedQueryErrors(
-                _recorded.submit,
-                &_recorded.allocators,
-                rejection_reason
-            );
+            PublishUnsubmittedQueryErrors(_recorded.submit, &_recorded.command_contexts, rejection_reason);
             TerminalizeUnsubmittedSignal(
                 vk_device,
                 timeline,
@@ -6371,12 +6356,10 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
             TerminalizeUnsubmittedSignals(
                 vk_device, rejected_signals, _outcome
             );
-            for (auto& allocator : _recorded.allocators.submitted) {
-                _recorded.allocators.abandoned.emplace_back(
-                    std::move(allocator)
-                );
+            for (auto& command_context : _recorded.command_contexts.submitted) {
+                _recorded.command_contexts.abandoned.emplace_back(std::move(command_context));
             }
-            _recorded.allocators.submitted.clear();
+            _recorded.command_contexts.submitted.clear();
             (void)rejected_signal_keepalives;
         }
 
@@ -6396,7 +6379,7 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
             _outcome.WasSubmitted(),
             _outcome.WasSubmitted(),
             std::move(_recorded.submit),
-            std::move(_recorded.allocators),
+            std::move(_recorded.command_contexts),
             std::move(_recorded.descriptor_lease),
             std::move(_recorded.deferred_releases),
             std::move(_recorded.batch_completion)
@@ -6494,7 +6477,7 @@ bool VkCommandQueue::TryExecuteParallel(
             }
         )) {
         // A query pair must stay in one native command buffer owned by one
-        // allocator. Other source packets can still translate concurrently;
+        // command context. Other source packets can still translate concurrently;
         // only this source falls back to its serial recorder.
         verify_fallback("query-serial-island");
         return false;
@@ -6636,7 +6619,7 @@ bool VkCommandQueue::TryExecuteParallel(
 
     struct ParallelChunkRuntime {
         ParallelRecordJobRange      range;
-        UniquePtr<VulkanAllocator> allocator;
+        UniquePtr<VulkanCommandContext> command_context;
         uint32                      worker_id{0};
         VkResult                    native_failure{VK_SUCCESS};
         bool                        recorded{false};
@@ -6645,9 +6628,9 @@ bool VkCommandQueue::TryExecuteParallel(
         Array<const Command*>          commands;
         Array<const ScopeCmd*>         scopes;
         Array<const ScopeCmd*>         scopes_after;
-        UniquePtr<VulkanAllocator>     primary_allocator;
+        UniquePtr<VulkanCommandContext>               primary_command_context;
         Array<ParallelChunkRuntime>    chunks;
-        UniquePtr<VulkanAllocator>     fallback_allocator;
+        UniquePtr<VulkanCommandContext>               fallback_command_context;
         bool                           parallel{false};
         bool                           use_secondary{false};
         bool                           graphics_secondary{false};
@@ -6763,12 +6746,12 @@ bool VkCommandQueue::TryExecuteParallel(
     VulkanDescriptorPushLease descriptor_lease =
         descriptor_heap.BeginPushDescriptors(EQueueType::Graphics);
 
-    auto tracker_owner = GetAllocator();
+    auto              tracker_owner = AcquireCommandContext();
     auto& tracker       = tracker_owner->GetTracker();
     VkCmdPreprocessor preprocessor(
         vk_device,
         tracker,
-        *tracker_owner,
+        tracker_owner->GetBufferAllocator(),
         _function_table,
         _submit.cached_args,
         queue.GetType()
@@ -6799,26 +6782,26 @@ bool VkCommandQueue::TryExecuteParallel(
         vk_device.TryLatchFirstFault(_context, _result, false, false, true);
         vk_device.RecordRejectedSubmit();
 
-        Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
-        auto collect_allocator = [&](UniquePtr<VulkanAllocator>& _allocator) {
-            if (_allocator) {
-                abandoned_allocators.push_back(std::move(_allocator));
+        Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
+        auto collect_command_context = [&](UniquePtr<VulkanCommandContext>& _command_context) {
+            if (_command_context) {
+                abandoned_command_contexts.push_back(std::move(_command_context));
             }
         };
         for (ParallelLayerRuntime& runtime : runtime_layers) {
-            collect_allocator(runtime.primary_allocator);
-            collect_allocator(runtime.fallback_allocator);
+            collect_command_context(runtime.primary_command_context);
+            collect_command_context(runtime.fallback_command_context);
             for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                collect_allocator(chunk.allocator);
+                collect_command_context(chunk.command_context);
             }
         }
-        collect_allocator(tracker_owner);
+        collect_command_context(tracker_owner);
 
         Array<RHIResource*> deferred_releases = TakeDeferredReleases();
         CurrentVulkanRecordedSubmit rejected{
             std::move(_submit), _context, _timeline
         };
-        rejected.allocators.abandoned = std::move(abandoned_allocators);
+        rejected.command_contexts.abandoned = std::move(abandoned_command_contexts);
         rejected.descriptor_lease.emplace(std::move(descriptor_lease));
         rejected.deferred_releases   = std::move(deferred_releases);
         rejected.retirement_outcome = {
@@ -6953,18 +6936,16 @@ bool VkCommandQueue::TryExecuteParallel(
     bool                  parallel_recorded = true;
     double                worker_join_time = 0.0;
 
-    auto finalize_parallel_record = [&] (
-                                        Array<VulkanCmdList*>&& _ordered_cmd_lists,
-                                        Array<UniquePtr<VulkanAllocator>>&& _submitted_allocators,
-                                        Array<UniquePtr<VulkanAllocator>>&& _abandoned_allocators,
+    auto finalize_parallel_record = [&](Array<VulkanCmdList*>&&                  _ordered_cmd_lists,
+                                        Array<UniquePtr<VulkanCommandContext>>&& _submitted_command_contexts,
+                                        Array<UniquePtr<VulkanCommandContext>>&& _abandoned_command_contexts,
                                         uint32 _secondary_command_buffer_count,
                                         uint32 _parallel_layer_count,
                                         uint64 _job_count,
                                         uint64 _work_units,
                                         uint32 _wave_count,
                                         uint32 _island_count,
-                                        bool   _parallel_recorded
-                                    ) -> bool {
+                                        bool   _parallel_recorded) -> bool {
         tracker.Reset();
         descriptor_heap.EndPushDescriptors(descriptor_lease);
         const uint64 descriptor_bytes =
@@ -6985,8 +6966,8 @@ bool VkCommandQueue::TryExecuteParallel(
             std::move(_presentation_source_program);
         recorded_submit.has_commands      = true;
         recorded_submit.ordered_cmd_lists = std::move(_ordered_cmd_lists);
-        recorded_submit.allocators = VulkanAllocatorBatch{
-            std::move(_submitted_allocators), std::move(_abandoned_allocators)
+        recorded_submit.command_contexts  = VulkanCommandContextBatch{
+            std::move(_submitted_command_contexts), std::move(_abandoned_command_contexts)
         };
         recorded_submit.descriptor_lease.emplace(std::move(descriptor_lease));
         recorded_submit.deferred_releases = std::move(deferred_releases);
@@ -7155,10 +7136,10 @@ bool VkCommandQueue::TryExecuteParallel(
                 runtime.chunks.reserve(layer_plan.job_count);
                 for (uint32 job_index = 0; job_index < layer_plan.job_count; ++job_index) {
                     ParallelChunkRuntime chunk{
-                        .range     = plan.jobs[layer_plan.first_job + job_index],
-                        .allocator = GetAllocator(),
+                        .range           = plan.jobs[layer_plan.first_job + job_index],
+                        .command_context = AcquireCommandContext(),
                     };
-                    chunk.allocator->PrepareSecondaryCmdList();
+                    chunk.command_context->PrepareSecondaryCmdList();
                     runtime.chunks.push_back(std::move(chunk));
                 }
 
@@ -7186,8 +7167,7 @@ bool VkCommandQueue::TryExecuteParallel(
 
                         try {
                             chunk.worker_id = Platform::GetCurrentThreadID();
-                            VulkanCmdList& cmd_list =
-                                chunk.allocator->GetSecondaryCmdList();
+                            VulkanCmdList& cmd_list = chunk.command_context->GetSecondaryCmdList();
                             cmd_list.SetDescriptorPushLease(descriptor_lease.state);
                             VkResult worker_begin = VK_SUCCESS;
                             if (job_layer.graphics_secondary) {
@@ -7228,8 +7208,8 @@ bool VkCommandQueue::TryExecuteParallel(
                             );
                             VkCmdVisitor visitor(
                                 vk_device,
-                                *chunk.allocator,
-                                chunk.allocator->GetTracker(),
+                                *chunk.command_context,
+                                chunk.command_context->GetTracker(),
                                 cmd_list,
                                 _submit.cached_args,
                                 nullptr,
@@ -7328,9 +7308,7 @@ bool VkCommandQueue::TryExecuteParallel(
                         Array<VkCommandBuffer> secondaries;
                         secondaries.reserve(runtime.chunks.size());
                         for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                            secondaries.push_back(
-                                chunk.allocator->GetSecondaryCmdList().GetHandle()
-                            );
+                            secondaries.push_back(chunk.command_context->GetSecondaryCmdList().GetHandle());
                         }
                         if (runtime.graphics_secondary) {
                             VkRenderingInfo rendering_info =
@@ -7483,10 +7461,10 @@ bool VkCommandQueue::TryExecuteParallel(
         }
 
         Array<VulkanCmdList*> ordered_cmd_lists{&assembly_cmd};
-        Array<UniquePtr<VulkanAllocator>> submitted_allocators;
-        Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
-        submitted_allocators.reserve(total_job_count + 1);
-        abandoned_allocators.reserve(total_job_count);
+        Array<UniquePtr<VulkanCommandContext>> submitted_command_contexts;
+        Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
+        submitted_command_contexts.reserve(total_job_count + 1);
+        abandoned_command_contexts.reserve(total_job_count);
         uint32 secondary_command_buffer_count = 0;
         for (ParallelLayerRuntime& runtime : runtime_layers) {
             if (!runtime.parallel) {
@@ -7495,17 +7473,17 @@ bool VkCommandQueue::TryExecuteParallel(
             for (ParallelChunkRuntime& chunk : runtime.chunks) {
                 if (runtime.worker_recorded) {
                     ++secondary_command_buffer_count;
-                    submitted_allocators.push_back(std::move(chunk.allocator));
+                    submitted_command_contexts.push_back(std::move(chunk.command_context));
                 } else {
-                    abandoned_allocators.push_back(std::move(chunk.allocator));
+                    abandoned_command_contexts.push_back(std::move(chunk.command_context));
                 }
             }
         }
-        submitted_allocators.push_back(std::move(tracker_owner));
+        submitted_command_contexts.push_back(std::move(tracker_owner));
         return finalize_parallel_record(
             std::move(ordered_cmd_lists),
-            std::move(submitted_allocators),
-            std::move(abandoned_allocators),
+            std::move(submitted_command_contexts),
+            std::move(abandoned_command_contexts),
             secondary_command_buffer_count,
             secondary_layer_count,
             total_job_count,
@@ -7552,8 +7530,8 @@ bool VkCommandQueue::TryExecuteParallel(
                     try {
                         chunk.worker_id = Platform::GetCurrentThreadID();
                         VulkanCmdList& cmd_list = job_layer.use_secondary ?
-                                                      chunk.allocator->GetSecondaryCmdList() :
-                                                      chunk.allocator->GetCmdList();
+                                                      chunk.command_context->GetSecondaryCmdList() :
+                                                      chunk.command_context->GetCmdList();
                         cmd_list.SetDescriptorPushLease(descriptor_lease.state);
                         VkResult worker_begin = VK_SUCCESS;
                         if (job_layer.graphics_secondary) {
@@ -7595,8 +7573,8 @@ bool VkCommandQueue::TryExecuteParallel(
                         );
                         VkCmdVisitor visitor(
                             vk_device,
-                            *chunk.allocator,
-                            chunk.allocator->GetTracker(),
+                            *chunk.command_context,
+                            chunk.command_context->GetTracker(),
                             cmd_list,
                             _submit.cached_args,
                             nullptr,
@@ -7708,14 +7686,12 @@ bool VkCommandQueue::TryExecuteParallel(
                 if (!runtime.parallel || !runtime.use_secondary) {
                     continue;
                 }
-                VulkanCmdList& primary = runtime.primary_allocator->GetCmdList();
+                VulkanCmdList& primary = runtime.primary_command_context->GetCmdList();
                 if (_execute_workers) {
                     Array<VkCommandBuffer> secondaries;
                     secondaries.reserve(runtime.chunks.size());
                     for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                        secondaries.push_back(
-                            chunk.allocator->GetSecondaryCmdList().GetHandle()
-                        );
+                        secondaries.push_back(chunk.command_context->GetSecondaryCmdList().GetHandle());
                     }
                     if (runtime.graphics_secondary) {
                         assert(runtime.rendering_envelope.has_value());
@@ -7769,8 +7745,8 @@ bool VkCommandQueue::TryExecuteParallel(
                 continue;
             }
             runtime.worker_recorded = false;
-            runtime.fallback_allocator = GetAllocator();
-            VulkanCmdList& fallback_cmd = runtime.fallback_allocator->GetCmdList();
+            runtime.fallback_command_context = AcquireCommandContext();
+            VulkanCmdList& fallback_cmd      = runtime.fallback_command_context->GetCmdList();
             fallback_cmd.SetDescriptorPushLease(descriptor_lease.state);
             const VkResult fallback_begin =
                 begin_primary(fallback_cmd, runtime.scopes, true);
@@ -7783,8 +7759,8 @@ bool VkCommandQueue::TryExecuteParallel(
             );
             VkCmdVisitor visitor(
                 vk_device,
-                *runtime.fallback_allocator,
-                runtime.fallback_allocator->GetTracker(),
+                *runtime.fallback_command_context,
+                runtime.fallback_command_context->GetTracker(),
                 fallback_cmd,
                 _submit.cached_args,
                 nullptr,
@@ -7839,7 +7815,7 @@ bool VkCommandQueue::TryExecuteParallel(
     // Consecutive coordinator-only layers share one primary. When a serial
     // island is immediately followed by a parallel layer, its final commands
     // also carry that layer's barrier prefix. This preserves GPU ordering while
-    // avoiding one primary allocator/CB for every reorderer layer.
+    // avoiding one primary command context/CB for every reorderer layer.
     constexpr size_t no_pending_wave = std::numeric_limits<size_t>::max();
     size_t pending_wave_begin = no_pending_wave;
     size_t pending_wave_end   = no_pending_wave;
@@ -7866,8 +7842,8 @@ bool VkCommandQueue::TryExecuteParallel(
         ParallelLayerRuntime& first_runtime = runtime_layers[layer_index];
         if (first_runtime.parallel) {
             if (!first_runtime.preprocessed) {
-                first_runtime.primary_allocator = GetAllocator();
-                VulkanCmdList& primary_cmd = first_runtime.primary_allocator->GetCmdList();
+                first_runtime.primary_command_context = AcquireCommandContext();
+                VulkanCmdList& primary_cmd            = first_runtime.primary_command_context->GetCmdList();
                 primary_cmd.SetDescriptorPushLease(descriptor_lease.state);
                 const VkResult primary_begin =
                     begin_primary(primary_cmd, first_runtime.scopes, true);
@@ -7912,13 +7888,13 @@ bool VkCommandQueue::TryExecuteParallel(
             first_runtime.chunks.reserve(layer_plan.job_count);
             for (uint32 job_index = 0; job_index < layer_plan.job_count; ++job_index) {
                 ParallelChunkRuntime chunk{
-                    .range     = plan.jobs[layer_plan.first_job + job_index],
-                    .allocator = GetAllocator(),
+                    .range           = plan.jobs[layer_plan.first_job + job_index],
+                    .command_context = AcquireCommandContext(),
                 };
                 if (first_runtime.use_secondary) {
                     // Allocate from the chunk's private pool on the
                     // coordinator before the worker can observe it.
-                    chunk.allocator->PrepareSecondaryCmdList();
+                    chunk.command_context->PrepareSecondaryCmdList();
                 }
                 first_runtime.chunks.push_back(std::move(chunk));
             }
@@ -7951,8 +7927,8 @@ bool VkCommandQueue::TryExecuteParallel(
             }
         }
 
-        first_runtime.primary_allocator = GetAllocator();
-        VulkanCmdList& island_cmd = first_runtime.primary_allocator->GetCmdList();
+        first_runtime.primary_command_context = AcquireCommandContext();
+        VulkanCmdList& island_cmd             = first_runtime.primary_command_context->GetCmdList();
         island_cmd.SetDescriptorPushLease(descriptor_lease.state);
         const VkResult island_begin = begin_primary(island_cmd, first_runtime.scopes, true);
         if (island_begin != VK_SUCCESS) {
@@ -7972,7 +7948,7 @@ bool VkCommandQueue::TryExecuteParallel(
                 record_layer_prefix(layer_index, island_cmd);
                 VkCmdVisitor visitor(
                     vk_device,
-                    *first_runtime.primary_allocator,
+                    *first_runtime.primary_command_context,
                     tracker,
                     island_cmd,
                     _submit.cached_args,
@@ -8062,15 +8038,15 @@ bool VkCommandQueue::TryExecuteParallel(
         return true;
     }
     Array<VulkanCmdList*> ordered_cmd_lists;
-    Array<UniquePtr<VulkanAllocator>> submitted_allocators;
-    Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
+    Array<UniquePtr<VulkanCommandContext>> submitted_command_contexts;
+    Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
     uint32 secondary_command_buffer_count = 0;
     ordered_cmd_lists.reserve(plan.layers.size() + total_job_count + 1);
-    submitted_allocators.reserve(plan.layers.size() + total_job_count + 1);
+    submitted_command_contexts.reserve(plan.layers.size() + total_job_count + 1);
     for (ParallelLayerRuntime& runtime : runtime_layers) {
-        if (runtime.primary_allocator) {
-            ordered_cmd_lists.push_back(&runtime.primary_allocator->GetCmdList());
-            submitted_allocators.push_back(std::move(runtime.primary_allocator));
+        if (runtime.primary_command_context) {
+            ordered_cmd_lists.push_back(&runtime.primary_command_context->GetCmdList());
+            submitted_command_contexts.push_back(std::move(runtime.primary_command_context));
         }
         if (!runtime.parallel) {
             continue;
@@ -8078,28 +8054,28 @@ bool VkCommandQueue::TryExecuteParallel(
         if (runtime.worker_recorded) {
             for (ParallelChunkRuntime& chunk : runtime.chunks) {
                 if (!runtime.use_secondary) {
-                    ordered_cmd_lists.push_back(&chunk.allocator->GetCmdList());
+                    ordered_cmd_lists.push_back(&chunk.command_context->GetCmdList());
                 } else {
                     ++secondary_command_buffer_count;
                 }
-                submitted_allocators.push_back(std::move(chunk.allocator));
+                submitted_command_contexts.push_back(std::move(chunk.command_context));
             }
         } else {
-            ordered_cmd_lists.push_back(&runtime.fallback_allocator->GetCmdList());
-            submitted_allocators.push_back(std::move(runtime.fallback_allocator));
+            ordered_cmd_lists.push_back(&runtime.fallback_command_context->GetCmdList());
+            submitted_command_contexts.push_back(std::move(runtime.fallback_command_context));
             // Keep every abandoned recorder pool alive and retire/reset it as
             // part of the same timeline transaction, but never submit its CB.
             for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                abandoned_allocators.push_back(std::move(chunk.allocator));
+                abandoned_command_contexts.push_back(std::move(chunk.command_context));
             }
         }
     }
     ordered_cmd_lists.push_back(&tracker_owner->GetCmdList());
-    submitted_allocators.push_back(std::move(tracker_owner));
+    submitted_command_contexts.push_back(std::move(tracker_owner));
     return finalize_parallel_record(
         std::move(ordered_cmd_lists),
-        std::move(submitted_allocators),
-        std::move(abandoned_allocators),
+        std::move(submitted_command_contexts),
+        std::move(abandoned_command_contexts),
         secondary_command_buffer_count,
         plan.parallel_layer_count,
         total_job_count,
@@ -8175,9 +8151,9 @@ void VkCommandQueue::ExecuteNow(
         }
     }
     auto reject_before_native_record =
-        [&](const VulkanOperationResult& _outcome,
-            std::string_view             _reason,
-            UniquePtr<VulkanAllocator>*  _abandoned_allocator = nullptr) {
+        [&](const VulkanOperationResult&     _outcome,
+            std::string_view                 _reason,
+            UniquePtr<VulkanCommandContext>* _abandoned_command_context = nullptr) {
             try {
                 LOG_ERROR(
                     "[RHIExecutor][Vulkan] rejected before native record: "
@@ -8190,22 +8166,18 @@ void VkCommandQueue::ExecuteNow(
             }
 
             ResetSplitProfilingCpuFrame();
-            Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
-            if (_abandoned_allocator != nullptr &&
-                *_abandoned_allocator) {
+            Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
+            if (_abandoned_command_context != nullptr && *_abandoned_command_context) {
                 // Complete every allocation before CmdSubmit moves into the
                 // terminal packet. If reserve/emplace fails, the submit is
                 // still owned by ExecuteNow and cannot notify on Translate.
-                abandoned_allocators.reserve(1);
-                abandoned_allocators.emplace_back(
-                    std::move(*_abandoned_allocator)
-                );
+                abandoned_command_contexts.reserve(1);
+                abandoned_command_contexts.emplace_back(std::move(*_abandoned_command_context));
             }
             CurrentVulkanRecordedSubmit rejected{
                 std::move(_submit), context, _timeline
             };
-            rejected.allocators.abandoned =
-                std::move(abandoned_allocators);
+            rejected.command_contexts.abandoned = std::move(abandoned_command_contexts);
             rejected.retirement_outcome     = _outcome;
             rejected.recoverable_rejection =
                 _outcome.status == EVulkanOperationStatus::Rejected &&
@@ -8379,8 +8351,8 @@ void VkCommandQueue::ExecuteNow(
     Timer timer{};
 
     //Get Allocators for buffer, texture and commandlist
-    auto  allocator_ptr = std::move(GetAllocator());
-    auto& vk_allocator  = *allocator_ptr;
+    auto  command_context_ptr = std::move(AcquireCommandContext());
+    auto& vk_command_context  = *command_context_ptr;
     if (timestamp_query_slot_count != 0) {
         const VulkanScriptedQueryPreparationOverrideForTesting*
             scripted_override =
@@ -8401,12 +8373,9 @@ void VkCommandQueue::ExecuteNow(
                     scripted_result = VK_ERROR_FEATURE_NOT_PRESENT;
                 }
                 reject_before_native_record(
-                    VulkanOperationResult{
-                        EVulkanOperationStatus::Rejected,
-                        scripted_result
-                    },
+                    VulkanOperationResult{EVulkanOperationStatus::Rejected, scripted_result},
                     "scripted timestamp query preparation rejection",
-                    &allocator_ptr
+                    &command_context_ptr
                 );
                 return;
             }
@@ -8414,14 +8383,11 @@ void VkCommandQueue::ExecuteNow(
     }
     try {
         // Explicit Query commands force this source onto the serial recorder.
-        // Size (and lazily create) its allocator-local pools before Begin() so
+        // Size (and lazily create) its query pools before Begin() so
         // a legal large query packet cannot fail after native recording has
         // already produced side effects. Timestamp boundaries consume one
         // slot each; an occlusion begin/end pair shares one slot.
-        vk_allocator.EnsureQueryCapacity(
-            timestamp_query_slot_count,
-            occlusion_query_pair_count
-        );
+        vk_command_context.EnsureQueryCapacity(timestamp_query_slot_count, occlusion_query_pair_count);
     } catch (const std::exception& error) {
         try {
             LOG_ERROR(
@@ -8434,43 +8400,35 @@ void VkCommandQueue::ExecuteNow(
         const bool device_faulted = vk_device.IsFaulted();
         reject_before_native_record(
             VulkanOperationResult{
-                device_faulted ?
-                    EVulkanOperationStatus::Faulted :
-                    EVulkanOperationStatus::Rejected,
-                device_faulted ?
-                    vk_device.GetFirstFaultResult() :
-                    VK_ERROR_OUT_OF_POOL_MEMORY
+                device_faulted ? EVulkanOperationStatus::Faulted : EVulkanOperationStatus::Rejected,
+                device_faulted ? vk_device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY
             },
             "query pool preparation failed",
-            &allocator_ptr
+            &command_context_ptr
         );
         return;
     } catch (...) {
         const bool device_faulted = vk_device.IsFaulted();
         reject_before_native_record(
             VulkanOperationResult{
-                device_faulted ?
-                    EVulkanOperationStatus::Faulted :
-                    EVulkanOperationStatus::Rejected,
-                device_faulted ?
-                    vk_device.GetFirstFaultResult() :
-                    VK_ERROR_OUT_OF_POOL_MEMORY
+                device_faulted ? EVulkanOperationStatus::Faulted : EVulkanOperationStatus::Rejected,
+                device_faulted ? vk_device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY
             },
             "query pool preparation failed",
-            &allocator_ptr
+            &command_context_ptr
         );
         return;
     }
 
     //Get Resource State Tracker
-    auto& tracker = vk_allocator.GetTracker();
+    auto& tracker = vk_command_context.GetTracker();
 
     //Visitor for actual command recording
     VkCmdVisitor visitor(
         vk_device,
-        vk_allocator,
+        vk_command_context,
         tracker,
-        vk_allocator.GetCmdList(),
+        vk_command_context.GetCmdList(),
         _submit.cached_args,
         &profiler_storage,
         emits_profiling_queries
@@ -8480,7 +8438,7 @@ void VkCommandQueue::ExecuteNow(
     VkCmdPreprocessor preprocessor(
         vk_device,
         tracker,
-        vk_allocator,
+        vk_command_context.GetBufferAllocator(),
         function_table,
         _submit.cached_args,
         queue.GetType()
@@ -8568,15 +8526,15 @@ void VkCommandQueue::ExecuteNow(
         vk_device.TryLatchFirstFault(context, _result, false, false, true);
         vk_device.RecordRejectedSubmit();
 
-        Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
-        if (allocator_ptr) {
-            abandoned_allocators.push_back(std::move(allocator_ptr));
+        Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
+        if (command_context_ptr) {
+            abandoned_command_contexts.push_back(std::move(command_context_ptr));
         }
         Array<RHIResource*> deferred_releases = TakeDeferredReleases();
         CurrentVulkanRecordedSubmit rejected{
             std::move(_submit), context, _timeline
         };
-        rejected.allocators.abandoned = std::move(abandoned_allocators);
+        rejected.command_contexts.abandoned = std::move(abandoned_command_contexts);
         rejected.descriptor_lease     = std::move(descriptor_lease);
         rejected.deferred_releases    = std::move(deferred_releases);
         rejected.retirement_outcome = {
@@ -8597,7 +8555,7 @@ void VkCommandQueue::ExecuteNow(
 
     auto record_serial_commands = [&] {
     if (has_cmd) {
-        const VkResult begin_result = vk_allocator.GetCmdList().Begin();
+        const VkResult begin_result = vk_command_context.GetCmdList().Begin();
         if (begin_result != VK_SUCCESS) {
             throw SerialNativeRecordFailure{"command-buffer-begin-failed", begin_result};
         }
@@ -8605,7 +8563,7 @@ void VkCommandQueue::ExecuteNow(
             if (serial_golden) {
                 serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
             }
-            profiler_storage.CollectProfiling(vk_allocator.GetCmdList().GetHandle());
+            profiler_storage.CollectProfiling(vk_command_context.GetCmdList().GetHandle());
             if (serial_golden) {
                 serial_golden->RecordQueryEvent(
                     SerialQueryEvent::Reset,
@@ -8617,7 +8575,7 @@ void VkCommandQueue::ExecuteNow(
                 std::unique_lock<std::mutex> profiler_lock(profiler_mutex);
                 cached_profiler_entry = profiler_storage.GetProfilerEntry();
             }
-            profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
+            profiler_storage.BeginProfilerSession(vk_command_context.GetCmdList(), "Graphics Exec");
             if (serial_golden) {
                 serial_golden->RecordQueryEvent(
                     SerialQueryEvent::Begin,
@@ -8639,7 +8597,7 @@ void VkCommandQueue::ExecuteNow(
             descriptor_lease.emplace(
                 vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(queue.GetType())
             );
-            vk_allocator.GetCmdList().SetDescriptorPushLease(descriptor_lease->state);
+            vk_command_context.GetCmdList().SetDescriptorPushLease(descriptor_lease->state);
             if (record_sample) {
                 descriptor_begin_offset = vk_device.GetGlobalDescriptorHeap()
                                               .CurrentPushDescriptorOffset(descriptor_lease->state);
@@ -8654,7 +8612,7 @@ void VkCommandQueue::ExecuteNow(
         const float4 queue_label_color = !_submit.debug_label.empty() ?
                                              _submit.debug_label_color :
                                              float4{1.0f, 0.0f, 0.0f, 1.0f};
-        vk_allocator.GetCmdList().BeginLabel(queue_label, queue_label_color);
+        vk_command_context.GetCmdList().BeginLabel(queue_label, queue_label_color);
     }
 
     uint layer = 0;
@@ -8666,7 +8624,7 @@ void VkCommandQueue::ExecuteNow(
                 continue;
             }
             if (layer == 0) {
-                vk_allocator.GetCmdList().BeginLabel(
+                vk_command_context.GetCmdList().BeginLabel(
                     "[RHI Diagnostics] Command Layers", {0.15f, 0.25f, 0.55f, 1.0f}
                 );
             }
@@ -8677,10 +8635,10 @@ void VkCommandQueue::ExecuteNow(
             }
             tracker.ResolveBarriers();
             record_pending_barriers(current_raw_layer);
-            tracker.DispatchBarriers(vk_allocator.GetCmdList());
+            tracker.DispatchBarriers(vk_command_context.GetCmdList());
             reorder_timer.Stop();
             preprocess_time += reorder_timer.ElapsedMilliseconds();
-            vk_allocator.GetCmdList().InsertLabel(
+            vk_command_context.GetCmdList().InsertLabel(
                 std::format("[RHI] Layer {}", layer++), {0.15f, 0.25f, 0.55f, 1.0f}
             );
             RecordLayerTiming& layer_timing = record_sample->layer_timings[current_raw_layer];
@@ -8802,7 +8760,7 @@ void VkCommandQueue::ExecuteNow(
                 preprocessor.VisitCmd(cmdnode->cmd);
             }
             tracker.ResolveBarriers();
-            tracker.DispatchBarriers(vk_allocator.GetCmdList());
+            tracker.DispatchBarriers(vk_command_context.GetCmdList());
             reorder_timer.Stop();
             preprocess_time += reorder_timer.ElapsedMilliseconds();
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
@@ -8811,7 +8769,7 @@ void VkCommandQueue::ExecuteNow(
         }
     }
     if (record_sample && layer > 0) {
-        vk_allocator.GetCmdList().EndLabel();
+        vk_command_context.GetCmdList().EndLabel();
     }
 
     if (has_cmd) {
@@ -8821,9 +8779,9 @@ void VkCommandQueue::ExecuteNow(
         if (record_sample) {
             record_pending_barriers(std::numeric_limits<uint64>::max());
         }
-        tracker.DispatchBarriers(vk_allocator.GetCmdList());
+        tracker.DispatchBarriers(vk_command_context.GetCmdList());
         if (ends_profiling_frame) {
-            profiler_storage.EndProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
+            profiler_storage.EndProfilerSession(vk_command_context.GetCmdList(), "Graphics Exec");
             if (serial_golden) {
                 serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
                 serial_golden->RecordQueryEvent(
@@ -8833,8 +8791,8 @@ void VkCommandQueue::ExecuteNow(
                 );
             }
         }
-        vk_allocator.GetCmdList().EndLabel();
-        const VkResult end_result = vk_allocator.GetCmdList().End();
+        vk_command_context.GetCmdList().EndLabel();
+        const VkResult end_result = vk_command_context.GetCmdList().End();
         if (end_result != VK_SUCCESS) {
             throw SerialNativeRecordFailure{"command-buffer-end-failed", end_result};
         }
@@ -8918,17 +8876,13 @@ void VkCommandQueue::ExecuteNow(
                                               ) :
                                               0.0;
     Array<VulkanCmdList*> serial_cmd_lists;
-    VulkanAllocatorBatch serial_allocators;
+    VulkanCommandContextBatch serial_command_contexts;
     if (has_cmd) {
         serial_cmd_lists.reserve(1);
-        serial_cmd_lists.emplace_back(
-            &vk_allocator.GetCmdList()
-        );
+        serial_cmd_lists.emplace_back(&vk_command_context.GetCmdList());
     }
-    serial_allocators.submitted.reserve(1);
-    serial_allocators.submitted.emplace_back(
-        std::move(allocator_ptr)
-    );
+    serial_command_contexts.submitted.reserve(1);
+    serial_command_contexts.submitted.emplace_back(std::move(command_context_ptr));
 
     // From this point onward every ownership member is moved through noexcept
     // constructors/assignments. No allocation may unwind a moved CmdSubmit on
@@ -8941,7 +8895,7 @@ void VkCommandQueue::ExecuteNow(
     recorded_submit.has_commands = has_cmd;
     recorded_submit.ordered_cmd_lists =
         std::move(serial_cmd_lists);
-    recorded_submit.allocators = std::move(serial_allocators);
+    recorded_submit.command_contexts  = std::move(serial_command_contexts);
     recorded_submit.descriptor_lease  = std::move(descriptor_lease);
     recorded_submit.deferred_releases = std::move(deferred_releases);
     recorded_submit.profile.sample = {
@@ -9101,8 +9055,8 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
     bool                            recoverable_rejection = false;
     EPresentStatus                  receipt_status        = EPresentStatus::Unresolved;
     EPresentStage                   receipt_stage         = EPresentStage::None;
-    EVulkanPresentorRetirementState presentor_state       = EVulkanPresentorRetirementState::Unused;
-    UniquePtr<VulkanPresentor>      presentor{};
+    EVulkanPresentContextRetirementState present_context_state = EVulkanPresentContextRetirementState::Unused;
+    UniquePtr<VulkanPresentContext>      present_context{};
     Array<RHIResource*>             deferred_releases{};
     PresentationCompletionTicket    presentation_completion{};
     VkFence                         wsi_completion_fence{VK_NULL_HANDLE};
@@ -9144,7 +9098,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         } else {
             auto*        vk_source_texture = static_cast<VulkanTexture*>(_view.texture);
             VkSwapchain* sc                = ResourceCast(_sc.Get());
-            presentor                      = GetPresentor();
+            present_context                = AcquirePresentContext();
             if (!sc->WaitFrameInFlight()) {
                 vk_device.RecordRejectedPresent();
                 final_outcome = {EVulkanOperationStatus::Rejected, GetRejectedSubmitResult(vk_device)};
@@ -9153,7 +9107,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 );
             } else {
                 const VkSwapchain::AcquireResult acquire = sc->AquireNextImage(
-                    presentor->GetImageReadySemaphore(), rhi_thread_enabled ? 0 : 50'000'000
+                    present_context->GetImageReadySemaphore(), rhi_thread_enabled ? 0 : 50'000'000
                 );
                 final_outcome = acquire.outcome;
                 AccumulatePresentReceiptOutcome(
@@ -9161,10 +9115,10 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 );
 
                 if (acquire.HasImage()) {
-                    presentor_state          = EVulkanPresentorRetirementState::RecordedNotSubmitted;
-                    auto&      vk_allocator  = *presentor;
-                    auto&      vk_cmd_list   = vk_allocator.GetCmdList();
-                    auto&      vk_tracker    = vk_allocator.GetTracker();
+                    present_context_state = EVulkanPresentContextRetirementState::RecordedNotSubmitted;
+                    auto&      vk_command_context = *present_context;
+                    auto&      vk_cmd_list        = vk_command_context.GetCmdList();
+                    auto&      vk_tracker         = vk_command_context.GetTracker();
                     auto*      vk_src_tex    = vk_source_texture;
                     const uint idx           = acquire.image_index;
                     auto*      swapchain_tex = ResourceCast(sc->GetSwapchainImage(idx).texture);
@@ -9260,14 +9214,14 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     queue.Wait(acquire.ready_semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
                     queue.Signal(sc->GetRenderFinishedFence(idx), VK_PIPELINE_STAGE_2_COPY_BIT);
                     const VulkanOperationResult submit_outcome =
-                        queue.Submit(vk_allocator.GetCmdList(), context);
+                        queue.Submit(vk_command_context.GetCmdList(), context);
                     final_outcome = submit_outcome;
                     gpu_submitted = submit_outcome.WasSubmitted();
                     AccumulatePresentReceiptOutcome(
                         receipt_status, receipt_stage, submit_outcome, EPresentStage::Submit
                     );
                     if (gpu_submitted) {
-                        presentor_state = EVulkanPresentorRetirementState::Submitted;
+                        present_context_state = EVulkanPresentContextRetirementState::Submitted;
                         timeline->MarkSubmitted(_timeline);
 
                         const VkSwapchain::PresentResult present_result =
@@ -9359,8 +9313,8 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         final_outcome,
         context,
         gpu_submitted,
-        presentor_state,
-        std::move(presentor),
+        present_context_state,
+        std::move(present_context),
         std::move(_sc),
         std::move(_source_texture),
         std::move(deferred_releases),
@@ -9387,19 +9341,19 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
 }
 
 void VkCommandQueue::CommitPresentCompletion(
-    const VulkanOperationResult&    _outcome,
-    const VulkanOperationContext&   _context,
-    bool                            _gpu_submitted,
-    EVulkanPresentorRetirementState _presentor_state,
-    UniquePtr<VulkanPresentor>&&    _presentor,
-    SwapchainRef&&                  _swapchain,
-    TextureRef&&                    _source_texture,
-    Array<RHIResource*>&&           _deferred_releases,
-    uint64                          _timeline,
-    PresentationCompletionTicket    _presentation_completion,
-    VkFence                         _wsi_completion_fence,
-    bool                            _wsi_enqueued,
-    bool                            _uses_present_fence
+    const VulkanOperationResult&         _outcome,
+    const VulkanOperationContext&        _context,
+    bool                                 _gpu_submitted,
+    EVulkanPresentContextRetirementState _present_context_state,
+    UniquePtr<VulkanPresentContext>&&    _present_context,
+    SwapchainRef&&                       _swapchain,
+    TextureRef&&                         _source_texture,
+    Array<RHIResource*>&&                _deferred_releases,
+    uint64                               _timeline,
+    PresentationCompletionTicket         _presentation_completion,
+    VkFence                              _wsi_completion_fence,
+    bool                                 _wsi_enqueued,
+    bool                                 _uses_present_fence
 ) noexcept {
     try {
         if (!_gpu_submitted &&
@@ -9420,8 +9374,8 @@ void VkCommandQueue::CommitPresentCompletion(
             _context,
             _gpu_submitted,
             true,
-            _presentor_state,
-            std::move(_presentor),
+            _present_context_state,
+            std::move(_present_context),
             std::move(_swapchain),
             std::move(_source_texture),
             std::move(_deferred_releases),
@@ -9432,7 +9386,7 @@ void VkCommandQueue::CommitPresentCompletion(
         );
         retirement_enqueued_serial = retirement_serial;
     } catch (...) {
-        // A submitted presentor must never unwind on the Submission owner.
+        // A submitted present context must never unwind on the Submission owner.
         std::terminate();
     }
     queue_cv.notify_one();
@@ -9696,27 +9650,27 @@ ProfileData VkCommandQueue::GetProfilerEntry() {
     return cached_profiler_entry;
 }
 
-UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
-    // Completion publishes only successfully completed and reset allocators
+UniquePtr<VulkanCommandContext> VkCommandQueue::AcquireCommandContext() {
+    // Completion publishes only successfully completed and reset command contexts
     // into this pool. Pool membership is therefore the reuse gate; if
     // Completion is delayed by unrelated CPU callbacks, allocate overflow
     // storage instead of stalling the Translate owner.
-    auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
-    if (allocator) {
-        return std::move(allocator);
+    auto command_context = std::move(UniquePtr<VulkanCommandContext>(command_contexts.Pop()));
+    if (command_context) {
+        return std::move(command_context);
     }
-    return MakeUnique<VulkanAllocator>(&vk_device, queue.GetType());
+    return MakeUnique<VulkanCommandContext>(&vk_device, queue.GetType());
 }
 
-UniquePtr<VulkanPresentor> VkCommandQueue::GetPresentor() {
-    // Presentors follow the same completion-owned pool contract as command
-    // allocators. A temporary pool miss is capacity pressure, not a reason for
+UniquePtr<VulkanPresentContext> VkCommandQueue::AcquirePresentContext() {
+    // Present contexts follow the same completion-owned pool contract as command
+    // contexts. A temporary pool miss is capacity pressure, not a reason for
     // Submission to wait on arbitrary completion callbacks.
-    auto presentor = std::move(UniquePtr<VulkanPresentor>(presentors.Pop()));
-    if (presentor) {
-        return std::move(presentor);
+    auto present_context = std::move(UniquePtr<VulkanPresentContext>(present_contexts.Pop()));
+    if (present_context) {
+        return std::move(present_context);
     }
-    return MakeUnique<VulkanPresentor>(&vk_device, queue.GetType());
+    return MakeUnique<VulkanPresentContext>(&vk_device, queue.GetType());
 }
 
 Array<RHIResource*> VkCommandQueue::TakeDeferredReleases() {
@@ -10376,31 +10330,24 @@ void VkCommandQueue::FinalizePresentRetirement(
     PresentationCompletionTicket completion_ticket =
         _batch.presentation_completion;
 
-    if (_batch.presentor) {
-        bool recycle_presentor = false;
-        if (_batch.presentor_state ==
-                EVulkanPresentorRetirementState::Submitted &&
-            _gpu_success && !vk_device.IsFaulted()) {
-            recycle_presentor =
-                _batch.presentor->CompleteSuccess() &&
-                _batch.presentor->Reset();
-        } else if (
-            _batch.presentor_state ==
-                EVulkanPresentorRetirementState::Unused &&
-            _release_safe && !vk_device.IsFaulted()
-        ) {
+    if (_batch.present_context) {
+        bool recycle_present_context = false;
+        if (_batch.present_context_state == EVulkanPresentContextRetirementState::Submitted && _gpu_success &&
+            !vk_device.IsFaulted()) {
+            recycle_present_context =
+                _batch.present_context->CompleteSuccess() && _batch.present_context->Reset();
+        } else if (_batch.present_context_state == EVulkanPresentContextRetirementState::Unused &&
+                   _release_safe && !vk_device.IsFaulted()) {
             // No native command buffer was begun.
-            recycle_presentor = true;
+            recycle_present_context = true;
         }
 
-        if (recycle_presentor && !vk_device.IsFaulted()) {
-            presentors.Push(_batch.presentor.release());
+        if (recycle_present_context && !vk_device.IsFaulted()) {
+            present_contexts.Push(_batch.present_context.release());
         } else {
             vk_device.RecordAllocatorQuarantine();
             vk_device.RecordSkippedCommandPoolReset();
-            presentor_quarantine.emplace_back(
-                std::move(_batch.presentor)
-            );
+            present_context_quarantine.emplace_back(std::move(_batch.present_context));
         }
     }
 
@@ -10662,11 +10609,9 @@ void VkCommandQueue::CompletionThreadMain() {
                             batch_release_safe = true;
                             completion_result = VK_SUCCESS;
 
-                            for (auto& allocator : _batch.allocators.submitted) {
+                            for (auto& command_context : _batch.command_contexts.submitted) {
                                 const VkResult query_result =
-                                    allocator->PrepareQueriesAfterGpuCompletion(
-                                        _batch.context
-                                    );
+                                    command_context->PrepareQueriesAfterGpuCompletion(_batch.context);
                                 if (query_result != VK_SUCCESS) {
                                     completion_result = query_result;
                                     batch_gpu_success = false;
@@ -10728,23 +10673,19 @@ void VkCommandQueue::CompletionThreadMain() {
                         batch_gpu_success ?
                             "Vulkan query did not resolve after GPU completion" :
                             "Vulkan submission did not reach successful GPU completion";
-                    for (auto& allocator : _batch.allocators.submitted) {
-                        allocator->PublishQueriesAfterGpuCompletion(
-                            query_batch,
-                            batch_gpu_success,
-                            query_failure_reason
+                    for (auto& command_context : _batch.command_contexts.submitted) {
+                        command_context->PublishQueriesAfterGpuCompletion(
+                            query_batch, batch_gpu_success, query_failure_reason
                         );
                     }
-                    for (auto& allocator : _batch.allocators.abandoned) {
-                        allocator->PublishQueriesAfterGpuCompletion(
-                            query_batch,
-                            false,
-                            "Vulkan query recorder was abandoned before native submission"
+                    for (auto& command_context : _batch.command_contexts.abandoned) {
+                        command_context->PublishQueriesAfterGpuCompletion(
+                            query_batch, false, "Vulkan query recorder was abandoned before native submission"
                         );
                     }
                     // Every CmdSubmit token must become terminal even if a
                     // backend bug failed to associate it with a native
-                    // allocator record. Publish the fallback in the same
+                    // command context record. Publish the fallback in the same
                     // transaction, but defer all notifications.
                     _batch.submit.PublishPendingQueryErrors(
                         query_failure_reason, query_batch
@@ -10767,10 +10708,8 @@ void VkCommandQueue::CompletionThreadMain() {
                     bool recycle_batch =
                         batch_gpu_success && !vk_device.IsFaulted();
                     if (recycle_batch) {
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            recycle_batch =
-                                allocator->CompleteSuccessCallbacks() &&
-                                recycle_batch;
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            recycle_batch = command_context->CompleteSuccessCallbacks() && recycle_batch;
                         }
                     }
 
@@ -10832,45 +10771,41 @@ void VkCommandQueue::CompletionThreadMain() {
                             gpu_completion_batch
                         );
                         _batch.submit.NotifyPendingQueries(query_batch);
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            allocator->NotifyQueriesAfterGpuCompletion(
-                                query_batch
-                            );
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            command_context->NotifyQueriesAfterGpuCompletion(query_batch);
                         }
-                        for (auto& allocator : _batch.allocators.abandoned) {
-                            allocator->NotifyQueriesAfterGpuCompletion(
-                                query_batch
-                            );
+                        for (auto& command_context : _batch.command_contexts.abandoned) {
+                            command_context->NotifyQueriesAfterGpuCompletion(query_batch);
                         }
                         _batch.submit.query_tokens.clear();
                     }
 
                     if (recycle_batch) {
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            recycle_batch = allocator->Reset() && recycle_batch;
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            recycle_batch = command_context->Reset() && recycle_batch;
                         }
                     }
                     if (recycle_batch && !vk_device.IsFaulted()) {
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            allocators.Push(allocator.release());
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            command_contexts.Push(command_context.release());
                         }
                     } else {
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            if (!allocator) {
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            if (!command_context) {
                                 continue;
                             }
                             vk_device.RecordAllocatorQuarantine();
                             vk_device.RecordSkippedCommandPoolReset();
-                            allocator_quarantine.emplace_back(std::move(allocator));
+                            command_context_quarantine.emplace_back(std::move(command_context));
                         }
                     }
-                    for (auto& allocator : _batch.allocators.abandoned) {
-                        if (!vk_device.IsFaulted() && allocator->ResetAbandoned()) {
-                            allocators.Push(allocator.release());
-                        } else if (allocator) {
+                    for (auto& command_context : _batch.command_contexts.abandoned) {
+                        if (!vk_device.IsFaulted() && command_context->ResetAbandoned()) {
+                            command_contexts.Push(command_context.release());
+                        } else if (command_context) {
                             vk_device.RecordAllocatorQuarantine();
                             vk_device.RecordSkippedCommandPoolReset();
-                            allocator_quarantine.emplace_back(std::move(allocator));
+                            command_context_quarantine.emplace_back(std::move(command_context));
                         }
                     }
 
@@ -10904,21 +10839,15 @@ void VkCommandQueue::CompletionThreadMain() {
                     }
                     _batch.deferred_releases.clear();
                 },
-                [this,
-                 event_timeline,
-                 &batch_gpu_success,
-                 &batch_release_safe,
-                 &pending_present_retirements](
+                [this, event_timeline, &batch_gpu_success, &batch_release_safe, &pending_present_retirements](
                     VulkanPresentCompletionBatch& _batch
                 ) {
                     batch_gpu_success = false;
                     batch_release_safe =
                         !_batch.gpu_submitted &&
-                        _batch.presentor_state ==
-                            EVulkanPresentorRetirementState::Unused &&
+                        _batch.present_context_state == EVulkanPresentContextRetirementState::Unused &&
                         (_batch.outcome.status == EVulkanOperationStatus::Retry ||
-                         _batch.outcome.status ==
-                             EVulkanOperationStatus::Recreate);
+                         _batch.outcome.status == EVulkanOperationStatus::Recreate);
 
                     VkResult completion_result = _batch.outcome.result;
                     if (_batch.gpu_submitted) {
@@ -11030,9 +10959,7 @@ void VkCommandQueue::CompletionThreadMain() {
                         batch_release_safe
                     );
                 },
-                [this, &pending_present_retirements](
-                    VulkanPresentationCompletionProbeForTesting& _probe
-                ) {
+                [this, &pending_present_retirements](VulkanPresentationCompletionProbeForTesting& _probe) {
                     if (!_probe.swapchain ||
                         !_probe.completion.IsValid()) {
                         std::terminate();
@@ -11052,18 +10979,16 @@ void VkCommandQueue::CompletionThreadMain() {
                     VulkanPresentCompletionBatch completion_batch{
                         VulkanOperationResult{},
                         VulkanOperationContext{
-                            .operation =
-                                EVulkanFaultOperation::
-                                    PresentFenceWait,
-                            .queue_type = EQueueType::Graphics,
-                            .queue = vk_device.GetPresentQueue(),
-                            .timeline = issue_sequence,
+                            .operation   = EVulkanFaultOperation::PresentFenceWait,
+                            .queue_type  = EQueueType::Graphics,
+                            .queue       = vk_device.GetPresentQueue(),
+                            .timeline    = issue_sequence,
                             .work_serial = issue_sequence,
                         },
                         false,
                         false,
-                        EVulkanPresentorRetirementState::Unused,
-                        UniquePtr<VulkanPresentor>{},
+                        EVulkanPresentContextRetirementState::Unused,
+                        UniquePtr<VulkanPresentContext>{},
                         std::move(_probe.swapchain),
                         TextureRef{},
                         Array<RHIResource*>{},
@@ -11079,68 +11004,67 @@ void VkCommandQueue::CompletionThreadMain() {
                         true
                     );
                 },
-                [this, &batch_gpu_success](UniquePtr<VulkanAllocator>& _allocator) {
+                [this, &batch_gpu_success](UniquePtr<VulkanCommandContext>& _command_context) {
                     if (batch_gpu_success && !vk_device.IsFaulted()) {
-                        if (_allocator->CompleteSuccess() && _allocator->Reset()) {
-                            allocators.Push(_allocator.release());
+                        if (_command_context->CompleteSuccess() && _command_context->Reset()) {
+                            command_contexts.Push(_command_context.release());
                             return;
                         }
                     }
                     vk_device.RecordAllocatorQuarantine();
                     vk_device.RecordSkippedCommandPoolReset();
-                    allocator_quarantine.emplace_back(std::move(_allocator));
+                    command_context_quarantine.emplace_back(std::move(_command_context));
                 },
-                [this, &batch_gpu_success](VulkanAllocatorBatch& _batch) {
+                [this, &batch_gpu_success](VulkanCommandContextBatch& _batch) {
                     bool recycle_batch = batch_gpu_success && !vk_device.IsFaulted();
                     if (recycle_batch) {
-                        for (auto& allocator : _batch.submitted) {
-                            recycle_batch =
-                                allocator->CompleteSuccess() && recycle_batch;
+                        for (auto& command_context : _batch.submitted) {
+                            recycle_batch = command_context->CompleteSuccess() && recycle_batch;
                         }
                     }
                     if (recycle_batch) {
-                        for (auto& allocator : _batch.submitted) {
-                            recycle_batch = allocator->Reset() && recycle_batch;
+                        for (auto& command_context : _batch.submitted) {
+                            recycle_batch = command_context->Reset() && recycle_batch;
                         }
                     }
 
                     if (recycle_batch && !vk_device.IsFaulted()) {
-                        for (auto& allocator : _batch.submitted) {
-                            allocators.Push(allocator.release());
+                        for (auto& command_context : _batch.submitted) {
+                            command_contexts.Push(command_context.release());
                         }
                     } else {
-                        for (auto& allocator : _batch.submitted) {
-                            if (allocator) {
+                        for (auto& command_context : _batch.submitted) {
+                            if (command_context) {
                                 vk_device.RecordAllocatorQuarantine();
                                 vk_device.RecordSkippedCommandPoolReset();
-                                allocator_quarantine.emplace_back(std::move(allocator));
+                                command_context_quarantine.emplace_back(std::move(command_context));
                             }
                         }
                     }
 
-                    for (auto& allocator : _batch.abandoned) {
-                        if (!vk_device.IsFaulted() && allocator->ResetAbandoned()) {
-                            allocators.Push(allocator.release());
-                        } else if (allocator) {
+                    for (auto& command_context : _batch.abandoned) {
+                        if (!vk_device.IsFaulted() && command_context->ResetAbandoned()) {
+                            command_contexts.Push(command_context.release());
+                        } else if (command_context) {
                             vk_device.RecordAllocatorQuarantine();
                             vk_device.RecordSkippedCommandPoolReset();
-                            allocator_quarantine.emplace_back(std::move(allocator));
+                            command_context_quarantine.emplace_back(std::move(command_context));
                         }
                     }
                 },
                 [this](VulkanDescriptorPushLease& _lease) {
                     vk_device.GetGlobalDescriptorHeap().RecyclePushDescriptors(std::move(_lease));
                 },
-                [this, &batch_gpu_success](UniquePtr<VulkanPresentor>& _presentor) {
+                [this, &batch_gpu_success](UniquePtr<VulkanPresentContext>& _present_context) {
                     if (batch_gpu_success && !vk_device.IsFaulted()) {
-                        if (_presentor->CompleteSuccess() && _presentor->Reset()) {
-                            presentors.Push(_presentor.release());
+                        if (_present_context->CompleteSuccess() && _present_context->Reset()) {
+                            present_contexts.Push(_present_context.release());
                             return;
                         }
                     }
                     vk_device.RecordAllocatorQuarantine();
                     vk_device.RecordSkippedCommandPoolReset();
-                    presentor_quarantine.emplace_back(std::move(_presentor));
+                    present_context_quarantine.emplace_back(std::move(_present_context));
                 },
                 [&batch_gpu_success](VulkanCallbackBatch& _batch) {
                     if (!_batch.success_only || batch_gpu_success) {
@@ -11286,13 +11210,13 @@ VkCopyQueue::~VkCopyQueue() {
     if (thread.joinable()) {
         thread.join();
     }
-    //clear allocators
-    Array<VulkanAllocator*> allocs;
-    allocators.PopAll(allocs);
-    for (auto& allocator : allocs) {
-        MoerDelete(allocator);
+    // Clear recycled command contexts.
+    Array<VulkanCommandContext*> recycled_command_contexts;
+    command_contexts.PopAll(recycled_command_contexts);
+    for (auto& command_context : recycled_command_contexts) {
+        MoerDelete(command_context);
     }
-    allocator_quarantine.clear();
+    command_context_quarantine.clear();
     timeline = nullptr;
     device.RecordQueueSyncComplete();
 }
@@ -11471,9 +11395,9 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
         }
 
         auto reject_before_native_record =
-            [&](const VulkanOperationResult& _outcome,
-                std::string_view             _reason,
-                UniquePtr<VulkanAllocator>*  _abandoned_allocator = nullptr) {
+            [&](const VulkanOperationResult&     _outcome,
+                std::string_view                 _reason,
+                UniquePtr<VulkanCommandContext>* _abandoned_command_context = nullptr) {
                 try {
                     LOG_ERROR(
                         "[RHIExecutor][Vulkan] Copy rejected before native "
@@ -11484,14 +11408,11 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
                     );
                 } catch (...) {
                 }
-                if (_abandoned_allocator != nullptr &&
-                    *_abandoned_allocator) {
-                    recorded->allocators.abandoned.reserve(
-                        recorded->allocators.abandoned.size() + 1
+                if (_abandoned_command_context != nullptr && *_abandoned_command_context) {
+                    recorded->command_contexts.abandoned.reserve(
+                        recorded->command_contexts.abandoned.size() + 1
                     );
-                    recorded->allocators.abandoned.emplace_back(
-                        std::move(*_abandoned_allocator)
-                    );
+                    recorded->command_contexts.abandoned.emplace_back(std::move(*_abandoned_command_context));
                 }
                 device.RecordRejectedSubmit();
                 recorded->retirement_outcome = _outcome;
@@ -11637,22 +11558,17 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
             timestamp_reset_mode ==
                 EVulkanTimestampQueryResetMode::Unsupported;
 
-        recorded->allocators.submitted.reserve(1);
-        recorded->allocators.abandoned.reserve(1);
-        auto allocator_ptr = GetAllocator();
+        recorded->command_contexts.submitted.reserve(1);
+        recorded->command_contexts.abandoned.reserve(1);
+        auto command_context_ptr = AcquireCommandContext();
         try {
             if (timestamp_query_slot_count != 0) {
-                allocator_ptr
-                    ->ConfigureTimestampCapabilityForRecording(
-                        effective_timestamp_valid_bits,
-                        timestamp_reset_mode
-                    );
+                command_context_ptr->ConfigureTimestampCapabilityForRecording(
+                    effective_timestamp_valid_bits, timestamp_reset_mode
+                );
             }
-            allocator_ptr->EnsureQueryCapacity(
-                suppress_timestamp_queries ?
-                    0 :
-                    timestamp_query_slot_count,
-                0
+            command_context_ptr->EnsureQueryCapacity(
+                suppress_timestamp_queries ? 0 : timestamp_query_slot_count, 0
             );
         } catch (const std::exception& error) {
             try {
@@ -11666,55 +11582,40 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
             const bool device_faulted = device.IsFaulted();
             reject_before_native_record(
                 VulkanOperationResult{
-                    device_faulted ?
-                        EVulkanOperationStatus::Faulted :
-                        EVulkanOperationStatus::Rejected,
-                    device_faulted ?
-                        device.GetFirstFaultResult() :
-                        VK_ERROR_OUT_OF_POOL_MEMORY
+                    device_faulted ? EVulkanOperationStatus::Faulted : EVulkanOperationStatus::Rejected,
+                    device_faulted ? device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY
                 },
                 "Copy query pool preparation failed",
-                &allocator_ptr
+                &command_context_ptr
             );
             return recorded;
         } catch (...) {
             const bool device_faulted = device.IsFaulted();
             reject_before_native_record(
                 VulkanOperationResult{
-                    device_faulted ?
-                        EVulkanOperationStatus::Faulted :
-                        EVulkanOperationStatus::Rejected,
-                    device_faulted ?
-                        device.GetFirstFaultResult() :
-                        VK_ERROR_OUT_OF_POOL_MEMORY
+                    device_faulted ? EVulkanOperationStatus::Faulted : EVulkanOperationStatus::Rejected,
+                    device_faulted ? device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY
                 },
                 "Copy query pool preparation failed",
-                &allocator_ptr
+                &command_context_ptr
             );
             return recorded;
         }
-        recorded->allocators.submitted.emplace_back(
-            std::move(allocator_ptr)
-        );
-        auto& vk_allocator =
-            *recorded->allocators.submitted.front();
-        auto& vk_cmd_list = vk_allocator.GetCmdList();
-        auto& vk_tracker  = vk_allocator.GetTracker();
+        recorded->command_contexts.submitted.emplace_back(std::move(command_context_ptr));
+        auto& vk_command_context = *recorded->command_contexts.submitted.front();
+        auto& vk_cmd_list        = vk_command_context.GetCmdList();
+        auto& vk_tracker         = vk_command_context.GetTracker();
 
         VkCmdPreprocessor preprocessor(
             device,
             vk_tracker,
-            vk_allocator,
+            vk_command_context.GetBufferAllocator(),
             {},
             recorded->submit.cached_args,
             EQueueType::Copy
         );
         VkCmdVisitor visitor(
-            device,
-            vk_allocator,
-            vk_tracker,
-            vk_cmd_list,
-            recorded->submit.cached_args
+            device, vk_command_context, vk_tracker, vk_cmd_list, recorded->submit.cached_args
         );
 
         for (const auto& cmd : recorded->submit.cmds) {
@@ -11919,18 +11820,13 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
                     }
 
                     assert(
-                        _recorded.allocators.submitted.size() ==
-                                1 &&
+                        _recorded.command_contexts.submitted.size() == 1 &&
                         "Copy Translate must publish exactly one "
-                        "command allocator"
+                        "command context"
                     );
-                    auto& vk_allocator =
-                        *_recorded.allocators.submitted.front();
+                    auto& vk_command_context = *_recorded.command_contexts.submitted.front();
                     _recorded.retirement_outcome =
-                        queue.Submit(
-                            vk_allocator.GetCmdList(),
-                            _recorded.context
-                        );
+                        queue.Submit(vk_command_context.GetCmdList(), _recorded.context);
                     _recorded.native_submit_resolved = true;
                     if (_recorded.retirement_outcome.WasSubmitted()) {
                         CommitAcceptedPresentationSourceStateTransaction(
@@ -12048,9 +11944,8 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
     assert(!_recorded.completion_committed);
     try {
         if (!_outcome.WasSubmitted()) {
-            _recorded.allocators.abandoned.reserve(
-                _recorded.allocators.abandoned.size() +
-                _recorded.allocators.submitted.size()
+            _recorded.command_contexts.abandoned.reserve(
+                _recorded.command_contexts.abandoned.size() + _recorded.command_contexts.submitted.size()
             );
             const std::string_view rejection_reason =
                 "Vulkan Copy submission was rejected before GPU completion";
@@ -12061,11 +11956,7 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
             _recorded.submit.PublishPendingGpuCompletionErrors(
                 rejection_reason, completion_batch
             );
-            PublishUnsubmittedQueryErrors(
-                _recorded.submit,
-                &_recorded.allocators,
-                rejection_reason
-            );
+            PublishUnsubmittedQueryErrors(_recorded.submit, &_recorded.command_contexts, rejection_reason);
             if (_recorded.logical_timeline != 0) {
                 TerminalizeUnsubmittedSignal(
                     device,
@@ -12085,12 +11976,10 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
             TerminalizeUnsubmittedSignals(
                 device, rejected_signals, _outcome
             );
-            for (auto& allocator : _recorded.allocators.submitted) {
-                _recorded.allocators.abandoned.emplace_back(
-                    std::move(allocator)
-                );
+            for (auto& command_context : _recorded.command_contexts.submitted) {
+                _recorded.command_contexts.abandoned.emplace_back(std::move(command_context));
             }
-            _recorded.allocators.submitted.clear();
+            _recorded.command_contexts.submitted.clear();
             (void)rejected_signal_keepalives;
         }
         std::unique_lock<std::mutex> lock(event_mutex);
@@ -12109,7 +11998,7 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
             _outcome.WasSubmitted(),
             _recorded.logical_timeline != 0,
             std::move(_recorded.submit),
-            std::move(_recorded.allocators),
+            std::move(_recorded.command_contexts),
             std::optional<VulkanDescriptorPushLease>{},
             Array<RHIResource*>{},
             std::move(_recorded.batch_completion)
@@ -12210,9 +12099,7 @@ void VkCopyQueue::ExecuteThread() {
                         timeline->Fail(result);
                     }
                 },
-                [this, event_timeline, &batch_gpu_success](
-                    VulkanSubmitCompletionBatch& _batch
-                ) {
+                [this, event_timeline, &batch_gpu_success](VulkanSubmitCompletionBatch& _batch) {
                     batch_gpu_success = false;
                     VkResult completion_result = _batch.outcome.result;
                     if (completion_result == VK_SUCCESS && !_batch.gpu_submitted) {
@@ -12234,11 +12121,9 @@ void VkCopyQueue::ExecuteThread() {
                             batch_gpu_success = true;
                             completion_result = VK_SUCCESS;
 
-                            for (auto& allocator : _batch.allocators.submitted) {
+                            for (auto& command_context : _batch.command_contexts.submitted) {
                                 const VkResult query_result =
-                                    allocator->PrepareQueriesAfterGpuCompletion(
-                                        _batch.context
-                                    );
+                                    command_context->PrepareQueriesAfterGpuCompletion(_batch.context);
                                 if (query_result != VK_SUCCESS) {
                                     completion_result = query_result;
                                     batch_gpu_success = false;
@@ -12298,15 +12183,13 @@ void VkCopyQueue::ExecuteThread() {
                         batch_gpu_success ?
                             "Vulkan query did not resolve after GPU completion" :
                             "Vulkan submission did not reach successful GPU completion";
-                    for (auto& allocator : _batch.allocators.submitted) {
-                        allocator->PublishQueriesAfterGpuCompletion(
-                            query_batch,
-                            batch_gpu_success,
-                            query_failure_reason
+                    for (auto& command_context : _batch.command_contexts.submitted) {
+                        command_context->PublishQueriesAfterGpuCompletion(
+                            query_batch, batch_gpu_success, query_failure_reason
                         );
                     }
-                    for (auto& allocator : _batch.allocators.abandoned) {
-                        allocator->PublishQueriesAfterGpuCompletion(
+                    for (auto& command_context : _batch.command_contexts.abandoned) {
+                        command_context->PublishQueriesAfterGpuCompletion(
                             query_batch,
                             false,
                             "Vulkan Copy query recorder was abandoned before native submission"
@@ -12333,10 +12216,8 @@ void VkCopyQueue::ExecuteThread() {
                     bool recycle_batch =
                         batch_gpu_success && !device.IsFaulted();
                     if (recycle_batch) {
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            recycle_batch =
-                                allocator->CompleteSuccessCallbacks() &&
-                                recycle_batch;
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            recycle_batch = command_context->CompleteSuccessCallbacks() && recycle_batch;
                         }
                     }
 
@@ -12397,45 +12278,41 @@ void VkCopyQueue::ExecuteThread() {
                             gpu_completion_batch
                         );
                         _batch.submit.NotifyPendingQueries(query_batch);
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            allocator->NotifyQueriesAfterGpuCompletion(
-                                query_batch
-                            );
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            command_context->NotifyQueriesAfterGpuCompletion(query_batch);
                         }
-                        for (auto& allocator : _batch.allocators.abandoned) {
-                            allocator->NotifyQueriesAfterGpuCompletion(
-                                query_batch
-                            );
+                        for (auto& command_context : _batch.command_contexts.abandoned) {
+                            command_context->NotifyQueriesAfterGpuCompletion(query_batch);
                         }
                         _batch.submit.query_tokens.clear();
                     }
 
                     if (recycle_batch) {
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            recycle_batch = allocator->Reset() && recycle_batch;
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            recycle_batch = command_context->Reset() && recycle_batch;
                         }
                     }
                     if (recycle_batch && !device.IsFaulted()) {
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            allocators.Push(allocator.release());
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            command_contexts.Push(command_context.release());
                         }
                     } else {
-                        for (auto& allocator : _batch.allocators.submitted) {
-                            if (!allocator) {
+                        for (auto& command_context : _batch.command_contexts.submitted) {
+                            if (!command_context) {
                                 continue;
                             }
                             device.RecordAllocatorQuarantine();
                             device.RecordSkippedCommandPoolReset();
-                            allocator_quarantine.emplace_back(std::move(allocator));
+                            command_context_quarantine.emplace_back(std::move(command_context));
                         }
                     }
-                    for (auto& allocator : _batch.allocators.abandoned) {
-                        if (!device.IsFaulted() && allocator->ResetAbandoned()) {
-                            allocators.Push(allocator.release());
-                        } else if (allocator) {
+                    for (auto& command_context : _batch.command_contexts.abandoned) {
+                        if (!device.IsFaulted() && command_context->ResetAbandoned()) {
+                            command_contexts.Push(command_context.release());
+                        } else if (command_context) {
                             device.RecordAllocatorQuarantine();
                             device.RecordSkippedCommandPoolReset();
-                            allocator_quarantine.emplace_back(std::move(allocator));
+                            command_context_quarantine.emplace_back(std::move(command_context));
                         }
                     }
 
@@ -12467,16 +12344,16 @@ void VkCopyQueue::ExecuteThread() {
                     }
                     _batch.deferred_releases.clear();
                 },
-                [this, &batch_gpu_success](UniquePtr<VulkanAllocator>& _allocator) {
+                [this, &batch_gpu_success](UniquePtr<VulkanCommandContext>& _command_context) {
                     if (batch_gpu_success && !device.IsFaulted()) {
-                        if (_allocator->CompleteSuccess() && _allocator->Reset()) {
-                            allocators.Push(_allocator.release());
+                        if (_command_context->CompleteSuccess() && _command_context->Reset()) {
+                            command_contexts.Push(_command_context.release());
                             return;
                         }
                     }
                     device.RecordAllocatorQuarantine();
                     device.RecordSkippedCommandPoolReset();
-                    allocator_quarantine.emplace_back(std::move(_allocator));
+                    command_context_quarantine.emplace_back(std::move(_command_context));
                 },
                 [this, &batch_gpu_success](VulkanCallbackBatch& _batch) {
                     if (!_batch.success_only || batch_gpu_success) {
@@ -12495,7 +12372,7 @@ void VkCopyQueue::ExecuteThread() {
                     }
                 },
                 [](IOWaitEvt&) {},
-                [](UniquePtr<VulkanPresentor>&) {
+                [](UniquePtr<VulkanPresentContext>&) {
                     assert(false && "Presentor event is invalid on the copy queue");
                 }
             },
@@ -12646,15 +12523,17 @@ void VkCopyQueue::RHIThreadLoop() {
             timeline = pair.second;
         }
 
-        auto  allocator    = std::move(GetAllocator());
-        auto& vk_allocator = *allocator;
-        auto& vk_cmd_list  = vk_allocator.GetCmdList();
-        auto& vk_tracker   = vk_allocator.GetTracker();
+        auto  command_context    = std::move(AcquireCommandContext());
+        auto& vk_command_context = *command_context;
+        auto& vk_cmd_list        = vk_command_context.GetCmdList();
+        auto& vk_tracker         = vk_command_context.GetTracker();
         VK_CHECK_RESULT(vk_cmd_list.Begin());
         vk_cmd_list.BeginLabel("IO Copy", {0.0f, 1.0f, 1.0f, 1.0f});
 
-        VkCmdPreprocessor preprocessor(device, vk_tracker, vk_allocator, {}, {}, EQueueType::Copy);
-        VkCmdVisitor      visitor(device, vk_allocator, vk_tracker, vk_cmd_list, {});
+        VkCmdPreprocessor preprocessor(
+            device, vk_tracker, vk_command_context.GetBufferAllocator(), {}, {}, EQueueType::Copy
+        );
+        VkCmdVisitor      visitor(device, vk_command_context, vk_tracker, vk_cmd_list, {});
 
         auto&& submission = cmdlist.Submit();
         for (const auto& cmd : submission.cmds) {
@@ -12683,8 +12562,7 @@ void VkCopyQueue::RHIThreadLoop() {
         };
         queue.Signal(this->timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
         queue.Wait(this->timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        const VulkanOperationResult submit_outcome =
-            queue.Submit(vk_allocator.GetCmdList(), context);
+        const VulkanOperationResult submit_outcome = queue.Submit(vk_command_context.GetCmdList(), context);
         if (submit_outcome.WasSubmitted()) {
             this->timeline->MarkSubmitted(current_timeline);
         } else {
@@ -12697,7 +12575,7 @@ void VkCopyQueue::RHIThreadLoop() {
                 current_timeline,
                 false
             );
-            event_queue.emplace_back(std::move(allocator), current_timeline, false);
+            event_queue.emplace_back(std::move(command_context), current_timeline, false);
             if (!submission.callbacks.empty()) {
                 event_queue.emplace_back(
                     VulkanCallbackBatch{std::move(submission.callbacks), false},
@@ -12729,13 +12607,12 @@ void VkCopyQueue::RHIThreadLoop() {
     }
 }
 
-UniquePtr<VulkanAllocator> VkCopyQueue::GetAllocator() {
-    auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
-    if (allocator) {
-        // allocator->ResetCmdList();
-        return std::move(allocator);
+UniquePtr<VulkanCommandContext> VkCopyQueue::AcquireCommandContext() {
+    auto command_context = std::move(UniquePtr<VulkanCommandContext>(command_contexts.Pop()));
+    if (command_context) {
+        return std::move(command_context);
     }
-    return MakeUnique<VulkanAllocator>(&device, EQueueType::Copy);
+    return MakeUnique<VulkanCommandContext>(&device, EQueueType::Copy);
 }
 
 void VkCopyQueue::CompleteAll(uint64 _timeline) {

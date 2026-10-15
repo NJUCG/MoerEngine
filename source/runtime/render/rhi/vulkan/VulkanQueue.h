@@ -1,9 +1,9 @@
 #pragma once
 #include "PixelFormat.h"
-#include "VulkanCommon.h"
-#include "VulkanAllocator.h"
 #include "VulkanCommand.h"
+#include "VulkanCommandContext.h"
 #include "VulkanCommandQueries.h"
+#include "VulkanCommon.h"
 #include "VulkanDescriptor.h"
 #include "VulkanFault.h"
 // #include "VulkanDevice.h"
@@ -279,9 +279,9 @@ struct VulkanCallbackBatch {
     bool                         success_only{false};
 };
 
-struct VulkanAllocatorBatch {
-    Array<UniquePtr<VulkanAllocator>> submitted;
-    Array<UniquePtr<VulkanAllocator>> abandoned;
+struct VulkanCommandContextBatch {
+    Array<UniquePtr<VulkanCommandContext>> submitted;
+    Array<UniquePtr<VulkanCommandContext>> abandoned;
 };
 
 struct VulkanDeferredReleaseBatch {
@@ -342,41 +342,41 @@ struct VulkanBatchCompletionSettlement {
 };
 
 // Runtime-recorded submissions cross the Submission -> Completion boundary as
-// one move-only ownership packet.  Keeping the command payload, allocator
+// one move-only ownership packet. Keeping the command payload, command context
 // retirement, descriptor lease, callbacks, signals, and deferred releases in
 // one variant alternative makes that handoff atomic: no exception can leave a
 // partially published completion sequence behind.
 struct VulkanSubmitCompletionBatch {
     VulkanSubmitCompletionBatch(
-        VulkanOperationResult                    _outcome,
-        VulkanOperationContext                   _context,
-        bool                                     _gpu_submitted,
-        bool                                     _owns_queue_timeline,
-        CmdSubmit&&                              _submit,
-        VulkanAllocatorBatch&&                   _allocators,
+        VulkanOperationResult                      _outcome,
+        VulkanOperationContext                     _context,
+        bool                                       _gpu_submitted,
+        bool                                       _owns_queue_timeline,
+        CmdSubmit&&                                _submit,
+        VulkanCommandContextBatch&&                _command_contexts,
         std::optional<VulkanDescriptorPushLease>&& _descriptor_lease,
-        Array<RHIResource*>&&                    _deferred_releases,
-        VulkanBatchCompletionTicket              _batch_completion = {}
+        Array<RHIResource*>&&                      _deferred_releases,
+        VulkanBatchCompletionTicket                _batch_completion = {}
     ) noexcept :
         outcome(_outcome),
         context(_context),
         gpu_submitted(_gpu_submitted),
         owns_queue_timeline(_owns_queue_timeline),
         submit(std::move(_submit)),
-        allocators(std::move(_allocators)),
+        command_contexts(std::move(_command_contexts)),
         descriptor_lease(std::move(_descriptor_lease)),
         deferred_releases(std::move(_deferred_releases)),
         batch_completion(std::move(_batch_completion)) {}
 
     VulkanSubmitCompletionBatch(
-        VulkanOperationResult      _outcome,
-        VulkanOperationContext     _context,
-        bool                       _gpu_submitted,
-        bool                       _owns_queue_timeline,
-        CmdSubmit&&                _submit,
-        VulkanAllocatorBatch&&     _allocators,
+        VulkanOperationResult       _outcome,
+        VulkanOperationContext      _context,
+        bool                        _gpu_submitted,
+        bool                        _owns_queue_timeline,
+        CmdSubmit&&                 _submit,
+        VulkanCommandContextBatch&& _command_contexts,
         VulkanDescriptorPushLease&& _descriptor_lease,
-        Array<RHIResource*>&&      _deferred_releases,
+        Array<RHIResource*>&&       _deferred_releases,
         VulkanBatchCompletionTicket _batch_completion = {}
     ) noexcept :
         outcome(_outcome),
@@ -384,7 +384,7 @@ struct VulkanSubmitCompletionBatch {
         gpu_submitted(_gpu_submitted),
         owns_queue_timeline(_owns_queue_timeline),
         submit(std::move(_submit)),
-        allocators(std::move(_allocators)),
+        command_contexts(std::move(_command_contexts)),
         descriptor_lease(std::move(_descriptor_lease)),
         deferred_releases(std::move(_deferred_releases)),
         batch_completion(std::move(_batch_completion)) {}
@@ -399,13 +399,13 @@ struct VulkanSubmitCompletionBatch {
     bool                                     gpu_submitted{false};
     bool                                     owns_queue_timeline{false};
     CmdSubmit                                submit;
-    VulkanAllocatorBatch                     allocators;
+    VulkanCommandContextBatch                command_contexts;
     std::optional<VulkanDescriptorPushLease> descriptor_lease;
     Array<RHIResource*>                      deferred_releases;
     VulkanBatchCompletionTicket              batch_completion{};
 };
 
-enum class EVulkanPresentorRetirementState : uint8_t {
+enum class EVulkanPresentContextRetirementState : uint8_t {
     Unused,
     RecordedNotSubmitted,
     Submitted,
@@ -413,43 +413,39 @@ enum class EVulkanPresentorRetirementState : uint8_t {
 
 // Present has a different submission contract from CmdSubmit: native copy
 // submission can succeed even when vkQueuePresentKHR asks for swapchain
-// recreation. Keep its presentor and retained resources in one move-only
+// recreation. Keep its present context and retained resources in one move-only
 // packet so they cross Submission -> Completion atomically.
 struct VulkanPresentCompletionBatch {
     VulkanPresentCompletionBatch(
-        VulkanOperationResult              _outcome,
-        VulkanOperationContext             _context,
-        bool                               _gpu_submitted,
-        bool                               _owns_queue_timeline,
-        EVulkanPresentorRetirementState    _presentor_state,
-        UniquePtr<VulkanPresentor>&&       _presentor,
-        SwapchainRef&&                     _swapchain,
-        TextureRef&&                       _source_texture,
-        Array<RHIResource*>&&              _deferred_releases,
-        PresentationCompletionTicket       _presentation_completion,
-        VkFence                            _wsi_completion_fence,
-        bool                               _wsi_enqueued,
-        bool                               _uses_present_fence,
-        bool _scripted_fence_status_allowed = false
+        VulkanOperationResult                _outcome,
+        VulkanOperationContext               _context,
+        bool                                 _gpu_submitted,
+        bool                                 _owns_queue_timeline,
+        EVulkanPresentContextRetirementState _present_context_state,
+        UniquePtr<VulkanPresentContext>&&    _present_context,
+        SwapchainRef&&                       _swapchain,
+        TextureRef&&                         _source_texture,
+        Array<RHIResource*>&&                _deferred_releases,
+        PresentationCompletionTicket         _presentation_completion,
+        VkFence                              _wsi_completion_fence,
+        bool                                 _wsi_enqueued,
+        bool                                 _uses_present_fence,
+        bool                                 _scripted_fence_status_allowed = false
     ) noexcept :
         outcome(_outcome),
         context(_context),
         gpu_submitted(_gpu_submitted),
         owns_queue_timeline(_owns_queue_timeline),
-        presentor_state(_presentor_state),
-        presentor(std::move(_presentor)),
+        present_context_state(_present_context_state),
+        present_context(std::move(_present_context)),
         swapchain(std::move(_swapchain)),
         source_texture(std::move(_source_texture)),
         deferred_releases(std::move(_deferred_releases)),
-        presentation_completion(
-            std::move(_presentation_completion)
-        ),
+        presentation_completion(std::move(_presentation_completion)),
         wsi_completion_fence(_wsi_completion_fence),
         wsi_enqueued(_wsi_enqueued),
         uses_present_fence(_uses_present_fence),
-        scripted_fence_status_allowed(
-            _scripted_fence_status_allowed
-        ) {}
+        scripted_fence_status_allowed(_scripted_fence_status_allowed) {}
 
     VulkanPresentCompletionBatch(const VulkanPresentCompletionBatch&) = delete;
     VulkanPresentCompletionBatch& operator=(const VulkanPresentCompletionBatch&) = delete;
@@ -460,10 +456,8 @@ struct VulkanPresentCompletionBatch {
     VulkanOperationContext          context;
     bool                            gpu_submitted{false};
     bool                            owns_queue_timeline{false};
-    EVulkanPresentorRetirementState presentor_state{
-        EVulkanPresentorRetirementState::Unused
-    };
-    UniquePtr<VulkanPresentor>      presentor;
+    EVulkanPresentContextRetirementState present_context_state{EVulkanPresentContextRetirementState::Unused};
+    UniquePtr<VulkanPresentContext>      present_context;
     SwapchainRef                    swapchain;
     TextureRef                      source_texture;
     Array<RHIResource*>             deferred_releases;
@@ -498,10 +492,10 @@ public:
         VulkanSubmitCompletionBatch,
         VulkanPresentCompletionBatch,
         VulkanPresentationCompletionProbeForTesting,
-        UniquePtr<VulkanAllocator>,
-        VulkanAllocatorBatch,
+        UniquePtr<VulkanCommandContext>,
+        VulkanCommandContextBatch,
         VulkanDescriptorPushLease,
-        UniquePtr<VulkanPresentor>,
+        UniquePtr<VulkanPresentContext>,
         VulkanCallbackBatch,
         VulkanDeferredReleaseBatch,
         VulkanCompletionMarker,
@@ -647,8 +641,8 @@ public:
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
     VulkanDevice&                             vk_device;
-    LockFreeQueueBase<VulkanAllocator, false> allocators;
-    LockFreeQueueBase<VulkanPresentor, false> presentors;
+    LockFreeQueueBase<VulkanCommandContext, false> command_contexts;
+    LockFreeQueueBase<VulkanPresentContext, false> present_contexts;
     DEQueue<QueueEvent>                       event_queue;
 
 #if WITH_CUDA
@@ -801,7 +795,7 @@ private:
     };
 
     // Current-backend ownership packet at the translate/submit boundary. The
-    // command buffers remain valid because their allocator owners travel in
+    // command buffers remain valid because their command context owners travel in
     // the same move-only packet until the completion queue takes ownership.
     struct CurrentVulkanRecordedSubmitProfile {
         bool                                  enabled{false};
@@ -827,7 +821,7 @@ private:
         uint64                                  timeline{0};
         bool                                    has_commands{false};
         Array<VulkanCmdList*>                   ordered_cmd_lists;
-        VulkanAllocatorBatch                    allocators;
+        VulkanCommandContextBatch                command_contexts;
         std::optional<VulkanDescriptorPushLease> descriptor_lease;
         Array<RHIResource*>                     deferred_releases;
         VulkanBatchCompletionTicket             batch_completion{};
@@ -915,20 +909,20 @@ private:
         CurrentVulkanRecordedSubmit& _recorded,
         const VulkanOperationResult&  _outcome
     ) noexcept;
-    void                       CommitPresentCompletion(
-        const VulkanOperationResult&       _outcome,
-        const VulkanOperationContext&      _context,
-        bool                               _gpu_submitted,
-        EVulkanPresentorRetirementState    _presentor_state,
-        UniquePtr<VulkanPresentor>&&       _presentor,
-        SwapchainRef&&                     _swapchain,
-        TextureRef&&                       _source_texture,
-        Array<RHIResource*>&&              _deferred_releases,
-        uint64                             _timeline,
-        PresentationCompletionTicket       _presentation_completion,
-        VkFence                            _wsi_completion_fence,
-        bool                               _wsi_enqueued,
-        bool                               _uses_present_fence
+    void CommitPresentCompletion(
+        const VulkanOperationResult&         _outcome,
+        const VulkanOperationContext&        _context,
+        bool                                 _gpu_submitted,
+        EVulkanPresentContextRetirementState _present_context_state,
+        UniquePtr<VulkanPresentContext>&&    _present_context,
+        SwapchainRef&&                       _swapchain,
+        TextureRef&&                         _source_texture,
+        Array<RHIResource*>&&                _deferred_releases,
+        uint64                               _timeline,
+        PresentationCompletionTicket         _presentation_completion,
+        VkFence                              _wsi_completion_fence,
+        bool                                 _wsi_enqueued,
+        bool                                 _uses_present_fence
     ) noexcept;
     void                       RegisterPresentationCompletionState(
         const PresentationCompletionStateRef& _state
@@ -965,8 +959,8 @@ private:
         bool                          _gpu_success,
         bool                          _release_safe
     ) noexcept;
-    UniquePtr<VulkanAllocator> GetAllocator();
-    UniquePtr<VulkanPresentor> GetPresentor();
+    UniquePtr<VulkanCommandContext> AcquireCommandContext();
+    UniquePtr<VulkanPresentContext> AcquirePresentContext();
     void                       CompleteAll(uint64 _timeline);
     void                       EnsureRecordCalibration();
     void                       RecordRhiRecordProfile(const RhiRecordExecuteSample& _sample);
@@ -1050,8 +1044,8 @@ private:
                        active_presentation_completion_states{};
     std::jthread completion_thread;
     std::jthread rhi_thread;
-    Array<UniquePtr<VulkanAllocator>> allocator_quarantine;
-    Array<UniquePtr<VulkanPresentor>> presentor_quarantine;
+    Array<UniquePtr<VulkanCommandContext>> command_context_quarantine;
+    Array<UniquePtr<VulkanPresentContext>> present_context_quarantine;
 };
 class VkCopyQueue : public CopyQueue {
 public:
@@ -1062,8 +1056,8 @@ public:
     using EventType = std::variant<
         VulkanSubmissionEvent,
         VulkanSubmitCompletionBatch,
-        UniquePtr<VulkanAllocator>,
-        UniquePtr<VulkanPresentor>,
+        UniquePtr<VulkanCommandContext>,
+        UniquePtr<VulkanPresentContext>,
         VulkanCallbackBatch,
         VulkanCompletionMarker,
         IOSignalEvt,
@@ -1197,7 +1191,7 @@ private:
         CmdSubmit                           submit;
         VulkanOperationContext              context{};
         uint64                              logical_timeline{0};
-        VulkanAllocatorBatch                allocators{};
+        VulkanCommandContextBatch            command_contexts{};
         VulkanBatchCompletionTicket         batch_completion{};
         VulkanPresentationSourceStateProgram presentation_source_program;
         RHITransferableOwnershipGate::Lease execution_lease{};
@@ -1226,9 +1220,9 @@ private:
         CurrentVulkanCopyRecordedSubmit& _recorded,
         const VulkanOperationResult&      _outcome
     ) noexcept;
-    UniquePtr<VulkanAllocator>                GetAllocator();
+    UniquePtr<VulkanCommandContext>                AcquireCommandContext();
     void                                      CompleteAll(uint64 _timeline);
-    LockFreeQueueBase<VulkanAllocator, false> allocators;
+    LockFreeQueueBase<VulkanCommandContext, false> command_contexts;
     DEQueue<IOEvent>                          event_queue;
 
 private:
@@ -1267,6 +1261,6 @@ private:
     std::mutex                                     io_mutex;
     Queue<std::pair<CommandList&&, uint64>>        io_rhi_cmdlists;
     std::mutex                                     rhi_mutex;
-    Array<UniquePtr<VulkanAllocator>>              allocator_quarantine;
+    Array<UniquePtr<VulkanCommandContext>>         command_context_quarantine;
 };
 } // namespace Moer::Render

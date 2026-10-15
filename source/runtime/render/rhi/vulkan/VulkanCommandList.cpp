@@ -8,6 +8,7 @@
 #include "rhi/RHIResource.h"
 
 #include "VulkanCommand.h"
+#include "VulkanCommandQueries.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
@@ -16,7 +17,6 @@
 #include "VulkanRHIResource.h"
 #include <string_view>
 
-#include "VulkanAllocator.h"
 #include "shader/ShaderPipeline.h"
 
 #include <cstdint>
@@ -27,6 +27,43 @@
 #include <variant>
 #include <vector>
 namespace Moer::Render {
+
+VulkanCommandPool::VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_type) :
+    VulkanDeviceObject(_device),
+    queue_type(_queue_type) {
+    // Use the selected queue-role mapping, including vendor overrides, so the
+    // command pool belongs to the same family as the actual submission queue.
+    uint32_t family_index = m_device->GetQueueFamilyIndex(_queue_type);
+
+    VkCommandPoolCreateInfo pool_info = {
+        .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .pNext            = nullptr,
+        .flags            = 0,
+        .queueFamilyIndex = family_index
+    };
+
+    VK_CHECK_RESULT(vkCreateCommandPool(_device->GetDevice(), &pool_info, nullptr, &command_pool));
+}
+
+VulkanCommandPool::~VulkanCommandPool() {
+    if (command_pool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(m_device->GetDevice(), command_pool, nullptr);
+        command_pool = VK_NULL_HANDLE;
+    }
+}
+
+std::string_view VulkanCommandPool::GetQueueName() const {
+    switch (queue_type) {
+        case EQueueType::Graphics:
+            return "Graphics";
+        case EQueueType::Compute:
+            return "Compute";
+        case EQueueType::Copy:
+            return "Copy";
+        default:
+            return "Unknown";
+    }
+}
 
 VkPipelineStageFlagBits2 GetPipelineStageFromPassType(EPassType _pass) {
     switch (_pass) {

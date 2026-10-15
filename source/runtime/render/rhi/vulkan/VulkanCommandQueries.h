@@ -59,7 +59,7 @@ private:
 };
 
 // Query pools, slots, tokens, and prepared results for one command recording.
-// This object stays with the allocator through Submission and Completion.
+// This object stays with the command context through Submission and Completion.
 class VulkanCommandQueries {
 public:
     VulkanCommandQueries(VulkanDevice& _device, EQueueType _queue_type);
@@ -69,7 +69,7 @@ public:
     // Reserve before recording: timestamps use one slot per boundary;
     // occlusion begin/end pairs share one slot.
     void EnsureQueryCapacity(size_t _timestamp_slot_count, size_t _occlusion_pair_count);
-    // A recycled allocator can switch native/degraded timestamp capability
+    // A recycled command context can switch native/degraded timestamp capability
     // only before recording its first query boundary.
     void
     ConfigureTimestampCapabilityForRecording(uint32 _valid_bits, EVulkanTimestampQueryResetMode _reset_mode);
@@ -80,7 +80,7 @@ public:
     }
 
     // Prepare reads native results without publishing. The queue retires
-    // submission signals and allocator callbacks before publishing the batch,
+    // submission signals and command context callbacks before publishing the batch,
     // then releases query callbacks only after every result is published.
     [[nodiscard]] VkResult PrepareQueriesAfterGpuCompletion(const VulkanOperationContext& _context) noexcept;
 
@@ -171,9 +171,9 @@ private:
     uint32                         timestamp_valid_bits{0};
     EVulkanTimestampQueryResetMode timestamp_reset_mode{EVulkanTimestampQueryResetMode::Unsupported};
     double                         timestamp_period_ns{0.0};
-    // Most allocators never record an explicit Query command. Lazily creating
+    // Most recordings never contain an explicit Query command. Lazily creating
     // this pool avoids adding a native driver object to every ordinary,
-    // parallel-worker, fallback, and Copy allocator.
+    // parallel-worker, fallback, and Copy command context.
     std::optional<VkNativeQueryPool> timestamp_pool;
     std::optional<VkNativeQueryPool> occlusion_pool;
 };

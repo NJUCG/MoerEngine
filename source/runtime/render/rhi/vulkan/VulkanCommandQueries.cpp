@@ -184,7 +184,7 @@ void VulkanCommandQueries::PublishQueriesAfterGpuCompletion(
     bool              _gpu_success,
     std::string_view  _failure_reason
 ) noexcept {
-    // Publish every token in the allocator before releasing any callback.
+    // Publish every token in the command context before releasing any callback.
     // A callback may synchronously inspect another query from this packet.
     PublishTimestampQueriesAfterGpuCompletion(_batch, _gpu_success, _failure_reason);
     PublishOcclusionQueriesAfterGpuCompletion(_batch, _gpu_success, _failure_reason);
@@ -257,7 +257,7 @@ void VulkanCommandQueries::RecordTimestampQuery(VulkanCmdList& _cmd_list, const 
         throw std::runtime_error("invalid Vulkan timestamp query token");
     }
     if (_cmd.GetQueueType() != queue_type) {
-        throw std::runtime_error("Vulkan timestamp query command queue does not match allocator");
+        throw std::runtime_error("Vulkan timestamp query command queue does not match command context");
     }
     if (timestamp_reset_mode == EVulkanTimestampQueryResetMode::Unsupported) {
         throw std::runtime_error("Vulkan timestamp query recording is unsupported on this queue");
@@ -315,7 +315,7 @@ void VulkanCommandQueries::EnsureOcclusionQueryCapacity(size_t _required_count) 
         return;
     }
     if (queue_type != EQueueType::Graphics) {
-        throw std::runtime_error("Vulkan occlusion queries require a Graphics allocator");
+        throw std::runtime_error("Vulkan occlusion queries require a Graphics command context");
     }
     if (next_occlusion_query != 0 || !occlusion_query_records.empty()) {
         throw std::logic_error("Vulkan occlusion query pool can grow only before recording");

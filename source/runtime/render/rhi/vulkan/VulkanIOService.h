@@ -1,7 +1,7 @@
-#include "VulkanAllocator.h"
+#include "RenderAPI.h"
+#include "VulkanCommandContext.h"
 #include "VulkanDevice.h"
 #include "VulkanQueue.h"
-#include "RenderAPI.h"
 #include "misc/STL.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -88,11 +88,11 @@ public:
     }
 
 private:
-    UniquePtr<VulkanAllocator> GetAllocator() {
-        if (allocators.size() >= max_allocators) {
+    UniquePtr<VulkanCommandContext> AcquireCommandContext() {
+        if (command_contexts.size() >= max_command_contexts) {
         }
-        auto allocator = MakeUnique<VulkanAllocator>(&m_device, EQueueType::Copy);
-        return std::move(allocator);
+        auto command_context = MakeUnique<VulkanCommandContext>(&m_device, EQueueType::Copy);
+        return std::move(command_context);
     }
     void Complete(uint64 _timeline) {
         while (executed_frame < _timeline) {
@@ -103,12 +103,12 @@ private:
     void Tick();
 
 private:
-    VulkanDevice&                       m_device;
-    VkCopyQueue&                        m_queue;
-    DEQueue<UniquePtr<VulkanAllocator>> allocators;
-    static constexpr uint32_t           max_allocators = 2;
-    std::atomic_uint64_t                executed_frame = 0;
-    std::atomic_uint64_t                last_frame     = 0;
+    VulkanDevice&                           m_device;
+    VkCopyQueue&                            m_queue;
+    DEQueue<UniquePtr<VulkanCommandContext>> command_contexts;
+    static constexpr uint32_t                max_command_contexts = 2;
+    std::atomic_uint64_t                     executed_frame = 0;
+    std::atomic_uint64_t                     last_frame     = 0;
 
     class VulkanStorage*        storage;
     Queue<VulkanCommitSession*> commit_sessions;
