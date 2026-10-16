@@ -1212,7 +1212,7 @@ public:
 struct VkCmdPreprocessor {
     VkTracker&                      tracker;
     FunctionTable                   m_funcs;
-    VulkanTemporaryBufferAllocator& buffer_allocator;
+    VulkanTemporaryBufferAllocator& temporary_buffer_allocator;
     VulkanDevice&                   device;
     EQueueType                      current_queue;
 
@@ -1224,14 +1224,14 @@ struct VkCmdPreprocessor {
     VkCmdPreprocessor(
         VulkanDevice&                   _device,
         VkTracker&                      _tracker,
-        VulkanTemporaryBufferAllocator& _buffer_allocator,
+        VulkanTemporaryBufferAllocator& _temporary_buffer_allocator,
         FunctionTable                   _funcs,
         const TCachedArgArray&          _cached_args,
         EQueueType                      _current_queue = EQueueType::Graphics
     ) :
         device(_device),
         tracker(_tracker),
-        buffer_allocator(_buffer_allocator),
+        temporary_buffer_allocator(_temporary_buffer_allocator),
         m_funcs(_funcs),
         cached_args(_cached_args),
         current_queue(_current_queue) {}
@@ -1531,7 +1531,7 @@ struct VkCmdPreprocessor {
 
     void Visit(const UploadBufferCmd* _cmd) {
         auto data_span  = _cmd->Data();
-        auto tmp_buffer = buffer_allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer = temporary_buffer_allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
         device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
         _cmd->staging_buffer = tmp_buffer;
 
@@ -1549,7 +1549,7 @@ struct VkCmdPreprocessor {
     void Visit(const UploadTextureCmd* _cmd) {
         auto data_span  = _cmd->Data();
         auto tmp_buffer =
-            buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
+            temporary_buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
         device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
         _cmd->staging_buffer = tmp_buffer;
 
@@ -1629,7 +1629,7 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const CopyBackBufferCmd* _cmd) {
-        auto tmp_buffer = buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
         auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
@@ -1640,7 +1640,7 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const CopyBackTextureCmd* _cmd) {
-        auto tmp_buffer = buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
         auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
@@ -1716,7 +1716,7 @@ struct VkCmdPreprocessor {
             }
             scratch_size += scratch_alignment;
 
-            scratch = buffer_allocator.AllocateScratch(scratch_size);
+            scratch = temporary_buffer_allocator.AllocateScratch(scratch_size);
         }
         tracker.RecordState(
             ResourceCast(scratch.GetBuffer()),
@@ -3611,7 +3611,7 @@ public:
 
             staging_size = current_offset;
 
-            staging_buffer = command_context.GetBufferAllocator().AllocateShaderBuffer(staging_size);
+            staging_buffer = command_context.GetTemporaryBufferAllocator().AllocateShaderBuffer(staging_size);
 
             //copy cpu data to staging buffer
             if (b_array) {
@@ -3807,10 +3807,10 @@ public:
         uint64           alignment_offset       = aligned_device_address - raw_device_address;
 
         if (to_update.size() != 0) {
-            BufferView staging = command_context.GetBufferAllocator().AllocateShaderBuffer(
+            BufferView staging = command_context.GetTemporaryBufferAllocator().AllocateShaderBuffer(
                 to_update.size() * sizeof(VkAccelerationStructureInstanceKHR)
             );
-            BufferView indices = command_context.GetBufferAllocator().AllocateShaderBuffer(
+            BufferView indices = command_context.GetTemporaryBufferAllocator().AllocateShaderBuffer(
                 to_update.size() * sizeof(uint32) * 2
             );
 
@@ -6751,7 +6751,7 @@ bool VkCommandQueue::TryExecuteParallel(
     VkCmdPreprocessor preprocessor(
         vk_device,
         tracker,
-        tracker_owner->GetBufferAllocator(),
+        tracker_owner->GetTemporaryBufferAllocator(),
         _function_table,
         _submit.cached_args,
         queue.GetType()
@@ -8438,7 +8438,7 @@ void VkCommandQueue::ExecuteNow(
     VkCmdPreprocessor preprocessor(
         vk_device,
         tracker,
-        vk_command_context.GetBufferAllocator(),
+        vk_command_context.GetTemporaryBufferAllocator(),
         function_table,
         _submit.cached_args,
         queue.GetType()
@@ -11609,7 +11609,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
         VkCmdPreprocessor preprocessor(
             device,
             vk_tracker,
-            vk_command_context.GetBufferAllocator(),
+            vk_command_context.GetTemporaryBufferAllocator(),
             {},
             recorded->submit.cached_args,
             EQueueType::Copy
@@ -12531,7 +12531,7 @@ void VkCopyQueue::RHIThreadLoop() {
         vk_cmd_list.BeginLabel("IO Copy", {0.0f, 1.0f, 1.0f, 1.0f});
 
         VkCmdPreprocessor preprocessor(
-            device, vk_tracker, vk_command_context.GetBufferAllocator(), {}, {}, EQueueType::Copy
+            device, vk_tracker, vk_command_context.GetTemporaryBufferAllocator(), {}, {}, EQueueType::Copy
         );
         VkCmdVisitor      visitor(device, vk_command_context, vk_tracker, vk_cmd_list, {});
 

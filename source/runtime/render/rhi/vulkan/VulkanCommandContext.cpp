@@ -42,22 +42,15 @@ bool InvokeCompletionCallbacksNoexcept(
 VulkanCommandContextBase::VulkanCommandContextBase(VulkanDevice* _device, EQueueType _type) :
     VulkanDeviceObject(_device),
     queue_type(_type),
-    tracker(_type) {
-    command_pool.emplace(_device, _type);
-    cmd_list.emplace(&command_pool.value(), *_device);
-}
+    tracker(_type),
+    command_pool(_device, _type),
+    cmd_list(&command_pool, *_device) {}
 
-VulkanCommandContextBase::~VulkanCommandContextBase() {
-    secondary_cmd_list.reset();
-    cmd_list.reset();
-    command_pool.reset();
-    on_complete.clear();
-    tracker.Reset();
-}
+VulkanCommandContextBase::~VulkanCommandContextBase() = default;
 
 VulkanCmdList& VulkanCommandContextBase::PrepareSecondaryCmdList() {
     if (!secondary_cmd_list.has_value()) {
-        secondary_cmd_list.emplace(&command_pool.value(), *m_device, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
+        secondary_cmd_list.emplace(&command_pool, *m_device, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
     }
     return secondary_cmd_list.value();
 }
@@ -84,7 +77,7 @@ bool VulkanCommandContextBase::ResetCommandPool() {
     }
 
     const VkResult result = m_device->ResetCommandPool(
-        command_pool->GetHandle(),
+        command_pool.GetHandle(),
         VulkanOperationContext{
             .operation  = EVulkanFaultOperation::CommandPoolReset,
             .queue_type = queue_type,
@@ -92,7 +85,7 @@ bool VulkanCommandContextBase::ResetCommandPool() {
         }
     );
     if (result == VK_SUCCESS) {
-        cmd_list->SetDescriptorPushLease({});
+        cmd_list.SetDescriptorPushLease({});
         if (secondary_cmd_list.has_value()) {
             secondary_cmd_list->SetDescriptorPushLease({});
         }
@@ -117,7 +110,7 @@ bool VulkanCommandContextBase::ResetAbandoned() {
 
 VulkanCommandContext::VulkanCommandContext(VulkanDevice* _device, EQueueType _type) :
     VulkanCommandContextBase(_device, _type),
-    buffer_allocator(*_device),
+    temporary_buffer_allocator(*_device),
     queries(*_device, _type) {}
 
 void VulkanCommandContext::EnsureQueryCapacity(size_t _timestamp_slot_count, size_t _occlusion_pair_count) {
@@ -175,7 +168,7 @@ bool VulkanCommandContext::Reset() {
     if (!ResetCommandPool()) {
         return false;
     }
-    buffer_allocator.Reset();
+    temporary_buffer_allocator.Reset();
     queries.ClearRecords();
     return true;
 }
