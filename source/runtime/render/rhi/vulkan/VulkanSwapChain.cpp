@@ -5,28 +5,20 @@
 #include "VulkanSwapChain.h"
 
 #include "PixelFormat.h"
+#include "VulkanDevice.h"
+#include "VulkanRHIResource.h"
 #include "VulkanUtil.h"
 #include "log/LogSystem.h"
 #include "misc/MMemory.h"
-#include "misc/Traits.h"
-#include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
-#include "rhi/RHIResource.h"
-#include "rhi/RHIResourceInitilizer.h"
-#include "rhi/RHIThreadOwnership.h"
 
-#include "VulkanPlatform.h"
-
-#include "VulkanCommand.h"
-#include "VulkanDevice.h"
-#include "VulkanMacroUtils.h"
-#include "VulkanRHIResource.h"
 #include <GLFW/glfw3.h>
-#include <atomic>
-#include <mutex>
-#include <thread>
-
-#include <stdint.h>
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <exception>
+#include <string>
+#include <utility>
 
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 namespace Moer::Render {
@@ -158,53 +150,41 @@ ChooseSwapPresentMode(const Moer::Array<VkPresentModeKHR>& _available_present_mo
     return present_mode;
 }
 
-VkExtent2D
-ChooseSwapExtent(uint32_t* width, uint32_t* height, const VkSurfaceCapabilitiesKHR& _capabilities) {
-    if (_capabilities.currentExtent.width != static_cast<uint32_t>(-1)) {
-        *width  = _capabilities.currentExtent.width;
-        *height = _capabilities.currentExtent.height;
+VkExtent2D ChooseSwapExtent(VkExtent2D _requested_extent, const VkSurfaceCapabilitiesKHR& _capabilities) {
+    if (_capabilities.currentExtent.width != UINT32_MAX) {
         return _capabilities.currentExtent;
     }
-    VkExtent2D extent = {static_cast<uint32_t>(*width), static_cast<uint32_t>(*height)};
+    VkExtent2D extent = _requested_extent;
     extent.width =
         std::clamp(extent.width, _capabilities.minImageExtent.width, _capabilities.maxImageExtent.width);
     extent.height =
         std::clamp(extent.height, _capabilities.minImageExtent.height, _capabilities.maxImageExtent.height);
-
-    *width  = extent.width;
-    *height = extent.height;
 
     return extent;
 }
 
 } // namespace
 
-VkSwapchain::VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info) :
+VkSwapchain::VkSwapchain(VulkanDevice& _device, const SwapchainCreateInfo& _info) :
     Swapchain(),
-    device(*static_cast<VulkanDevice*>(&_device)) {
+    device(_device) {
     static_cast<void>(CreateOrRecreate(_info));
 }
 bool VkSwapchain::WaitFrameInFlight() {
-    if (!device.HasDeviceExtension(
-            VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
-        )) {
+    if (!device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
         return !device.IsFaulted();
     }
-    return PreparePresentFence(image_idx);
+    return PreparePresentFence(present_serial);
 }
 
-PresentationCompletionTicket VkSwapchain::ReservePresentCompletion(
-    PresentationCompletionIdentity _identity
-) {
-    const PresentationCompletionStateRef& state =
-        GetPresentationCompletionState();
-    if (!state || max_frames_in_flight == 0 || present_slots.empty()) {
+PresentationCompletionTicket VkSwapchain::ReservePresentCompletion(PresentationCompletionIdentity _identity) {
+    const PresentationCompletionStateRef& state = GetPresentationCompletionState();
+    if (!state || present_slots.empty()) {
         return {};
     }
 
-    const uint32 slot_index =
-        static_cast<uint32>(image_idx % max_frames_in_flight);
-    PresentSlot& slot = present_slots[slot_index];
+    const uint32 slot_index = static_cast<uint32>(present_serial % present_slots.size());
+    PresentSlot& slot       = present_slots[slot_index];
     ++slot.generation;
     if (slot.generation == 0) {
         ++slot.generation;
@@ -381,10 +361,10 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    const auto&        details = support_query.details;
-    VkSurfaceFormatKHR new_fmt = ChooseSwapSurfaceFormat(details.formats, _info.preferred_format);
-    Extent2D           new_size{_info.size.x, _info.size.y};
-    ChooseSwapExtent(&new_size.x, &new_size.y, details.capabilities);
+    const auto&        details    = support_query.details;
+    VkSurfaceFormatKHR new_fmt    = ChooseSwapSurfaceFormat(details.formats, _info.preferred_format);
+    const VkExtent2D   new_extent = ChooseSwapExtent({_info.size.x, _info.size.y}, details.capabilities);
+    const Extent2D     new_size{new_extent.width, new_extent.height};
     if (new_size.x == 0 || new_size.y == 0) {
         LOG_WARNING("Swapchain recreate skipped due to zero swapchain extent.");
         return false;
@@ -542,7 +522,7 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    const uint new_max_frames_in_flight = std::min(max_frames_in_flight, uint(image_cnt));
+    const uint new_present_slot_count = std::min(max_frames_in_flight, uint(image_cnt));
     // Every successful lifecycle transaction receives fresh unsignalled Present
     // fences. Completion owns observation, Submission owns slot reset, and the
     // Render owner may destroy the retired set only after its targeted drain;
@@ -570,9 +550,9 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         );
     }
 
-    new_present_slots.resize(new_max_frames_in_flight);
+    new_present_slots.resize(new_present_slot_count);
     VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    for (uint i = 0; i < new_max_frames_in_flight; i++) {
+    for (uint i = 0; i < new_present_slot_count; i++) {
         result = vkCreateFence(device.GetDevice(), &fence_info, VK_NULL_HANDLE, &new_present_slots[i].fence);
         if (result != VK_SUCCESS) {
             new_present_slots[i].fence = VK_NULL_HANDLE;
@@ -582,7 +562,7 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             return false;
         }
         device.SetResourceName(
-            uint64(new_present_slots[i].fence), VK_OBJECT_TYPE_FENCE, "InFlightFence_" + std::to_string(i)
+            uint64(new_present_slots[i].fence), VK_OBJECT_TYPE_FENCE, "PresentFence_" + std::to_string(i)
         );
     }
 
@@ -624,10 +604,9 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     new_sc                        = VK_NULL_HANDLE;
     size                          = new_size;
     format                        = new_format;
-    max_frames_in_flight          = new_max_frames_in_flight;
     swapchain_images              = std::move(new_swapchain_images);
     present_slots                 = std::move(new_present_slots);
-    image_idx                     = 0;
+    present_serial                = 0;
     const bool presentation_ready = IsPresentationReady();
     if (presentation_ready) {
         native_surface_recreate_pending_ = false;
@@ -667,38 +646,30 @@ void VkSwapchain::DestroyPresentSlots(Array<PresentSlot>& _slots) {
     _slots.clear();
 }
 
-VkSemaphore VkSwapchain::GetRenderFinishedFence(uint _image_index) {
+VkSemaphore VkSwapchain::GetRenderFinishedSemaphore(uint _image_index) const {
     return swapchain_images[_image_index % swapchain_images.size()].render_finished_semaphore;
 }
-TextureView VkSwapchain::GetSwapchainImage(uint _index) {
+TextureView VkSwapchain::GetSwapchainImage(uint _index) const {
     return swapchain_images[_index % swapchain_images.size()].view;
 }
-VkSwapchain::AcquireResult VkSwapchain::AquireNextImage(
-    VkSemaphore _ready_semaphore,
-    uint64      _timeout
-) {
+VkSwapchain::AcquireResult VkSwapchain::AcquireNextImage(VkSemaphore _ready_semaphore, uint64 _timeout) {
     assert(_ready_semaphore != VK_NULL_HANDLE);
-    uint32_t aquire_idx = UINT32_MAX;
-    const VulkanOperationResult outcome = device.AcquireNextImage(
+    uint32_t                    image_index = UINT32_MAX;
+    const VulkanOperationResult outcome     = device.AcquireNextImage(
         handle,
         _timeout,
         _ready_semaphore,
         VK_NULL_HANDLE,
-        &aquire_idx,
+        &image_index,
         VulkanOperationContext{
-            .operation  = EVulkanFaultOperation::AcquireNextImage,
-            .queue_type = EQueueType::Graphics,
-            .queue      = device.GetGraphicsQueue(),
-            .timeline   = image_idx,
+                .operation  = EVulkanFaultOperation::AcquireNextImage,
+                .queue_type = EQueueType::Graphics,
+                .queue      = device.GetGraphicsQueue(),
+                .timeline   = present_serial,
         }
     );
-    if ((outcome.result == VK_SUCCESS || outcome.result == VK_SUBOPTIMAL_KHR) &&
-        aquire_idx != UINT32_MAX) {
-        return {
-            outcome,
-            _ready_semaphore,
-            aquire_idx
-        };
+    if ((outcome.result == VK_SUCCESS || outcome.result == VK_SUBOPTIMAL_KHR) && image_index != UINT32_MAX) {
+        return {outcome, _ready_semaphore, image_index};
     }
     return {outcome, VK_NULL_HANDLE, UINT32_MAX};
 }
@@ -727,16 +698,15 @@ VkSwapchain::PresentResult VkSwapchain::Present(
         set_wsi_mode(EPresentationWsiCompletionMode::Immediate);
         return present_result;
     }
-    VkSemaphore finished_semaphores[] = {GetRenderFinishedFence(_index)};
+    VkSemaphore finished_semaphores[] = {GetRenderFinishedSemaphore(_index)};
     // 如果启用了 VK_EXT_swapchain_maintenance1，则使用 present fence 优化队列同步；
     // 否则退回到兼容路径，不挂 VkSwapchainPresentFenceInfoEXT，避免验证层报扩展未启用。
-    const bool use_present_fence =
-        device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+    const bool use_present_fence = device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
 
     VkSwapchainPresentFenceInfoEXT present_fence_info{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
     if (use_present_fence) {
         present_fence_info.swapchainCount = 1;
-        present_fence_info.pFences        = &present_slots[image_idx % present_slots.size()].fence;
+        present_fence_info.pFences        = &present_slots[present_serial % present_slots.size()].fence;
     }
 
     VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
@@ -794,22 +764,21 @@ VkSwapchain::PresentResult VkSwapchain::Present(
             );
         } else {
             set_wsi_mode(
-                present_result.outcome.status ==
-                        EVulkanOperationStatus::Faulted ?
+                present_result.outcome.status == EVulkanOperationStatus::Faulted ?
                     EPresentationWsiCompletionMode::Failed :
                     EPresentationWsiCompletionMode::Immediate
             );
         }
     }
-    ++image_idx;
+    ++present_serial;
     return present_result;
 }
 
-bool VkSwapchain::PreparePresentFence(uint64 _present_idx) {
+bool VkSwapchain::PreparePresentFence(uint64 _present_serial) {
     if (present_slots.empty()) {
         return false;
     }
-    const uint32 slot_index = static_cast<uint32>(_present_idx % present_slots.size());
+    const uint32 slot_index = static_cast<uint32>(_present_serial % present_slots.size());
     PresentSlot& slot       = present_slots[slot_index];
     if (!slot.completion.IsValid()) {
         return !device.IsFaulted();
@@ -833,7 +802,7 @@ bool VkSwapchain::PreparePresentFence(uint64 _present_idx) {
             .operation  = EVulkanFaultOperation::PresentFenceReset,
             .queue_type = EQueueType::Graphics,
             .queue      = device.GetPresentQueue(),
-            .timeline   = _present_idx,
+            .timeline   = _present_serial,
         }
     );
     if (result != VK_SUCCESS) {

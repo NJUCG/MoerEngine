@@ -5,20 +5,19 @@
 #ifndef VULKAN_SWAP_CHAIN_H
 #define VULKAN_SWAP_CHAIN_H
 
-#include "PixelFormat.h"
+#include "VulkanCommon.h"
 #include "VulkanFault.h"
-#include "VulkanPlatform.h"
-#include "misc/CountableRef.h"
-#include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
+
 namespace Moer::Render {
 
+class VulkanDevice;
 class VulkanTexture;
 
 class VkSwapchain : public Swapchain {
 public:
     struct AcquireResult {
-        VulkanOperationResult outcome;
+        VulkanOperationResult outcome{};
         VkSemaphore           ready_semaphore{VK_NULL_HANDLE};
         uint32                image_index{UINT32_MAX};
 
@@ -33,29 +32,30 @@ public:
         bool                  wsi_enqueued{false};
         bool                  uses_present_fence{false};
     };
-    VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info);
+    VkSwapchain(VulkanDevice& _device, const SwapchainCreateInfo& _info);
     ~VkSwapchain() override;
-    [[nodiscard]] bool Recreate(const SwapchainCreateInfo& _info) override;
-    AcquireResult      AquireNextImage(VkSemaphore _ready_semaphore, uint64 _timeout = UINT64_MAX);
-    TextureView        GetSwapchainImage(uint _index);
-    VkSemaphore        GetRenderFinishedFence(uint _image_index);
-    PresentResult      Present(
-             VkQueue                             _queue,
-             uint                                _image_index,
-             uint64                              _timeline,
-             uint64                              _work_serial,
-             const PresentationCompletionTicket& _completion
-         );
+    [[nodiscard]] bool          Recreate(const SwapchainCreateInfo& _info) override;
+    [[nodiscard]] AcquireResult AcquireNextImage(VkSemaphore _ready_semaphore, uint64 _timeout = UINT64_MAX);
+    [[nodiscard]] TextureView   GetSwapchainImage(uint _index) const;
+    [[nodiscard]] VkSemaphore   GetRenderFinishedSemaphore(uint _image_index) const;
+    [[nodiscard]] PresentResult Present(
+        VkQueue                             _queue,
+        uint                                _image_index,
+        uint64                              _timeline,
+        uint64                              _work_serial,
+        const PresentationCompletionTicket& _completion
+    );
     [[nodiscard]] bool IsPresentationReady() const noexcept override {
         return handle != VK_NULL_HANDLE && surface != VK_NULL_HANDLE && surface_info.IsValid() &&
-               surface_info.GetIdentity().IsValid() && size.x != 0 && size.y != 0;
+               size.x != 0 && size.y != 0;
     }
     [[nodiscard]] WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept override {
         return surface_info.GetIdentity();
     }
 
-    bool                         WaitFrameInFlight();
-    PresentationCompletionTicket ReservePresentCompletion(PresentationCompletionIdentity _identity);
+    [[nodiscard]] bool WaitFrameInFlight();
+    [[nodiscard]] PresentationCompletionTicket
+    ReservePresentCompletion(PresentationCompletionIdentity _identity);
 
 private:
     struct SwapchainImage {
@@ -71,7 +71,7 @@ private:
     };
 
     [[nodiscard]] bool CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
-    bool               PreparePresentFence(uint64 _present_idx);
+    [[nodiscard]] bool PreparePresentFence(uint64 _present_serial);
     void               DestroyImages(Array<SwapchainImage>& _images);
     void               DestroyPresentSlots(Array<PresentSlot>& _slots);
 
@@ -81,9 +81,10 @@ private:
     VkSwapchainKHR       handle  = VK_NULL_HANDLE;
     VkSurfaceKHR         surface = VK_NULL_HANDLE;
     SwapchainSurfaceInfo surface_info{};
-    class VulkanDevice&  device;
-    uint64               image_idx            = 0; // present queue timeline value
-    uint                 max_frames_in_flight = 3;
+    VulkanDevice&        device;
+    uint64               present_serial = 0;
+
+    static constexpr uint max_frames_in_flight = 3;
 
     bool native_surface_recreate_pending_ = false;
 };

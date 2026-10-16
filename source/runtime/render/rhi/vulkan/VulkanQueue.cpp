@@ -9086,7 +9086,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     receipt_status, receipt_stage, final_outcome, EPresentStage::Submit
                 );
             } else {
-                const VkSwapchain::AcquireResult acquire = sc->AquireNextImage(
+                const VkSwapchain::AcquireResult acquire = sc->AcquireNextImage(
                     present_context->GetImageReadySemaphore(), rhi_thread_enabled ? 0 : 50'000'000
                 );
                 final_outcome = acquire.outcome;
@@ -9192,7 +9192,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     );
                     queue.Signal(timeline, _timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
                     queue.Wait(acquire.ready_semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-                    queue.Signal(sc->GetRenderFinishedFence(idx), VK_PIPELINE_STAGE_2_COPY_BIT);
+                    queue.Signal(sc->GetRenderFinishedSemaphore(idx), VK_PIPELINE_STAGE_2_COPY_BIT);
                     const VulkanOperationResult submit_outcome =
                         queue.Submit(vk_command_context.GetCmdList(), context);
                     final_outcome = submit_outcome;
