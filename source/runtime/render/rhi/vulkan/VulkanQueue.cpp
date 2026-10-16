@@ -1212,7 +1212,7 @@ public:
 struct VkCmdPreprocessor {
     VkTracker&                      tracker;
     FunctionTable                   m_funcs;
-    VulkanTemporaryBufferAllocator& buffer_allocator;
+    VulkanTemporaryBufferAllocator& temporary_buffer_allocator;
     VulkanDevice&                   device;
     EQueueType                      current_queue;
 
@@ -1224,14 +1224,14 @@ struct VkCmdPreprocessor {
     VkCmdPreprocessor(
         VulkanDevice&                   _device,
         VkTracker&                      _tracker,
-        VulkanTemporaryBufferAllocator& _buffer_allocator,
+        VulkanTemporaryBufferAllocator& _temporary_buffer_allocator,
         FunctionTable                   _funcs,
         const TCachedArgArray&          _cached_args,
         EQueueType                      _current_queue = EQueueType::Graphics
     ) :
         device(_device),
         tracker(_tracker),
-        buffer_allocator(_buffer_allocator),
+        temporary_buffer_allocator(_temporary_buffer_allocator),
         m_funcs(_funcs),
         cached_args(_cached_args),
         current_queue(_current_queue) {}
@@ -1531,7 +1531,7 @@ struct VkCmdPreprocessor {
 
     void Visit(const UploadBufferCmd* _cmd) {
         auto data_span  = _cmd->Data();
-        auto tmp_buffer = buffer_allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer = temporary_buffer_allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
         device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
         _cmd->staging_buffer = tmp_buffer;
 
@@ -1549,7 +1549,7 @@ struct VkCmdPreprocessor {
     void Visit(const UploadTextureCmd* _cmd) {
         auto data_span  = _cmd->Data();
         auto tmp_buffer =
-            buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
+            temporary_buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
         device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
         _cmd->staging_buffer = tmp_buffer;
 
@@ -1629,7 +1629,7 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const CopyBackBufferCmd* _cmd) {
-        auto tmp_buffer = buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
         auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
@@ -1640,7 +1640,7 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const CopyBackTextureCmd* _cmd) {
-        auto tmp_buffer = buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
         auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
@@ -1716,7 +1716,7 @@ struct VkCmdPreprocessor {
             }
             scratch_size += scratch_alignment;
 
-            scratch = buffer_allocator.AllocateScratch(scratch_size);
+            scratch = temporary_buffer_allocator.AllocateScratch(scratch_size);
         }
         tracker.RecordState(
             ResourceCast(scratch.GetBuffer()),
@@ -2636,12 +2636,12 @@ public:
             const ReadbackToken readback = _cmd.OwningReadback();
             const uint64 logical_size = _cmd.ByteSize();
             command_context.AddOnComplete(
-                [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
+                [tmp_buffer, device = m_device, readback, logical_size] {
                     struct WriterContext {
-                        VulkanCmdList* command_list{};
-                        BufferView     staging{};
-                        uint64         byte_size{};
-                    } context{&cmd_list, tmp_buffer, logical_size};
+                        VulkanDevice* device{};
+                        BufferView    staging{};
+                        uint64        byte_size{};
+                    } context{device, tmp_buffer, logical_size};
                     (void)ReadbackBackendAccess::MaterializePayload(
                         readback,
                         &context,
@@ -2655,7 +2655,7 @@ public:
                                     "Vulkan buffer readback payload size mismatch"
                                 );
                             }
-                            writer->command_list->CopyData(
+                            writer->device->CopyData(
                                 _destination.data(),
                                 writer->staging,
                                 writer->byte_size
@@ -2666,8 +2666,8 @@ public:
             );
         } else {
             command_context.AddOnComplete(
-                [tmp_buffer, &cmd_list(cmd_list), destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
-                    cmd_list.CopyData(
+                [tmp_buffer, device = m_device, destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
+                    device->CopyData(
                         destination, tmp_buffer, logical_size
                     );
                 }
@@ -2697,12 +2697,12 @@ public:
             const ReadbackToken readback = _cmd.OwningReadback();
             const uint64 logical_size = _cmd.ByteSize();
             command_context.AddOnComplete(
-                [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
+                [tmp_buffer, device = m_device, readback, logical_size] {
                     struct WriterContext {
-                        VulkanCmdList* command_list{};
-                        BufferView     staging{};
-                        uint64         byte_size{};
-                    } context{&cmd_list, tmp_buffer, logical_size};
+                        VulkanDevice* device{};
+                        BufferView    staging{};
+                        uint64        byte_size{};
+                    } context{device, tmp_buffer, logical_size};
                     (void)ReadbackBackendAccess::MaterializePayload(
                         readback,
                         &context,
@@ -2716,7 +2716,7 @@ public:
                                     "Vulkan texture readback payload size mismatch"
                                 );
                             }
-                            writer->command_list->CopyData(
+                            writer->device->CopyData(
                                 _destination.data(),
                                 writer->staging,
                                 writer->byte_size
@@ -2727,8 +2727,8 @@ public:
             );
         } else {
             command_context.AddOnComplete(
-                [tmp_buffer, &cmd_list(cmd_list), destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
-                    cmd_list.CopyData(
+                [tmp_buffer, device = m_device, destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
+                    device->CopyData(
                         destination.data(), tmp_buffer, logical_size
                     );
                 }
@@ -2801,10 +2801,10 @@ public:
         }
 
         const PipelineHandle& pso = _cmd.Pipeline();
-        cmd_list.SetPso(_cmd.Pipeline());
+        cmd_list.BindPipeline(_cmd.Pipeline());
         const auto& args = _cmd.Args(cached_args);
 
-        cmd_list.BindDescriptors(pso, args);
+        cmd_list.BindShaderArguments(pso, args);
 
         std::visit(
             Overload{
@@ -2896,18 +2896,13 @@ public:
                 PipelineUsesStencilAttachment(_cmd.Pipeline());
             rendering_envelope.emplace(pass_info, uses_stencil_attachment);
             VkRenderingInfo dynamic_rendering_info = rendering_envelope->RenderingInfo();
-            cmd_list.BeginRendering(std::move(dynamic_rendering_info));
+            cmd_list.BeginRendering(dynamic_rendering_info);
         }
 
-        cmd_list.SetPso(_cmd.Pipeline());
+        cmd_list.BindPipeline(_cmd.Pipeline());
 
-        cmd_list.BindDescriptors(pso, args);
+        cmd_list.BindShaderArguments(pso, args);
 
-        if (args.constants.size() > 0) {
-            cmd_list.UploadPushConstants(
-                pso, std::span<const uint>(args.constants.data(), args.constants.size())
-            );
-        }
         const auto& cmd_vertex_buffers = _cmd.VertexBuffers();
         const auto& draw_datas         = _cmd.DrawData();
         const auto& rect               = pass_info.render_area;
@@ -2923,7 +2918,7 @@ public:
         viewport.y += viewport.height;
         viewport.height = -viewport.height;
 
-        cmd_list.SetViewPort(viewport);
+        cmd_list.SetViewport(viewport);
         cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
         for (const auto& draw_data : draw_datas) {
             auto num_of_vertex_buffers = draw_data.vtx_views.size();
@@ -2940,12 +2935,7 @@ public:
                     vtx_offsets.emplace_back(vtx_view.offset);
                 }
 
-                cmd_list.SetVertexBuffers(
-                    0,
-                    num_of_vertex_buffers,
-                    std::span<VkBuffer>(vertex_buffers.data(), num_of_vertex_buffers),
-                    std::span<VkDeviceSize>(vtx_offsets.data(), num_of_vertex_buffers)
-                );
+                cmd_list.SetVertexBuffers(0, vertex_buffers, vtx_offsets);
             }
 
             std::visit(
@@ -2977,7 +2967,7 @@ public:
                                 //draw indirect with count buffer
                                 auto* count_buffer =
                                     ResourceCast(draw_data.indirect_draw_param->count_buffer->GetBuffer());
-                                cmd_list.DrawIndexedIndirectCnt(
+                                cmd_list.DrawIndexedIndirectCount(
                                     indirect_buffer,
                                     draw_data.indirect_draw_param->buffer.GetByteOffset(),
                                     count_buffer,
@@ -3015,7 +3005,7 @@ public:
                                 //draw indirect with count buffer
                                 auto* count_buffer =
                                     ResourceCast(draw_data.indirect_draw_param->count_buffer->GetBuffer());
-                                cmd_list.DrawIndirectCnt(
+                                cmd_list.DrawIndirectCount(
                                     indirect_buffer,
                                     draw_data.indirect_draw_param->buffer.GetByteOffset(),
                                     count_buffer,
@@ -3064,7 +3054,7 @@ public:
                 DrawBatchUsesStencilAttachment(_cmd.draw_batch);
             rendering_envelope.emplace(pass_info, uses_stencil_attachment);
             VkRenderingInfo dynamic_rendering_info = rendering_envelope->RenderingInfo();
-            cmd_list.BeginRendering(std::move(dynamic_rendering_info));
+            cmd_list.BeginRendering(dynamic_rendering_info);
         }
         const auto& rect = pass_info.render_area;
         VkViewport  viewport{
@@ -3077,12 +3067,12 @@ public:
         };
         viewport.y += viewport.height;
         viewport.height = -viewport.height;
-        cmd_list.SetViewPort(viewport);
+        cmd_list.SetViewport(viewport);
         cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
 
         for (const DrawBatchElement& draw_cmd : _cmd.draw_batch.draw_cmds) {
 
-            cmd_list.SetPso(draw_cmd.handle);
+            cmd_list.BindPipeline(draw_cmd.handle);
             const ArrayArguments* arg = std::holds_alternative<ArrayArguments>(draw_cmd.args) ?
                                             &std::get<ArrayArguments>(draw_cmd.args) :
                                             (std::holds_alternative<ArrayArgReference>(draw_cmd.args) ?
@@ -3090,13 +3080,8 @@ public:
                                                  nullptr);
 
             PipelineHandle& pipeline = *const_cast<PipelineHandle*>(&draw_cmd.handle);
-            cmd_list.BindDescriptors(pipeline, *arg);
+            cmd_list.BindShaderArguments(pipeline, *arg);
 
-            if (arg && arg->constants.size() > 0) {
-                cmd_list.UploadPushConstants(
-                    pipeline, std::span<const uint>(arg->constants.data(), arg->constants.size())
-                );
-            }
             std::visit(
                 Overload{
                     [&](const Array<MeshDrawData>& _mesh_draw_cmds) {
@@ -3115,12 +3100,7 @@ public:
                                     vtx_offsets.emplace_back(vtx_view.offset);
                                 }
 
-                                cmd_list.SetVertexBuffers(
-                                    0,
-                                    num_of_vertex_buffers,
-                                    std::span<VkBuffer>(vertex_buffers.data(), num_of_vertex_buffers),
-                                    std::span<VkDeviceSize>(vtx_offsets.data(), num_of_vertex_buffers)
-                                );
+                                cmd_list.SetVertexBuffers(0, vertex_buffers, vtx_offsets);
                             }
 
                             std::visit(
@@ -3154,7 +3134,7 @@ public:
                                                 auto* count_buffer = ResourceCast(
                                                     draw_data.indirect_draw_param->count_buffer->GetBuffer()
                                                 );
-                                                cmd_list.DrawIndexedIndirectCnt(
+                                                cmd_list.DrawIndexedIndirectCount(
                                                     indirect_buffer,
                                                     draw_data.indirect_draw_param->buffer.GetByteOffset(),
                                                     count_buffer,
@@ -3195,7 +3175,7 @@ public:
                                                 auto* count_buffer = ResourceCast(
                                                     draw_data.indirect_draw_param->count_buffer->GetBuffer()
                                                 );
-                                                cmd_list.DrawIndirectCnt(
+                                                cmd_list.DrawIndirectCount(
                                                     indirect_buffer,
                                                     draw_data.indirect_draw_param->buffer.GetByteOffset(),
                                                     count_buffer,
@@ -3302,11 +3282,11 @@ public:
     //         .pDepthAttachment     = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
     //         .pStencilAttachment   = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr};
 
-    //     cmd_list.BeginRendering(std::move(dynamic_rendering_info));
+    //     cmd_list.BeginRendering(dynamic_rendering_info);
 
     //     for (const auto& [bitmask, pso] : _cmd.PipelineMap()) {
-    //         cmd_list.SetPso(pso);
-    //         cmd_list.BindDescriptors(pso, args);
+    //         cmd_list.BindPipeline(pso);
+    //         cmd_list.BindShaderArguments(pso, args);
 
     //         if (args.constants.size() > 0) {
     //             cmd_list.UploadPushConstants(
@@ -3326,7 +3306,7 @@ public:
     //         viewport.y += viewport.height;
     //         viewport.height = -viewport.height;
 
-    //         cmd_list.SetViewPort(viewport);
+    //         cmd_list.SetViewport(viewport);
     //         cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
     //         for (const auto& draw_data : draw_datas) {
     //             auto num_of_vertex_buffers = draw_data.vtx_views.size();
@@ -3611,14 +3591,14 @@ public:
 
             staging_size = current_offset;
 
-            staging_buffer = command_context.GetBufferAllocator().AllocateShaderBuffer(staging_size);
+            staging_buffer = command_context.GetTemporaryBufferAllocator().AllocateShaderBuffer(staging_size);
 
             //copy cpu data to staging buffer
             if (b_array) {
                 array_staging     = staging_buffer.buffer->GetView(array_staging_offset, array_staging_size);
                 array_indices_buf = staging_buffer.buffer->GetView(array_indices_offset, array_indices_size);
-                cmd_list.CopyData(array_staging, array_data.data(), array_staging_size);
-                cmd_list.CopyData(array_indices_buf, array_indices_dat.data(), array_indices_size);
+                m_device->CopyData(array_staging, array_data.data(), array_staging_size);
+                m_device->CopyData(array_indices_buf, array_indices_dat.data(), array_indices_size);
             }
 
             if (b_texture) {
@@ -3626,8 +3606,8 @@ public:
                     staging_buffer.buffer->GetView(texture_staging_offset, texture_staging_size);
                 texture_indices_buf =
                     staging_buffer.buffer->GetView(texture_indices_offset, texture_indices_size);
-                cmd_list.CopyData(texture_desc_staging, texture_data.data(), texture_staging_size);
-                cmd_list.CopyData(texture_indices_buf, texture_indices_dat.data(), texture_indices_size);
+                m_device->CopyData(texture_desc_staging, texture_data.data(), texture_staging_size);
+                m_device->CopyData(texture_indices_buf, texture_indices_dat.data(), texture_indices_size);
             }
 
             if (b_buffer) {
@@ -3635,15 +3615,15 @@ public:
                     staging_buffer.buffer->GetView(buffer_staging_offset, buffer_staging_size);
                 buffer_indices_buf =
                     staging_buffer.buffer->GetView(buffer_indices_offset, buffer_indices_size);
-                cmd_list.CopyData(buffer_desc_staging, buffer_data.data(), buffer_staging_size);
-                cmd_list.CopyData(buffer_indices_buf, buffer_indices_dat.data(), buffer_indices_size);
+                m_device->CopyData(buffer_desc_staging, buffer_data.data(), buffer_staging_size);
+                m_device->CopyData(buffer_indices_buf, buffer_indices_dat.data(), buffer_indices_size);
             }
         }
 
         //recording bindless array updates
         if (b_array) {
             cmd_list.BeginLabel("UpdateBindlessArray", {0.0f, 1.0f, 0.0f, 1.0f});
-            cmd_list.SetPso(shuffle_sd.handle);
+            cmd_list.BindPipeline(shuffle_sd.handle);
             ComponentShuffleShader::Arg arg;
 
             {
@@ -3651,7 +3631,7 @@ public:
                 arg.component_cnt = array_indices_dat.size();
                 arg.stride        = sizeof(uint) >> 2;
 
-                cmd_list.BindDescriptors(
+                cmd_list.BindShaderArguments(
                     shuffle_sd.handle,
                     shuffle_sd.SetArgs(
                         arg,
@@ -3670,7 +3650,7 @@ public:
                              ) >>
                              2;
 
-                cmd_list.BindDescriptors(
+                cmd_list.BindShaderArguments(
                     shuffle_sd.handle,
                     shuffle_sd.SetArgs(
                         arg,
@@ -3691,7 +3671,7 @@ public:
                              ) >>
                              2;
 
-                cmd_list.BindDescriptors(
+                cmd_list.BindShaderArguments(
                     shuffle_sd.handle,
                     shuffle_sd.SetArgs(
                         arg,
@@ -3807,10 +3787,10 @@ public:
         uint64           alignment_offset       = aligned_device_address - raw_device_address;
 
         if (to_update.size() != 0) {
-            BufferView staging = command_context.GetBufferAllocator().AllocateShaderBuffer(
+            BufferView staging = command_context.GetTemporaryBufferAllocator().AllocateShaderBuffer(
                 to_update.size() * sizeof(VkAccelerationStructureInstanceKHR)
             );
-            BufferView indices = command_context.GetBufferAllocator().AllocateShaderBuffer(
+            BufferView indices = command_context.GetTemporaryBufferAllocator().AllocateShaderBuffer(
                 to_update.size() * sizeof(uint32) * 2
             );
 
@@ -3821,15 +3801,15 @@ public:
                 to_update_indices[i] = {i, id};
             }
 
-            cmd_list.CopyData(
+            m_device->CopyData(
                 staging,
                 _cmd.InstanceData().data(),
                 to_update.size() * sizeof(VkAccelerationStructureInstanceKHR)
             );
-            cmd_list.CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
+            m_device->CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
 
             auto& shuffle_sd = m_device->GetInternalShaders().sd_component_shuffle;
-            cmd_list.SetPso(shuffle_sd.handle);
+            cmd_list.BindPipeline(shuffle_sd.handle);
 
             ComponentShuffleShader::Arg arg;
             arg.component_cnt = to_update.size();
@@ -3845,7 +3825,7 @@ public:
                 EPixelFormat::PF_UNDEFINED
             );
 
-            cmd_list.BindDescriptors(
+            cmd_list.BindShaderArguments(
                 shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, staging, aligned_instance_buffer_view)
             );
 
@@ -6751,7 +6731,7 @@ bool VkCommandQueue::TryExecuteParallel(
     VkCmdPreprocessor preprocessor(
         vk_device,
         tracker,
-        tracker_owner->GetBufferAllocator(),
+        tracker_owner->GetTemporaryBufferAllocator(),
         _function_table,
         _submit.cached_args,
         queue.GetType()
@@ -7315,11 +7295,11 @@ bool VkCommandQueue::TryExecuteParallel(
                                 runtime.rendering_envelope->RenderingInfo(
                                     VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT
                                 );
-                            assembly_cmd.BeginRendering(std::move(rendering_info));
-                            assembly_cmd.ExecuteCommands(secondaries);
+                            assembly_cmd.BeginRendering(rendering_info);
+                            assembly_cmd.ExecuteSecondaryCommands(secondaries);
                             assembly_cmd.EndRendering();
                         } else {
-                            assembly_cmd.ExecuteCommands(secondaries);
+                            assembly_cmd.ExecuteSecondaryCommands(secondaries);
                         }
                         runtime.worker_recorded = true;
                     } else {
@@ -7699,11 +7679,11 @@ bool VkCommandQueue::TryExecuteParallel(
                             runtime.rendering_envelope->RenderingInfo(
                                 VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT
                             );
-                        primary.BeginRendering(std::move(rendering_info));
-                        primary.ExecuteCommands(secondaries);
+                        primary.BeginRendering(rendering_info);
+                        primary.ExecuteSecondaryCommands(secondaries);
                         primary.EndRendering();
                     } else {
-                        primary.ExecuteCommands(secondaries);
+                        primary.ExecuteSecondaryCommands(secondaries);
                     }
                 }
                 const VkResult end_result =
@@ -8438,7 +8418,7 @@ void VkCommandQueue::ExecuteNow(
     VkCmdPreprocessor preprocessor(
         vk_device,
         tracker,
-        vk_command_context.GetBufferAllocator(),
+        vk_command_context.GetTemporaryBufferAllocator(),
         function_table,
         _submit.cached_args,
         queue.GetType()
@@ -11609,7 +11589,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
         VkCmdPreprocessor preprocessor(
             device,
             vk_tracker,
-            vk_command_context.GetBufferAllocator(),
+            vk_command_context.GetTemporaryBufferAllocator(),
             {},
             recorded->submit.cached_args,
             EQueueType::Copy
@@ -12531,7 +12511,7 @@ void VkCopyQueue::RHIThreadLoop() {
         vk_cmd_list.BeginLabel("IO Copy", {0.0f, 1.0f, 1.0f, 1.0f});
 
         VkCmdPreprocessor preprocessor(
-            device, vk_tracker, vk_command_context.GetBufferAllocator(), {}, {}, EQueueType::Copy
+            device, vk_tracker, vk_command_context.GetTemporaryBufferAllocator(), {}, {}, EQueueType::Copy
         );
         VkCmdVisitor      visitor(device, vk_command_context, vk_tracker, vk_cmd_list, {});
 

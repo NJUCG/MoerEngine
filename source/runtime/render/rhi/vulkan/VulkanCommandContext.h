@@ -15,7 +15,6 @@ namespace Moer::Render {
 // Shared command resources for ordinary recordings and presentation copies.
 class VulkanCommandContextBase : public VulkanDeviceObject {
 public:
-    VulkanCommandContextBase(VulkanDevice* _device, EQueueType _queue_type);
     virtual ~VulkanCommandContextBase();
     VulkanCommandContextBase(const VulkanCommandContextBase&)            = delete;
     VulkanCommandContextBase& operator=(const VulkanCommandContextBase&) = delete;
@@ -23,7 +22,7 @@ public:
     VulkanCommandContextBase& operator=(VulkanCommandContextBase&&)      = delete;
 
     VulkanCmdList& GetCmdList() {
-        return cmd_list.value();
+        return cmd_list;
     }
     // Secondary allocation is deliberately explicit. Call this on the
     // coordinator before publishing work to a record worker: Vulkan command
@@ -53,16 +52,19 @@ public:
     bool ResetAbandoned();
 
 protected:
+    VulkanCommandContextBase(VulkanDevice* _device, EQueueType _queue_type);
+
     bool ResetCommandPool();
 
-    std::optional<VulkanCommandPool> command_pool;
-    std::optional<VulkanCmdList>     cmd_list;
-    std::optional<VulkanCmdList>     secondary_cmd_list;
-
+    // Keep callbacks and tracker state alive until command resources are destroyed.
+    EQueueType                   queue_type{EQueueType::Ignore};
+    VkTracker                    tracker;
     Array<std::function<void()>> on_complete;
 
-    EQueueType queue_type{EQueueType::Ignore};
-    VkTracker  tracker;
+    // Reverse destruction releases both command buffers before their pool.
+    VulkanCommandPool           command_pool;
+    VulkanCmdList               cmd_list;
+    std::optional<VulkanCmdList> secondary_cmd_list;
 };
 
 // A recording and its resources travel together through Submission and Completion.
@@ -71,8 +73,8 @@ public:
     VulkanCommandContext(VulkanDevice* _device, EQueueType _queue_type);
     ~VulkanCommandContext() override = default;
 
-    VulkanTemporaryBufferAllocator& GetBufferAllocator() {
-        return buffer_allocator;
+    VulkanTemporaryBufferAllocator& GetTemporaryBufferAllocator() {
+        return temporary_buffer_allocator;
     }
 
     // Query recording. Slots and tokens belong to this context's recording.
@@ -101,7 +103,7 @@ public:
     bool Reset() override;
 
 private:
-    VulkanTemporaryBufferAllocator buffer_allocator;
+    VulkanTemporaryBufferAllocator temporary_buffer_allocator;
     VulkanCommandQueries           queries;
 };
 

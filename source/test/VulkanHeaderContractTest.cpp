@@ -35,6 +35,8 @@ static_assert(std::is_base_of_v<Moer::Render::VulkanGenericPlatform, Moer::Rende
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandPool>);
 static_assert(!std::is_copy_assignable_v<Moer::Render::VulkanCommandPool>);
 static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandPool>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCmdList>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCmdList>);
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandContextBase>);
 static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandContextBase>);
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanPresentContext>);
