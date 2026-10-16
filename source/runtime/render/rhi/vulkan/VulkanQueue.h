@@ -472,15 +472,18 @@ struct VulkanPresentationCompletionProbeForTesting {
     VulkanPresentationCompletionProbeForTesting(
         SwapchainRef                 _swapchain,
         PresentationCompletionTicket _completion,
-        bool                         _uses_present_fence
+        bool                         _uses_present_fence,
+        TextureRef                   _source_texture
     ) noexcept :
         swapchain(std::move(_swapchain)),
         completion(std::move(_completion)),
-        uses_present_fence(_uses_present_fence) {}
+        uses_present_fence(_uses_present_fence),
+        source_texture(std::move(_source_texture)) {}
 
     SwapchainRef                 swapchain{};
     PresentationCompletionTicket completion{};
     bool                         uses_present_fence{false};
+    TextureRef                   source_texture{};
 };
 
 struct VulkanCompletionMarker {};
@@ -631,7 +634,8 @@ public:
     EnqueuePresentationCompletionProbeForTesting(
         SwapchainRef                 _swapchain,
         PresentationCompletionTicket _completion,
-        bool                         _uses_present_fence
+        bool                         _uses_present_fence,
+        TextureRef                   _source_texture = {}
     );
     [[nodiscard]] RENDER_API bool
     RegisterPresentationCompletionStateForShutdownProbeForTesting(
@@ -955,6 +959,11 @@ private:
         PendingPresentRetirement& _pending
     ) noexcept;
     void                       FinalizePresentRetirement(
+        VulkanPresentCompletionBatch& _batch,
+        bool                          _gpu_success,
+        bool                          _release_safe
+    ) noexcept;
+    void ReleasePresentGpuResources(
         VulkanPresentCompletionBatch& _batch,
         bool                          _gpu_success,
         bool                          _release_safe

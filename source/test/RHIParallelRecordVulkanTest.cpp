@@ -11424,13 +11424,19 @@ void RunPresentationCompletionIntegrationBoundary() {
         blocked.GetIssueSequence(),
         ready.GetIssueSequence()
     );
+    TextureRef source = device.CreateTexture(
+        "present_gpu_retirement_probe",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC
+    );
     {
         ScopedPresentFenceStatusOverride status_override(
             fence_status
         );
         if (!graphics_queue.
                 EnqueuePresentationCompletionProbeForTesting(
-                    swapchain, blocked, true
+                    swapchain, blocked, true, source
                 ) ||
             !graphics_queue.
                 EnqueuePresentationCompletionProbeForTesting(
@@ -11465,14 +11471,15 @@ void RunPresentationCompletionIntegrationBoundary() {
             state->Freeze(401, 1);
         const PresentationDrainPoint ready_point =
             state->Freeze(402, 1);
-        if (state->OutstandingCount() != 1 ||
+        if (source->GetRefCount() != 1 ||
+            state->OutstandingCount() != 1 ||
             state->WaitRetired(blocked_point, 1ms) ||
             !state->WaitRetired(ready_point, 20ms) ||
             fence_status.ready_poll_count.load(
                 std::memory_order_acquire
             ) == 0) {
             throw std::runtime_error(
-                "targeted Present drain retired the wrong identity"
+                "Present retained GPU resources or retired the wrong identity"
             );
         }
 

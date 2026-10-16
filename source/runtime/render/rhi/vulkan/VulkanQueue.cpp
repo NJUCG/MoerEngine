@@ -9375,7 +9375,8 @@ void VkCommandQueue::CommitPresentCompletion(
 bool VkCommandQueue::EnqueuePresentationCompletionProbeForTesting(
     SwapchainRef                 _swapchain,
     PresentationCompletionTicket _completion,
-    bool                         _uses_present_fence
+    bool                         _uses_present_fence,
+    TextureRef                   _source_texture
 ) {
     if (queue.GetType() != EQueueType::Graphics ||
         !_swapchain || !_completion.IsValid()) {
@@ -9405,7 +9406,8 @@ bool VkCommandQueue::EnqueuePresentationCompletionProbeForTesting(
             retirement_serial,
             std::move(_swapchain),
             std::move(_completion),
-            _uses_present_fence
+            _uses_present_fence,
+            std::move(_source_texture)
         );
         retirement_enqueued_serial = retirement_serial;
     } catch (...) {
@@ -10292,23 +10294,15 @@ void VkCommandQueue::RhiThreadMain() {
     LOG_INFO("[Threading] RHIThread id = {} stopped", Platform::GetCurrentThreadID());
 }
 
-void VkCommandQueue::FinalizePresentRetirement(
+void VkCommandQueue::ReleasePresentGpuResources(
     VulkanPresentCompletionBatch& _batch,
     bool                          _gpu_success,
     bool                          _release_safe
 ) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Completion &&
-        "Present retirement belongs to the Completion owner"
+        "Present GPU resources belong to the Completion owner"
     );
-
-    PresentationCompletionStateRef completion_state{};
-    if (_batch.swapchain) {
-        completion_state =
-            _batch.swapchain->GetPresentationCompletionState();
-    }
-    PresentationCompletionTicket completion_ticket =
-        _batch.presentation_completion;
 
     if (_batch.present_context) {
         bool recycle_present_context = false;
@@ -10341,11 +10335,22 @@ void VkCommandQueue::FinalizePresentRetirement(
         }
     }
     _batch.deferred_releases.clear();
+    _batch.source_texture = nullptr;
+}
+
+void VkCommandQueue::FinalizePresentRetirement(
+    VulkanPresentCompletionBatch& _batch,
+    bool                          _gpu_success,
+    bool                          _release_safe
+) noexcept {
+    ReleasePresentGpuResources(_batch, _gpu_success, _release_safe);
+    const PresentationCompletionStateRef completion_state =
+        _batch.swapchain ? _batch.swapchain->GetPresentationCompletionState() : nullptr;
+    const PresentationCompletionTicket completion_ticket = _batch.presentation_completion;
 
     // No code below this point may observe the native Present fence or touch
     // retained Present resources. Drop strong resource ownership before
     // publishing the task-local retirement point to the Render owner.
-    _batch.source_texture        = nullptr;
     _batch.swapchain             = nullptr;
     _batch.wsi_completion_fence  = VK_NULL_HANDLE;
     _batch.wsi_enqueued          = false;
@@ -10886,6 +10891,10 @@ void VkCommandQueue::CompletionThreadMain() {
                         }
                     }
 
+                    ReleasePresentGpuResources(
+                        _batch, batch_gpu_success, batch_release_safe
+                    );
+
                     if (!batch_gpu_success &&
                         _batch.presentation_completion.IsValid()) {
                         if (_batch.wsi_enqueued &&
@@ -10970,7 +10979,7 @@ void VkCommandQueue::CompletionThreadMain() {
                         EVulkanPresentContextRetirementState::Unused,
                         UniquePtr<VulkanPresentContext>{},
                         std::move(_probe.swapchain),
-                        TextureRef{},
+                        std::move(_probe.source_texture),
                         Array<RHIResource*>{},
                         std::move(_probe.completion),
                         VK_NULL_HANDLE,
@@ -10978,6 +10987,7 @@ void VkCommandQueue::CompletionThreadMain() {
                         _probe.uses_present_fence,
                         true
                     };
+                    ReleasePresentGpuResources(completion_batch, true, true);
                     pending_present_retirements.emplace_back(
                         std::move(completion_batch),
                         true,
