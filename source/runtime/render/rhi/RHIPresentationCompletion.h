@@ -18,8 +18,8 @@ struct PresentationCompletionStateAccess;
 // backend selects exactly one mode after attempting Present:
 // - Immediate/Failed have no outstanding native WSI wait.
 // - PresentFence is completed by the Completion owner.
-// - QueueIdleFallback is resolved only after the Submission owner performs
-//   the backend's queue-idle fallback.
+// - QueueIdleFallback is completed by a subsequent image-acquire dependency,
+//   or by the Submission owner's queue-idle fallback during a drain.
 enum class EPresentationWsiCompletionMode : std::uint8_t {
     Immediate = 0,
     PresentFence,
@@ -145,6 +145,9 @@ public:
     bool MarkWsiComplete(
         const PresentationCompletionTicket& _ticket
     ) noexcept;
+    // The next acquisition's semaphore/fence wait must have completed, not
+    // merely the CPU call returning an image index.
+    bool MarkImageAvailable(const PresentationCompletionTicket& _previous_present) noexcept;
     bool MarkWsiFailed(
         const PresentationCompletionTicket& _ticket
     ) noexcept;

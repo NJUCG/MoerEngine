@@ -17,9 +17,11 @@ class VulkanTexture;
 class VkSwapchain : public Swapchain {
 public:
     struct AcquireResult {
-        VulkanOperationResult outcome{};
-        VkSemaphore           ready_semaphore{VK_NULL_HANDLE};
-        uint32                image_index{UINT32_MAX};
+        VulkanOperationResult         outcome{};
+        VkSemaphore                   ready_semaphore{VK_NULL_HANDLE};
+        uint32                        image_index{UINT32_MAX};
+        // Completed only after the GPU has waited for this acquisition.
+        PresentationCompletionTicket previous_present{};
 
         [[nodiscard]] bool HasImage() const {
             return image_index != UINT32_MAX;
@@ -58,9 +60,10 @@ public:
 
 private:
     struct SwapchainImage {
-        VulkanTexture* texture{nullptr};
-        TextureView    view{};
-        VkSemaphore    render_finished_semaphore{VK_NULL_HANDLE};
+        VulkanTexture*               texture{nullptr};
+        TextureView                  view{};
+        VkSemaphore                  render_finished_semaphore{VK_NULL_HANDLE};
+        PresentationCompletionTicket last_present{};
     };
 
     [[nodiscard]] bool CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);

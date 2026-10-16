@@ -615,7 +615,12 @@ VkSwapchain::AcquireResult VkSwapchain::AcquireNextImage(VkSemaphore _ready_sema
         }
     );
     if ((outcome.result == VK_SUCCESS || outcome.result == VK_SUBOPTIMAL_KHR) && image_index != UINT32_MAX) {
-        return {outcome, _ready_semaphore, image_index};
+        return {
+            outcome,
+            _ready_semaphore,
+            image_index,
+            std::exchange(swapchain_images[image_index].last_present, {})
+        };
     }
     return {outcome, VK_NULL_HANDLE, UINT32_MAX};
 }
@@ -700,6 +705,7 @@ VkSwapchain::PresentResult VkSwapchain::Present(
             set_wsi_mode(
                 EPresentationWsiCompletionMode::QueueIdleFallback
             );
+            swapchain_images[_index].last_present = _completion;
         } else {
             set_wsi_mode(
                 present_result.outcome.status == EVulkanOperationStatus::Faulted ?

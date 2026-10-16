@@ -6086,7 +6086,8 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
                 {},
                 VK_NULL_HANDLE,
                 false,
-                false
+                false,
+                {}
             );
             ResolvePresentReceiptNoexcept(
                 _receipt, false, PresentStatusFromVulkanOutcome(scripted.outcome), EPresentStage::Present
@@ -9043,6 +9044,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
     UniquePtr<VulkanPresentContext>      present_context{};
     Array<RHIResource*>             deferred_releases{};
     PresentationCompletionTicket    presentation_completion{};
+    PresentationCompletionTicket         previous_present{};
     VkFence                         wsi_completion_fence{VK_NULL_HANDLE};
     bool                            wsi_enqueued{false};
     bool                            uses_present_fence{false};
@@ -9101,6 +9103,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 );
 
                 if (acquire.HasImage()) {
+                    previous_present              = acquire.previous_present;
                     present_context_state = EVulkanPresentContextRetirementState::RecordedNotSubmitted;
                     auto&      vk_command_context = *present_context;
                     auto&      vk_cmd_list        = vk_command_context.GetCmdList();
@@ -9227,26 +9230,6 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                             present_result.wsi_enqueued;
                         uses_present_fence =
                             present_result.uses_present_fence;
-                        if (present_result.wsi_enqueued &&
-                            !present_result.uses_present_fence) {
-                            // Without swapchain-maintenance fences, leaving one
-                            // unresolved fallback record per frame would retain
-                            // command pools, semaphores, and swapchain resources
-                            // without bound until a resize. Performance is
-                            // secondary on this compatibility path: the sole
-                            // Submission owner resolves the current surface
-                            // frontier immediately with queue idle.
-                            const PresentationCompletionIdentity&
-                                identity =
-                                    presentation_completion.GetIdentity();
-                            ResolvePresentationQueueIdleFallback(
-                                _sc->GetPresentationCompletionState()->
-                                    Freeze(
-                                        identity.presentation_epoch,
-                                        identity.drawable_generation
-                                    )
-                            );
-                        }
                         AccumulatePresentReceiptOutcome(
                             receipt_status, receipt_stage, present_outcome, EPresentStage::Present
                         );
@@ -9313,7 +9296,8 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         std::move(presentation_completion),
         wsi_completion_fence,
         wsi_enqueued,
-        uses_present_fence
+        uses_present_fence,
+        std::move(previous_present)
     );
 
     if (receipt_status == EPresentStatus::Unresolved) {
@@ -9344,7 +9328,8 @@ void VkCommandQueue::CommitPresentCompletion(
     PresentationCompletionTicket         _presentation_completion,
     VkFence                              _wsi_completion_fence,
     bool                                 _wsi_enqueued,
-    bool                                 _uses_present_fence
+    bool                                 _uses_present_fence,
+    PresentationCompletionTicket         _previous_present
 ) noexcept {
     try {
         if (!_gpu_submitted &&
@@ -9373,7 +9358,9 @@ void VkCommandQueue::CommitPresentCompletion(
             std::move(_presentation_completion),
             _wsi_completion_fence,
             _wsi_enqueued,
-            _uses_present_fence
+            _uses_present_fence,
+            false,
+            std::move(_previous_present)
         );
         retirement_enqueued_serial = retirement_serial;
     } catch (...) {
@@ -9387,7 +9374,8 @@ bool VkCommandQueue::EnqueuePresentationCompletionProbeForTesting(
     SwapchainRef                 _swapchain,
     PresentationCompletionTicket _completion,
     bool                         _uses_present_fence,
-    TextureRef                   _source_texture
+    TextureRef                   _source_texture,
+    PresentationCompletionTicket _previous_present
 ) {
     if (queue.GetType() != EQueueType::Graphics ||
         !_swapchain || !_completion.IsValid()) {
@@ -9410,15 +9398,15 @@ bool VkCommandQueue::EnqueuePresentationCompletionProbeForTesting(
         const uint64 retirement_serial =
             retirement_enqueued_serial + 1;
         event_queue.emplace_back(
-            std::in_place_type<
-                VulkanPresentationCompletionProbeForTesting>,
+            std::in_place_type<VulkanPresentationCompletionProbeForTesting>,
             _completion.GetIssueSequence(),
             true,
             retirement_serial,
             std::move(_swapchain),
             std::move(_completion),
             _uses_present_fence,
-            std::move(_source_texture)
+            std::move(_source_texture),
+            std::move(_previous_present)
         );
         retirement_enqueued_serial = retirement_serial;
     } catch (...) {
@@ -10315,6 +10303,17 @@ void VkCommandQueue::ReleasePresentGpuResources(
         "Present GPU resources belong to the Completion owner"
     );
 
+    if (_gpu_success && _batch.previous_present.IsValid()) {
+        const auto& previous = _batch.previous_present;
+        const auto& state    = _batch.swapchain->GetPresentationCompletionState();
+        if (previous.GetWsiOutcome() == EPresentationWsiCompletionOutcome::Pending &&
+            !state->MarkImageAvailable(previous) &&
+            previous.GetWsiOutcome() == EPresentationWsiCompletionOutcome::Pending) {
+            std::terminate();
+        }
+    }
+    _batch.previous_present = {};
+
     if (_batch.present_context) {
         bool recycle_present_context = false;
         if (_batch.present_context_state == EVulkanPresentContextRetirementState::Submitted && _gpu_success &&
@@ -10972,7 +10971,8 @@ void VkCommandQueue::CompletionThreadMain() {
                         VK_NULL_HANDLE,
                         true,
                         _probe.uses_present_fence,
-                        true
+                        true,
+                        std::move(_probe.previous_present)
                     };
                     ReleasePresentGpuResources(completion_batch, true, true);
                     pending_present_retirements.emplace_back(std::move(completion_batch));

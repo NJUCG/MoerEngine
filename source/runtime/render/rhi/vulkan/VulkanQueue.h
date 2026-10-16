@@ -430,7 +430,8 @@ struct VulkanPresentCompletionBatch {
         VkFence                              _wsi_completion_fence,
         bool                                 _wsi_enqueued,
         bool                                 _uses_present_fence,
-        bool                                 _scripted_fence_status_allowed = false
+        bool                                 _scripted_fence_status_allowed = false,
+        PresentationCompletionTicket         _previous_present              = {}
     ) noexcept :
         outcome(_outcome),
         context(_context),
@@ -445,7 +446,8 @@ struct VulkanPresentCompletionBatch {
         wsi_completion_fence(_wsi_completion_fence),
         wsi_enqueued(_wsi_enqueued),
         uses_present_fence(_uses_present_fence),
-        scripted_fence_status_allowed(_scripted_fence_status_allowed) {}
+        scripted_fence_status_allowed(_scripted_fence_status_allowed),
+        previous_present(std::move(_previous_present)) {}
 
     VulkanPresentCompletionBatch(const VulkanPresentCompletionBatch&) = delete;
     VulkanPresentCompletionBatch& operator=(const VulkanPresentCompletionBatch&) = delete;
@@ -466,6 +468,7 @@ struct VulkanPresentCompletionBatch {
     bool                            wsi_enqueued{false};
     bool                            uses_present_fence{false};
     bool                            scripted_fence_status_allowed{false};
+    PresentationCompletionTicket         previous_present{};
 };
 
 struct VulkanPresentationCompletionProbeForTesting {
@@ -473,17 +476,20 @@ struct VulkanPresentationCompletionProbeForTesting {
         SwapchainRef                 _swapchain,
         PresentationCompletionTicket _completion,
         bool                         _uses_present_fence,
-        TextureRef                   _source_texture
+        TextureRef                   _source_texture,
+        PresentationCompletionTicket _previous_present
     ) noexcept :
         swapchain(std::move(_swapchain)),
         completion(std::move(_completion)),
         uses_present_fence(_uses_present_fence),
-        source_texture(std::move(_source_texture)) {}
+        source_texture(std::move(_source_texture)),
+        previous_present(std::move(_previous_present)) {}
 
     SwapchainRef                 swapchain{};
     PresentationCompletionTicket completion{};
     bool                         uses_present_fence{false};
     TextureRef                   source_texture{};
+    PresentationCompletionTicket previous_present{};
 };
 
 struct VulkanCompletionMarker {};
@@ -630,12 +636,12 @@ public:
     ) override;
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
-    [[nodiscard]] RENDER_API bool
-    EnqueuePresentationCompletionProbeForTesting(
+    [[nodiscard]] RENDER_API bool EnqueuePresentationCompletionProbeForTesting(
         SwapchainRef                 _swapchain,
         PresentationCompletionTicket _completion,
         bool                         _uses_present_fence,
-        TextureRef                   _source_texture = {}
+        TextureRef                   _source_texture   = {},
+        PresentationCompletionTicket _previous_present = {}
     );
     [[nodiscard]] RENDER_API bool
     RegisterPresentationCompletionStateForShutdownProbeForTesting(
@@ -926,7 +932,8 @@ private:
         PresentationCompletionTicket         _presentation_completion,
         VkFence                              _wsi_completion_fence,
         bool                                 _wsi_enqueued,
-        bool                                 _uses_present_fence
+        bool                                 _uses_present_fence,
+        PresentationCompletionTicket         _previous_present
     ) noexcept;
     void                       RegisterPresentationCompletionState(
         const PresentationCompletionStateRef& _state

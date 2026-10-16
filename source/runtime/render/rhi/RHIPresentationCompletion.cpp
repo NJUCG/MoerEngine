@@ -365,6 +365,25 @@ bool PresentationCompletionState::MarkWsiComplete(
     return true;
 }
 
+bool PresentationCompletionState::MarkImageAvailable(const PresentationCompletionTicket& _previous_present
+) noexcept {
+    {
+        std::scoped_lock lock(impl_->mutex);
+        const auto       record =
+            PresentationCompletionStateAccess::FindExactRecord(*impl_, *this, _previous_present);
+        if (record == impl_->records.end() ||
+            record->second.wsi_mode != EPresentationWsiCompletionMode::QueueIdleFallback) {
+            return false;
+        }
+        record->second.wsi_complete = true;
+        record->second.wsi_outcome->store(
+            EPresentationWsiCompletionOutcome::Succeeded, std::memory_order_release
+        );
+    }
+    impl_->wsi_cv.notify_all();
+    return true;
+}
+
 bool PresentationCompletionState::MarkWsiFailed(
     const PresentationCompletionTicket& _ticket
 ) noexcept {

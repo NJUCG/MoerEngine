@@ -216,7 +216,7 @@ void FailedPresentFenceOutcomeSurvivesRetirement() {
         state->PublishRetired(ticket) &&
             ticket.GetWsiOutcome() ==
                 EPresentationWsiCompletionOutcome::Failed,
-        "retirement erased the slot-visible failure outcome"
+        "retirement erased the ticket's failure outcome"
     );
 }
 
@@ -276,6 +276,35 @@ void QueueIdleFallbackIsTargetedAndOwnerResolved() {
         state->PublishRetired() == 1 &&
             state->WaitRetired(point, 20ms),
         "resolved fallback did not retire"
+    );
+}
+
+void ReacquisitionCompletesOnlyThePreviousPresent() {
+    const auto state    = PresentationCompletionState::Create();
+    const auto previous = state->Reserve(Identity(state, 101, 102, 1));
+    const auto current  = state->Reserve(Identity(state, 101, 102, 2));
+    for (const auto& ticket : {previous, current}) {
+        Expect(
+            state->SetWsiMode(ticket, EPresentationWsiCompletionMode::QueueIdleFallback) &&
+                state->MarkGpuComplete(ticket),
+            "reacquisition setup failed"
+        );
+    }
+    Expect(!state->WaitForWsi(previous, 1ms), "GPU completion alone retired the previous Present");
+    Expect(
+        state->MarkImageAvailable(previous) && state->PublishRetired(previous),
+        "completed acquisition did not retire the previous Present"
+    );
+    Expect(
+        !state->MarkImageAvailable(previous) && !state->WaitForWsi(current, 1ms) &&
+            state->OutstandingCount() == 1,
+        "previous acquisition completed the current Present"
+    );
+    const auto tail = state->Freeze();
+    Expect(
+        state->RequiresQueueIdle(tail) && state->ResolveQueueIdle(tail) && state->PublishRetired(current) &&
+            state->WaitRetired(tail, 20ms),
+        "the final unacquired Present did not drain through the compatibility fallback"
     );
 }
 
@@ -440,6 +469,7 @@ int main() {
         FailedPresentFenceOutcomeSurvivesRetirement();
         RetiredIssueRejectsLateCallbacks();
         QueueIdleFallbackIsTargetedAndOwnerResolved();
+        ReacquisitionCompletesOnlyThePreviousPresent();
         WaitersWakeAndStrongOwnersReleaseBoundedly();
 #if !defined(__APPLE__)
         Maintenance1CapabilityGateIsExplicitAndOptional();

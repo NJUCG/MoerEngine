@@ -11544,14 +11544,43 @@ void RunPresentationCompletionIntegrationBoundary() {
         );
     }
 
-    LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=PresentationCompletionIntegrationBoundary "
-        "present_fence=nonblocking_targeted "
-        "fence_owner=Completion completion_threads=1 "
-        "queue_idle_fallback=targeted "
-        "queue_idle_owner=Submission outstanding=0"
-    );
+    const auto previous = reserve(404, 4);
+    const auto current  = reserve(405, 5);
+    for (const auto& ticket : {previous, current}) {
+        if (!state->SetWsiMode(ticket, EPresentationWsiCompletionMode::QueueIdleFallback)) {
+            throw std::runtime_error("could not reserve reacquisition completion");
+        }
+    }
+    QueueIdleWaitCapture reacquire_idle{};
+    {
+        ScopedQueueIdleWaitObserver observer(reacquire_idle);
+        if (!graphics_queue.EnqueuePresentationCompletionProbeForTesting(swapchain, previous, false) ||
+            !graphics_queue.EnqueuePresentationCompletionProbeForTesting(
+                swapchain, current, false, {}, previous
+            )) {
+            throw std::runtime_error("could not enqueue reacquisition completion");
+        }
+        if (!state->WaitRetired(state->Freeze(404, 1), 5s) ||
+            current.GetWsiOutcome() != EPresentationWsiCompletionOutcome::Pending ||
+            state->OutstandingCount() != 1 || reacquire_idle.count.load(std::memory_order_acquire) != 0) {
+            throw std::runtime_error(
+                "reacquisition failed to retire only the previous Present without queue idle"
+            );
+        }
+        RHIExecutor::Get().DrainPresentation(RHIPresentationDrainTarget{swapchain, 405, 1});
+        if (state->HasOutstanding() || reacquire_idle.count.load(std::memory_order_acquire) != 1 ||
+            reacquire_idle.invalid.load(std::memory_order_acquire)) {
+            throw std::runtime_error("unacquired Present tail did not drain with one owned queue-idle wait");
+        }
+    }
+
+    LOG_INFO("[TESTCASE][PASS] "
+             "name=PresentationCompletionIntegrationBoundary "
+             "present_fence=nonblocking_targeted "
+        "blocked_records=6 gpu_source=released_before_wsi "
+             "fence_owner=Completion completion_threads=1 "
+             "queue_idle_fallback=targeted "
+             "queue_idle_owner=Submission reacquire=nonblocking outstanding=0");
 }
 
 void RunQueuedPresentShutdownBoundary() {
