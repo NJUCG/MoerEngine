@@ -13,6 +13,8 @@
 #include "rhi/RHIResource.h"
 namespace Moer::Render {
 
+class VulkanTexture;
+
 class VkSwapchain : public Swapchain {
 public:
     struct AcquireResult {
@@ -56,10 +58,25 @@ public:
     PresentationCompletionTicket ReservePresentCompletion(PresentationCompletionIdentity _identity);
 
 private:
-    Array<VkSemaphore>          render_finished_fences;
-    Array<class VulkanTexture*> swapchain_textures;
-    Array<TextureView>          swapchain_views;
-    Array<VkFence>              in_flight_fences;
+    struct SwapchainImage {
+        VulkanTexture* texture{nullptr};
+        TextureView    view{};
+        VkSemaphore    render_finished_semaphore{VK_NULL_HANDLE};
+    };
+
+    struct PresentSlot {
+        VkFence                      fence{VK_NULL_HANDLE};
+        PresentationCompletionTicket completion{};
+        uint64                       generation{0};
+    };
+
+    [[nodiscard]] bool CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
+    bool               PreparePresentFence(uint64 _present_idx);
+    void               DestroyImages(Array<SwapchainImage>& _images);
+    void               DestroyPresentSlots(Array<PresentSlot>& _slots);
+
+    Array<SwapchainImage> swapchain_images;
+    Array<PresentSlot>    present_slots;
 
     VkSwapchainKHR       handle  = VK_NULL_HANDLE;
     VkSurfaceKHR         surface = VK_NULL_HANDLE;
@@ -68,16 +85,7 @@ private:
     uint64               image_idx            = 0; // present queue timeline value
     uint                 max_frames_in_flight = 3;
 
-    [[nodiscard]] bool CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
-    bool               PreparePresentFence(uint64 _present_idx);
-
-    struct PresentFenceSlot {
-        PresentationCompletionTicket completion{};
-        uint64                       generation{0};
-    };
-
-    Array<PresentFenceSlot> present_fence_slots{};
-    bool                    native_surface_recreate_pending_ = false;
+    bool native_surface_recreate_pending_ = false;
 };
 } // namespace Moer::Render
 

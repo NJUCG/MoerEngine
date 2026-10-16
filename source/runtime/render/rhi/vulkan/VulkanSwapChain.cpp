@@ -198,14 +198,13 @@ PresentationCompletionTicket VkSwapchain::ReservePresentCompletion(
 ) {
     const PresentationCompletionStateRef& state =
         GetPresentationCompletionState();
-    if (!state || max_frames_in_flight == 0 ||
-        present_fence_slots.empty()) {
+    if (!state || max_frames_in_flight == 0 || present_slots.empty()) {
         return {};
     }
 
     const uint32 slot_index =
         static_cast<uint32>(image_idx % max_frames_in_flight);
-    PresentFenceSlot& slot = present_fence_slots[slot_index];
+    PresentSlot& slot = present_slots[slot_index];
     ++slot.generation;
     if (slot.generation == 0) {
         ++slot.generation;
@@ -282,19 +281,7 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         // Some window systems also reject a second surface for the same
         // native window while the old one exists, so retire in Vulkan order
         // before asking the platform to create its replacement.
-        for (auto* texture : swapchain_textures) {
-            MoerDelete(texture);
-        }
-        swapchain_textures.clear();
-        swapchain_views.clear();
-        for (VkSemaphore semaphore : render_finished_fences) {
-            if (semaphore != VK_NULL_HANDLE) {
-                vkDestroySemaphore(
-                    device.GetDevice(), semaphore, VK_NULL_HANDLE
-                );
-            }
-        }
-        render_finished_fences.clear();
+        DestroyImages(swapchain_images);
         if (handle != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(
                 device.GetDevice(), handle, VK_NULL_HANDLE
@@ -446,28 +433,13 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     }
 
     VkSwapchainKHR        new_sc = VK_NULL_HANDLE;
-    Array<VkSemaphore>    new_render_finished_fences;
-    Array<VkFence>        new_in_flight_fences;
-    Array<VulkanTexture*> new_swapchain_textures;
-    Array<TextureView>    new_swapchain_views;
+    Array<SwapchainImage> new_swapchain_images;
+    Array<PresentSlot>    new_present_slots;
     bool                  old_resources_retired = false;
 
     auto cleanup_new_resources = [&]() {
-        for (auto* texture : new_swapchain_textures) {
-            if (texture != nullptr) {
-                MoerDelete(texture);
-            }
-        }
-        for (VkSemaphore semaphore : new_render_finished_fences) {
-            if (semaphore != VK_NULL_HANDLE) {
-                vkDestroySemaphore(device.GetDevice(), semaphore, VK_NULL_HANDLE);
-            }
-        }
-        for (VkFence fence : new_in_flight_fences) {
-            if (fence != VK_NULL_HANDLE) {
-                vkDestroyFence(device.GetDevice(), fence, VK_NULL_HANDLE);
-            }
-        }
+        DestroyImages(new_swapchain_images);
+        DestroyPresentSlots(new_present_slots);
         if (new_sc != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(device.GetDevice(), new_sc, VK_NULL_HANDLE);
             new_sc = VK_NULL_HANDLE;
@@ -477,15 +449,7 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         if (old_resources_retired || committed_old_sc == VK_NULL_HANDLE) {
             return;
         }
-        for (auto* texture : swapchain_textures) {
-            MoerDelete(texture);
-        }
-        swapchain_textures.clear();
-        swapchain_views.clear();
-        for (VkSemaphore semaphore : render_finished_fences) {
-            vkDestroySemaphore(device.GetDevice(), semaphore, VK_NULL_HANDLE);
-        }
-        render_finished_fences.clear();
+        DestroyImages(swapchain_images);
         vkDestroySwapchainKHR(device.GetDevice(), committed_old_sc, VK_NULL_HANDLE);
         handle                = VK_NULL_HANDLE;
         old_resources_retired = true;
@@ -583,53 +547,47 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     // fences. Completion owns observation, Submission owns slot reset, and the
     // Render owner may destroy the retired set only after its targeted drain;
     // no caller-side reset is therefore required or allowed.
-    const bool recreate_fences = true;
-    new_render_finished_fences.resize(image_cnt, VK_NULL_HANDLE);
+    new_swapchain_images.resize(image_cnt);
     VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (uint i = 0; i < image_cnt; i++) {
         result = vkCreateSemaphore(
-            device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &new_render_finished_fences[i]
+            device.GetDevice(),
+            &semaphore_info,
+            VK_NULL_HANDLE,
+            &new_swapchain_images[i].render_finished_semaphore
         );
         if (result != VK_SUCCESS) {
-            new_render_finished_fences[i] = VK_NULL_HANDLE;
+            new_swapchain_images[i].render_finished_semaphore = VK_NULL_HANDLE;
         }
         if (!check_device_result(result, EVulkanFaultOperation::SwapchainSemaphoreCreate)) {
             abort_transaction();
             return false;
         }
         device.SetResourceName(
-            uint64(new_render_finished_fences[i]),
+            uint64(new_swapchain_images[i].render_finished_semaphore),
             VK_OBJECT_TYPE_SEMAPHORE,
             "RenderFinishedSemaphore_" + std::to_string(i)
         );
     }
 
-    if (recreate_fences) {
-        new_in_flight_fences.resize(new_max_frames_in_flight, VK_NULL_HANDLE);
-        VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        for (uint i = 0; i < new_max_frames_in_flight; i++) {
-            result = vkCreateFence(
-                device.GetDevice(), &fence_info, VK_NULL_HANDLE, &new_in_flight_fences[i]
-            );
-            if (result != VK_SUCCESS) {
-                new_in_flight_fences[i] = VK_NULL_HANDLE;
-            }
-            if (!check_device_result(result, EVulkanFaultOperation::SwapchainFenceCreate)) {
-                abort_transaction();
-                return false;
-            }
-            device.SetResourceName(
-                uint64(new_in_flight_fences[i]),
-                VK_OBJECT_TYPE_FENCE,
-                "InFlightFence_" + std::to_string(i)
-            );
+    new_present_slots.resize(new_max_frames_in_flight);
+    VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    for (uint i = 0; i < new_max_frames_in_flight; i++) {
+        result = vkCreateFence(device.GetDevice(), &fence_info, VK_NULL_HANDLE, &new_present_slots[i].fence);
+        if (result != VK_SUCCESS) {
+            new_present_slots[i].fence = VK_NULL_HANDLE;
         }
+        if (!check_device_result(result, EVulkanFaultOperation::SwapchainFenceCreate)) {
+            abort_transaction();
+            return false;
+        }
+        device.SetResourceName(
+            uint64(new_present_slots[i].fence), VK_OBJECT_TYPE_FENCE, "InFlightFence_" + std::to_string(i)
+        );
     }
 
-    new_swapchain_textures.resize(image_cnt, nullptr);
-    new_swapchain_views.resize(image_cnt);
     for (uint i = 0; i < image_cnt; i++) {
-        new_swapchain_textures[i] = MoerNew(VulkanTexture)(
+        new_swapchain_images[i].texture = MoerNew(VulkanTexture)(
             TextureInfo{
                 ETextureDimension::TEX_2D,
                 ETextureUsageFlags::PRESENT,
@@ -640,7 +598,7 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             &device,
             images[i]
         );
-        new_swapchain_views[i] = TextureView(new_swapchain_textures[i]);
+        new_swapchain_images[i].view = TextureView(new_swapchain_images[i].texture);
     }
     if (!check_device_result(VK_SUCCESS, EVulkanFaultOperation::SwapchainCreate)) {
         abort_transaction();
@@ -652,11 +610,7 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     // that path.
     retire_old_resources();
 
-    if (recreate_fences) {
-        for (VkFence fence : in_flight_fences) {
-            vkDestroyFence(device.GetDevice(), fence, VK_NULL_HANDLE);
-        }
-    }
+    DestroyPresentSlots(present_slots);
 
     if (candidate_owns_surface) {
         const VkSurfaceKHR old_surface = surface;
@@ -665,21 +619,15 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             vkDestroySurfaceKHR(device.GetInstance(), old_surface, VK_NULL_HANDLE);
         }
     }
-    surface_info           = _info.surface;
-    handle                 = new_sc;
-    new_sc                 = VK_NULL_HANDLE;
-    size                   = new_size;
-    format                 = new_format;
-    max_frames_in_flight   = new_max_frames_in_flight;
-    render_finished_fences = std::move(new_render_finished_fences);
-    swapchain_textures     = std::move(new_swapchain_textures);
-    swapchain_views        = std::move(new_swapchain_views);
-    if (recreate_fences) {
-        in_flight_fences = std::move(new_in_flight_fences);
-    }
-    present_fence_slots.clear();
-    present_fence_slots.resize(new_max_frames_in_flight);
-    image_idx = 0;
+    surface_info                  = _info.surface;
+    handle                        = new_sc;
+    new_sc                        = VK_NULL_HANDLE;
+    size                          = new_size;
+    format                        = new_format;
+    max_frames_in_flight          = new_max_frames_in_flight;
+    swapchain_images              = std::move(new_swapchain_images);
+    present_slots                 = std::move(new_present_slots);
+    image_idx                     = 0;
     const bool presentation_ready = IsPresentationReady();
     if (presentation_ready) {
         native_surface_recreate_pending_ = false;
@@ -687,23 +635,8 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     return presentation_ready;
 }
 VkSwapchain::~VkSwapchain() {
-    for (VulkanTexture* texture : swapchain_textures) {
-        MoerDelete(texture);
-    }
-    swapchain_textures.clear();
-    swapchain_views.clear();
-    for (VkSemaphore semaphore : render_finished_fences) {
-        if (semaphore != VK_NULL_HANDLE) {
-            vkDestroySemaphore(device.GetDevice(), semaphore, VK_NULL_HANDLE);
-        }
-    }
-    render_finished_fences.clear();
-    for (VkFence fence : in_flight_fences) {
-        if (fence != VK_NULL_HANDLE) {
-            vkDestroyFence(device.GetDevice(), fence, VK_NULL_HANDLE);
-        }
-    }
-    in_flight_fences.clear();
+    DestroyImages(swapchain_images);
+    DestroyPresentSlots(present_slots);
     if (handle != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
         handle = VK_NULL_HANDLE;
@@ -713,11 +646,32 @@ VkSwapchain::~VkSwapchain() {
         surface = VK_NULL_HANDLE;
     }
 }
+void VkSwapchain::DestroyImages(Array<SwapchainImage>& _images) {
+    for (const SwapchainImage& image : _images) {
+        if (image.texture != nullptr) {
+            MoerDelete(image.texture);
+        }
+        if (image.render_finished_semaphore != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device.GetDevice(), image.render_finished_semaphore, VK_NULL_HANDLE);
+        }
+    }
+    _images.clear();
+}
+
+void VkSwapchain::DestroyPresentSlots(Array<PresentSlot>& _slots) {
+    for (const PresentSlot& slot : _slots) {
+        if (slot.fence != VK_NULL_HANDLE) {
+            vkDestroyFence(device.GetDevice(), slot.fence, VK_NULL_HANDLE);
+        }
+    }
+    _slots.clear();
+}
+
 VkSemaphore VkSwapchain::GetRenderFinishedFence(uint _image_index) {
-    return render_finished_fences[_image_index % render_finished_fences.size()];
+    return swapchain_images[_image_index % swapchain_images.size()].render_finished_semaphore;
 }
 TextureView VkSwapchain::GetSwapchainImage(uint _index) {
-    return swapchain_views[_index % swapchain_views.size()];
+    return swapchain_images[_index % swapchain_images.size()].view;
 }
 VkSwapchain::AcquireResult VkSwapchain::AquireNextImage(
     VkSemaphore _ready_semaphore,
@@ -782,7 +736,7 @@ VkSwapchain::PresentResult VkSwapchain::Present(
     VkSwapchainPresentFenceInfoEXT present_fence_info{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
     if (use_present_fence) {
         present_fence_info.swapchainCount = 1;
-        present_fence_info.pFences        = &in_flight_fences[image_idx % in_flight_fences.size()];
+        present_fence_info.pFences        = &present_slots[image_idx % present_slots.size()].fence;
     }
 
     VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
@@ -826,16 +780,14 @@ VkSwapchain::PresentResult VkSwapchain::Present(
                 EPresentationWsiCompletionMode::PresentFence
             );
             const uint32 slot_index = _completion.GetFenceSlot();
-            if (slot_index >= present_fence_slots.size() ||
-                present_fence_slots[slot_index].generation !=
-                    _completion.GetSlotGeneration()) {
+            if (slot_index >= present_slots.size() ||
+                present_slots[slot_index].generation != _completion.GetSlotGeneration()) {
                 // The native Present is already accepted. Continuing without
                 // the exact slot generation could race reset/destruction.
                 std::terminate();
             }
-            present_fence_slots[slot_index].completion = _completion;
-            present_result.completion_fence =
-                in_flight_fences[slot_index];
+            present_slots[slot_index].completion = _completion;
+            present_result.completion_fence      = present_slots[slot_index].fence;
         } else if (present_result.wsi_enqueued) {
             set_wsi_mode(
                 EPresentationWsiCompletionMode::QueueIdleFallback
@@ -854,12 +806,11 @@ VkSwapchain::PresentResult VkSwapchain::Present(
 }
 
 bool VkSwapchain::PreparePresentFence(uint64 _present_idx) {
-    if (in_flight_fences.empty() || present_fence_slots.empty()) {
+    if (present_slots.empty()) {
         return false;
     }
-    const uint32 slot_index =
-        static_cast<uint32>(_present_idx % present_fence_slots.size());
-    PresentFenceSlot& slot = present_fence_slots[slot_index];
+    const uint32 slot_index = static_cast<uint32>(_present_idx % present_slots.size());
+    PresentSlot& slot       = present_slots[slot_index];
     if (!slot.completion.IsValid()) {
         return !device.IsFaulted();
     }
@@ -877,7 +828,7 @@ bool VkSwapchain::PreparePresentFence(uint64 _present_idx) {
     }
 
     const VkResult result = device.ResetFence(
-        in_flight_fences[slot_index],
+        slot.fence,
         VulkanOperationContext{
             .operation  = EVulkanFaultOperation::PresentFenceReset,
             .queue_type = EQueueType::Graphics,
