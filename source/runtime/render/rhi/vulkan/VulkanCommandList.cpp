@@ -192,6 +192,12 @@ struct VulkanPipelineReflection {
 //     }
 // }
 
+VkImageLayout GetSamplerImageLayout(const TextureView& _view) {
+    return uint(_view.GetTexture()->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) ?
+               VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
+               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+}
+
 VulkanCmdList::VulkanCmdList(
     VulkanCommandPool*   _command_pool,
     VulkanDevice&        _device,
@@ -222,6 +228,8 @@ VulkanCmdList::VulkanCmdList(
 VulkanCmdList::~VulkanCmdList() {
     vkFreeCommandBuffers(device.GetDevice(), command_pool->GetHandle(), 1, &command_buffer);
 }
+
+// Recording lifecycle.
 VkResult VulkanCmdList::Begin() {
     assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     VkCommandBufferBeginInfo begin_info = {
@@ -232,6 +240,7 @@ VkResult VulkanCmdList::Begin() {
     };
     return vkBeginCommandBuffer(command_buffer, &begin_info);
 }
+
 VkResult VulkanCmdList::BeginSecondary(
     const VkCommandBufferInheritanceInfo& _inheritance,
     VkCommandBufferUsageFlags             _flags
@@ -245,9 +254,11 @@ VkResult VulkanCmdList::BeginSecondary(
     };
     return vkBeginCommandBuffer(command_buffer, &begin_info);
 }
+
 VkResult VulkanCmdList::End() {
     return vkEndCommandBuffer(command_buffer);
 }
+
 void VulkanCmdList::ExecuteCommands(
     std::span<const VkCommandBuffer> _secondary_buffers
 ) {
@@ -261,346 +272,8 @@ void VulkanCmdList::ExecuteCommands(
         _secondary_buffers.data()
     );
 }
-void VulkanCmdList::CopyBuffer(
-    VulkanBuffer* _src,
-    VulkanBuffer* _dst,
-    uint64        _size,
-    uint64        _src_offset,
-    uint64        _dst_offset
-) {
 
-    VkBufferCopy copy_region = {.srcOffset = _src_offset, .dstOffset = _dst_offset, .size = _size};
-    vkCmdCopyBuffer(command_buffer, _src->GetHandle(), _dst->GetHandle(), 1, &copy_region);
-}
-void VulkanCmdList::CopyBufferToTexture(
-    VulkanBuffer*  _src,
-    VulkanTexture* _dst,
-    uint64         _size,
-    uint64         _src_offset,
-    uint3          _dst_offset,
-    uint3          _extent,
-    uint32         _mip_level,
-    uint32         _array_layer
-) {
-    VkImageAspectFlags aspect =
-        _src->GetResourceType() == RRT_DEPTH ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    VkBufferImageCopy copy_region = {
-        .bufferOffset      = _src_offset,
-        .bufferRowLength   = 0,
-        .bufferImageHeight = 0,
-        .imageSubresource =
-            {.aspectMask = aspect, .mipLevel = _mip_level, .baseArrayLayer = _array_layer, .layerCount = 1},
-        .imageOffset =
-            {static_cast<int32_t>(_dst_offset.x),
-             static_cast<int32_t>(_dst_offset.y),
-             static_cast<int32_t>(_dst_offset.z)},
-        .imageExtent = {
-            static_cast<uint32_t>(_extent.x),
-            static_cast<uint32_t>(_extent.y),
-            static_cast<uint32_t>(_extent.z)
-        }
-    };
-
-    // _dst->GetExtent() 是整个texture的尺寸
-    // _extent 是这次mipmap的尺寸
-    const uint64 expected_size_exact    = GetSizeFromImageFormat(_dst->GetFormat(), _extent);
-    const uint64 legacy_texel_count_size = uint64(_extent.x) * uint64(_extent.y) * uint64(_extent.z);
-
-    if (_size != expected_size_exact) {
-        const uint3 texture_extent = _dst->GetExtent();
-        LOG_ERROR(
-            "[CopyBufferToTexture] Size mismatch. Texture='{}' Handle={:#x} Format={} Mip={} ArrayLayer={} "
-            "TextureExtent=({}, {}, {}) CopyOffset=({}, {}, {}) CopyExtent=({}, {}, {}) "
-            "IncomingSize={} ExactExpected={} LegacyTexelCount={} DstMipByteSize={} "
-            "DeltaToExact={} DeltaToLegacy={} LegacyMatch={}",
-            _dst->GetName(),
-            (uint64)_dst->GetHandle(),
-            uint32(_dst->GetFormat()),
-            _mip_level,
-            _array_layer,
-            texture_extent.x,
-            texture_extent.y,
-            texture_extent.z,
-            _dst_offset.x,
-            _dst_offset.y,
-            _dst_offset.z,
-            _extent.x,
-            _extent.y,
-            _extent.z,
-            _size,
-            expected_size_exact,
-            legacy_texel_count_size,
-            _dst->GetMipByteSize(_mip_level),
-            int64_t(_size) - int64_t(expected_size_exact),
-            int64_t(_size) - int64_t(legacy_texel_count_size),
-            _size == legacy_texel_count_size ? "true" : "false"
-        );
-    }
-
-    assert(_size == expected_size_exact && "Copy size does not match texture extent");
-
-    vkCmdCopyBufferToImage(
-        command_buffer,
-        _src->GetHandle(),
-        _dst->GetHandle(),
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1,
-        &copy_region
-    );
-}
-
-void VulkanCmdList::CopyTextureToBuffer(
-    VulkanTexture* _src,
-    VulkanBuffer*  _dst,
-    uint64         _size,
-    uint3          _src_offset,
-    uint64         _dst_offset,
-    uint3          _extent,
-    uint32         _mip_level,
-    uint32         _array_layer
-) {
-    VkImageAspectFlags aspect =
-        _src->GetResourceType() == RRT_DEPTH ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    VkBufferImageCopy copy_region = {
-        .bufferOffset      = _dst_offset,
-        .bufferRowLength   = 0,
-        .bufferImageHeight = 0,
-        .imageSubresource =
-            {.aspectMask = aspect,
-             .mipLevel = _mip_level,
-             .baseArrayLayer = _array_layer,
-             .layerCount = 1},
-        .imageOffset =
-            {static_cast<int32_t>(_src_offset.x),
-             static_cast<int32_t>(_src_offset.y),
-             static_cast<int32_t>(_src_offset.z)},
-        .imageExtent = {
-            static_cast<uint32_t>(_extent.x),
-            static_cast<uint32_t>(_extent.y),
-            static_cast<uint32_t>(_extent.z)
-        }
-    };
-
-    vkCmdCopyImageToBuffer(
-        command_buffer,
-        _src->GetHandle(),
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        _dst->GetHandle(),
-        1,
-        &copy_region
-    );
-}
-
-void VulkanCmdList::CopyData(const BufferView& _dst, const void* _data, uint64 _size) {
-    auto*        buffer    = static_cast<VulkanBuffer*>(_dst.buffer);
-    VmaAllocator allocator = device.GetVmaAllocator();
-
-    // void* p_data;
-    // VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
-    // std::memcpy((byte*)p_data + _dst.GetByteOffset(), _data, _size);
-    // vmaUnmapMemory(allocator, buffer->GetAllocation());
-    // vmaFlushAllocation(allocator, buffer->GetAllocation(), _dst.GetByteOffset(), _size);
-    VK_CHECK_RESULT(
-        vmaCopyMemoryToAllocation(allocator, _data, buffer->GetAllocation(), _dst.GetByteOffset(), _size)
-    );
-}
-
-void VulkanCmdList::CopyData(void* _dst, const BufferView& _src, uint64 _size) {
-    auto*        buffer    = static_cast<VulkanBuffer*>(_src.buffer);
-    VmaAllocator allocator = device.GetVmaAllocator();
-
-    // void* p_data;
-    // VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
-    // std::memcpy((byte*)_dst, (byte*)p_data + _src.GetByteOffset(), _size);
-    // vmaUnmapMemory(allocator, buffer->GetAllocation());
-    // vmaFlushAllocation(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _size);
-    VK_CHECK_RESULT(
-        vmaCopyAllocationToMemory(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _dst, _size)
-    );
-}
-
-void* VulkanCmdList::MapBuffer(const BufferView& _buffer) {
-    auto*        buffer    = static_cast<VulkanBuffer*>(_buffer.buffer);
-    VmaAllocator allocator = device.GetVmaAllocator();
-
-    void* p_data;
-    VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
-    return (byte*)p_data + _buffer.GetByteOffset();
-}
-
-void VulkanCmdList::UnmapBuffer(const BufferView& _buffer) {
-    auto*        buffer    = static_cast<VulkanBuffer*>(_buffer.buffer);
-    VmaAllocator allocator = device.GetVmaAllocator();
-
-    vmaUnmapMemory(allocator, buffer->GetAllocation());
-    vmaFlushAllocation(allocator, buffer->GetAllocation(), _buffer.GetByteOffset(), _buffer.GetByteSize());
-}
-
-void VulkanCmdList::DrawIndexedInstanced(
-    uint32_t _index_cnt,
-    uint32_t _instance_cnt,
-    uint32_t _first_index,
-    uint32_t _vertex_offset,
-    uint32_t _first_instance
-) {
-    vkCmdDrawIndexed(
-        command_buffer, _index_cnt, _instance_cnt, _first_index, _vertex_offset, _first_instance
-    );
-}
-
-void VulkanCmdList::DrawInstanced(
-    uint32_t _vertex_cnt,
-    uint32_t _instance_cnt,
-    uint32_t _first_vertex,
-    uint32_t _first_instance
-) {
-    vkCmdDraw(command_buffer, _vertex_cnt, _instance_cnt, _first_vertex, _first_instance);
-}
-
-void VulkanCmdList::DrawIndexedIndirectCnt(
-    VulkanBuffer* _commands,
-    uint64        _commands_offset,
-    VulkanBuffer* _count,
-    uint64        _count_offset,
-    uint32_t      _max_cnt,
-    uint32_t      _stride
-) {
-    vkCmdDrawIndexedIndirectCount(
-        command_buffer,
-        _commands->GetHandle(),
-        _commands_offset,
-        _count->GetHandle(),
-        _count_offset,
-        _max_cnt,
-        _stride
-    );
-}
-
-void VulkanCmdList::DrawIndirectCnt(
-    VulkanBuffer* _commands,
-    uint64        _commands_offset,
-    VulkanBuffer* _count,
-    uint64        _count_offset,
-    uint32_t      _max_cnt,
-    uint32_t      _stride
-) {
-    vkCmdDrawIndirectCount(
-        command_buffer,
-        _commands->GetHandle(),
-        _commands_offset,
-        _count->GetHandle(),
-        _count_offset,
-        _max_cnt,
-        _stride
-    );
-}
-
-void VulkanCmdList::DrawIndexedIndirect(
-    VulkanBuffer* _buffer,
-    uint64        _offset,
-    uint32_t      _draw_cnt,
-    uint32_t      _stride
-) {
-    vkCmdDrawIndexedIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
-}
-
-void VulkanCmdList::DrawIndirect(
-    VulkanBuffer* _buffer,
-    uint64        _offset,
-    uint32_t      _draw_cnt,
-    uint32_t      _stride
-) {
-    vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
-}
-
-void VulkanCmdList::DispatchMesh(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
-    vkCmdDrawMeshTasksEXT(command_buffer, _group_count_x, _group_count_y, _group_count_z);
-}
-
-void VulkanCmdList::DispatchMeshIndirect(
-    VulkanBuffer* _buffer,
-    uint64        _offset,
-    uint32_t      _draw_cnt,
-    uint32_t      _stride
-) {
-    vkCmdDrawMeshTasksIndirectEXT(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
-}
-
-void VulkanCmdList::DispatchMeshIndirectCount(
-    VulkanBuffer* _commands,
-    uint64        _commands_offset,
-    VulkanBuffer* _count,
-    uint64        _count_offset,
-    uint32_t      _max_cnt,
-    uint32_t      _stride
-) {
-    vkCmdDrawMeshTasksIndirectCountEXT(
-        command_buffer,
-        _commands->GetHandle(),
-        _commands_offset,
-        _count->GetHandle(),
-        _count_offset,
-        _max_cnt,
-        _stride
-    );
-}
-
-void VulkanCmdList::CopyTexture(
-    VulkanTexture* _src,
-    VulkanTexture* _dst,
-    uint3          _extent,
-    uint3          _src_offset,
-    uint3          _dst_offset,
-    uint32         _src_mip_level,
-    uint32         _dst_mip_level,
-    VkImageLayout  _src_layout,
-    VkImageLayout  _dst_layout
-) {
-    if ((_src_layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
-         _src_layout != VK_IMAGE_LAYOUT_GENERAL) ||
-        (_dst_layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
-         _dst_layout != VK_IMAGE_LAYOUT_GENERAL)) {
-        throw std::invalid_argument(
-            "vkCmdCopyImage requires GENERAL or transfer-optimal layouts"
-        );
-    }
-    VkImageCopy copy_region = {
-        .srcSubresource =
-            {.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-             .mipLevel       = _src_mip_level,
-             .baseArrayLayer = 0,
-             .layerCount     = 1},
-        .srcOffset =
-            {static_cast<int32_t>(_src_offset.x),
-             static_cast<int32_t>(_src_offset.y),
-             static_cast<int32_t>(_src_offset.z)},
-        .dstSubresource =
-            {.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-             .mipLevel       = _dst_mip_level,
-             .baseArrayLayer = 0,
-             .layerCount     = 1},
-        .dstOffset =
-            {static_cast<int32_t>(_dst_offset.x),
-             static_cast<int32_t>(_dst_offset.y),
-             static_cast<int32_t>(_dst_offset.z)},
-        .extent = {
-            static_cast<uint32_t>(_extent.x),
-            static_cast<uint32_t>(_extent.y),
-            static_cast<uint32_t>(_extent.z)
-        }
-    };
-
-    vkCmdCopyImage(
-        command_buffer,
-        _src->GetHandle(),
-        _src_layout,
-        _dst->GetHandle(),
-        _dst_layout,
-        1,
-        &copy_region
-    );
-}
-
+// Rendering scope.
 void VulkanCmdList::BeginRendering(VkRenderingInfo&& _info) {
     vkCmdBeginRendering(command_buffer, &_info);
 }
@@ -609,92 +282,10 @@ void VulkanCmdList::EndRendering() {
     vkCmdEndRendering(command_buffer);
 }
 
-void VulkanCmdList::SetVertexBuffers(
-    uint                _first_binding,
-    uint                _binding_cnt,
-    std::span<VkBuffer> _buffers,
-    std::span<uint64>   _offsets
-) {
-    vkCmdBindVertexBuffers(command_buffer, _first_binding, _binding_cnt, _buffers.data(), _offsets.data());
-}
-
-void VulkanCmdList::SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _index_type) {
-    vkCmdBindIndexBuffer(command_buffer, _buffer->GetHandle(), _offset, _index_type);
-}
-
-void VulkanCmdList::SetViewPort(const VkViewport& _view_port) {
-
-    vkCmdSetViewport(command_buffer, 0, 1, &_view_port);
-}
-
-void VulkanCmdList::SetScissor(const VkRect2D& _scissor) {
-    vkCmdSetScissor(command_buffer, 0, 1, &_scissor);
-}
-
-void VulkanCmdList::ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _size, uint32 _data) {
-    vkCmdFillBuffer(command_buffer, _buffer->GetHandle(), _offset, _size, _data);
-}
-
-void VulkanCmdList::ClearTexture(
-    VulkanTexture*                 _texture,
-    const VkClearColorValue&       _color,
-    const VkImageSubresourceRange& _range
-) {
-    vkCmdClearColorImage(
-        command_buffer, _texture->GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &_color, 1, &_range
-    );
-}
-
-void VulkanCmdList::ResetQueryPool(VkNativeQueryPool& _query_pool, uint32 _first_query, uint32 _query_cnt) {
-    vkCmdResetQueryPool(command_buffer, _query_pool.GetHandle(), _first_query, _query_cnt);
-}
-
-void VulkanCmdList::BeginQuery(
-    VkNativeQueryPool&  _query_pool,
-    uint32              _query,
-    VkQueryControlFlags _flags
-) {
-    vkCmdBeginQuery(
-        command_buffer, _query_pool.GetHandle(), _query, _flags
-    );
-}
-
-void VulkanCmdList::EndQuery(
-    VkNativeQueryPool& _query_pool,
-    uint32             _query
-) {
-    vkCmdEndQuery(command_buffer, _query_pool.GetHandle(), _query);
-}
-
-void VulkanCmdList::WriteTimeStamp(
-    VkNativeQueryPool&       _query_pool,
-    uint32                   _query_idx,
-    VkPipelineStageFlagBits2 _stage
-) {
-    vkCmdWriteTimestamp2(command_buffer, _stage, _query_pool.GetHandle(), _query_idx);
-}
-
-void VulkanCmdList::Dispatch(uint _group_count_x, uint _group_count_y, uint _group_count_z) {
-    vkCmdDispatch(command_buffer, _group_count_x, _group_count_y, _group_count_z);
-}
-
-void VulkanCmdList::DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset) {
-    vkCmdDispatchIndirect(command_buffer, _buffer->GetHandle(), _offset);
-}
-
-void VulkanCmdList::UploadDescriptors(const PipelineHandle& _pso_handle) {}
-
-void VulkanCmdList::UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data) {
+// Pipeline and shader arguments.
+void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {
     auto* vk_pso = static_cast<VulkanPipelineState*>(_pso_handle.GetState());
-    // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
-
-    // vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
-}
-
-VkImageLayout GetSamplerImageLayout(const TextureView& _view) {
-    return uint(_view.GetTexture()->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) ?
-               VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
-               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdBindPipeline(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetHandle());
 }
 
 void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const ArrayArguments& arguments) {
@@ -986,11 +577,406 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
     }
 }
 
-void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {
+void VulkanCmdList::UploadDescriptors(const PipelineHandle& _pso_handle) {}
+
+void VulkanCmdList::UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data) {
     auto* vk_pso = static_cast<VulkanPipelineState*>(_pso_handle.GetState());
-    vkCmdBindPipeline(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetHandle());
+    // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
+
+    // vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
 }
 
+// Vertex input and dynamic state.
+void VulkanCmdList::SetVertexBuffers(
+    uint                _first_binding,
+    uint                _binding_cnt,
+    std::span<VkBuffer> _buffers,
+    std::span<uint64>   _offsets
+) {
+    vkCmdBindVertexBuffers(command_buffer, _first_binding, _binding_cnt, _buffers.data(), _offsets.data());
+}
+
+void VulkanCmdList::SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _index_type) {
+    vkCmdBindIndexBuffer(command_buffer, _buffer->GetHandle(), _offset, _index_type);
+}
+
+void VulkanCmdList::SetScissor(const VkRect2D& _scissor) {
+    vkCmdSetScissor(command_buffer, 0, 1, &_scissor);
+}
+
+void VulkanCmdList::SetViewPort(const VkViewport& _view_port) {
+
+    vkCmdSetViewport(command_buffer, 0, 1, &_view_port);
+}
+
+// Draw and mesh commands.
+void VulkanCmdList::DrawInstanced(
+    uint32_t _vertex_cnt,
+    uint32_t _instance_cnt,
+    uint32_t _first_vertex,
+    uint32_t _first_instance
+) {
+    vkCmdDraw(command_buffer, _vertex_cnt, _instance_cnt, _first_vertex, _first_instance);
+}
+
+void VulkanCmdList::DrawIndexedInstanced(
+    uint32_t _index_cnt,
+    uint32_t _instance_cnt,
+    uint32_t _first_index,
+    uint32_t _vertex_offset,
+    uint32_t _first_instance
+) {
+    vkCmdDrawIndexed(
+        command_buffer, _index_cnt, _instance_cnt, _first_index, _vertex_offset, _first_instance
+    );
+}
+
+void VulkanCmdList::DrawIndirect(
+    VulkanBuffer* _buffer,
+    uint64        _offset,
+    uint32_t      _draw_cnt,
+    uint32_t      _stride
+) {
+    vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+}
+
+void VulkanCmdList::DrawIndirectCnt(
+    VulkanBuffer* _commands,
+    uint64        _commands_offset,
+    VulkanBuffer* _count,
+    uint64        _count_offset,
+    uint32_t      _max_cnt,
+    uint32_t      _stride
+) {
+    vkCmdDrawIndirectCount(
+        command_buffer,
+        _commands->GetHandle(),
+        _commands_offset,
+        _count->GetHandle(),
+        _count_offset,
+        _max_cnt,
+        _stride
+    );
+}
+
+void VulkanCmdList::DrawIndexedIndirect(
+    VulkanBuffer* _buffer,
+    uint64        _offset,
+    uint32_t      _draw_cnt,
+    uint32_t      _stride
+) {
+    vkCmdDrawIndexedIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+}
+
+void VulkanCmdList::DrawIndexedIndirectCnt(
+    VulkanBuffer* _commands,
+    uint64        _commands_offset,
+    VulkanBuffer* _count,
+    uint64        _count_offset,
+    uint32_t      _max_cnt,
+    uint32_t      _stride
+) {
+    vkCmdDrawIndexedIndirectCount(
+        command_buffer,
+        _commands->GetHandle(),
+        _commands_offset,
+        _count->GetHandle(),
+        _count_offset,
+        _max_cnt,
+        _stride
+    );
+}
+
+void VulkanCmdList::DispatchMesh(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
+    vkCmdDrawMeshTasksEXT(command_buffer, _group_count_x, _group_count_y, _group_count_z);
+}
+
+void VulkanCmdList::DispatchMeshIndirect(
+    VulkanBuffer* _buffer,
+    uint64        _offset,
+    uint32_t      _draw_cnt,
+    uint32_t      _stride
+) {
+    vkCmdDrawMeshTasksIndirectEXT(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+}
+
+void VulkanCmdList::DispatchMeshIndirectCount(
+    VulkanBuffer* _commands,
+    uint64        _commands_offset,
+    VulkanBuffer* _count,
+    uint64        _count_offset,
+    uint32_t      _max_cnt,
+    uint32_t      _stride
+) {
+    vkCmdDrawMeshTasksIndirectCountEXT(
+        command_buffer,
+        _commands->GetHandle(),
+        _commands_offset,
+        _count->GetHandle(),
+        _count_offset,
+        _max_cnt,
+        _stride
+    );
+}
+
+// Compute commands.
+void VulkanCmdList::Dispatch(uint _group_count_x, uint _group_count_y, uint _group_count_z) {
+    vkCmdDispatch(command_buffer, _group_count_x, _group_count_y, _group_count_z);
+}
+
+void VulkanCmdList::DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset) {
+    vkCmdDispatchIndirect(command_buffer, _buffer->GetHandle(), _offset);
+}
+
+// Transfer and clear commands.
+void VulkanCmdList::CopyBuffer(
+    VulkanBuffer* _src,
+    VulkanBuffer* _dst,
+    uint64        _size,
+    uint64        _src_offset,
+    uint64        _dst_offset
+) {
+
+    VkBufferCopy copy_region = {.srcOffset = _src_offset, .dstOffset = _dst_offset, .size = _size};
+    vkCmdCopyBuffer(command_buffer, _src->GetHandle(), _dst->GetHandle(), 1, &copy_region);
+}
+
+void VulkanCmdList::CopyBufferToTexture(
+    VulkanBuffer*  _src,
+    VulkanTexture* _dst,
+    uint64         _size,
+    uint64         _src_offset,
+    uint3          _dst_offset,
+    uint3          _extent,
+    uint32         _mip_level,
+    uint32         _array_layer
+) {
+    VkImageAspectFlags aspect =
+        _src->GetResourceType() == RRT_DEPTH ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    VkBufferImageCopy copy_region = {
+        .bufferOffset      = _src_offset,
+        .bufferRowLength   = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource =
+            {.aspectMask = aspect, .mipLevel = _mip_level, .baseArrayLayer = _array_layer, .layerCount = 1},
+        .imageOffset =
+            {static_cast<int32_t>(_dst_offset.x),
+             static_cast<int32_t>(_dst_offset.y),
+             static_cast<int32_t>(_dst_offset.z)},
+        .imageExtent = {
+            static_cast<uint32_t>(_extent.x),
+            static_cast<uint32_t>(_extent.y),
+            static_cast<uint32_t>(_extent.z)
+        }
+    };
+
+    // _dst->GetExtent() 是整个texture的尺寸
+    // _extent 是这次mipmap的尺寸
+    const uint64 expected_size_exact    = GetSizeFromImageFormat(_dst->GetFormat(), _extent);
+    const uint64 legacy_texel_count_size = uint64(_extent.x) * uint64(_extent.y) * uint64(_extent.z);
+
+    if (_size != expected_size_exact) {
+        const uint3 texture_extent = _dst->GetExtent();
+        LOG_ERROR(
+            "[CopyBufferToTexture] Size mismatch. Texture='{}' Handle={:#x} Format={} Mip={} ArrayLayer={} "
+            "TextureExtent=({}, {}, {}) CopyOffset=({}, {}, {}) CopyExtent=({}, {}, {}) "
+            "IncomingSize={} ExactExpected={} LegacyTexelCount={} DstMipByteSize={} "
+            "DeltaToExact={} DeltaToLegacy={} LegacyMatch={}",
+            _dst->GetName(),
+            (uint64)_dst->GetHandle(),
+            uint32(_dst->GetFormat()),
+            _mip_level,
+            _array_layer,
+            texture_extent.x,
+            texture_extent.y,
+            texture_extent.z,
+            _dst_offset.x,
+            _dst_offset.y,
+            _dst_offset.z,
+            _extent.x,
+            _extent.y,
+            _extent.z,
+            _size,
+            expected_size_exact,
+            legacy_texel_count_size,
+            _dst->GetMipByteSize(_mip_level),
+            int64_t(_size) - int64_t(expected_size_exact),
+            int64_t(_size) - int64_t(legacy_texel_count_size),
+            _size == legacy_texel_count_size ? "true" : "false"
+        );
+    }
+
+    assert(_size == expected_size_exact && "Copy size does not match texture extent");
+
+    vkCmdCopyBufferToImage(
+        command_buffer,
+        _src->GetHandle(),
+        _dst->GetHandle(),
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1,
+        &copy_region
+    );
+}
+
+void VulkanCmdList::CopyTextureToBuffer(
+    VulkanTexture* _src,
+    VulkanBuffer*  _dst,
+    uint64         _size,
+    uint3          _src_offset,
+    uint64         _dst_offset,
+    uint3          _extent,
+    uint32         _mip_level,
+    uint32         _array_layer
+) {
+    VkImageAspectFlags aspect =
+        _src->GetResourceType() == RRT_DEPTH ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    VkBufferImageCopy copy_region = {
+        .bufferOffset      = _dst_offset,
+        .bufferRowLength   = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource =
+            {.aspectMask = aspect,
+             .mipLevel = _mip_level,
+             .baseArrayLayer = _array_layer,
+             .layerCount = 1},
+        .imageOffset =
+            {static_cast<int32_t>(_src_offset.x),
+             static_cast<int32_t>(_src_offset.y),
+             static_cast<int32_t>(_src_offset.z)},
+        .imageExtent = {
+            static_cast<uint32_t>(_extent.x),
+            static_cast<uint32_t>(_extent.y),
+            static_cast<uint32_t>(_extent.z)
+        }
+    };
+
+    vkCmdCopyImageToBuffer(
+        command_buffer,
+        _src->GetHandle(),
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        _dst->GetHandle(),
+        1,
+        &copy_region
+    );
+}
+
+void VulkanCmdList::CopyTexture(
+    VulkanTexture* _src,
+    VulkanTexture* _dst,
+    uint3          _extent,
+    uint3          _src_offset,
+    uint3          _dst_offset,
+    uint32         _src_mip_level,
+    uint32         _dst_mip_level,
+    VkImageLayout  _src_layout,
+    VkImageLayout  _dst_layout
+) {
+    if ((_src_layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
+         _src_layout != VK_IMAGE_LAYOUT_GENERAL) ||
+        (_dst_layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+         _dst_layout != VK_IMAGE_LAYOUT_GENERAL)) {
+        throw std::invalid_argument(
+            "vkCmdCopyImage requires GENERAL or transfer-optimal layouts"
+        );
+    }
+    VkImageCopy copy_region = {
+        .srcSubresource =
+            {.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+             .mipLevel       = _src_mip_level,
+             .baseArrayLayer = 0,
+             .layerCount     = 1},
+        .srcOffset =
+            {static_cast<int32_t>(_src_offset.x),
+             static_cast<int32_t>(_src_offset.y),
+             static_cast<int32_t>(_src_offset.z)},
+        .dstSubresource =
+            {.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+             .mipLevel       = _dst_mip_level,
+             .baseArrayLayer = 0,
+             .layerCount     = 1},
+        .dstOffset =
+            {static_cast<int32_t>(_dst_offset.x),
+             static_cast<int32_t>(_dst_offset.y),
+             static_cast<int32_t>(_dst_offset.z)},
+        .extent = {
+            static_cast<uint32_t>(_extent.x),
+            static_cast<uint32_t>(_extent.y),
+            static_cast<uint32_t>(_extent.z)
+        }
+    };
+
+    vkCmdCopyImage(
+        command_buffer,
+        _src->GetHandle(),
+        _src_layout,
+        _dst->GetHandle(),
+        _dst_layout,
+        1,
+        &copy_region
+    );
+}
+
+void VulkanCmdList::ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _size, uint32 _data) {
+    vkCmdFillBuffer(command_buffer, _buffer->GetHandle(), _offset, _size, _data);
+}
+
+void VulkanCmdList::ClearTexture(
+    VulkanTexture*                 _texture,
+    const VkClearColorValue&       _color,
+    const VkImageSubresourceRange& _range
+) {
+    vkCmdClearColorImage(
+        command_buffer, _texture->GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &_color, 1, &_range
+    );
+}
+
+// CPU buffer access.
+void VulkanCmdList::CopyData(const BufferView& _dst, const void* _data, uint64 _size) {
+    auto*        buffer    = static_cast<VulkanBuffer*>(_dst.buffer);
+    VmaAllocator allocator = device.GetVmaAllocator();
+
+    // void* p_data;
+    // VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
+    // std::memcpy((byte*)p_data + _dst.GetByteOffset(), _data, _size);
+    // vmaUnmapMemory(allocator, buffer->GetAllocation());
+    // vmaFlushAllocation(allocator, buffer->GetAllocation(), _dst.GetByteOffset(), _size);
+    VK_CHECK_RESULT(
+        vmaCopyMemoryToAllocation(allocator, _data, buffer->GetAllocation(), _dst.GetByteOffset(), _size)
+    );
+}
+
+void VulkanCmdList::CopyData(void* _dst, const BufferView& _src, uint64 _size) {
+    auto*        buffer    = static_cast<VulkanBuffer*>(_src.buffer);
+    VmaAllocator allocator = device.GetVmaAllocator();
+
+    // void* p_data;
+    // VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
+    // std::memcpy((byte*)_dst, (byte*)p_data + _src.GetByteOffset(), _size);
+    // vmaUnmapMemory(allocator, buffer->GetAllocation());
+    // vmaFlushAllocation(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _size);
+    VK_CHECK_RESULT(
+        vmaCopyAllocationToMemory(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _dst, _size)
+    );
+}
+
+void* VulkanCmdList::MapBuffer(const BufferView& _buffer) {
+    auto*        buffer    = static_cast<VulkanBuffer*>(_buffer.buffer);
+    VmaAllocator allocator = device.GetVmaAllocator();
+
+    void* p_data;
+    VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
+    return (byte*)p_data + _buffer.GetByteOffset();
+}
+
+void VulkanCmdList::UnmapBuffer(const BufferView& _buffer) {
+    auto*        buffer    = static_cast<VulkanBuffer*>(_buffer.buffer);
+    VmaAllocator allocator = device.GetVmaAllocator();
+
+    vmaUnmapMemory(allocator, buffer->GetAllocation());
+    vmaFlushAllocation(allocator, buffer->GetAllocation(), _buffer.GetByteOffset(), _buffer.GetByteSize());
+}
+
+// Acceleration structures.
 void VulkanCmdList::BuildAccelerationStructures(
     const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos,
     const Array<VkAccelerationStructureBuildRangeInfoKHR*>&   _build_ranges
@@ -1000,6 +986,37 @@ void VulkanCmdList::BuildAccelerationStructures(
     );
 }
 
+// Queries.
+void VulkanCmdList::ResetQueryPool(VkNativeQueryPool& _query_pool, uint32 _first_query, uint32 _query_cnt) {
+    vkCmdResetQueryPool(command_buffer, _query_pool.GetHandle(), _first_query, _query_cnt);
+}
+
+void VulkanCmdList::BeginQuery(
+    VkNativeQueryPool&  _query_pool,
+    uint32              _query,
+    VkQueryControlFlags _flags
+) {
+    vkCmdBeginQuery(
+        command_buffer, _query_pool.GetHandle(), _query, _flags
+    );
+}
+
+void VulkanCmdList::EndQuery(
+    VkNativeQueryPool& _query_pool,
+    uint32             _query
+) {
+    vkCmdEndQuery(command_buffer, _query_pool.GetHandle(), _query);
+}
+
+void VulkanCmdList::WriteTimeStamp(
+    VkNativeQueryPool&       _query_pool,
+    uint32                   _query_idx,
+    VkPipelineStageFlagBits2 _stage
+) {
+    vkCmdWriteTimestamp2(command_buffer, _stage, _query_pool.GetHandle(), _query_idx);
+}
+
+// Debug labels.
 void VulkanCmdList::BeginLabel(std::string_view _label, float4 _color) {
     VkDebugUtilsLabelEXT label = {
         .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
