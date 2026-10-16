@@ -64,14 +64,14 @@ public:
         VkCommandBufferUsageFlags             _flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
     );
     [[nodiscard]] VkResult End();
-    void                   ExecuteCommands(std::span<const VkCommandBuffer> _secondary_buffers);
+    void                   ExecuteSecondaryCommands(std::span<const VkCommandBuffer> _secondary_buffers);
 
     // Rendering scope.
-    void BeginRendering(VkRenderingInfo&& _info);
+    void BeginRendering(const VkRenderingInfo& _info);
     void EndRendering();
 
     // Pipeline and shader arguments.
-    void SetPso(const PipelineHandle& _pso_handle);
+    void BindPipeline(const PipelineHandle& _pso_handle);
     void BindShaderArguments(const PipelineHandle& _pipeline_handle, const ArrayArguments& _arguments);
     void SetDescriptorPushLease(std::shared_ptr<VulkanDescriptorPushLeaseState> _lease) {
         descriptor_push_lease = std::move(_lease);
@@ -79,14 +79,13 @@ public:
 
     // Vertex input and dynamic state.
     void SetVertexBuffers(
-        uint                _first_binding,
-        uint                _binding_cnt,
-        std::span<VkBuffer> _buffers,
-        std::span<uint64>   _offsets
+        uint32_t                      _first_binding,
+        std::span<const VkBuffer>     _buffers,
+        std::span<const VkDeviceSize> _offsets
     );
     void SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _type);
     void SetScissor(const VkRect2D& _scissor);
-    void SetViewPort(const VkViewport& _viewport);
+    void SetViewport(const VkViewport& _viewport);
 
     // Draw and mesh commands.
     void DrawInstanced(
@@ -103,7 +102,7 @@ public:
         uint32_t _start_instance_location
     );
     void DrawIndirect(VulkanBuffer* _arg_buffer, uint64 _arg_offset, uint32_t _draw_count, uint32_t _stride);
-    void DrawIndirectCnt(
+    void DrawIndirectCount(
         VulkanBuffer* _arg_buffer,
         uint64        _arg_offset,
         VulkanBuffer* _count_buffer,
@@ -117,7 +116,7 @@ public:
         uint32_t      _draw_count,
         uint32_t      _stride
     );
-    void DrawIndexedIndirectCnt(
+    void DrawIndexedIndirectCount(
         VulkanBuffer* _arg_buffer,
         uint64        _arg_offset,
         VulkanBuffer* _count_buffer,
@@ -194,10 +193,10 @@ public:
     );
 
     // Queries.
-    void ResetQueryPool(class VkNativeQueryPool& _query_pool, uint32 _first_query, uint32 _query_count);
+    void ResetQueryPool(VkNativeQueryPool& _query_pool, uint32 _first_query, uint32 _query_count);
     void BeginQuery(VkNativeQueryPool& _query_pool, uint32 _query, VkQueryControlFlags _flags = 0);
     void EndQuery(VkNativeQueryPool& _query_pool, uint32 _query);
-    void WriteTimeStamp(VkNativeQueryPool& _query_pool, uint32 _query, VkPipelineStageFlagBits2 _stage);
+    void WriteTimestamp(VkNativeQueryPool& _query_pool, uint32 _query, VkPipelineStageFlagBits2 _stage);
 
     // Debug labels.
     void BeginLabel(std::string_view _label, float4 _color);

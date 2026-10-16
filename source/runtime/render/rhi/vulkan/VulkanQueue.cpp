@@ -2801,7 +2801,7 @@ public:
         }
 
         const PipelineHandle& pso = _cmd.Pipeline();
-        cmd_list.SetPso(_cmd.Pipeline());
+        cmd_list.BindPipeline(_cmd.Pipeline());
         const auto& args = _cmd.Args(cached_args);
 
         cmd_list.BindShaderArguments(pso, args);
@@ -2896,10 +2896,10 @@ public:
                 PipelineUsesStencilAttachment(_cmd.Pipeline());
             rendering_envelope.emplace(pass_info, uses_stencil_attachment);
             VkRenderingInfo dynamic_rendering_info = rendering_envelope->RenderingInfo();
-            cmd_list.BeginRendering(std::move(dynamic_rendering_info));
+            cmd_list.BeginRendering(dynamic_rendering_info);
         }
 
-        cmd_list.SetPso(_cmd.Pipeline());
+        cmd_list.BindPipeline(_cmd.Pipeline());
 
         cmd_list.BindShaderArguments(pso, args);
 
@@ -2918,7 +2918,7 @@ public:
         viewport.y += viewport.height;
         viewport.height = -viewport.height;
 
-        cmd_list.SetViewPort(viewport);
+        cmd_list.SetViewport(viewport);
         cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
         for (const auto& draw_data : draw_datas) {
             auto num_of_vertex_buffers = draw_data.vtx_views.size();
@@ -2935,12 +2935,7 @@ public:
                     vtx_offsets.emplace_back(vtx_view.offset);
                 }
 
-                cmd_list.SetVertexBuffers(
-                    0,
-                    num_of_vertex_buffers,
-                    std::span<VkBuffer>(vertex_buffers.data(), num_of_vertex_buffers),
-                    std::span<VkDeviceSize>(vtx_offsets.data(), num_of_vertex_buffers)
-                );
+                cmd_list.SetVertexBuffers(0, vertex_buffers, vtx_offsets);
             }
 
             std::visit(
@@ -2972,7 +2967,7 @@ public:
                                 //draw indirect with count buffer
                                 auto* count_buffer =
                                     ResourceCast(draw_data.indirect_draw_param->count_buffer->GetBuffer());
-                                cmd_list.DrawIndexedIndirectCnt(
+                                cmd_list.DrawIndexedIndirectCount(
                                     indirect_buffer,
                                     draw_data.indirect_draw_param->buffer.GetByteOffset(),
                                     count_buffer,
@@ -3010,7 +3005,7 @@ public:
                                 //draw indirect with count buffer
                                 auto* count_buffer =
                                     ResourceCast(draw_data.indirect_draw_param->count_buffer->GetBuffer());
-                                cmd_list.DrawIndirectCnt(
+                                cmd_list.DrawIndirectCount(
                                     indirect_buffer,
                                     draw_data.indirect_draw_param->buffer.GetByteOffset(),
                                     count_buffer,
@@ -3059,7 +3054,7 @@ public:
                 DrawBatchUsesStencilAttachment(_cmd.draw_batch);
             rendering_envelope.emplace(pass_info, uses_stencil_attachment);
             VkRenderingInfo dynamic_rendering_info = rendering_envelope->RenderingInfo();
-            cmd_list.BeginRendering(std::move(dynamic_rendering_info));
+            cmd_list.BeginRendering(dynamic_rendering_info);
         }
         const auto& rect = pass_info.render_area;
         VkViewport  viewport{
@@ -3072,12 +3067,12 @@ public:
         };
         viewport.y += viewport.height;
         viewport.height = -viewport.height;
-        cmd_list.SetViewPort(viewport);
+        cmd_list.SetViewport(viewport);
         cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
 
         for (const DrawBatchElement& draw_cmd : _cmd.draw_batch.draw_cmds) {
 
-            cmd_list.SetPso(draw_cmd.handle);
+            cmd_list.BindPipeline(draw_cmd.handle);
             const ArrayArguments* arg = std::holds_alternative<ArrayArguments>(draw_cmd.args) ?
                                             &std::get<ArrayArguments>(draw_cmd.args) :
                                             (std::holds_alternative<ArrayArgReference>(draw_cmd.args) ?
@@ -3105,12 +3100,7 @@ public:
                                     vtx_offsets.emplace_back(vtx_view.offset);
                                 }
 
-                                cmd_list.SetVertexBuffers(
-                                    0,
-                                    num_of_vertex_buffers,
-                                    std::span<VkBuffer>(vertex_buffers.data(), num_of_vertex_buffers),
-                                    std::span<VkDeviceSize>(vtx_offsets.data(), num_of_vertex_buffers)
-                                );
+                                cmd_list.SetVertexBuffers(0, vertex_buffers, vtx_offsets);
                             }
 
                             std::visit(
@@ -3144,7 +3134,7 @@ public:
                                                 auto* count_buffer = ResourceCast(
                                                     draw_data.indirect_draw_param->count_buffer->GetBuffer()
                                                 );
-                                                cmd_list.DrawIndexedIndirectCnt(
+                                                cmd_list.DrawIndexedIndirectCount(
                                                     indirect_buffer,
                                                     draw_data.indirect_draw_param->buffer.GetByteOffset(),
                                                     count_buffer,
@@ -3185,7 +3175,7 @@ public:
                                                 auto* count_buffer = ResourceCast(
                                                     draw_data.indirect_draw_param->count_buffer->GetBuffer()
                                                 );
-                                                cmd_list.DrawIndirectCnt(
+                                                cmd_list.DrawIndirectCount(
                                                     indirect_buffer,
                                                     draw_data.indirect_draw_param->buffer.GetByteOffset(),
                                                     count_buffer,
@@ -3292,10 +3282,10 @@ public:
     //         .pDepthAttachment     = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
     //         .pStencilAttachment   = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr};
 
-    //     cmd_list.BeginRendering(std::move(dynamic_rendering_info));
+    //     cmd_list.BeginRendering(dynamic_rendering_info);
 
     //     for (const auto& [bitmask, pso] : _cmd.PipelineMap()) {
-    //         cmd_list.SetPso(pso);
+    //         cmd_list.BindPipeline(pso);
     //         cmd_list.BindShaderArguments(pso, args);
 
     //         if (args.constants.size() > 0) {
@@ -3316,7 +3306,7 @@ public:
     //         viewport.y += viewport.height;
     //         viewport.height = -viewport.height;
 
-    //         cmd_list.SetViewPort(viewport);
+    //         cmd_list.SetViewport(viewport);
     //         cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
     //         for (const auto& draw_data : draw_datas) {
     //             auto num_of_vertex_buffers = draw_data.vtx_views.size();
@@ -3633,7 +3623,7 @@ public:
         //recording bindless array updates
         if (b_array) {
             cmd_list.BeginLabel("UpdateBindlessArray", {0.0f, 1.0f, 0.0f, 1.0f});
-            cmd_list.SetPso(shuffle_sd.handle);
+            cmd_list.BindPipeline(shuffle_sd.handle);
             ComponentShuffleShader::Arg arg;
 
             {
@@ -3819,7 +3809,7 @@ public:
             cmd_list.CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
 
             auto& shuffle_sd = m_device->GetInternalShaders().sd_component_shuffle;
-            cmd_list.SetPso(shuffle_sd.handle);
+            cmd_list.BindPipeline(shuffle_sd.handle);
 
             ComponentShuffleShader::Arg arg;
             arg.component_cnt = to_update.size();
@@ -7305,11 +7295,11 @@ bool VkCommandQueue::TryExecuteParallel(
                                 runtime.rendering_envelope->RenderingInfo(
                                     VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT
                                 );
-                            assembly_cmd.BeginRendering(std::move(rendering_info));
-                            assembly_cmd.ExecuteCommands(secondaries);
+                            assembly_cmd.BeginRendering(rendering_info);
+                            assembly_cmd.ExecuteSecondaryCommands(secondaries);
                             assembly_cmd.EndRendering();
                         } else {
-                            assembly_cmd.ExecuteCommands(secondaries);
+                            assembly_cmd.ExecuteSecondaryCommands(secondaries);
                         }
                         runtime.worker_recorded = true;
                     } else {
@@ -7689,11 +7679,11 @@ bool VkCommandQueue::TryExecuteParallel(
                             runtime.rendering_envelope->RenderingInfo(
                                 VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT
                             );
-                        primary.BeginRendering(std::move(rendering_info));
-                        primary.ExecuteCommands(secondaries);
+                        primary.BeginRendering(rendering_info);
+                        primary.ExecuteSecondaryCommands(secondaries);
                         primary.EndRendering();
                     } else {
-                        primary.ExecuteCommands(secondaries);
+                        primary.ExecuteSecondaryCommands(secondaries);
                     }
                 }
                 const VkResult end_result =

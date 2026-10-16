@@ -19,6 +19,7 @@
 #include "shader/ShaderPipeline.h"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -129,7 +130,7 @@ VkResult VulkanCmdList::End() {
     return vkEndCommandBuffer(command_buffer);
 }
 
-void VulkanCmdList::ExecuteCommands(
+void VulkanCmdList::ExecuteSecondaryCommands(
     std::span<const VkCommandBuffer> _secondary_buffers
 ) {
     assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
@@ -144,7 +145,7 @@ void VulkanCmdList::ExecuteCommands(
 }
 
 // Rendering scope.
-void VulkanCmdList::BeginRendering(VkRenderingInfo&& _info) {
+void VulkanCmdList::BeginRendering(const VkRenderingInfo& _info) {
     vkCmdBeginRendering(command_buffer, &_info);
 }
 
@@ -153,7 +154,7 @@ void VulkanCmdList::EndRendering() {
 }
 
 // Pipeline and shader arguments.
-void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {
+void VulkanCmdList::BindPipeline(const PipelineHandle& _pso_handle) {
     auto* vk_pso = static_cast<VulkanPipelineState*>(_pso_handle.GetState());
     vkCmdBindPipeline(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetHandle());
 }
@@ -449,12 +450,23 @@ void VulkanCmdList::BindShaderArguments(const PipelineHandle& _pipeline_handle, 
 
 // Vertex input and dynamic state.
 void VulkanCmdList::SetVertexBuffers(
-    uint                _first_binding,
-    uint                _binding_cnt,
-    std::span<VkBuffer> _buffers,
-    std::span<uint64>   _offsets
+    uint32_t                      _first_binding,
+    std::span<const VkBuffer>     _buffers,
+    std::span<const VkDeviceSize> _offsets
 ) {
-    vkCmdBindVertexBuffers(command_buffer, _first_binding, _binding_cnt, _buffers.data(), _offsets.data());
+    if (_buffers.size() != _offsets.size()) {
+        throw std::invalid_argument("Vertex buffer and offset counts must match");
+    }
+    if (_buffers.size() > std::numeric_limits<uint32_t>::max()) {
+        throw std::out_of_range("Vertex buffer count exceeds uint32_t");
+    }
+    vkCmdBindVertexBuffers(
+        command_buffer,
+        _first_binding,
+        static_cast<uint32_t>(_buffers.size()),
+        _buffers.data(),
+        _offsets.data()
+    );
 }
 
 void VulkanCmdList::SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _index_type) {
@@ -465,7 +477,7 @@ void VulkanCmdList::SetScissor(const VkRect2D& _scissor) {
     vkCmdSetScissor(command_buffer, 0, 1, &_scissor);
 }
 
-void VulkanCmdList::SetViewPort(const VkViewport& _view_port) {
+void VulkanCmdList::SetViewport(const VkViewport& _view_port) {
 
     vkCmdSetViewport(command_buffer, 0, 1, &_view_port);
 }
@@ -501,7 +513,7 @@ void VulkanCmdList::DrawIndirect(
     vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
 }
 
-void VulkanCmdList::DrawIndirectCnt(
+void VulkanCmdList::DrawIndirectCount(
     VulkanBuffer* _commands,
     uint64        _commands_offset,
     VulkanBuffer* _count,
@@ -529,7 +541,7 @@ void VulkanCmdList::DrawIndexedIndirect(
     vkCmdDrawIndexedIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
 }
 
-void VulkanCmdList::DrawIndexedIndirectCnt(
+void VulkanCmdList::DrawIndexedIndirectCount(
     VulkanBuffer* _commands,
     uint64        _commands_offset,
     VulkanBuffer* _count,
@@ -869,7 +881,7 @@ void VulkanCmdList::EndQuery(
     vkCmdEndQuery(command_buffer, _query_pool.GetHandle(), _query);
 }
 
-void VulkanCmdList::WriteTimeStamp(
+void VulkanCmdList::WriteTimestamp(
     VkNativeQueryPool&       _query_pool,
     uint32                   _query_idx,
     VkPipelineStageFlagBits2 _stage

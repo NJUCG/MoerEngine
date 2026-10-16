@@ -272,7 +272,7 @@ void VulkanCommandQueries::RecordTimestampQuery(VulkanCmdList& _cmd_list, const 
         if (timestamp_reset_mode == EVulkanTimestampQueryResetMode::CommandBuffer) {
             _cmd_list.ResetQueryPool(*timestamp_pool, slot, 1);
         }
-        _cmd_list.WriteTimeStamp(*timestamp_pool, slot, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        _cmd_list.WriteTimestamp(*timestamp_pool, slot, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
         timestamp_query_records.emplace_back(
             TimestampQueryRecord{
                 .token      = token,
@@ -294,7 +294,7 @@ void VulkanCommandQueries::RecordTimestampQuery(VulkanCmdList& _cmd_list, const 
     if (timestamp_reset_mode == EVulkanTimestampQueryResetMode::CommandBuffer) {
         _cmd_list.ResetQueryPool(*timestamp_pool, slot, 1);
     }
-    _cmd_list.WriteTimeStamp(*timestamp_pool, slot, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+    _cmd_list.WriteTimestamp(*timestamp_pool, slot, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
     record->end_slot = slot;
 }
 
