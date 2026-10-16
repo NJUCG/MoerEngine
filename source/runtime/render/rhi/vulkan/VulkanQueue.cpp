@@ -2804,7 +2804,7 @@ public:
         cmd_list.SetPso(_cmd.Pipeline());
         const auto& args = _cmd.Args(cached_args);
 
-        cmd_list.BindDescriptors(pso, args);
+        cmd_list.BindShaderArguments(pso, args);
 
         std::visit(
             Overload{
@@ -2901,13 +2901,8 @@ public:
 
         cmd_list.SetPso(_cmd.Pipeline());
 
-        cmd_list.BindDescriptors(pso, args);
+        cmd_list.BindShaderArguments(pso, args);
 
-        if (args.constants.size() > 0) {
-            cmd_list.UploadPushConstants(
-                pso, std::span<const uint>(args.constants.data(), args.constants.size())
-            );
-        }
         const auto& cmd_vertex_buffers = _cmd.VertexBuffers();
         const auto& draw_datas         = _cmd.DrawData();
         const auto& rect               = pass_info.render_area;
@@ -3090,13 +3085,8 @@ public:
                                                  nullptr);
 
             PipelineHandle& pipeline = *const_cast<PipelineHandle*>(&draw_cmd.handle);
-            cmd_list.BindDescriptors(pipeline, *arg);
+            cmd_list.BindShaderArguments(pipeline, *arg);
 
-            if (arg && arg->constants.size() > 0) {
-                cmd_list.UploadPushConstants(
-                    pipeline, std::span<const uint>(arg->constants.data(), arg->constants.size())
-                );
-            }
             std::visit(
                 Overload{
                     [&](const Array<MeshDrawData>& _mesh_draw_cmds) {
@@ -3306,7 +3296,7 @@ public:
 
     //     for (const auto& [bitmask, pso] : _cmd.PipelineMap()) {
     //         cmd_list.SetPso(pso);
-    //         cmd_list.BindDescriptors(pso, args);
+    //         cmd_list.BindShaderArguments(pso, args);
 
     //         if (args.constants.size() > 0) {
     //             cmd_list.UploadPushConstants(
@@ -3651,7 +3641,7 @@ public:
                 arg.component_cnt = array_indices_dat.size();
                 arg.stride        = sizeof(uint) >> 2;
 
-                cmd_list.BindDescriptors(
+                cmd_list.BindShaderArguments(
                     shuffle_sd.handle,
                     shuffle_sd.SetArgs(
                         arg,
@@ -3670,7 +3660,7 @@ public:
                              ) >>
                              2;
 
-                cmd_list.BindDescriptors(
+                cmd_list.BindShaderArguments(
                     shuffle_sd.handle,
                     shuffle_sd.SetArgs(
                         arg,
@@ -3691,7 +3681,7 @@ public:
                              ) >>
                              2;
 
-                cmd_list.BindDescriptors(
+                cmd_list.BindShaderArguments(
                     shuffle_sd.handle,
                     shuffle_sd.SetArgs(
                         arg,
@@ -3845,7 +3835,7 @@ public:
                 EPixelFormat::PF_UNDEFINED
             );
 
-            cmd_list.BindDescriptors(
+            cmd_list.BindShaderArguments(
                 shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, staging, aligned_instance_buffer_view)
             );
 

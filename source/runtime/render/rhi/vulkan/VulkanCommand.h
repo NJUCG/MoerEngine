@@ -38,8 +38,6 @@ private:
 };
 
 class VulkanCmdList {
-    friend struct VkCustomDispatchCmd;
-
 public:
     VulkanCmdList(
         VulkanCommandPool*   _command_pool,
@@ -47,6 +45,11 @@ public:
         VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY
     );
     ~VulkanCmdList();
+    VulkanCmdList(const VulkanCmdList&)            = delete;
+    VulkanCmdList& operator=(const VulkanCmdList&) = delete;
+    VulkanCmdList(VulkanCmdList&&)                 = delete;
+    VulkanCmdList& operator=(VulkanCmdList&&)      = delete;
+
     VkCommandBuffer GetHandle() const {
         return command_buffer;
     }
@@ -69,9 +72,7 @@ public:
 
     // Pipeline and shader arguments.
     void SetPso(const PipelineHandle& _pso_handle);
-    void BindDescriptors(const PipelineHandle& pipeline_handle, const ArrayArguments& arguments);
-    void UploadDescriptors(const PipelineHandle& _pso_handle);
-    void UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data);
+    void BindShaderArguments(const PipelineHandle& _pipeline_handle, const ArrayArguments& _arguments);
     void SetDescriptorPushLease(std::shared_ptr<VulkanDescriptorPushLeaseState> _lease) {
         descriptor_push_lease = std::move(_lease);
     }
@@ -204,7 +205,7 @@ public:
     void InsertLabel(std::string_view _label, float4 _color);
 
 private:
-    VkCommandBuffer                                 command_buffer;
+    VkCommandBuffer                                 command_buffer{VK_NULL_HANDLE};
     VulkanCommandPool*                              command_pool;
     VulkanDevice&                                   device;
     VkCommandBufferLevel                            level;

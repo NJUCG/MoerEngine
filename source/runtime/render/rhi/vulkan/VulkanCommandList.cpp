@@ -2,7 +2,6 @@
 // Created by 74535 on 2023/10/17.
 //
 
-#include "VulkanResourceTracker.h"
 #include "misc/STL.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -22,10 +21,8 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
-#include <stdint.h>
 #include <string>
 #include <variant>
-#include <vector>
 namespace Moer::Render {
 
 VulkanCommandPool::VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_type) :
@@ -64,133 +61,6 @@ std::string_view VulkanCommandPool::GetQueueName() const {
             return "Unknown";
     }
 }
-
-VkPipelineStageFlagBits2 GetPipelineStageFromPassType(EPassType _pass) {
-    switch (_pass) {
-        case EPassType::Graphics:
-            return VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        case EPassType::Compute:
-            return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        case EPassType::Copy:
-            return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        default:
-            assert(false && "Invalid pass type");
-            return VK_PIPELINE_STAGE_2_NONE;
-    }
-}
-template<bool _is_src>
-void ResolveTextureBarrierInfo(VkImageMemoryBarrier2& _barrier, ETextureStateFlags _state, EPassType _pass) {
-
-    auto& src_access_flags = _is_src ? _barrier.srcAccessMask : _barrier.dstAccessMask;
-    auto& src_stage        = _is_src ? _barrier.srcStageMask : _barrier.dstStageMask;
-    auto& layout           = _is_src ? _barrier.oldLayout : _barrier.newLayout;
-
-    auto transfer_state_any_or = [&](ETextureStateFlags    _tmp_state,
-                                     VkAccessFlags2        _access,
-                                     VkPipelineStageFlags2 _stage,
-                                     VkImageLayout         _layout) {
-        if (EnumHasAnyFlag(_state, _tmp_state)) {
-            src_access_flags |= _access;
-            src_stage = _stage;
-            layout    = _layout;
-        }
-    };
-    src_stage        = VK_PIPELINE_STAGE_2_NONE;
-    src_access_flags = VK_ACCESS_2_NONE;
-    transfer_state_any_or(
-        TS_UNORDERED_READ,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        GetPipelineStageFromPassType(_pass),
-        VK_IMAGE_LAYOUT_GENERAL
-    );
-    transfer_state_any_or(
-        TS_UNORDERED_WRITE,
-        VK_ACCESS_2_SHADER_WRITE_BIT,
-        GetPipelineStageFromPassType(_pass),
-        VK_IMAGE_LAYOUT_GENERAL
-    );
-    transfer_state_any_or(
-        TS_COLOR_ATTACHMENT,
-        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-        uint32_t(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT),
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-    );
-
-    transfer_state_any_or(
-        TS_RESOLVE_ATTACHMENT,
-        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-        uint32_t(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT),
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-    );
-    if (src_stage != VK_PIPELINE_STAGE_2_NONE) {
-        return;
-    }
-    switch (_state) {
-        case TS_UNDEFINED:
-            src_access_flags = VK_ACCESS_2_NONE;
-            src_stage        = VK_PIPELINE_STAGE_2_NONE;
-            layout           = VK_IMAGE_LAYOUT_UNDEFINED;
-            break;
-        case TS_TRANSFER_SRC:
-            src_access_flags = VK_ACCESS_TRANSFER_READ_BIT;
-            src_stage        = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            layout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            break;
-        case TS_TRANSFER_DST:
-            src_access_flags = VK_ACCESS_TRANSFER_WRITE_BIT;
-            src_stage        = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            layout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            break;
-        case TS_SAMPLED:
-            src_access_flags = VK_ACCESS_SHADER_READ_BIT;
-            src_stage        = GetPipelineStageFromPassType(_pass);
-            layout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            break;
-        case TS_DEPTH_STENCIL:
-            src_access_flags = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            if (_is_src)
-                src_stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-            else
-                src_stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
-            layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            break;
-        case TS_PRESENT:
-            if constexpr (_is_src) {
-                src_access_flags = VK_ACCESS_MEMORY_READ_BIT;
-            } else {
-                src_access_flags = VK_ACCESS_2_NONE;
-            }
-            layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-            break;
-        default:
-            assert(false && "Invalid texture usage");
-    }
-}
-} // namespace Moer::Render
-#include <shader/ShaderPipeline.h>
-namespace Moer::Render {
-struct VulkanPipelineReflection {
-    struct Bindings {
-        VkShaderStageFlags                        stage;
-        std::vector<VkDescriptorSetLayoutBinding> bindings;
-    };
-    struct ShaderStage {
-        VkShaderStageFlagBits stage;
-        std::string           entry_point;
-        VkShaderModule        module;
-    };
-    std::vector<Bindings>              bindings;
-    std::vector<ShaderStage>           stages;
-    std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
-    std::vector<VkPushConstantRange>   push_constant_ranges;
-};
-//RHICreateGfxPso<Texture, Texture, Buffer>? no RHICreateGfxPso<TPipelineLayout>(auto&& _init_info);
-//     switch (state.resource_type) {
-//         case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
-//             return true;
-//         default: return false;
-//     }
-// }
 
 VkImageLayout GetSamplerImageLayout(const TextureView& _view) {
     return uint(_view.GetTexture()->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) ?
@@ -288,8 +158,8 @@ void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {
     vkCmdBindPipeline(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetHandle());
 }
 
-void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const ArrayArguments& arguments) {
-    auto* pipeline = static_cast<VulkanPipelineState*>(pipeline_handle.GetState());
+void VulkanCmdList::BindShaderArguments(const PipelineHandle& _pipeline_handle, const ArrayArguments& _arguments) {
+    auto* pipeline = static_cast<VulkanPipelineState*>(_pipeline_handle.GetState());
 
     assert(pipeline && pipeline->binding_template != nullptr && "Pipeline state has no bind template!");
     // Pipeline metadata remains immutable across graphics/compute queues and
@@ -328,7 +198,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                     const VulkanBindlessSetBindings<DescriptorType>& resource_bindings
                 ) {
                     BindlessArrayRef array =
-                        std::get<BindlessArrayRef>(arguments[resource_bindings.argument_index]);
+                        std::get<BindlessArrayRef>(_arguments[resource_bindings.argument_index]);
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
                     if constexpr (DescriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
                         descriptor_buffer.address = bindless_array->bindless_buffer_descs->DeviceAddress();
@@ -359,7 +229,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                                     );
                                 }
                                 uint64 source_descriptor_byte_offset = descriptor_heap.GetSamplerDescIdx(
-                                    std::get<Sampler>(arguments[argument_index])
+                                    std::get<Sampler>(_arguments[argument_index])
                                 );
                                 descriptor_heap.WriteSamplerDesc(
                                     source_descriptor_byte_offset, binding_byte_offset
@@ -370,7 +240,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
 
                                 if (resource_binding.descriptor_count > 1) {
                                     const TextureViewArray& textures =
-                                        std::get<TextureViewArray>(arguments[argument_index]);
+                                        std::get<TextureViewArray>(_arguments[argument_index]);
                                     if (textures.empty()) {
                                         throw std::runtime_error("sampled-image descriptor array is empty");
                                     }
@@ -403,10 +273,10 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                                     break;
                                 }
                                 VkImageLayout image_layout =
-                                    GetSamplerImageLayout(std::get<TextureView>(arguments[argument_index]));
+                                    GetSamplerImageLayout(std::get<TextureView>(_arguments[argument_index]));
 
                                 uint64 source_descriptor_byte_offset = descriptor_heap.GetImageDescIdx(
-                                    &std::get<TextureView>(arguments[argument_index]),
+                                    &std::get<TextureView>(_arguments[argument_index]),
                                     image_layout,
                                     resource_binding.descriptor_type
                                 );
@@ -418,7 +288,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
                                 if (resource_binding.descriptor_count > 1) {
                                     const TextureViewArray& textures =
-                                        std::get<TextureViewArray>(arguments[argument_index]);
+                                        std::get<TextureViewArray>(_arguments[argument_index]);
                                     if (textures.empty()) {
                                         throw std::runtime_error("storage-image descriptor array is empty");
                                     }
@@ -451,7 +321,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                                     break;
                                 }
                                 uint64 source_descriptor_byte_offset = descriptor_heap.GetImageDescIdx(
-                                    &std::get<TextureView>(arguments[argument_index]),
+                                    &std::get<TextureView>(_arguments[argument_index]),
                                     VK_IMAGE_LAYOUT_GENERAL,
                                     resource_binding.descriptor_type
                                 );
@@ -483,7 +353,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                                 };
                                 if (resource_binding.descriptor_count > 1) {
                                     const BufferViewArray& buffers =
-                                        std::get<BufferViewArray>(arguments[argument_index]);
+                                        std::get<BufferViewArray>(_arguments[argument_index]);
                                     if (buffers.empty()) {
                                         throw std::runtime_error("buffer descriptor array is empty");
                                     }
@@ -508,7 +378,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                                     break;
                                 }
                                 write_buffer_descriptor(
-                                    std::get<BufferView>(arguments[argument_index]), binding_byte_offset
+                                    std::get<BufferView>(_arguments[argument_index]), binding_byte_offset
                                 );
                                 break;
                             }
@@ -520,7 +390,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
                                     );
                                 }
                                 VulkanAccelerationStructure* acceleration_structure = ResourceCast(
-                                    std::get<RaytracingTlasRef>(arguments[argument_index]).Get()
+                                    std::get<RaytracingTlasRef>(_arguments[argument_index]).Get()
                                 );
                                 uint64 source_descriptor_byte_offset =
                                     descriptor_heap.GetAccelDescIdx(acceleration_structure);
@@ -563,7 +433,7 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
     }
 
     if (push_constants_info.size > 0) {
-        if (arguments.constants.size() * sizeof(uint) < push_constants_info.size) {
+        if (_arguments.constants.size() * sizeof(uint) < push_constants_info.size) {
             throw std::invalid_argument("Push constant upload exceeds the source data buffer");
         }
         vkCmdPushConstants(
@@ -572,18 +442,9 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& pipeline_handle, const
             push_constants_info.stageFlags,
             push_constants_info.offset,
             push_constants_info.size,
-            arguments.constants.data()
+            _arguments.constants.data()
         );
     }
-}
-
-void VulkanCmdList::UploadDescriptors(const PipelineHandle& _pso_handle) {}
-
-void VulkanCmdList::UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data) {
-    auto* vk_pso = static_cast<VulkanPipelineState*>(_pso_handle.GetState());
-    // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
-
-    // vkCmdPushConstants(command_buffer, vk_pso->GetPipelineLayout(), stage_flags, offset, size, _data.data());
 }
 
 // Vertex input and dynamic state.
