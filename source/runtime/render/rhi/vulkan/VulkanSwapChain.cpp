@@ -120,12 +120,9 @@ VkCompositeAlphaFlagBitsKHR ChooseCompositeAlpha(const VkSurfaceCapabilitiesKHR&
     }
 }
 
-} // namespace
-
 VkSurfaceFormatKHR ChooseSwapSurfaceFormat(
     const Moer::Array<VkSurfaceFormatKHR>& _available_formats,
-    EPixelFormat                           _preferred_format,
-    bool                                   _prefer_hdr
+    EPixelFormat                           _preferred_format
 ) {
     VkFormat preferred_format = VulkanEnumTranslator::METoVKFormat(_preferred_format);
 
@@ -180,6 +177,8 @@ ChooseSwapExtent(uint32_t* width, uint32_t* height, const VkSurfaceCapabilitiesK
     return extent;
 }
 
+} // namespace
+
 VkSwapchain::VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info) :
     Swapchain(),
     device(*static_cast<VulkanDevice*>(&_device)) {
@@ -219,14 +218,7 @@ PresentationCompletionTicket VkSwapchain::ReservePresentCompletion(
     );
 }
 
-VkFence VkSwapchain::GetInFlightFence(uint64 _index) {
-    return in_flight_fences[_index % in_flight_fences.size()];
-}
-
 bool VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
-    //FIXME: this is not a good way to do it, and it may have issue in multi-threaded env
-    //best do sync in a separate thread, and give sync op to user
-    // vkQueueWaitIdle(device.GetPresentQueue());
     return CreateOrRecreate(_info, _info.force_surface_recreate);
 }
 bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
@@ -676,7 +668,6 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     surface_info           = _info.surface;
     handle                 = new_sc;
     new_sc                 = VK_NULL_HANDLE;
-    fmt                    = new_fmt;
     size                   = new_size;
     format                 = new_format;
     max_frames_in_flight   = new_max_frames_in_flight;
@@ -752,11 +743,10 @@ VkSwapchain::AcquireResult VkSwapchain::AquireNextImage(
         return {
             outcome,
             _ready_semaphore,
-            aquire_idx,
-            image_idx
+            aquire_idx
         };
     }
-    return {outcome, VK_NULL_HANDLE, UINT32_MAX, image_idx};
+    return {outcome, VK_NULL_HANDLE, UINT32_MAX};
 }
 
 VkSwapchain::PresentResult VkSwapchain::Present(
