@@ -32,7 +32,7 @@ enum class EVulkanFaultOperation : uint8_t {
     SwapchainCreate,
     SwapchainGetImages,
     SwapchainSemaphoreCreate,
-    SwapchainFenceCreate,
+    PresentFenceCreate,
     QueueWaitIdle,
     DeviceWaitIdle
 };
@@ -114,8 +114,8 @@ struct VulkanFaultRecord {
             return "SwapchainGetImages";
         case EVulkanFaultOperation::SwapchainSemaphoreCreate:
             return "SwapchainSemaphoreCreate";
-        case EVulkanFaultOperation::SwapchainFenceCreate:
-            return "SwapchainFenceCreate";
+        case EVulkanFaultOperation::PresentFenceCreate:
+            return "PresentFenceCreate";
         case EVulkanFaultOperation::QueueWaitIdle:
             return "QueueWaitIdle";
         case EVulkanFaultOperation::DeviceWaitIdle:

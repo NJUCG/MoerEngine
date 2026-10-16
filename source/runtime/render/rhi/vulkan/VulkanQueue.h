@@ -940,24 +940,30 @@ private:
         const PresentationDrainPoint& _point
     );
 
-    struct PendingPresentRetirement {
-        VulkanPresentCompletionBatch batch;
-        bool                         gpu_success{false};
-        bool                         release_safe{false};
+    struct PendingPresentCompletion {
+        PendingPresentCompletion(const PendingPresentCompletion&)                = delete;
+        PendingPresentCompletion& operator=(const PendingPresentCompletion&)     = delete;
+        PendingPresentCompletion(PendingPresentCompletion&&) noexcept            = default;
+        PendingPresentCompletion& operator=(PendingPresentCompletion&&) noexcept = default;
 
-        PendingPresentRetirement(
-            VulkanPresentCompletionBatch&& _batch,
-            bool                            _gpu_success,
-            bool                            _release_safe
-        ) noexcept :
-            batch(std::move(_batch)),
-            gpu_success(_gpu_success),
-            release_safe(_release_safe) {}
+        explicit PendingPresentCompletion(VulkanPresentCompletionBatch&& _batch) noexcept :
+            context(_batch.context),
+            swapchain(std::move(_batch.swapchain)),
+            ticket(std::move(_batch.presentation_completion)),
+            fence(std::exchange(_batch.wsi_completion_fence, VK_NULL_HANDLE)),
+            uses_present_fence(_batch.uses_present_fence),
+            scripted_fence_status_allowed(_batch.scripted_fence_status_allowed) {}
+
+        VulkanOperationContext       context{};
+        SwapchainRef                 swapchain;
+        PresentationCompletionTicket ticket;
+        VkFence                      fence{VK_NULL_HANDLE};
+        bool                         uses_present_fence{false};
+        bool                         scripted_fence_status_allowed{false};
     };
 
-    [[nodiscard]] bool TryPollPresentRetirement(
-        PendingPresentRetirement& _pending
-    ) noexcept;
+    [[nodiscard]] bool         TryPollPresentRetirement(PendingPresentCompletion& _pending) noexcept;
+    void                       FinalizePresentCompletion(PendingPresentCompletion& _pending) noexcept;
     void                       FinalizePresentRetirement(
         VulkanPresentCompletionBatch& _batch,
         bool                          _gpu_success,
@@ -970,6 +976,11 @@ private:
     ) noexcept;
     UniquePtr<VulkanCommandContext> AcquireCommandContext();
     UniquePtr<VulkanPresentContext> AcquirePresentContext();
+    [[nodiscard]] VkFence           AcquirePresentFence();
+    void                            RecyclePresentFence(VkFence _fence) noexcept;
+    std::mutex                      present_fence_mutex;
+    Array<VkFence>                  free_present_fences;
+    Array<VkFence>                  all_present_fences;
     void                       CompleteAll(uint64 _timeline);
     void                       EnsureRecordCalibration();
     void                       RecordRhiRecordProfile(const RhiRecordExecuteSample& _sample);

@@ -27,7 +27,6 @@ public:
     };
     struct PresentResult {
         VulkanOperationResult outcome{};
-        VkFence               completion_fence{VK_NULL_HANDLE};
         bool                  accepted{false};
         bool                  wsi_enqueued{false};
         bool                  uses_present_fence{false};
@@ -43,6 +42,7 @@ public:
         uint                                _image_index,
         uint64                              _timeline,
         uint64                              _work_serial,
+        VkFence                             _completion_fence,
         const PresentationCompletionTicket& _completion
     );
     [[nodiscard]] bool IsPresentationReady() const noexcept override {
@@ -53,7 +53,6 @@ public:
         return surface_info.GetIdentity();
     }
 
-    [[nodiscard]] bool WaitFrameInFlight();
     [[nodiscard]] PresentationCompletionTicket
     ReservePresentCompletion(PresentationCompletionIdentity _identity);
 
@@ -64,27 +63,16 @@ private:
         VkSemaphore    render_finished_semaphore{VK_NULL_HANDLE};
     };
 
-    struct PresentSlot {
-        VkFence                      fence{VK_NULL_HANDLE};
-        PresentationCompletionTicket completion{};
-        uint64                       generation{0};
-    };
-
     [[nodiscard]] bool CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
-    [[nodiscard]] bool PreparePresentFence(uint64 _present_serial);
     void               DestroyImages(Array<SwapchainImage>& _images);
-    void               DestroyPresentSlots(Array<PresentSlot>& _slots);
 
     Array<SwapchainImage> swapchain_images;
-    Array<PresentSlot>    present_slots;
 
     VkSwapchainKHR       handle  = VK_NULL_HANDLE;
     VkSurfaceKHR         surface = VK_NULL_HANDLE;
     SwapchainSurfaceInfo surface_info{};
     VulkanDevice&        device;
     uint64               present_serial = 0;
-
-    static constexpr uint max_frames_in_flight = 3;
 
     bool native_surface_recreate_pending_ = false;
 };

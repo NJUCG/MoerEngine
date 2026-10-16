@@ -5538,6 +5538,10 @@ VkCommandQueue::~VkCommandQueue() {
     queue_cv.notify_all();
     completion_thread.join();
 
+    for (VkFence fence : all_present_fences) {
+        vkDestroyFence(vk_device.GetDevice(), fence, nullptr);
+    }
+
     Array<VulkanCommandContext*> recycled_command_contexts;
     command_contexts.PopAll(recycled_command_contexts);
     for (auto* command_context : recycled_command_contexts) {
@@ -9079,7 +9083,9 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
             auto*        vk_source_texture = static_cast<VulkanTexture*>(_view.texture);
             VkSwapchain* sc                = ResourceCast(_sc.Get());
             present_context                = AcquirePresentContext();
-            if (!sc->WaitFrameInFlight()) {
+            wsi_completion_fence           = AcquirePresentFence();
+            if (vk_device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) &&
+                wsi_completion_fence == VK_NULL_HANDLE) {
                 vk_device.RecordRejectedPresent();
                 final_outcome = {EVulkanOperationStatus::Rejected, GetRejectedSubmitResult(vk_device)};
                 AccumulatePresentReceiptOutcome(
@@ -9204,14 +9210,14 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                         present_context_state = EVulkanPresentContextRetirementState::Submitted;
                         timeline->MarkSubmitted(_timeline);
 
-                        const VkSwapchain::PresentResult present_result =
-                            sc->Present(
-                                queue.GetHandle(),
-                                idx,
-                                _timeline,
-                                _serial,
-                                presentation_completion
-                            );
+                        const VkSwapchain::PresentResult present_result = sc->Present(
+                            queue.GetHandle(),
+                            idx,
+                            _timeline,
+                            _serial,
+                            wsi_completion_fence,
+                            presentation_completion
+                        );
                         presentation_wsi_classified = true;
                         const VulkanOperationResult& present_outcome =
                             present_result.outcome;
@@ -9219,8 +9225,6 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                             present_result.accepted;
                         wsi_enqueued =
                             present_result.wsi_enqueued;
-                        wsi_completion_fence =
-                            present_result.completion_fence;
                         uses_present_fence =
                             present_result.uses_present_fence;
                         if (present_result.wsi_enqueued &&
@@ -9287,6 +9291,13 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
             )) {
             std::terminate();
         }
+    }
+
+    if (!uses_present_fence && wsi_completion_fence != VK_NULL_HANDLE) {
+        if (!vk_device.IsFaulted()) {
+            RecyclePresentFence(wsi_completion_fence);
+        }
+        wsi_completion_fence = VK_NULL_HANDLE;
     }
 
     CommitPresentCompletion(
@@ -10344,38 +10355,35 @@ void VkCommandQueue::FinalizePresentRetirement(
     bool                          _release_safe
 ) noexcept {
     ReleasePresentGpuResources(_batch, _gpu_success, _release_safe);
-    const PresentationCompletionStateRef completion_state =
-        _batch.swapchain ? _batch.swapchain->GetPresentationCompletionState() : nullptr;
-    const PresentationCompletionTicket completion_ticket = _batch.presentation_completion;
+    PendingPresentCompletion pending{std::move(_batch)};
+    FinalizePresentCompletion(pending);
+}
 
-    // No code below this point may observe the native Present fence or touch
-    // retained Present resources. Drop strong resource ownership before
-    // publishing the task-local retirement point to the Render owner.
-    _batch.swapchain             = nullptr;
-    _batch.wsi_completion_fence  = VK_NULL_HANDLE;
-    _batch.wsi_enqueued          = false;
-    _batch.uses_present_fence    = false;
-
-    if (completion_ticket.IsValid()) {
-        if (!completion_state ||
-            !completion_state->PublishRetired(completion_ticket)) {
-            std::terminate();
-        }
-        _batch.presentation_completion = {};
+void VkCommandQueue::FinalizePresentCompletion(PendingPresentCompletion& _pending) noexcept {
+    const PresentationCompletionStateRef state =
+        _pending.swapchain ? _pending.swapchain->GetPresentationCompletionState() : nullptr;
+    const PresentationCompletionTicket ticket = _pending.ticket;
+    if (_pending.fence != VK_NULL_HANDLE && !vk_device.IsFaulted()) {
+        RecyclePresentFence(_pending.fence);
+    }
+    // Stop observing native objects and release the swapchain before making
+    // the targeted drain visible to its Render owner.
+    _pending.fence     = VK_NULL_HANDLE;
+    _pending.swapchain = nullptr;
+    _pending.ticket    = {};
+    if (ticket.IsValid() && (!state || !state->PublishRetired(ticket))) {
+        std::terminate();
     }
 }
 
-bool VkCommandQueue::TryPollPresentRetirement(
-    PendingPresentRetirement& _pending
-) noexcept {
+bool VkCommandQueue::TryPollPresentRetirement(PendingPresentCompletion& _pending) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Completion &&
         "Present fence observation belongs to the Completion owner"
     );
 
-    VulkanPresentCompletionBatch& batch = _pending.batch;
-    if (!batch.presentation_completion.IsValid() ||
-        !batch.swapchain) {
+    PendingPresentCompletion& batch = _pending;
+    if (!batch.ticket.IsValid() || !batch.swapchain) {
         std::terminate();
     }
     const PresentationCompletionStateRef completion_state =
@@ -10388,20 +10396,17 @@ bool VkCommandQueue::TryPollPresentRetirement(
         VulkanOperationContext fault_context = batch.context;
         fault_context.operation = EVulkanFaultOperation::PresentFenceWait;
         fault_context.queue     = vk_device.GetPresentQueue();
-        fault_context.timeline =
-            batch.presentation_completion.GetIssueSequence();
+        fault_context.timeline               = batch.ticket.GetIssueSequence();
         if (_result == VK_SUCCESS) {
             _result = VK_ERROR_UNKNOWN;
         }
         vk_device.TryLatchFirstFault(
             fault_context, _result, false, false, true
         );
-        if (!completion_state->MarkWsiFailed(
-                batch.presentation_completion
-            )) {
+        if (!completion_state->MarkWsiFailed(batch.ticket)) {
             std::terminate();
         }
-        FinalizePresentRetirement(batch, false, false);
+        FinalizePresentCompletion(batch);
     };
 
     if (vk_device.IsFaulted()) {
@@ -10414,15 +10419,10 @@ bool VkCommandQueue::TryPollPresentRetirement(
     }
 
     if (!batch.uses_present_fence) {
-        if (!completion_state->WaitForWsi(
-                batch.presentation_completion,
-                std::chrono::nanoseconds::zero()
-            )) {
+        if (!completion_state->WaitForWsi(batch.ticket, std::chrono::nanoseconds::zero())) {
             return false;
         }
-        FinalizePresentRetirement(
-            batch, _pending.gpu_success, _pending.release_safe
-        );
+        FinalizePresentCompletion(batch);
         return true;
     }
 
@@ -10434,12 +10434,10 @@ bool VkCommandQueue::TryPollPresentRetirement(
     VkResult fence_status = VK_ERROR_UNKNOWN;
     if (batch.scripted_fence_status_allowed &&
         scripted_fence_status != nullptr) {
-        fence_status = scripted_fence_status->callback(
-            scripted_fence_status->context,
-            batch.presentation_completion.GetIssueSequence()
-        );
+        fence_status =
+            scripted_fence_status->callback(scripted_fence_status->context, batch.ticket.GetIssueSequence());
     } else {
-        if (batch.wsi_completion_fence == VK_NULL_HANDLE) {
+        if (batch.fence == VK_NULL_HANDLE) {
             fail_wsi(VK_ERROR_UNKNOWN);
             return true;
         }
@@ -10447,11 +10445,8 @@ bool VkCommandQueue::TryPollPresentRetirement(
         fence_context.operation =
             EVulkanFaultOperation::PresentFenceWait;
         fence_context.queue = vk_device.GetPresentQueue();
-        fence_context.timeline =
-            batch.presentation_completion.GetIssueSequence();
-        fence_status = vk_device.GetFenceStatus(
-            batch.wsi_completion_fence, fence_context
-        );
+        fence_context.timeline = batch.ticket.GetIssueSequence();
+        fence_status           = vk_device.GetFenceStatus(batch.fence, fence_context);
     }
     if (fence_status == VK_NOT_READY) {
         return false;
@@ -10460,14 +10455,10 @@ bool VkCommandQueue::TryPollPresentRetirement(
         fail_wsi(fence_status);
         return true;
     }
-    if (!completion_state->MarkWsiComplete(
-            batch.presentation_completion
-        )) {
+    if (!completion_state->MarkWsiComplete(batch.ticket)) {
         std::terminate();
     }
-    FinalizePresentRetirement(
-        batch, _pending.gpu_success, _pending.release_safe
-    );
+    FinalizePresentCompletion(batch);
     return true;
 }
 
@@ -10484,7 +10475,7 @@ void VkCommandQueue::CompletionThreadMain() {
 
     bool batch_gpu_success = false;
     bool batch_release_safe = false;
-    Array<PendingPresentRetirement> pending_present_retirements{};
+    Array<PendingPresentCompletion> pending_present_retirements{};
     while (true) {
         heartbeat.Pulse(ERHIHeartbeatStage::PollCompletion);
         for (auto pending = pending_present_retirements.begin();
@@ -10933,11 +10924,7 @@ void VkCommandQueue::CompletionThreadMain() {
                                 _batch.presentation_completion,
                                 std::chrono::nanoseconds::zero()
                             )) {
-                            pending_present_retirements.emplace_back(
-                                std::move(_batch),
-                                batch_gpu_success,
-                                batch_release_safe
-                            );
+                            pending_present_retirements.emplace_back(std::move(_batch));
                             return;
                         }
                     }
@@ -10988,11 +10975,7 @@ void VkCommandQueue::CompletionThreadMain() {
                         true
                     };
                     ReleasePresentGpuResources(completion_batch, true, true);
-                    pending_present_retirements.emplace_back(
-                        std::move(completion_batch),
-                        true,
-                        true
-                    );
+                    pending_present_retirements.emplace_back(std::move(completion_batch));
                 },
                 [this, &batch_gpu_success](UniquePtr<VulkanCommandContext>& _command_context) {
                     if (batch_gpu_success && !vk_device.IsFaulted()) {
@@ -11110,6 +11093,60 @@ void VkCommandQueue::CompletionThreadMain() {
             queue_cv.notify_all();
         }
     }
+}
+
+VkFence VkCommandQueue::AcquirePresentFence() {
+    assert(GetCurrentRHIThreadRole() == ERHIThreadRole::Submission);
+    if (!vk_device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
+        return VK_NULL_HANDLE;
+    }
+    VkFence fence = VK_NULL_HANDLE;
+    {
+        std::lock_guard lock(present_fence_mutex);
+        if (!free_present_fences.empty()) {
+            fence = free_present_fences.back();
+            free_present_fences.pop_back();
+        }
+    }
+    if (fence != VK_NULL_HANDLE) {
+        const VkResult result = vk_device.ResetFence(
+            fence,
+            VulkanOperationContext{
+                .operation  = EVulkanFaultOperation::PresentFenceReset,
+                .queue_type = queue.GetType(),
+                .queue      = queue.GetHandle(),
+            }
+        );
+        return result == VK_SUCCESS ? fence : VK_NULL_HANDLE;
+    }
+    const VkFenceCreateInfo info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    const VkResult          result = vkCreateFence(vk_device.GetDevice(), &info, nullptr, &fence);
+    if (result != VK_SUCCESS) {
+        vk_device.TryLatchFirstFault(
+            VulkanOperationContext{
+                .operation  = EVulkanFaultOperation::PresentFenceCreate,
+                .queue_type = queue.GetType(),
+                .queue      = queue.GetHandle(),
+            },
+            result,
+            false,
+            false,
+            true
+        );
+        return VK_NULL_HANDLE;
+    }
+    try {
+        all_present_fences.push_back(fence);
+    } catch (...) {
+        vkDestroyFence(vk_device.GetDevice(), fence, nullptr);
+        throw;
+    }
+    return fence;
+}
+
+void VkCommandQueue::RecyclePresentFence(VkFence _fence) noexcept {
+    std::lock_guard lock(present_fence_mutex);
+    free_present_fences.push_back(_fence);
 }
 
 void VkCommandQueue::CompleteAll(uint64 _timeline) {

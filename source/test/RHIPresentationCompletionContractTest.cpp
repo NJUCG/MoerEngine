@@ -69,8 +69,7 @@ void SeparateStatesRejectCrossMutation() {
         "separate states reused an instance identity"
     );
 
-    const auto ticket_a =
-        state_a->Reserve(Identity(state_a, 1, 1, 7), 0, 1);
+    const auto ticket_a = state_a->Reserve(Identity(state_a, 1, 1, 7));
     Expect(ticket_a.IsValid(), "state A returned an invalid ticket");
     Expect(
         !state_b->SetWsiMode(
@@ -102,10 +101,8 @@ void SeparateStatesRejectCrossMutation() {
 
 void EpochDrainDoesNotCaptureNewGeneration() {
     const auto state = PresentationCompletionState::Create();
-    const auto old_ticket =
-        state->Reserve(Identity(state, 10, 20, 1), 0, 1);
-    const auto new_ticket =
-        state->Reserve(Identity(state, 11, 21, 2), 1, 1);
+    const auto old_ticket = state->Reserve(Identity(state, 10, 20, 1));
+    const auto new_ticket = state->Reserve(Identity(state, 11, 21, 2));
     const auto old_point = state->Freeze(10, 20);
     const auto all_point = state->Freeze();
 
@@ -133,10 +130,8 @@ void EpochDrainDoesNotCaptureNewGeneration() {
 
 void OutOfOrderRetirementUsesInternalIssueSequence() {
     const auto state = PresentationCompletionState::Create();
-    const auto first =
-        state->Reserve(Identity(state, 30, 40, 900), 0, 1);
-    const auto second =
-        state->Reserve(Identity(state, 30, 40, 1), 1, 1);
+    const auto first  = state->Reserve(Identity(state, 30, 40, 900));
+    const auto second = state->Reserve(Identity(state, 30, 40, 1));
     Expect(
         first.GetIssueSequence() != first.GetIdentity().request_serial &&
             second.GetIssueSequence() ==
@@ -166,10 +161,8 @@ void OutOfOrderRetirementUsesInternalIssueSequence() {
 
 void FastFailureIsNotHeldBehindAcceptedPresent() {
     const auto state = PresentationCompletionState::Create();
-    const auto accepted =
-        state->Reserve(Identity(state, 50, 60, 1), 0, 1);
-    const auto failed =
-        state->Reserve(Identity(state, 50, 60, 2), 1, 1);
+    const auto accepted = state->Reserve(Identity(state, 50, 60, 1));
+    const auto failed   = state->Reserve(Identity(state, 50, 60, 2));
     Expect(
         state->SetWsiMode(
             accepted,
@@ -203,8 +196,7 @@ void FastFailureIsNotHeldBehindAcceptedPresent() {
 
 void FailedPresentFenceOutcomeSurvivesRetirement() {
     const auto state = PresentationCompletionState::Create();
-    const auto ticket =
-        state->Reserve(Identity(state, 61, 62, 1), 2, 7);
+    const auto ticket = state->Reserve(Identity(state, 61, 62, 1));
     Expect(
         state->SetWsiMode(
             ticket,
@@ -228,50 +220,33 @@ void FailedPresentFenceOutcomeSurvivesRetirement() {
     );
 }
 
-void RetiredSlotGenerationRejectsLateCallbacks() {
+void RetiredIssueRejectsLateCallbacks() {
     const auto state = PresentationCompletionState::Create();
-    const auto old_ticket =
-        state->Reserve(Identity(state, 70, 80, 1), 4, 12);
+    const auto old_ticket = state->Reserve(Identity(state, 70, 80, 1));
     CompletePresentFence(state, old_ticket);
-    Expect(
-        state->PublishRetired(old_ticket),
-        "old slot generation did not retire"
-    );
+    Expect(state->PublishRetired(old_ticket), "old issue did not retire");
 
-    const auto new_ticket =
-        state->Reserve(Identity(state, 71, 81, 2), 4, 13);
+    const auto new_ticket = state->Reserve(Identity(state, 70, 80, 1));
     Expect(
-        new_ticket.GetFenceSlot() == old_ticket.GetFenceSlot() &&
-            new_ticket.GetSlotGeneration() !=
-                old_ticket.GetSlotGeneration(),
-        "slot generation setup was invalid"
+        new_ticket.GetIdentity() == old_ticket.GetIdentity() &&
+            new_ticket.GetIssueSequence() != old_ticket.GetIssueSequence(),
+        "reused identity did not receive a new issue sequence"
     );
     Expect(
-        !state->MarkGpuComplete(old_ticket) &&
-            !state->MarkWsiComplete(old_ticket) &&
-            !state->SetWsiMode(
-                old_ticket,
-                EPresentationWsiCompletionMode::Immediate
-            ) &&
+        !state->MarkGpuComplete(old_ticket) && !state->MarkWsiComplete(old_ticket) &&
+            !state->SetWsiMode(old_ticket, EPresentationWsiCompletionMode::Immediate) &&
             !state->PublishRetired(old_ticket),
-        "late old-slot callback remained mutable after retirement"
+        "late old-issue callback remained mutable after retirement"
     );
-    Expect(
-        !state->WaitForWsi(new_ticket, 2ms),
-        "old-slot callback completed the reused slot"
-    );
+    Expect(!state->WaitForWsi(new_ticket, 2ms), "old-issue callback completed the reused identity");
 
     CompletePresentFence(state, new_ticket);
-    Expect(
-        state->PublishRetired(new_ticket),
-        "new slot generation did not retire independently"
-    );
+    Expect(state->PublishRetired(new_ticket), "new issue did not retire independently");
 }
 
 void QueueIdleFallbackIsTargetedAndOwnerResolved() {
     const auto state = PresentationCompletionState::Create();
-    const auto fallback =
-        state->Reserve(Identity(state, 90, 100, 1), 0, 1);
+    const auto fallback = state->Reserve(Identity(state, 90, 100, 1));
     Expect(
         state->SetWsiMode(
             fallback,
@@ -307,8 +282,7 @@ void QueueIdleFallbackIsTargetedAndOwnerResolved() {
 void WaitersWakeAndStrongOwnersReleaseBoundedly() {
     auto state = PresentationCompletionState::Create();
     std::weak_ptr<PresentationCompletionState> weak_state = state;
-    auto ticket =
-        state->Reserve(Identity(state, 110, 120, 1), 0, 1);
+    auto                                       ticket     = state->Reserve(Identity(state, 110, 120, 1));
     auto point = state->Freeze();
     Expect(
         state->SetWsiMode(
@@ -464,7 +438,7 @@ int main() {
         OutOfOrderRetirementUsesInternalIssueSequence();
         FastFailureIsNotHeldBehindAcceptedPresent();
         FailedPresentFenceOutcomeSurvivesRetirement();
-        RetiredSlotGenerationRejectsLateCallbacks();
+        RetiredIssueRejectsLateCallbacks();
         QueueIdleFallbackIsTargetedAndOwnerResolved();
         WaitersWakeAndStrongOwnersReleaseBoundedly();
 #if !defined(__APPLE__)

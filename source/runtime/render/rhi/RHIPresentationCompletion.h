@@ -60,8 +60,6 @@ public:
     [[nodiscard]] const PresentationCompletionIdentity&
     GetIdentity() const noexcept;
     [[nodiscard]] std::uint64_t GetIssueSequence() const noexcept;
-    [[nodiscard]] std::uint32_t GetFenceSlot() const noexcept;
-    [[nodiscard]] std::uint64_t GetSlotGeneration() const noexcept;
     [[nodiscard]] EPresentationWsiCompletionOutcome
     GetWsiOutcome() const noexcept;
 
@@ -70,8 +68,6 @@ private:
         PresentationCompletionStateRef _state,
         PresentationCompletionIdentity _identity,
         std::uint64_t                  _issue_sequence,
-        std::uint32_t                  _fence_slot,
-        std::uint64_t                  _slot_generation,
         SharedPtr<std::atomic<EPresentationWsiCompletionOutcome>>
             _wsi_outcome
     ) noexcept;
@@ -79,8 +75,6 @@ private:
     PresentationCompletionStateRef state_{};
     PresentationCompletionIdentity identity_{};
     std::uint64_t                   issue_sequence_{0};
-    std::uint32_t                   fence_slot_{0};
-    std::uint64_t                   slot_generation_{0};
     SharedPtr<std::atomic<EPresentationWsiCompletionOutcome>>
         wsi_outcome_{};
 
@@ -136,14 +130,10 @@ public:
         return GetInstanceId();
     }
 
-    [[nodiscard]] PresentationCompletionTicket Reserve(
-        PresentationCompletionIdentity _identity,
-        std::uint32_t                   _fence_slot,
-        std::uint64_t                   _slot_generation
-    );
+    [[nodiscard]] PresentationCompletionTicket Reserve(PresentationCompletionIdentity _identity);
 
     // Every mutation performs an exact ticket lookup. A late callback from a
-    // retired state/epoch/generation/slot generation returns false and cannot
+    // retired state/epoch/generation/issue returns false and cannot
     // mutate a newer record.
     bool SetWsiMode(
         const PresentationCompletionTicket& _ticket,

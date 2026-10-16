@@ -1270,12 +1270,10 @@ private:
 
 class PresentFenceStatusCapture final {
 public:
-    PresentFenceStatusCapture(
-        uint64 _blocked_issue,
-        uint64 _ready_issue
-    ) :
+    PresentFenceStatusCapture(uint64 _blocked_issue, uint64 _ready_issue, bool _block_other_issues = false) :
         blocked_issue(_blocked_issue),
-        ready_issue(_ready_issue) {}
+        ready_issue(_ready_issue),
+        block_other_issues(_block_other_issues) {}
 
     static VkResult Observe(void* _context, uint64 _issue) noexcept {
         auto& capture =
@@ -1299,7 +1297,8 @@ public:
         capture.poll_count.fetch_add(
             1, std::memory_order_acq_rel
         );
-        if (_issue == capture.blocked_issue) {
+        if (_issue == capture.blocked_issue ||
+            (capture.block_other_issues && _issue != capture.ready_issue)) {
             capture.blocked_poll_count.fetch_add(
                 1, std::memory_order_acq_rel
             );
@@ -1329,6 +1328,7 @@ public:
 private:
     uint64 blocked_issue{0};
     uint64 ready_issue{0};
+    bool   block_other_issues{false};
 };
 
 class ScopedPresentFenceStatusOverride final {
@@ -11387,25 +11387,17 @@ void RunPresentationCompletionIntegrationBoundary() {
         );
     }
 
-    const auto reserve =
-        [&](uint64 _epoch, uint64 _request, uint32 _slot) {
-            return state->Reserve(
-                PresentationCompletionIdentity{
-                    .state_instance_id =
-                        state->GetStateInstanceId(),
-                    .presentation_epoch = _epoch,
-                    .drawable_generation = 1,
-                    .request_serial = _request,
-                },
-                _slot,
-                1
-            );
-        };
+    const auto reserve = [&](uint64 _epoch, uint64 _request) {
+        return state->Reserve(PresentationCompletionIdentity{
+            .state_instance_id   = state->GetStateInstanceId(),
+            .presentation_epoch  = _epoch,
+            .drawable_generation = 1,
+            .request_serial      = _request,
+        });
+    };
 
-    const PresentationCompletionTicket blocked =
-        reserve(401, 1, 0);
-    const PresentationCompletionTicket ready =
-        reserve(402, 2, 1);
+    const PresentationCompletionTicket blocked = reserve(401, 1);
+    const PresentationCompletionTicket ready   = reserve(402, 2);
     if (!blocked.IsValid() || !ready.IsValid() ||
         !state->SetWsiMode(
             blocked,
@@ -11420,10 +11412,14 @@ void RunPresentationCompletionIntegrationBoundary() {
         );
     }
 
-    PresentFenceStatusCapture fence_status(
-        blocked.GetIssueSequence(),
-        ready.GetIssueSequence()
-    );
+    PresentFenceStatusCapture fence_status(blocked.GetIssueSequence(), ready.GetIssueSequence(), true);
+    std::array<PresentationCompletionTicket, 5> extra_pending;
+    for (size_t i = 0; i < extra_pending.size(); ++i) {
+        extra_pending[i] = reserve(401, 3 + i);
+        if (!state->SetWsiMode(extra_pending[i], EPresentationWsiCompletionMode::PresentFence)) {
+            throw std::runtime_error("could not reserve additional Present completion");
+        }
+    }
     TextureRef source = device.CreateTexture(
         "present_gpu_retirement_probe",
         Extent3D(4, 4, 1),
@@ -11445,6 +11441,11 @@ void RunPresentationCompletionIntegrationBoundary() {
             throw std::runtime_error(
                 "could not enqueue synthetic Present completions"
             );
+        }
+        for (const auto& ticket : extra_pending) {
+            if (!graphics_queue.EnqueuePresentationCompletionProbeForTesting(swapchain, ticket, true)) {
+                throw std::runtime_error("could not enqueue additional Present completion");
+            }
         }
 
         std::binary_semaphore ready_drain_finished{0};
@@ -11471,13 +11472,9 @@ void RunPresentationCompletionIntegrationBoundary() {
             state->Freeze(401, 1);
         const PresentationDrainPoint ready_point =
             state->Freeze(402, 1);
-        if (source->GetRefCount() != 1 ||
-            state->OutstandingCount() != 1 ||
-            state->WaitRetired(blocked_point, 1ms) ||
-            !state->WaitRetired(ready_point, 20ms) ||
-            fence_status.ready_poll_count.load(
-                std::memory_order_acquire
-            ) == 0) {
+        if (source->GetRefCount() != 1 || state->OutstandingCount() != 1 + extra_pending.size() ||
+            state->WaitRetired(blocked_point, 1ms) || !state->WaitRetired(ready_point, 20ms) ||
+            fence_status.ready_poll_count.load(std::memory_order_acquire) == 0) {
             throw std::runtime_error(
                 "Present retained GPU resources or retired the wrong identity"
             );
@@ -11507,8 +11504,7 @@ void RunPresentationCompletionIntegrationBoundary() {
         }
     }
 
-    const PresentationCompletionTicket fallback =
-        reserve(403, 3, 2);
+    const PresentationCompletionTicket fallback = reserve(403, 3);
     if (!fallback.IsValid() ||
         !state->SetWsiMode(
             fallback,
@@ -11784,24 +11780,16 @@ void RunPresentationCompletionShutdownDrainBoundary() {
     };
     const PresentationCompletionStateRef state =
         swapchain->GetPresentationCompletionState();
-    const auto reserve =
-        [&](uint64 _epoch, uint64 _request, uint32 _slot) {
-            return state->Reserve(
-                PresentationCompletionIdentity{
-                    .state_instance_id =
-                        state->GetStateInstanceId(),
-                    .presentation_epoch = _epoch,
-                    .drawable_generation = 1,
-                    .request_serial = _request,
-                },
-                _slot,
-                1
-            );
-        };
-    const PresentationCompletionTicket fence_ticket =
-        reserve(501, 1, 0);
-    const PresentationCompletionTicket fallback_ticket =
-        reserve(502, 2, 1);
+    const auto reserve = [&](uint64 _epoch, uint64 _request) {
+        return state->Reserve(PresentationCompletionIdentity{
+            .state_instance_id   = state->GetStateInstanceId(),
+            .presentation_epoch  = _epoch,
+            .drawable_generation = 1,
+            .request_serial      = _request,
+        });
+    };
+    const PresentationCompletionTicket fence_ticket    = reserve(501, 1);
+    const PresentationCompletionTicket fallback_ticket = reserve(502, 2);
     if (!fence_ticket.IsValid() ||
         !fallback_ticket.IsValid() ||
         !state->SetWsiMode(

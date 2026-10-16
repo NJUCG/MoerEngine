@@ -30,8 +30,6 @@ struct PresentationCompletionState::Impl {
     struct Record {
         PresentationCompletionIdentity            identity{};
         std::uint64_t                              issue_sequence{0};
-        std::uint32_t                              fence_slot{0};
-        std::uint64_t                              slot_generation{0};
         SharedPtr<
             std::atomic<EPresentationWsiCompletionOutcome>>
             wsi_outcome{};
@@ -85,11 +83,8 @@ struct PresentationCompletionStateAccess {
             return record;
         }
         if (record->second.identity != _ticket.identity_ ||
-            record->second.issue_sequence !=
-                _ticket.issue_sequence_ ||
-            record->second.fence_slot != _ticket.fence_slot_ ||
-            record->second.slot_generation !=
-                _ticket.slot_generation_) {
+            record->second.issue_sequence != _ticket.issue_sequence_ ||
+            record->second.wsi_outcome != _ticket.wsi_outcome_) {
             return _impl.records.end();
         }
         return record;
@@ -109,11 +104,8 @@ struct PresentationCompletionStateAccess {
             return record;
         }
         if (record->second.identity != _ticket.identity_ ||
-            record->second.issue_sequence !=
-                _ticket.issue_sequence_ ||
-            record->second.fence_slot != _ticket.fence_slot_ ||
-            record->second.slot_generation !=
-                _ticket.slot_generation_) {
+            record->second.issue_sequence != _ticket.issue_sequence_ ||
+            record->second.wsi_outcome != _ticket.wsi_outcome_) {
             return _impl.records.end();
         }
         return record;
@@ -169,16 +161,12 @@ PresentationCompletionTicket::PresentationCompletionTicket(
     PresentationCompletionStateRef _state,
     PresentationCompletionIdentity _identity,
     std::uint64_t                  _issue_sequence,
-    std::uint32_t                  _fence_slot,
-    std::uint64_t                  _slot_generation,
     SharedPtr<std::atomic<EPresentationWsiCompletionOutcome>>
         _wsi_outcome
 ) noexcept :
     state_(std::move(_state)),
     identity_(_identity),
     issue_sequence_(_issue_sequence),
-    fence_slot_(_fence_slot),
-    slot_generation_(_slot_generation),
     wsi_outcome_(std::move(_wsi_outcome)) {}
 
 bool PresentationCompletionTicket::IsValid() const noexcept {
@@ -198,16 +186,6 @@ PresentationCompletionTicket::GetIdentity() const noexcept {
 std::uint64_t
 PresentationCompletionTicket::GetIssueSequence() const noexcept {
     return issue_sequence_;
-}
-
-std::uint32_t
-PresentationCompletionTicket::GetFenceSlot() const noexcept {
-    return fence_slot_;
-}
-
-std::uint64_t
-PresentationCompletionTicket::GetSlotGeneration() const noexcept {
-    return slot_generation_;
 }
 
 EPresentationWsiCompletionOutcome
@@ -271,11 +249,7 @@ PresentationCompletionState::GetInstanceId() const noexcept {
     return state_instance_id_;
 }
 
-PresentationCompletionTicket PresentationCompletionState::Reserve(
-    PresentationCompletionIdentity _identity,
-    std::uint32_t                   _fence_slot,
-    std::uint64_t                   _slot_generation
-) {
+PresentationCompletionTicket PresentationCompletionState::Reserve(PresentationCompletionIdentity _identity) {
     if (_identity.state_instance_id != state_instance_id_) {
         return {};
     }
@@ -295,8 +269,6 @@ PresentationCompletionTicket PresentationCompletionState::Reserve(
         Impl::Record record{};
         record.identity        = _identity;
         record.issue_sequence  = issue_sequence;
-        record.fence_slot      = _fence_slot;
-        record.slot_generation = _slot_generation;
         record.wsi_outcome     = wsi_outcome;
         impl_->records.emplace(issue_sequence, std::move(record));
         impl_->last_issue_sequence = issue_sequence;
@@ -306,8 +278,6 @@ PresentationCompletionTicket PresentationCompletionState::Reserve(
         shared_from_this(),
         _identity,
         issue_sequence,
-        _fence_slot,
-        _slot_generation,
         std::move(wsi_outcome)
     );
 }
