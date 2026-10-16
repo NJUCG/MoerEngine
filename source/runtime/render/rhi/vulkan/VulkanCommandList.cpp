@@ -803,52 +803,6 @@ void VulkanCmdList::ClearTexture(
     );
 }
 
-// CPU buffer access.
-void VulkanCmdList::CopyData(const BufferView& _dst, const void* _data, uint64 _size) {
-    auto*        buffer    = static_cast<VulkanBuffer*>(_dst.buffer);
-    VmaAllocator allocator = device.GetVmaAllocator();
-
-    // void* p_data;
-    // VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
-    // std::memcpy((byte*)p_data + _dst.GetByteOffset(), _data, _size);
-    // vmaUnmapMemory(allocator, buffer->GetAllocation());
-    // vmaFlushAllocation(allocator, buffer->GetAllocation(), _dst.GetByteOffset(), _size);
-    VK_CHECK_RESULT(
-        vmaCopyMemoryToAllocation(allocator, _data, buffer->GetAllocation(), _dst.GetByteOffset(), _size)
-    );
-}
-
-void VulkanCmdList::CopyData(void* _dst, const BufferView& _src, uint64 _size) {
-    auto*        buffer    = static_cast<VulkanBuffer*>(_src.buffer);
-    VmaAllocator allocator = device.GetVmaAllocator();
-
-    // void* p_data;
-    // VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
-    // std::memcpy((byte*)_dst, (byte*)p_data + _src.GetByteOffset(), _size);
-    // vmaUnmapMemory(allocator, buffer->GetAllocation());
-    // vmaFlushAllocation(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _size);
-    VK_CHECK_RESULT(
-        vmaCopyAllocationToMemory(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _dst, _size)
-    );
-}
-
-void* VulkanCmdList::MapBuffer(const BufferView& _buffer) {
-    auto*        buffer    = static_cast<VulkanBuffer*>(_buffer.buffer);
-    VmaAllocator allocator = device.GetVmaAllocator();
-
-    void* p_data;
-    VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
-    return (byte*)p_data + _buffer.GetByteOffset();
-}
-
-void VulkanCmdList::UnmapBuffer(const BufferView& _buffer) {
-    auto*        buffer    = static_cast<VulkanBuffer*>(_buffer.buffer);
-    VmaAllocator allocator = device.GetVmaAllocator();
-
-    vmaUnmapMemory(allocator, buffer->GetAllocation());
-    vmaFlushAllocation(allocator, buffer->GetAllocation(), _buffer.GetByteOffset(), _buffer.GetByteSize());
-}
-
 // Acceleration structures.
 void VulkanCmdList::BuildAccelerationStructures(
     const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos,

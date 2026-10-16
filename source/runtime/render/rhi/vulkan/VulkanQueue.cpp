@@ -2636,12 +2636,12 @@ public:
             const ReadbackToken readback = _cmd.OwningReadback();
             const uint64 logical_size = _cmd.ByteSize();
             command_context.AddOnComplete(
-                [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
+                [tmp_buffer, device = m_device, readback, logical_size] {
                     struct WriterContext {
-                        VulkanCmdList* command_list{};
-                        BufferView     staging{};
-                        uint64         byte_size{};
-                    } context{&cmd_list, tmp_buffer, logical_size};
+                        VulkanDevice* device{};
+                        BufferView    staging{};
+                        uint64        byte_size{};
+                    } context{device, tmp_buffer, logical_size};
                     (void)ReadbackBackendAccess::MaterializePayload(
                         readback,
                         &context,
@@ -2655,7 +2655,7 @@ public:
                                     "Vulkan buffer readback payload size mismatch"
                                 );
                             }
-                            writer->command_list->CopyData(
+                            writer->device->CopyData(
                                 _destination.data(),
                                 writer->staging,
                                 writer->byte_size
@@ -2666,8 +2666,8 @@ public:
             );
         } else {
             command_context.AddOnComplete(
-                [tmp_buffer, &cmd_list(cmd_list), destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
-                    cmd_list.CopyData(
+                [tmp_buffer, device = m_device, destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
+                    device->CopyData(
                         destination, tmp_buffer, logical_size
                     );
                 }
@@ -2697,12 +2697,12 @@ public:
             const ReadbackToken readback = _cmd.OwningReadback();
             const uint64 logical_size = _cmd.ByteSize();
             command_context.AddOnComplete(
-                [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
+                [tmp_buffer, device = m_device, readback, logical_size] {
                     struct WriterContext {
-                        VulkanCmdList* command_list{};
-                        BufferView     staging{};
-                        uint64         byte_size{};
-                    } context{&cmd_list, tmp_buffer, logical_size};
+                        VulkanDevice* device{};
+                        BufferView    staging{};
+                        uint64        byte_size{};
+                    } context{device, tmp_buffer, logical_size};
                     (void)ReadbackBackendAccess::MaterializePayload(
                         readback,
                         &context,
@@ -2716,7 +2716,7 @@ public:
                                     "Vulkan texture readback payload size mismatch"
                                 );
                             }
-                            writer->command_list->CopyData(
+                            writer->device->CopyData(
                                 _destination.data(),
                                 writer->staging,
                                 writer->byte_size
@@ -2727,8 +2727,8 @@ public:
             );
         } else {
             command_context.AddOnComplete(
-                [tmp_buffer, &cmd_list(cmd_list), destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
-                    cmd_list.CopyData(
+                [tmp_buffer, device = m_device, destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
+                    device->CopyData(
                         destination.data(), tmp_buffer, logical_size
                     );
                 }
@@ -3597,8 +3597,8 @@ public:
             if (b_array) {
                 array_staging     = staging_buffer.buffer->GetView(array_staging_offset, array_staging_size);
                 array_indices_buf = staging_buffer.buffer->GetView(array_indices_offset, array_indices_size);
-                cmd_list.CopyData(array_staging, array_data.data(), array_staging_size);
-                cmd_list.CopyData(array_indices_buf, array_indices_dat.data(), array_indices_size);
+                m_device->CopyData(array_staging, array_data.data(), array_staging_size);
+                m_device->CopyData(array_indices_buf, array_indices_dat.data(), array_indices_size);
             }
 
             if (b_texture) {
@@ -3606,8 +3606,8 @@ public:
                     staging_buffer.buffer->GetView(texture_staging_offset, texture_staging_size);
                 texture_indices_buf =
                     staging_buffer.buffer->GetView(texture_indices_offset, texture_indices_size);
-                cmd_list.CopyData(texture_desc_staging, texture_data.data(), texture_staging_size);
-                cmd_list.CopyData(texture_indices_buf, texture_indices_dat.data(), texture_indices_size);
+                m_device->CopyData(texture_desc_staging, texture_data.data(), texture_staging_size);
+                m_device->CopyData(texture_indices_buf, texture_indices_dat.data(), texture_indices_size);
             }
 
             if (b_buffer) {
@@ -3615,8 +3615,8 @@ public:
                     staging_buffer.buffer->GetView(buffer_staging_offset, buffer_staging_size);
                 buffer_indices_buf =
                     staging_buffer.buffer->GetView(buffer_indices_offset, buffer_indices_size);
-                cmd_list.CopyData(buffer_desc_staging, buffer_data.data(), buffer_staging_size);
-                cmd_list.CopyData(buffer_indices_buf, buffer_indices_dat.data(), buffer_indices_size);
+                m_device->CopyData(buffer_desc_staging, buffer_data.data(), buffer_staging_size);
+                m_device->CopyData(buffer_indices_buf, buffer_indices_dat.data(), buffer_indices_size);
             }
         }
 
@@ -3801,12 +3801,12 @@ public:
                 to_update_indices[i] = {i, id};
             }
 
-            cmd_list.CopyData(
+            m_device->CopyData(
                 staging,
                 _cmd.InstanceData().data(),
                 to_update.size() * sizeof(VkAccelerationStructureInstanceKHR)
             );
-            cmd_list.CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
+            m_device->CopyData(indices, to_update_indices.data(), to_update.size() * sizeof(uint32) * 2);
 
             auto& shuffle_sd = m_device->GetInternalShaders().sd_component_shuffle;
             cmd_list.BindPipeline(shuffle_sd.handle);

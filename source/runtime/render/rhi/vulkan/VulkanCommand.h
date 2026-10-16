@@ -180,12 +180,6 @@ public:
         const VkImageSubresourceRange& _range
     );
 
-    // CPU buffer access.
-    void  CopyData(const BufferView& _dst, const void* _data, uint64 _size);
-    void  CopyData(void* _dst, const BufferView& _src, uint64 _size);
-    void* MapBuffer(const BufferView& _src);
-    void  UnmapBuffer(const BufferView& _buffer);
-
     // Acceleration structures.
     void BuildAccelerationStructures(
         const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos,
