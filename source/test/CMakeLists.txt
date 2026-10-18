@@ -592,8 +592,10 @@ endif()
 # used by Moer::Render.
 set(test_target TestVulkanHeaderContract)
 add_executable(${test_target} "VulkanHeaderContractTest.cpp")
+# Public Render headers contain inline code that references Render symbols.
+# Keep the Vulkan header contract explicit and satisfy those link dependencies.
 target_link_libraries(${test_target}
-    PRIVATE Moer::VulkanHeaders
+    PRIVATE Moer::VulkanHeaders Moer::Render
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanHeaderContract COMMAND $<TARGET_FILE:${test_target}>)

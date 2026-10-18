@@ -170,14 +170,6 @@ VkSwapchain::VkSwapchain(VulkanDevice& _device, const SwapchainCreateInfo& _info
     device(_device) {
     static_cast<void>(CreateOrRecreate(_info));
 }
-PresentationCompletionTicket VkSwapchain::ReservePresentCompletion(PresentationCompletionIdentity _identity) {
-    const PresentationCompletionStateRef& state = GetPresentationCompletionState();
-    if (!state) {
-        return {};
-    }
-    _identity.state_instance_id = state->GetInstanceId();
-    return state->Reserve(_identity);
-}
 
 bool VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
     return CreateOrRecreate(_info, _info.force_surface_recreate);
@@ -631,12 +623,12 @@ VkSwapchain::PresentResult VkSwapchain::Present(
     uint64                              _timeline,
     uint64                              _work_serial,
     VkFence                             _completion_fence,
-    const PresentationCompletionTicket& _completion
+    const PresentationCompletionRef& _completion
 ) {
     PresentResult present_result{};
     const auto set_wsi_mode =
         [this, &_completion](EPresentationWsiCompletionMode _mode) {
-            if (_completion.IsValid() &&
+            if (_completion &&
                 !GetPresentationCompletionState()->SetWsiMode(
                     _completion, _mode
                 )) {
@@ -694,7 +686,7 @@ VkSwapchain::PresentResult VkSwapchain::Present(
     present_result.uses_present_fence =
         present_result.wsi_enqueued && use_present_fence;
 
-    if (_completion.IsValid()) {
+    if (_completion) {
         // Present fences cover both accepted presentation and the queue
         // operations retained after recoverable WSI errors.
         if (present_result.wsi_enqueued && use_present_fence) {

@@ -82,7 +82,6 @@ struct RHIPresentRequest {
 struct RHIPresentationDrainTarget {
     SwapchainRef                   swapchain{};
     PresentationCompletionStateRef completion_state{};
-    uint64                         state_instance_id{0};
     uint64                         presentation_epoch{0};
     uint64                         drawable_generation{0};
 
@@ -98,16 +97,11 @@ struct RHIPresentationDrainTarget {
             swapchain ? swapchain->GetPresentationCompletionState() :
                         PresentationCompletionStateRef{}
         ),
-        state_instance_id(
-            completion_state ? completion_state->GetInstanceId() : 0
-        ),
         presentation_epoch(_presentation_epoch),
         drawable_generation(_drawable_generation) {}
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return swapchain && completion_state &&
-               state_instance_id != 0 &&
-               completion_state->GetInstanceId() == state_instance_id;
+        return swapchain && completion_state;
     }
 };
 

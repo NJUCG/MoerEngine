@@ -11387,18 +11387,11 @@ void RunPresentationCompletionIntegrationBoundary() {
         );
     }
 
-    const auto reserve = [&](uint64 _epoch, uint64 _request) {
-        return state->Reserve(PresentationCompletionIdentity{
-            .state_instance_id   = state->GetStateInstanceId(),
-            .presentation_epoch  = _epoch,
-            .drawable_generation = 1,
-            .request_serial      = _request,
-        });
-    };
+    const auto reserve = [&](uint64 _epoch) { return state->Reserve(_epoch, 1); };
 
-    const PresentationCompletionTicket blocked = reserve(401, 1);
-    const PresentationCompletionTicket ready   = reserve(402, 2);
-    if (!blocked.IsValid() || !ready.IsValid() ||
+    const PresentationCompletionRef blocked = reserve(401);
+    const PresentationCompletionRef ready   = reserve(402);
+    if (!blocked || !ready ||
         !state->SetWsiMode(
             blocked,
             EPresentationWsiCompletionMode::PresentFence
@@ -11412,10 +11405,10 @@ void RunPresentationCompletionIntegrationBoundary() {
         );
     }
 
-    PresentFenceStatusCapture fence_status(blocked.GetIssueSequence(), ready.GetIssueSequence(), true);
-    std::array<PresentationCompletionTicket, 5> extra_pending;
+    PresentFenceStatusCapture fence_status(blocked->GetIssueSequence(), ready->GetIssueSequence(), true);
+    std::array<PresentationCompletionRef, 5> extra_pending;
     for (size_t i = 0; i < extra_pending.size(); ++i) {
-        extra_pending[i] = reserve(401, 3 + i);
+        extra_pending[i] = reserve(401);
         if (!state->SetWsiMode(extra_pending[i], EPresentationWsiCompletionMode::PresentFence)) {
             throw std::runtime_error("could not reserve additional Present completion");
         }
@@ -11504,8 +11497,8 @@ void RunPresentationCompletionIntegrationBoundary() {
         }
     }
 
-    const PresentationCompletionTicket fallback = reserve(403, 3);
-    if (!fallback.IsValid() ||
+    const PresentationCompletionRef fallback = reserve(403);
+    if (!fallback ||
         !state->SetWsiMode(
             fallback,
             EPresentationWsiCompletionMode::QueueIdleFallback
@@ -11544,8 +11537,8 @@ void RunPresentationCompletionIntegrationBoundary() {
         );
     }
 
-    const auto previous = reserve(404, 4);
-    const auto current  = reserve(405, 5);
+    const auto previous = reserve(404);
+    const auto current  = reserve(405);
     for (const auto& ticket : {previous, current}) {
         if (!state->SetWsiMode(ticket, EPresentationWsiCompletionMode::QueueIdleFallback)) {
             throw std::runtime_error("could not reserve reacquisition completion");
@@ -11561,7 +11554,7 @@ void RunPresentationCompletionIntegrationBoundary() {
             throw std::runtime_error("could not enqueue reacquisition completion");
         }
         if (!state->WaitRetired(state->Freeze(404, 1), 5s) ||
-            current.GetWsiOutcome() != EPresentationWsiCompletionOutcome::Pending ||
+            current->GetWsiOutcome() != EPresentationWsiCompletionOutcome::Pending ||
             state->OutstandingCount() != 1 || reacquire_idle.count.load(std::memory_order_acquire) != 0) {
             throw std::runtime_error(
                 "reacquisition failed to retire only the previous Present without queue idle"
@@ -11809,18 +11802,11 @@ void RunPresentationCompletionShutdownDrainBoundary() {
     };
     const PresentationCompletionStateRef state =
         swapchain->GetPresentationCompletionState();
-    const auto reserve = [&](uint64 _epoch, uint64 _request) {
-        return state->Reserve(PresentationCompletionIdentity{
-            .state_instance_id   = state->GetStateInstanceId(),
-            .presentation_epoch  = _epoch,
-            .drawable_generation = 1,
-            .request_serial      = _request,
-        });
-    };
-    const PresentationCompletionTicket fence_ticket    = reserve(501, 1);
-    const PresentationCompletionTicket fallback_ticket = reserve(502, 2);
-    if (!fence_ticket.IsValid() ||
-        !fallback_ticket.IsValid() ||
+    const auto reserve = [&](uint64 _epoch) { return state->Reserve(_epoch, 1); };
+    const PresentationCompletionRef fence_ticket    = reserve(501);
+    const PresentationCompletionRef fallback_ticket = reserve(502);
+    if (!fence_ticket ||
+        !fallback_ticket ||
         !state->SetWsiMode(
             fence_ticket,
             EPresentationWsiCompletionMode::PresentFence
@@ -11839,7 +11825,7 @@ void RunPresentationCompletionShutdownDrainBoundary() {
     }
 
     PresentFenceStatusCapture fence_status(
-        fence_ticket.GetIssueSequence(),
+        fence_ticket->GetIssueSequence(),
         UINT64_MAX
     );
     QueueIdleWaitCapture queue_idle{};

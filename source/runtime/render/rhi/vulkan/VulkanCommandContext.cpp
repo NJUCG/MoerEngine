@@ -38,24 +38,22 @@ bool InvokeCompletionCallbacksNoexcept(
 
 } // namespace
 
-// VulkanCommandContextBase
-VulkanCommandContextBase::VulkanCommandContextBase(VulkanDevice* _device, EQueueType _type) :
+VulkanCommandContext::VulkanCommandContext(VulkanDevice* _device, EQueueType _type) :
     VulkanDeviceObject(_device),
     queue_type(_type),
     tracker(_type),
     command_pool(_device, _type),
-    cmd_list(&command_pool, *_device) {}
+    cmd_list(&command_pool, *_device),
+    queries(*_device, _type) {}
 
-VulkanCommandContextBase::~VulkanCommandContextBase() = default;
-
-VulkanCmdList& VulkanCommandContextBase::PrepareSecondaryCmdList() {
+VulkanCmdList& VulkanCommandContext::PrepareSecondaryCmdList() {
     if (!secondary_cmd_list.has_value()) {
         secondary_cmd_list.emplace(&command_pool, *m_device, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
     }
     return secondary_cmd_list.value();
 }
 
-bool VulkanCommandContextBase::ResetCommandPool() {
+bool VulkanCommandContext::ResetCommandPool() {
     if (m_device->IsDeviceLost()) {
         m_device->RecordSkippedCommandPoolReset();
         return false;
@@ -94,24 +92,11 @@ bool VulkanCommandContextBase::ResetCommandPool() {
     return false;
 }
 
-bool VulkanCommandContextBase::CompleteSuccess() noexcept {
-    return InvokeCompletionCallbacksNoexcept(on_complete, "command context");
-}
-
-bool VulkanCommandContextBase::Reset() {
-    return ResetCommandPool();
-}
-
-bool VulkanCommandContextBase::ResetAbandoned() {
+bool VulkanCommandContext::ResetAbandoned() {
     on_complete.clear();
     tracker.Reset();
     return Reset();
 }
-
-VulkanCommandContext::VulkanCommandContext(VulkanDevice* _device, EQueueType _type) :
-    VulkanCommandContextBase(_device, _type),
-    temporary_buffer_allocator(*_device),
-    queries(*_device, _type) {}
 
 void VulkanCommandContext::EnsureQueryCapacity(size_t _timestamp_slot_count, size_t _occlusion_pair_count) {
     queries.EnsureQueryCapacity(_timestamp_slot_count, _occlusion_pair_count);
@@ -128,12 +113,13 @@ void VulkanCommandContext::RecordQuery(VulkanCmdList& _cmd_list, const QueryCmd&
     queries.RecordQuery(_cmd_list, _cmd);
 }
 
-VkResult
-VulkanCommandContext::PrepareQueriesAfterGpuCompletion(const VulkanOperationContext& _context) noexcept {
+VkResult VulkanCommandContext::PrepareQueriesAfterGpuCompletion(const VulkanOperationContext& _context
+) noexcept {
     return queries.PrepareQueriesAfterGpuCompletion(_context);
 }
 
 bool VulkanCommandContext::CompleteSuccessCallbacks() noexcept {
+    image_acquisition_pending = false;
     return InvokeCompletionCallbacksNoexcept(on_complete, "command context");
 }
 
@@ -165,17 +151,20 @@ bool VulkanCommandContext::CompleteSuccess() noexcept {
 }
 
 bool VulkanCommandContext::Reset() {
-    if (!ResetCommandPool()) {
+    if (image_acquisition_pending || !ResetCommandPool()) {
         return false;
     }
-    temporary_buffer_allocator.Reset();
+    if (temporary_buffer_allocator) {
+        temporary_buffer_allocator->Reset();
+    }
     queries.ClearRecords();
     return true;
 }
 
-// VulkanPresentContext
-VulkanPresentContext::VulkanPresentContext(VulkanDevice* _device, EQueueType _type) :
-    VulkanCommandContextBase(_device, _type) {
+VkSemaphore VulkanCommandContext::GetImageReadySemaphore() {
+    if (image_ready_semaphore != VK_NULL_HANDLE) {
+        return image_ready_semaphore;
+    }
     VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     const VkResult        result =
         vkCreateSemaphore(m_device->GetDevice(), &semaphore_info, VK_NULL_HANDLE, &image_ready_semaphore);
@@ -184,7 +173,7 @@ VulkanPresentContext::VulkanPresentContext(VulkanDevice* _device, EQueueType _ty
         m_device->TryLatchFirstFault(
             VulkanOperationContext{
                 .operation  = EVulkanFaultOperation::SwapchainSemaphoreCreate,
-                .queue_type = _type,
+                .queue_type = queue_type,
             },
             result
         );
@@ -194,24 +183,21 @@ VulkanPresentContext::VulkanPresentContext(VulkanDevice* _device, EQueueType _ty
         m_device->SetResourceName(
             uint64(image_ready_semaphore),
             VK_OBJECT_TYPE_SEMAPHORE,
-            "PresentContextImageReadySemaphore_" + std::to_string(reinterpret_cast<uintptr_t>(this))
+            "CommandContextImageReadySemaphore_" + std::to_string(reinterpret_cast<uintptr_t>(this))
         );
     } catch (...) {
         vkDestroySemaphore(m_device->GetDevice(), image_ready_semaphore, VK_NULL_HANDLE);
         image_ready_semaphore = VK_NULL_HANDLE;
         throw;
     }
+    return image_ready_semaphore;
 }
 
-VulkanPresentContext::~VulkanPresentContext() {
+VulkanCommandContext::~VulkanCommandContext() {
     if (image_ready_semaphore != VK_NULL_HANDLE) {
         vkDestroySemaphore(m_device->GetDevice(), image_ready_semaphore, VK_NULL_HANDLE);
         image_ready_semaphore = VK_NULL_HANDLE;
     }
-}
-
-bool VulkanPresentContext::CompleteSuccess() noexcept {
-    return InvokeCompletionCallbacksNoexcept(on_complete, "present context");
 }
 
 } // namespace Moer::Render

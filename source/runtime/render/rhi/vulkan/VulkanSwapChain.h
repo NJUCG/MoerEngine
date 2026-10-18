@@ -21,7 +21,7 @@ public:
         VkSemaphore                   ready_semaphore{VK_NULL_HANDLE};
         uint32                        image_index{UINT32_MAX};
         // Completed only after the GPU has waited for this acquisition.
-        PresentationCompletionTicket previous_present{};
+        PresentationCompletionRef    previous_present{};
 
         [[nodiscard]] bool HasImage() const {
             return image_index != UINT32_MAX;
@@ -45,7 +45,7 @@ public:
         uint64                              _timeline,
         uint64                              _work_serial,
         VkFence                             _completion_fence,
-        const PresentationCompletionTicket& _completion
+        const PresentationCompletionRef& _completion
     );
     [[nodiscard]] bool IsPresentationReady() const noexcept override {
         return handle != VK_NULL_HANDLE && surface != VK_NULL_HANDLE && surface_info.IsValid() &&
@@ -55,15 +55,12 @@ public:
         return surface_info.GetIdentity();
     }
 
-    [[nodiscard]] PresentationCompletionTicket
-    ReservePresentCompletion(PresentationCompletionIdentity _identity);
-
 private:
     struct SwapchainImage {
         VulkanTexture*               texture{nullptr};
         TextureView                  view{};
         VkSemaphore                  render_finished_semaphore{VK_NULL_HANDLE};
-        PresentationCompletionTicket last_present{};
+        PresentationCompletionRef    last_present{};
     };
 
     [[nodiscard]] bool CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);

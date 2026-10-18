@@ -25,37 +25,23 @@ void Expect(bool _condition, std::string_view _message) {
     }
 }
 
-PresentationCompletionIdentity Identity(
-    const PresentationCompletionStateRef& _state,
-    std::uint64_t _epoch,
-    std::uint64_t _generation,
-    std::uint64_t _request_serial
-) {
-    return PresentationCompletionIdentity{
-        .state_instance_id = _state->GetStateInstanceId(),
-        .presentation_epoch = _epoch,
-        .drawable_generation = _generation,
-        .request_serial = _request_serial,
-    };
-}
-
 void CompletePresentFence(
     const PresentationCompletionStateRef& _state,
-    const PresentationCompletionTicket&   _ticket
+    const PresentationCompletionRef&   _record
 ) {
     Expect(
         _state->SetWsiMode(
-            _ticket,
+            _record,
             EPresentationWsiCompletionMode::PresentFence
         ),
         "could not select PresentFence mode"
     );
     Expect(
-        _state->MarkGpuComplete(_ticket),
+        _state->MarkGpuComplete(_record),
         "could not mark GPU completion"
     );
     Expect(
-        _state->MarkWsiComplete(_ticket),
+        _state->MarkWsiComplete(_record),
         "could not mark WSI completion"
     );
 }
@@ -63,24 +49,19 @@ void CompletePresentFence(
 void SeparateStatesRejectCrossMutation() {
     const auto state_a = PresentationCompletionState::Create();
     const auto state_b = PresentationCompletionState::Create();
-    Expect(
-        state_a->GetStateInstanceId() !=
-            state_b->GetStateInstanceId(),
-        "separate states reused an instance identity"
-    );
 
-    const auto ticket_a = state_a->Reserve(Identity(state_a, 1, 1, 7));
-    Expect(ticket_a.IsValid(), "state A returned an invalid ticket");
+    const auto record_a = state_a->Reserve(1, 1);
+    Expect(bool(record_a), "state A returned an invalid record");
     Expect(
         !state_b->SetWsiMode(
-            ticket_a,
+            record_a,
             EPresentationWsiCompletionMode::Immediate
         ) &&
-            !state_b->MarkGpuComplete(ticket_a) &&
-            !state_b->MarkWsiComplete(ticket_a) &&
-            !state_b->MarkWsiFailed(ticket_a) &&
-            !state_b->PublishRetired(ticket_a),
-        "state B accepted state A's strong ticket"
+            !state_b->MarkGpuComplete(record_a) &&
+            !state_b->MarkWsiComplete(record_a) &&
+            !state_b->MarkWsiFailed(record_a) &&
+            !state_b->PublishRetired(record_a),
+        "state B accepted state A's completion record"
     );
     Expect(
         state_a->OutstandingCount() == 1 &&
@@ -90,25 +71,25 @@ void SeparateStatesRejectCrossMutation() {
 
     Expect(
         state_a->SetWsiMode(
-            ticket_a,
+            record_a,
             EPresentationWsiCompletionMode::Immediate
         ) &&
-            state_a->MarkGpuComplete(ticket_a) &&
-            state_a->PublishRetired(ticket_a),
-        "state A could not retire its own ticket"
+            state_a->MarkGpuComplete(record_a) &&
+            state_a->PublishRetired(record_a),
+        "state A could not retire its own record"
     );
 }
 
 void EpochDrainDoesNotCaptureNewGeneration() {
     const auto state = PresentationCompletionState::Create();
-    const auto old_ticket = state->Reserve(Identity(state, 10, 20, 1));
-    const auto new_ticket = state->Reserve(Identity(state, 11, 21, 2));
+    const auto old_record = state->Reserve(10, 20);
+    const auto new_record = state->Reserve(11, 21);
     const auto old_point = state->Freeze(10, 20);
     const auto all_point = state->Freeze();
 
-    CompletePresentFence(state, old_ticket);
+    CompletePresentFence(state, old_record);
     Expect(
-        state->PublishRetired(old_ticket),
+        state->PublishRetired(old_record),
         "old epoch did not retire"
     );
     Expect(
@@ -120,24 +101,18 @@ void EpochDrainDoesNotCaptureNewGeneration() {
         "all-identity drain ignored the newer generation"
     );
 
-    CompletePresentFence(state, new_ticket);
+    CompletePresentFence(state, new_record);
     Expect(
-        state->PublishRetired(new_ticket) &&
+        state->PublishRetired(new_record) &&
             state->WaitRetired(all_point, 20ms),
         "all-identity drain did not finish after both generations retired"
     );
 }
 
-void OutOfOrderRetirementUsesInternalIssueSequence() {
+void OutOfOrderRetirementDoesNotCompleteOlderRecords() {
     const auto state = PresentationCompletionState::Create();
-    const auto first  = state->Reserve(Identity(state, 30, 40, 900));
-    const auto second = state->Reserve(Identity(state, 30, 40, 1));
-    Expect(
-        first.GetIssueSequence() != first.GetIdentity().request_serial &&
-            second.GetIssueSequence() ==
-                first.GetIssueSequence() + 1,
-        "internal issue ordering inherited receipt serials"
-    );
+    const auto first  = state->Reserve(30, 40);
+    const auto second = state->Reserve(30, 40);
     const auto point = state->Freeze();
 
     CompletePresentFence(state, second);
@@ -159,10 +134,39 @@ void OutOfOrderRetirementUsesInternalIssueSequence() {
     );
 }
 
+void FrozenDrainExcludesLaterPresents() {
+    const auto state = PresentationCompletionState::Create();
+    const auto fallback = state->Reserve(41, 42);
+    const auto fence = state->Reserve(41, 42);
+    Expect(state->SetWsiMode(fallback, EPresentationWsiCompletionMode::QueueIdleFallback) &&
+               state->SetWsiMode(fence, EPresentationWsiCompletionMode::PresentFence),
+           "could not configure mixed presentation completion modes");
+    const auto point = state->Freeze(41, 42);
+    const auto later = state->Reserve(41, 42);
+    Expect(state->SetWsiMode(later, EPresentationWsiCompletionMode::QueueIdleFallback),
+           "could not configure the later Present");
+
+    Expect(state->ResolveQueueIdle(point) &&
+               fallback->GetWsiOutcome() == EPresentationWsiCompletionOutcome::Succeeded &&
+               fence->GetWsiOutcome() == EPresentationWsiCompletionOutcome::Pending &&
+               later->GetWsiOutcome() == EPresentationWsiCompletionOutcome::Pending,
+           "queue-idle resolution completed a fence or a later Present");
+    Expect(!state->PublishRetired(fallback), "WSI completion retired resources before GPU completion");
+    Expect(state->MarkGpuComplete(fallback) && state->PublishRetired(fallback), "fallback did not retire");
+    Expect(state->MarkWsiComplete(fence) && state->MarkGpuComplete(fence) && state->PublishRetired(fence) &&
+               state->WaitRetired(point, 20ms) && state->OutstandingCount() == 1,
+           "frozen drain waited for a later Present in the same generation");
+
+    const auto tail = state->Freeze();
+    Expect(state->ResolveQueueIdle(tail) && state->MarkGpuComplete(later) && state->PublishRetired(later) &&
+               state->WaitRetired(tail, 20ms),
+           "later Present did not drain independently");
+}
+
 void FastFailureIsNotHeldBehindAcceptedPresent() {
     const auto state = PresentationCompletionState::Create();
-    const auto accepted = state->Reserve(Identity(state, 50, 60, 1));
-    const auto failed   = state->Reserve(Identity(state, 50, 60, 2));
+    const auto accepted = state->Reserve(50, 60);
+    const auto failed   = state->Reserve(50, 60);
     Expect(
         state->SetWsiMode(
             accepted,
@@ -196,57 +200,53 @@ void FastFailureIsNotHeldBehindAcceptedPresent() {
 
 void FailedPresentFenceOutcomeSurvivesRetirement() {
     const auto state = PresentationCompletionState::Create();
-    const auto ticket = state->Reserve(Identity(state, 61, 62, 1));
+    const auto record = state->Reserve(61, 62);
     Expect(
         state->SetWsiMode(
-            ticket,
+            record,
             EPresentationWsiCompletionMode::PresentFence
         ) &&
-            state->MarkGpuComplete(ticket) &&
-            state->MarkWsiFailed(ticket),
+            state->MarkGpuComplete(record) &&
+            state->MarkWsiFailed(record),
         "failed Present-fence setup did not become terminal"
     );
     Expect(
-        ticket.GetWsiOutcome() ==
+        record->GetWsiOutcome() ==
                 EPresentationWsiCompletionOutcome::Failed &&
-            state->WaitForWsi(ticket, 20ms),
+            state->WaitForWsi(record, 20ms),
         "failed Present fence reported successful or pending"
     );
     Expect(
-        state->PublishRetired(ticket) &&
-            ticket.GetWsiOutcome() ==
+        state->PublishRetired(record) &&
+            record->GetWsiOutcome() ==
                 EPresentationWsiCompletionOutcome::Failed,
-        "retirement erased the ticket's failure outcome"
+        "retirement erased the record's failure outcome"
     );
 }
 
 void RetiredIssueRejectsLateCallbacks() {
     const auto state = PresentationCompletionState::Create();
-    const auto old_ticket = state->Reserve(Identity(state, 70, 80, 1));
-    CompletePresentFence(state, old_ticket);
-    Expect(state->PublishRetired(old_ticket), "old issue did not retire");
+    const auto old_record = state->Reserve(70, 80);
+    CompletePresentFence(state, old_record);
+    Expect(state->PublishRetired(old_record), "old issue did not retire");
 
-    const auto new_ticket = state->Reserve(Identity(state, 70, 80, 1));
+    const auto new_record = state->Reserve(70, 80);
+    Expect(new_record != old_record, "new Present reused an old completion record");
     Expect(
-        new_ticket.GetIdentity() == old_ticket.GetIdentity() &&
-            new_ticket.GetIssueSequence() != old_ticket.GetIssueSequence(),
-        "reused identity did not receive a new issue sequence"
-    );
-    Expect(
-        !state->MarkGpuComplete(old_ticket) && !state->MarkWsiComplete(old_ticket) &&
-            !state->SetWsiMode(old_ticket, EPresentationWsiCompletionMode::Immediate) &&
-            !state->PublishRetired(old_ticket),
+        !state->MarkGpuComplete(old_record) && !state->MarkWsiComplete(old_record) &&
+            !state->SetWsiMode(old_record, EPresentationWsiCompletionMode::Immediate) &&
+            !state->PublishRetired(old_record),
         "late old-issue callback remained mutable after retirement"
     );
-    Expect(!state->WaitForWsi(new_ticket, 2ms), "old-issue callback completed the reused identity");
+    Expect(!state->WaitForWsi(new_record, 2ms), "old-issue callback completed the reused identity");
 
-    CompletePresentFence(state, new_ticket);
-    Expect(state->PublishRetired(new_ticket), "new issue did not retire independently");
+    CompletePresentFence(state, new_record);
+    Expect(state->PublishRetired(new_record), "new issue did not retire independently");
 }
 
 void QueueIdleFallbackIsTargetedAndOwnerResolved() {
     const auto state = PresentationCompletionState::Create();
-    const auto fallback = state->Reserve(Identity(state, 90, 100, 1));
+    const auto fallback = state->Reserve(90, 100);
     Expect(
         state->SetWsiMode(
             fallback,
@@ -281,12 +281,12 @@ void QueueIdleFallbackIsTargetedAndOwnerResolved() {
 
 void ReacquisitionCompletesOnlyThePreviousPresent() {
     const auto state    = PresentationCompletionState::Create();
-    const auto previous = state->Reserve(Identity(state, 101, 102, 1));
-    const auto current  = state->Reserve(Identity(state, 101, 102, 2));
-    for (const auto& ticket : {previous, current}) {
+    const auto previous = state->Reserve(101, 102);
+    const auto current  = state->Reserve(101, 102);
+    for (const auto& record : {previous, current}) {
         Expect(
-            state->SetWsiMode(ticket, EPresentationWsiCompletionMode::QueueIdleFallback) &&
-                state->MarkGpuComplete(ticket),
+            state->SetWsiMode(record, EPresentationWsiCompletionMode::QueueIdleFallback) &&
+                state->MarkGpuComplete(record),
             "reacquisition setup failed"
         );
     }
@@ -311,33 +311,33 @@ void ReacquisitionCompletesOnlyThePreviousPresent() {
 void WaitersWakeAndStrongOwnersReleaseBoundedly() {
     auto state = PresentationCompletionState::Create();
     std::weak_ptr<PresentationCompletionState> weak_state = state;
-    auto                                       ticket     = state->Reserve(Identity(state, 110, 120, 1));
+    auto                                       record     = state->Reserve(110, 120);
     auto point = state->Freeze();
     Expect(
         state->SetWsiMode(
-            ticket,
+            record,
             EPresentationWsiCompletionMode::PresentFence
         ),
         "bounded-wait setup failed"
     );
     Expect(
-        !state->WaitForWsi(ticket, 2ms) &&
+        !state->WaitForWsi(record, 2ms) &&
             !state->WaitRetired(point, 2ms),
         "pending waits did not honor their timeout"
     );
 
     std::atomic_bool resolver_succeeded{false};
-    std::jthread resolver([state, ticket, &resolver_succeeded] {
+    std::jthread resolver([state, record, &resolver_succeeded] {
         std::this_thread::sleep_for(5ms);
         resolver_succeeded.store(
-            state->MarkWsiComplete(ticket) &&
-                state->MarkGpuComplete(ticket) &&
-                state->PublishRetired(ticket),
+            state->MarkWsiComplete(record) &&
+                state->MarkGpuComplete(record) &&
+                state->PublishRetired(record),
             std::memory_order_release
         );
     });
     const bool wsi_released =
-        state->WaitForWsi(ticket, 2s);
+        state->WaitForWsi(record, 2s);
     const bool retirement_released =
         state->WaitRetired(point, 2s);
     resolver.join();
@@ -353,10 +353,13 @@ void WaitersWakeAndStrongOwnersReleaseBoundedly() {
     state.reset();
     Expect(
         !weak_state.expired(),
-        "ticket/drain point did not strongly own their state"
+        "drain point did not keep its state alive"
     );
-    ticket = {};
-    point  = {};
+    point = {};
+    Expect(weak_state.expired(), "completed record retained its state");
+    Expect(record->GetWsiOutcome() == EPresentationWsiCompletionOutcome::Succeeded,
+           "releasing the state erased the record outcome");
+    record = {};
     Expect(
         weak_state.expired(),
         "strong presentation completion owners did not release"
@@ -455,7 +458,7 @@ void Maintenance1CapabilityGateIsExplicitAndOptional() {
 
 int main() {
     static_assert(
-        std::is_copy_constructible_v<PresentationCompletionTicket>
+        std::is_copy_constructible_v<PresentationCompletionRef>
     );
     static_assert(
         std::is_copy_constructible_v<PresentationDrainPoint>
@@ -464,7 +467,8 @@ int main() {
     try {
         SeparateStatesRejectCrossMutation();
         EpochDrainDoesNotCaptureNewGeneration();
-        OutOfOrderRetirementUsesInternalIssueSequence();
+        OutOfOrderRetirementDoesNotCompleteOlderRecords();
+        FrozenDrainExcludesLaterPresents();
         FastFailureIsNotHeldBehindAcceptedPresent();
         FailedPresentFenceOutcomeSurvivesRetirement();
         RetiredIssueRejectsLateCallbacks();

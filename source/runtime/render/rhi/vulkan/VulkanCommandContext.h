@@ -12,14 +12,15 @@
 
 namespace Moer::Render {
 
-// Shared command resources for ordinary recordings and presentation copies.
-class VulkanCommandContextBase : public VulkanDeviceObject {
+// A recording and its resources travel together through Submission and Completion.
+class VulkanCommandContext : public VulkanDeviceObject {
 public:
-    virtual ~VulkanCommandContextBase();
-    VulkanCommandContextBase(const VulkanCommandContextBase&)            = delete;
-    VulkanCommandContextBase& operator=(const VulkanCommandContextBase&) = delete;
-    VulkanCommandContextBase(VulkanCommandContextBase&&)                 = delete;
-    VulkanCommandContextBase& operator=(VulkanCommandContextBase&&)      = delete;
+    VulkanCommandContext(VulkanDevice* _device, EQueueType _queue_type);
+    ~VulkanCommandContext();
+    VulkanCommandContext(const VulkanCommandContext&)            = delete;
+    VulkanCommandContext& operator=(const VulkanCommandContext&) = delete;
+    VulkanCommandContext(VulkanCommandContext&&)                 = delete;
+    VulkanCommandContext& operator=(VulkanCommandContext&&)      = delete;
 
     VulkanCmdList& GetCmdList() {
         return cmd_list;
@@ -42,39 +43,11 @@ public:
         on_complete.push_back(std::move(_func));
     }
 
-    // Completion callbacks are user-extensible and must never escape the
-    // Completion owner. A false result quarantines the context instead of
-    // resetting/reusing partially finalized state.
-    virtual bool CompleteSuccess() noexcept;
-    virtual bool Reset();
-    // A recorder that was never submitted must not run success callbacks.
-    // It can still reset and return to the pool after all worker jobs joined.
-    bool ResetAbandoned();
-
-protected:
-    VulkanCommandContextBase(VulkanDevice* _device, EQueueType _queue_type);
-
-    bool ResetCommandPool();
-
-    // Keep callbacks and tracker state alive until command resources are destroyed.
-    EQueueType                   queue_type{EQueueType::Ignore};
-    VkTracker                    tracker;
-    Array<std::function<void()>> on_complete;
-
-    // Reverse destruction releases both command buffers before their pool.
-    VulkanCommandPool           command_pool;
-    VulkanCmdList               cmd_list;
-    std::optional<VulkanCmdList> secondary_cmd_list;
-};
-
-// A recording and its resources travel together through Submission and Completion.
-class VulkanCommandContext : public VulkanCommandContextBase {
-public:
-    VulkanCommandContext(VulkanDevice* _device, EQueueType _queue_type);
-    ~VulkanCommandContext() override = default;
-
     VulkanTemporaryBufferAllocator& GetTemporaryBufferAllocator() {
-        return temporary_buffer_allocator;
+        if (!temporary_buffer_allocator) {
+            temporary_buffer_allocator = MakeUnique<VulkanTemporaryBufferAllocator>(*m_device);
+        }
+        return *temporary_buffer_allocator;
     }
 
     // Query recording. Slots and tokens belong to this context's recording.
@@ -99,28 +72,28 @@ public:
     ) noexcept;
     void NotifyQueriesAfterGpuCompletion(QueryPublishBatch _batch) noexcept;
 
-    bool CompleteSuccess() noexcept override;
-    bool Reset() override;
-
-private:
-    VulkanTemporaryBufferAllocator temporary_buffer_allocator;
-    VulkanCommandQueries           queries;
-};
-
-// Presentation copies share command resources and own an image-acquire semaphore.
-class VulkanPresentContext : public VulkanCommandContextBase {
-public:
-    VulkanPresentContext(VulkanDevice* _device, EQueueType _queue_type);
-    ~VulkanPresentContext() override;
-
-    [[nodiscard]] VkSemaphore GetImageReadySemaphore() const noexcept {
-        return image_ready_semaphore;
+    bool                      CompleteSuccess() noexcept;
+    bool                      Reset();
+    bool                      ResetAbandoned();
+    [[nodiscard]] VkSemaphore GetImageReadySemaphore();
+    void                      MarkImageAcquired() noexcept {
+        image_acquisition_pending = true;
     }
 
-    bool CompleteSuccess() noexcept override;
-
 private:
-    VkSemaphore image_ready_semaphore{VK_NULL_HANDLE};
+    bool ResetCommandPool();
+
+    // Release command buffers before the pool, callbacks and tracker.
+    EQueueType                                queue_type{EQueueType::Ignore};
+    VkTracker                                 tracker;
+    Array<std::function<void()>>              on_complete;
+    VulkanCommandPool                         command_pool;
+    VulkanCmdList                             cmd_list;
+    std::optional<VulkanCmdList>              secondary_cmd_list;
+    UniquePtr<VulkanTemporaryBufferAllocator> temporary_buffer_allocator;
+    VulkanCommandQueries                      queries;
+    VkSemaphore                               image_ready_semaphore{VK_NULL_HANDLE};
+    bool                                      image_acquisition_pending{false};
 };
 
 } // namespace Moer::Render
