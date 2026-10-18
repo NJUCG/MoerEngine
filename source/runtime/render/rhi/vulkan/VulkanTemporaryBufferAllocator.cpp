@@ -101,7 +101,7 @@ VulkanTemporaryBufferAllocator::LinearBufferAllocator::LinearBufferAllocator(
 ) :
     device(_device),
     buffer_usage(_buffer_usage),
-    next_block_capacity(std::max<uint64>(_initial_capacity, 1)),
+    next_block_capacity(std::clamp<uint64>(_initial_capacity, 1, max_block_size)),
     growth_factor(_growth_factor) {
     allocated_buffers.push_back({CreateBufferBlock(next_block_capacity), next_block_capacity, 0});
 }
@@ -109,23 +109,25 @@ VulkanTemporaryBufferAllocator::LinearBufferAllocator::LinearBufferAllocator(
 VulkanTemporaryBufferAllocator::LinearBufferAllocator::BufferSlice
 VulkanTemporaryBufferAllocator::LinearBufferAllocator::Allocate(uint64 _size, uint _alignment) {
 
-    uint64 align_size = std::max(_alignment, 16u);
+    const uint64 align_size        = std::max(_alignment, 16u);
+    const uint64 required_capacity = std::max(align_size, _size);
+    if (required_capacity > max_block_size) {
+        throw std::invalid_argument("linear Vulkan buffer allocation exceeds the maximum block size");
+    }
     for (auto& block : allocated_buffers) {
         auto offset = Moer::AlignUp(block.used_bytes, align_size);
-        if (block.size_bytes - offset >= _size) {
+        if (offset <= block.size_bytes && block.size_bytes - offset >= _size) {
             block.used_bytes = offset + _size;
             return {block.buffer, offset};
         }
     }
 
-    align_size = std::max(align_size, _size);
-
-    if (next_block_capacity < align_size) {
-        next_block_capacity = std::max<uint64>(next_block_capacity * growth_factor, align_size);
-    }
-
-    auto buffer = CreateBufferBlock(next_block_capacity);
-    allocated_buffers.push_back({buffer, next_block_capacity, align_size});
+    const uint64 grown_capacity =
+        static_cast<uint64>(std::min<double>(next_block_capacity * growth_factor, max_block_size));
+    const uint64 block_capacity = std::max(grown_capacity, required_capacity);
+    auto         buffer         = CreateBufferBlock(block_capacity);
+    allocated_buffers.push_back({buffer, block_capacity, required_capacity});
+    next_block_capacity = block_capacity;
     return {buffer, 0};
 }
 
@@ -134,10 +136,10 @@ void VulkanTemporaryBufferAllocator::LinearBufferAllocator::Reset() {
         allocated_buffers.back().used_bytes = 0;
     }
     if (allocated_buffers.size() > 1) {
-        // Consolidate staging blocks for the next recording.
+        // Keep a bounded staging cache for the next recording.
         uint64 total_size_bytes = 0;
         for (auto& block : allocated_buffers) {
-            total_size_bytes += block.size_bytes;
+            total_size_bytes = std::min(total_size_bytes + block.size_bytes, max_block_size);
             DestroyTemporaryBuffer(block.buffer);
         }
         allocated_buffers.clear();
@@ -146,6 +148,9 @@ void VulkanTemporaryBufferAllocator::LinearBufferAllocator::Reset() {
 
         allocated_buffers.push_back({CreateBufferBlock(total_size_bytes), total_size_bytes, 0});
     }
+    next_block_capacity = allocated_buffers.empty() ?
+                              small_block_size :
+                              std::min(allocated_buffers.front().size_bytes, max_block_size);
 }
 
 void VulkanTemporaryBufferAllocator::LinearBufferAllocator::Dispose() {

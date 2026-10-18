@@ -6,8 +6,6 @@
 
 namespace Moer::Render {
 
-RENDER_API std::shared_ptr<VulkanDeviceExtension>
-CreateVulkanEXTSwapchainMaintenance1Extension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRAccelerationStructureExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayTracingPipelineExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayQueryExtension(bool _optional);

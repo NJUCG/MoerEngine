@@ -1,7 +1,3 @@
-//
-// Created by 74535 on 2023/10/5.
-//
-
 #ifndef VULKAN_SWAP_CHAIN_H
 #define VULKAN_SWAP_CHAIN_H
 
@@ -20,8 +16,6 @@ public:
         VulkanOperationResult         outcome{};
         VkSemaphore                   ready_semaphore{VK_NULL_HANDLE};
         uint32                        image_index{UINT32_MAX};
-        // Completed only after the GPU has waited for this acquisition.
-        PresentationCompletionRef    previous_present{};
 
         [[nodiscard]] bool HasImage() const {
             return image_index != UINT32_MAX;
@@ -30,8 +24,6 @@ public:
     struct PresentResult {
         VulkanOperationResult outcome{};
         bool                  accepted{false};
-        bool                  wsi_enqueued{false};
-        bool                  uses_present_fence{false};
     };
     VkSwapchain(VulkanDevice& _device, const SwapchainCreateInfo& _info);
     ~VkSwapchain() override;
@@ -39,14 +31,8 @@ public:
     [[nodiscard]] AcquireResult AcquireNextImage(VkSemaphore _ready_semaphore, uint64 _timeout = UINT64_MAX);
     [[nodiscard]] TextureView   GetSwapchainImage(uint _index) const;
     [[nodiscard]] VkSemaphore   GetRenderFinishedSemaphore(uint _image_index) const;
-    [[nodiscard]] PresentResult Present(
-        VkQueue                             _queue,
-        uint                                _image_index,
-        uint64                              _timeline,
-        uint64                              _work_serial,
-        VkFence                             _completion_fence,
-        const PresentationCompletionRef& _completion
-    );
+    [[nodiscard]] PresentResult
+                       Present(VkQueue _queue, uint _image_index, uint64 _timeline, uint64 _work_serial);
     [[nodiscard]] bool IsPresentationReady() const noexcept override {
         return handle != VK_NULL_HANDLE && surface != VK_NULL_HANDLE && surface_info.IsValid() &&
                size.x != 0 && size.y != 0;
@@ -60,7 +46,6 @@ private:
         VulkanTexture*               texture{nullptr};
         TextureView                  view{};
         VkSemaphore                  render_finished_semaphore{VK_NULL_HANDLE};
-        PresentationCompletionRef    last_present{};
     };
 
     [[nodiscard]] bool CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);

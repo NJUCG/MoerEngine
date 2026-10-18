@@ -9,7 +9,6 @@ namespace Moer::Render::VulkanSubmissionDetail {
 enum class EWorkerRequestKind : uint8_t {
     Submit,
     Sync,
-    PresentationDrain,
     Stop,
 };
 

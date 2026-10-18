@@ -10,38 +10,6 @@ static void AddToPNext(ExistingChainType& _existing, NewStructType& _added) {
 namespace Moer::Render {
 namespace {
 
-class VulkanEXTSwapchainMaintenance1Extension final : public VulkanDeviceExtension {
-public:
-    VulkanEXTSwapchainMaintenance1Extension(bool _is_optional = false) :
-        VulkanDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME, _is_optional),
-        m_swapchain_maintenance1_features() {}
-
-    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
-        m_swapchain_maintenance1_features.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
-        AddToPNext(_gpu_features2, m_swapchain_maintenance1_features);
-    }
-
-    void PostGpuFeatures(
-        VulkanOptionalDeviceExtensions& _gpu_extensions
-    ) override {
-        m_is_usable =
-            m_swapchain_maintenance1_features.swapchainMaintenance1 ==
-            VK_TRUE;
-        _gpu_extensions.m_has_ext_swapchain_maintenance1 =
-            m_is_usable;
-    }
-
-    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
-        if (m_is_usable && m_is_enabled) {
-            AddToPNext(_device_create_info, m_swapchain_maintenance1_features);
-        }
-    }
-
-private:
-    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT m_swapchain_maintenance1_features;
-};
-
 class VulkanKHRAccelerationStructureExtension final : public VulkanDeviceExtension {
 public:
     VulkanKHRAccelerationStructureExtension(bool _is_optional = false) :
@@ -524,10 +492,6 @@ private:
 };
 
 } // namespace
-
-std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTSwapchainMaintenance1Extension(bool _optional) {
-    return std::make_shared<VulkanEXTSwapchainMaintenance1Extension>(_optional);
-}
 
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRAccelerationStructureExtension(bool _optional) {
     return std::make_shared<VulkanKHRAccelerationStructureExtension>(_optional);

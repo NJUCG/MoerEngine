@@ -1268,122 +1268,14 @@ private:
     bool                             installed{false};
 };
 
-class PresentFenceStatusCapture final {
+class DeviceIdleWaitCapture final {
 public:
-    PresentFenceStatusCapture(uint64 _blocked_issue, uint64 _ready_issue, bool _block_other_issues = false) :
-        blocked_issue(_blocked_issue),
-        ready_issue(_ready_issue),
-        block_other_issues(_block_other_issues) {}
-
-    static VkResult Observe(void* _context, uint64 _issue) noexcept {
-        auto& capture =
-            *static_cast<PresentFenceStatusCapture*>(_context);
-        const uint32 current_thread =
-            Platform::GetCurrentThreadID();
-        uint32 expected_thread = 0;
-        if (!capture.completion_thread.compare_exchange_strong(
-                expected_thread,
-                current_thread,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire
-            ) &&
-            expected_thread != current_thread) {
-            capture.invalid.store(true, std::memory_order_release);
-        }
-        if (GetCurrentRHIThreadRole() !=
-            ERHIThreadRole::Completion) {
-            capture.invalid.store(true, std::memory_order_release);
-        }
-        capture.poll_count.fetch_add(
-            1, std::memory_order_acq_rel
-        );
-        if (_issue == capture.blocked_issue ||
-            (capture.block_other_issues && _issue != capture.ready_issue)) {
-            capture.blocked_poll_count.fetch_add(
-                1, std::memory_order_acq_rel
-            );
-            return capture.release_blocked.load(
-                       std::memory_order_acquire
-                   ) ?
-                       VK_SUCCESS :
-                       VK_NOT_READY;
-        }
-        if (_issue == capture.ready_issue) {
-            capture.ready_poll_count.fetch_add(
-                1, std::memory_order_acq_rel
-            );
-            return VK_SUCCESS;
-        }
-        capture.invalid.store(true, std::memory_order_release);
-        return VK_ERROR_UNKNOWN;
-    }
-
-    std::atomic_bool   release_blocked{false};
-    std::atomic<uint32> completion_thread{0};
-    std::atomic<uint32> poll_count{0};
-    std::atomic<uint32> blocked_poll_count{0};
-    std::atomic<uint32> ready_poll_count{0};
-    std::atomic_bool   invalid{false};
-
-private:
-    uint64 blocked_issue{0};
-    uint64 ready_issue{0};
-    bool   block_other_issues{false};
-};
-
-class ScopedPresentFenceStatusOverride final {
-public:
-    explicit ScopedPresentFenceStatusOverride(
-        PresentFenceStatusCapture& _capture
-    ) :
-        scripted_override{
-            .context  = &_capture,
-            .callback = &PresentFenceStatusCapture::Observe,
-        } {
-        if (!TryInstallVulkanScriptedPresentFenceStatusOverrideForTesting(
-                &scripted_override
-            )) {
-            throw std::runtime_error(
-                "Vulkan Present-fence status override was already installed"
-            );
-        }
-        installed = true;
-    }
-
-    ~ScopedPresentFenceStatusOverride() noexcept {
-        if (installed &&
-            !RemoveVulkanScriptedPresentFenceStatusOverrideForTesting(
-                &scripted_override
-            )) {
-            std::terminate();
-        }
-    }
-
-    ScopedPresentFenceStatusOverride(
-        const ScopedPresentFenceStatusOverride&
-    ) = delete;
-    ScopedPresentFenceStatusOverride& operator=(
-        const ScopedPresentFenceStatusOverride&
-    ) = delete;
-
-private:
-    VulkanScriptedPresentFenceStatusOverrideForTesting
-        scripted_override{};
-    bool installed{false};
-};
-
-class QueueIdleWaitCapture final {
-public:
-    static void Observe(
-        void*                             _context,
-        const VulkanQueueIdleWaitEvent& _event
-    ) noexcept {
-        auto& capture =
-            *static_cast<QueueIdleWaitCapture*>(_context);
+    const std::atomic_bool* required_completion{nullptr};
+    static void             Observe(void* _context, const VulkanDeviceIdleWaitEvent& _event) noexcept {
+        auto& capture = *static_cast<DeviceIdleWaitCapture*>(_context);
         if (_event.thread_role != ERHIThreadRole::Submission ||
-            _event.context.operation !=
-                EVulkanFaultOperation::QueueWaitIdle ||
-            _event.native_queue_handle == 0) {
+            _event.context.operation != EVulkanFaultOperation::DeviceWaitIdle ||
+            (capture.required_completion && !capture.required_completion->load(std::memory_order_acquire))) {
             capture.invalid.store(true, std::memory_order_release);
         }
         const uint32 current_thread = _event.thread_id;
@@ -1405,39 +1297,30 @@ public:
     std::atomic_bool    invalid{false};
 };
 
-class ScopedQueueIdleWaitObserver final {
+class ScopedDeviceIdleWaitObserver final {
 public:
-    explicit ScopedQueueIdleWaitObserver(
-        QueueIdleWaitCapture& _capture
-    ) :
+    explicit ScopedDeviceIdleWaitObserver(DeviceIdleWaitCapture& _capture) :
         observer{
             .context  = &_capture,
-            .callback = &QueueIdleWaitCapture::Observe,
+            .callback = &DeviceIdleWaitCapture::Observe,
         } {
-        if (!TryInstallVulkanQueueIdleWaitObserver(&observer)) {
-            throw std::runtime_error(
-                "Vulkan queue-idle observer was already installed"
-            );
+        if (!TryInstallVulkanDeviceIdleWaitObserver(&observer)) {
+            throw std::runtime_error("Vulkan device-idle observer was already installed");
         }
         installed = true;
     }
 
-    ~ScopedQueueIdleWaitObserver() noexcept {
-        if (installed &&
-            !RemoveVulkanQueueIdleWaitObserver(&observer)) {
+    ~ScopedDeviceIdleWaitObserver() noexcept {
+        if (installed && !RemoveVulkanDeviceIdleWaitObserver(&observer)) {
             std::terminate();
         }
     }
 
-    ScopedQueueIdleWaitObserver(
-        const ScopedQueueIdleWaitObserver&
-    ) = delete;
-    ScopedQueueIdleWaitObserver& operator=(
-        const ScopedQueueIdleWaitObserver&
-    ) = delete;
+    ScopedDeviceIdleWaitObserver(const ScopedDeviceIdleWaitObserver&)            = delete;
+    ScopedDeviceIdleWaitObserver& operator=(const ScopedDeviceIdleWaitObserver&) = delete;
 
 private:
-    VulkanQueueIdleWaitObserver observer{};
+    VulkanDeviceIdleWaitObserver observer{};
     bool                        installed{false};
 };
 
@@ -1549,7 +1432,6 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--present-boundary" &&
             argument != "--present-hard" &&
             argument != "--present-legacy-owner" &&
-            argument != "--present-completion-shutdown" &&
             argument != "--rt-export-rejection" &&
             argument != "--readback-future" &&
             argument != "--occlusion-query" &&
@@ -11369,211 +11251,37 @@ void RunLegacyDirectPresentOwnerBoundary() {
     );
 }
 
-void RunPresentationCompletionIntegrationBoundary() {
-    using namespace std::chrono_literals;
+void RunPresentationIdleBoundary() {
+    // A normal GPU/CPU completion drain must not stall presentation. Only the
+    // explicit lifecycle boundary performs device idle, after all callbacks.
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    std::atomic_bool             completed{false};
+    DeviceIdleWaitCapture        idle{};
+    ScopedDeviceIdleWaitObserver observer(idle);
 
-    auto& device = RenderDevice::Get();
-    auto& graphics_queue = static_cast<VkCommandQueue&>(
-        device.GetCommandQueue(EQueueType::Graphics)
-    );
-    SwapchainRef swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
-    };
-    const PresentationCompletionStateRef state =
-        swapchain->GetPresentationCompletionState();
-    if (!state) {
-        throw std::runtime_error(
-            "headless Presentation completion state was not created"
-        );
+    CommandList ordinary(EQueueType::Graphics);
+    ordinary.AddCallback([&] {
+        completed.store(true, std::memory_order_release);
+    });
+    RHIExecutor::Get().Submit(EQueueType::Graphics, ordinary.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!completed.load(std::memory_order_acquire) || idle.count.load() != 0) {
+        throw std::runtime_error("ordinary completion unexpectedly waited for device idle");
     }
 
-    const auto reserve = [&](uint64 _epoch) { return state->Reserve(_epoch, 1); };
-
-    const PresentationCompletionRef blocked = reserve(401);
-    const PresentationCompletionRef ready   = reserve(402);
-    if (!blocked || !ready ||
-        !state->SetWsiMode(
-            blocked,
-            EPresentationWsiCompletionMode::PresentFence
-        ) ||
-        !state->SetWsiMode(
-            ready,
-            EPresentationWsiCompletionMode::PresentFence
-        )) {
-        throw std::runtime_error(
-            "Present-fence integration setup failed"
-        );
+    completed.store(false, std::memory_order_release);
+    idle.required_completion = &completed;
+    CommandList before_recreate(EQueueType::Graphics);
+    before_recreate.AddCallback([&] {
+        completed.store(true, std::memory_order_release);
+    });
+    RHIExecutor::Get().Submit(EQueueType::Graphics, before_recreate.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    if (idle.count.load() != 1 || idle.invalid.load() || idle.submission_thread.load() == 0) {
+        throw std::runtime_error("Present sync did not wait idle after ordinary completion on Submission");
     }
-
-    PresentFenceStatusCapture fence_status(blocked->GetIssueSequence(), ready->GetIssueSequence(), true);
-    std::array<PresentationCompletionRef, 5> extra_pending;
-    for (size_t i = 0; i < extra_pending.size(); ++i) {
-        extra_pending[i] = reserve(401);
-        if (!state->SetWsiMode(extra_pending[i], EPresentationWsiCompletionMode::PresentFence)) {
-            throw std::runtime_error("could not reserve additional Present completion");
-        }
-    }
-    TextureRef source = device.CreateTexture(
-        "present_gpu_retirement_probe",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC
-    );
-    {
-        ScopedPresentFenceStatusOverride status_override(
-            fence_status
-        );
-        if (!graphics_queue.
-                EnqueuePresentationCompletionProbeForTesting(
-                    swapchain, blocked, true, source
-                ) ||
-            !graphics_queue.
-                EnqueuePresentationCompletionProbeForTesting(
-                    swapchain, ready, true
-                )) {
-            throw std::runtime_error(
-                "could not enqueue synthetic Present completions"
-            );
-        }
-        for (const auto& ticket : extra_pending) {
-            if (!graphics_queue.EnqueuePresentationCompletionProbeForTesting(swapchain, ticket, true)) {
-                throw std::runtime_error("could not enqueue additional Present completion");
-            }
-        }
-
-        std::binary_semaphore ready_drain_finished{0};
-        std::jthread ready_drain([&] {
-            RHIExecutor::Get().DrainPresentation(
-                RHIPresentationDrainTarget{
-                    swapchain, 402, 1
-                }
-            );
-            ready_drain_finished.release();
-        });
-        if (!ready_drain_finished.try_acquire_for(5s)) {
-            fence_status.release_blocked.store(
-                true, std::memory_order_release
-            );
-            ready_drain.join();
-            throw std::runtime_error(
-                "ready Present was blocked behind an older unsignalled fence"
-            );
-        }
-        ready_drain.join();
-
-        const PresentationDrainPoint blocked_point =
-            state->Freeze(401, 1);
-        const PresentationDrainPoint ready_point =
-            state->Freeze(402, 1);
-        if (source->GetRefCount() != 1 || state->OutstandingCount() != 1 + extra_pending.size() ||
-            state->WaitRetired(blocked_point, 1ms) || !state->WaitRetired(ready_point, 20ms) ||
-            fence_status.ready_poll_count.load(std::memory_order_acquire) == 0) {
-            throw std::runtime_error(
-                "Present retained GPU resources or retired the wrong identity"
-            );
-        }
-
-        fence_status.release_blocked.store(
-            true, std::memory_order_release
-        );
-        RHIExecutor::Get().DrainPresentation(
-            RHIPresentationDrainTarget{
-                swapchain, 401, 1
-            }
-        );
-        if (state->HasOutstanding() ||
-            fence_status.blocked_poll_count.load(
-                std::memory_order_acquire
-            ) == 0 ||
-            fence_status.invalid.load(
-                std::memory_order_acquire
-            ) ||
-            fence_status.completion_thread.load(
-                std::memory_order_acquire
-            ) == 0) {
-            throw std::runtime_error(
-                "Present-fence polling escaped the sole Completion owner"
-            );
-        }
-    }
-
-    const PresentationCompletionRef fallback = reserve(403);
-    if (!fallback ||
-        !state->SetWsiMode(
-            fallback,
-            EPresentationWsiCompletionMode::QueueIdleFallback
-        ) ||
-        !graphics_queue.
-            EnqueuePresentationCompletionProbeForTesting(
-                swapchain, fallback, false
-            )) {
-        throw std::runtime_error(
-            "queue-idle fallback integration setup failed"
-        );
-    }
-
-    QueueIdleWaitCapture queue_idle{};
-    {
-        ScopedQueueIdleWaitObserver queue_idle_observer(
-            queue_idle
-        );
-        RHIExecutor::Get().DrainPresentation(
-            RHIPresentationDrainTarget{
-                swapchain, 403, 1
-            }
-        );
-    }
-    if (state->HasOutstanding() ||
-        queue_idle.count.load(std::memory_order_acquire) == 0 ||
-        queue_idle.invalid.load(std::memory_order_acquire) ||
-        queue_idle.submission_thread.load(
-            std::memory_order_acquire
-        ) == 0 ||
-        queue_idle.submission_thread.load(
-            std::memory_order_acquire
-        ) == Platform::GetCurrentThreadID()) {
-        throw std::runtime_error(
-            "queue-idle fallback escaped the sole Submission owner"
-        );
-    }
-
-    const auto previous = reserve(404);
-    const auto current  = reserve(405);
-    for (const auto& ticket : {previous, current}) {
-        if (!state->SetWsiMode(ticket, EPresentationWsiCompletionMode::QueueIdleFallback)) {
-            throw std::runtime_error("could not reserve reacquisition completion");
-        }
-    }
-    QueueIdleWaitCapture reacquire_idle{};
-    {
-        ScopedQueueIdleWaitObserver observer(reacquire_idle);
-        if (!graphics_queue.EnqueuePresentationCompletionProbeForTesting(swapchain, previous, false) ||
-            !graphics_queue.EnqueuePresentationCompletionProbeForTesting(
-                swapchain, current, false, {}, previous
-            )) {
-            throw std::runtime_error("could not enqueue reacquisition completion");
-        }
-        if (!state->WaitRetired(state->Freeze(404, 1), 5s) ||
-            current->GetWsiOutcome() != EPresentationWsiCompletionOutcome::Pending ||
-            state->OutstandingCount() != 1 || reacquire_idle.count.load(std::memory_order_acquire) != 0) {
-            throw std::runtime_error(
-                "reacquisition failed to retire only the previous Present without queue idle"
-            );
-        }
-        RHIExecutor::Get().DrainPresentation(RHIPresentationDrainTarget{swapchain, 405, 1});
-        if (state->HasOutstanding() || reacquire_idle.count.load(std::memory_order_acquire) != 1 ||
-            reacquire_idle.invalid.load(std::memory_order_acquire)) {
-            throw std::runtime_error("unacquired Present tail did not drain with one owned queue-idle wait");
-        }
-    }
-
-    LOG_INFO("[TESTCASE][PASS] "
-             "name=PresentationCompletionIntegrationBoundary "
-             "present_fence=nonblocking_targeted "
-        "blocked_records=6 gpu_source=released_before_wsi "
-             "fence_owner=Completion completion_threads=1 "
-             "queue_idle_fallback=targeted "
-             "queue_idle_owner=Submission reacquire=nonblocking outstanding=0");
+    LOG_INFO("[TESTCASE][PASS] name=PresentationIdleBoundary ordinary_idle=0 lifecycle_idle=1 "
+             "owner=Submission callbacks=completed");
 }
 
 void RunQueuedPresentShutdownBoundary() {
@@ -11788,112 +11496,6 @@ void RunQueuedPresentShutdownBoundary() {
         stop_runtime();
         std::rethrow_exception(failure);
     }
-}
-
-void RunPresentationCompletionShutdownDrainBoundary() {
-    using namespace std::chrono_literals;
-
-    auto& device = RenderDevice::Get();
-    auto& graphics_queue = static_cast<VkCommandQueue&>(
-        device.GetCommandQueue(EQueueType::Graphics)
-    );
-    SwapchainRef swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
-    };
-    const PresentationCompletionStateRef state =
-        swapchain->GetPresentationCompletionState();
-    const auto reserve = [&](uint64 _epoch) { return state->Reserve(_epoch, 1); };
-    const PresentationCompletionRef fence_ticket    = reserve(501);
-    const PresentationCompletionRef fallback_ticket = reserve(502);
-    if (!fence_ticket ||
-        !fallback_ticket ||
-        !state->SetWsiMode(
-            fence_ticket,
-            EPresentationWsiCompletionMode::PresentFence
-        ) ||
-        !state->SetWsiMode(
-            fallback_ticket,
-            EPresentationWsiCompletionMode::QueueIdleFallback
-        ) ||
-        !graphics_queue.
-            RegisterPresentationCompletionStateForShutdownProbeForTesting(
-                state
-            )) {
-        throw std::runtime_error(
-            "shutdown Presentation completion setup failed"
-        );
-    }
-
-    PresentFenceStatusCapture fence_status(
-        fence_ticket->GetIssueSequence(),
-        UINT64_MAX
-    );
-    QueueIdleWaitCapture queue_idle{};
-    ScopedPresentFenceStatusOverride fence_override(
-        fence_status
-    );
-    ScopedQueueIdleWaitObserver queue_idle_observer(
-        queue_idle
-    );
-    if (!graphics_queue.
-            EnqueuePresentationCompletionProbeForTesting(
-                swapchain, fence_ticket, true
-            ) ||
-        !graphics_queue.
-            EnqueuePresentationCompletionProbeForTesting(
-                swapchain, fallback_ticket, false
-            )) {
-        throw std::runtime_error(
-            "shutdown Presentation completion probes were not enqueued"
-        );
-    }
-
-    const auto poll_deadline =
-        std::chrono::steady_clock::now() + 2s;
-    while (fence_status.blocked_poll_count.load(
-               std::memory_order_acquire
-           ) == 0 &&
-           std::chrono::steady_clock::now() < poll_deadline) {
-        std::this_thread::sleep_for(1ms);
-    }
-    if (fence_status.blocked_poll_count.load(
-            std::memory_order_acquire
-        ) == 0) {
-        throw std::runtime_error(
-            "shutdown Present fence never reached Completion polling"
-        );
-    }
-
-    std::jthread release_fence([&] {
-        std::this_thread::sleep_for(100ms);
-        fence_status.release_blocked.store(
-            true, std::memory_order_release
-        );
-    });
-    RenderDevice::Dispose();
-    release_fence.join();
-
-    if (state->HasOutstanding() ||
-        fence_status.invalid.load(std::memory_order_acquire) ||
-        fence_status.completion_thread.load(
-            std::memory_order_acquire
-        ) == 0 ||
-        queue_idle.count.load(std::memory_order_acquire) == 0 ||
-        queue_idle.invalid.load(std::memory_order_acquire) ||
-        queue_idle.submission_thread.load(
-            std::memory_order_acquire
-        ) == 0) {
-        throw std::runtime_error(
-            "queue destruction did not perform the final owned Presentation drain"
-        );
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=PresentationCompletionShutdownDrainBoundary "
-        "pending=fence+fallback fence_owner=Completion "
-        "queue_idle_owner=Submission outstanding=0 dispose=returned"
-    );
 }
 
 void RunPresentHardFailureBoundary() {
@@ -16395,15 +15997,9 @@ int main(int argc, const char** argv) {
             HasArgument(argc, argv, "--present-hard");
         const bool present_legacy_owner =
             HasArgument(argc, argv, "--present-legacy-owner");
-        const bool present_completion_shutdown =
-            HasArgument(
-                argc, argv, "--present-completion-shutdown"
-            );
-        const uint32 focused_present_mode_count =
-            static_cast<uint32>(present_boundary) +
-            static_cast<uint32>(present_hard) +
-            static_cast<uint32>(present_legacy_owner) +
-            static_cast<uint32>(present_completion_shutdown);
+        const uint32 focused_present_mode_count = static_cast<uint32>(present_boundary) +
+                                                  static_cast<uint32>(present_hard) +
+                                                  static_cast<uint32>(present_legacy_owner);
         if (focused_present_mode_count > 1) {
             throw std::invalid_argument(
                 "focused Present modes are mutually exclusive"
@@ -16442,35 +16038,24 @@ int main(int argc, const char** argv) {
         task_system_initialized = true;
 
         RenderDevice::Init(DeviceInitInfo{
-            .rhi_type         = ERHIType::Vulkan,
-            .name             = "RHIParallelRecordVulkanTest",
-            .rhi_api_version  = "1.3",
-            .rhi_thread       =
-                !present_legacy_owner &&
-                !present_completion_shutdown,
-            .rhi_bypass       = false,
-            .parallel_recording =
-                parallel || pipeline_window_mode || present_mode ||
-                readback_future_mode ||
-                occlusion_query_mode ||
-                timestamp_query_mode ||
-                timestamp_query_success_batch_mode ||
-                timestamp_query_mid_failure_mode ||
-                timestamp_query_record_failure_mode ||
-                gpu_scope_stream_mode,
+            .rhi_type           = ERHIType::Vulkan,
+            .name               = "RHIParallelRecordVulkanTest",
+            .rhi_api_version    = "1.3",
+            .rhi_thread         = !present_legacy_owner,
+            .rhi_bypass         = false,
+            .parallel_recording = parallel || pipeline_window_mode || present_mode || readback_future_mode ||
+                                  occlusion_query_mode || timestamp_query_mode ||
+                                  timestamp_query_success_batch_mode || timestamp_query_mid_failure_mode ||
+                                  timestamp_query_record_failure_mode || gpu_scope_stream_mode,
             .parallel_record_workers = 4,
-            .parallel_record_verify =
-                parallel || pipeline_window_mode || present_mode ||
-                readback_future_mode ||
-                occlusion_query_mode ||
-                timestamp_query_mode ||
-                timestamp_query_success_batch_mode ||
-                timestamp_query_mid_failure_mode ||
-                timestamp_query_record_failure_mode ||
-                gpu_scope_stream_mode,
+            .parallel_record_verify  = parallel || pipeline_window_mode || present_mode ||
+                                      readback_future_mode || occlusion_query_mode || timestamp_query_mode ||
+                                      timestamp_query_success_batch_mode ||
+                                      timestamp_query_mid_failure_mode ||
+                                      timestamp_query_record_failure_mode || gpu_scope_stream_mode,
             .parallel_record_min_work_units_per_job = production_gate ? 64u : 1u,
-            .submission_batch_window = submission_batch_window,
-            .parallel_record_worker_throw_trigger = inject_worker_failure ? 1u : 0u,
+            .submission_batch_window                = submission_batch_window,
+            .parallel_record_worker_throw_trigger   = inject_worker_failure ? 1u : 0u,
         });
         render_device_initialized = true;
 
@@ -16497,14 +16082,6 @@ int main(int argc, const char** argv) {
         if (present_legacy_owner) {
             RunLegacyDirectPresentOwnerBoundary();
             RenderDevice::Dispose();
-            render_device_initialized = false;
-            TaskSystem::ShutDown();
-            task_system_initialized = false;
-            return 0;
-        }
-
-        if (present_completion_shutdown) {
-            RunPresentationCompletionShutdownDrainBoundary();
             render_device_initialized = false;
             TaskSystem::ShutDown();
             task_system_initialized = false;
@@ -16592,8 +16169,8 @@ int main(int argc, const char** argv) {
                 RunSerialControlPipelineBoundary();
                 LOG_INFO("[TESTCASE][BEGIN] name=PresentPipelineBoundary");
                 RunPresentPipelineBoundary();
-                LOG_INFO("[TESTCASE][BEGIN] name=PresentationCompletionIntegrationBoundary");
-                RunPresentationCompletionIntegrationBoundary();
+                LOG_INFO("[TESTCASE][BEGIN] name=PresentationIdleBoundary");
+                RunPresentationIdleBoundary();
                 // This is the terminal focused lifecycle test: it stops and
                 // joins the RHI runtime before returning.
                 LOG_INFO("[TESTCASE][BEGIN] name=QueuedPresentShutdownBoundary");

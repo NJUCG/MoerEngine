@@ -11,7 +11,6 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
-#include "rhi/RHIPresentationCompletion.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/RHIWindowSurface.h"
 
@@ -1452,9 +1451,7 @@ struct SwapchainCreateInfo {
 
 class RENDER_API Swapchain : public RHIResource {
 protected:
-    Swapchain() :
-        RHIResource(RRT_SWAPCHAIN),
-        presentation_completion_state_(PresentationCompletionState::Create()) {};
+    Swapchain() : RHIResource(RRT_SWAPCHAIN) {};
 
 public:
     [[nodiscard]] virtual bool Recreate(const SwapchainCreateInfo&) = 0;
@@ -1462,17 +1459,10 @@ public:
     [[nodiscard]] virtual bool IsPresentationReady() const noexcept = 0;
     [[nodiscard]] virtual WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept = 0;
 
-    [[nodiscard]] const PresentationCompletionStateRef&
-    GetPresentationCompletionState() const noexcept {
-        return presentation_completion_state_;
-    }
-
 public:
     EPixelFormat format;
     Extent2D     size;
 
-private:
-    PresentationCompletionStateRef presentation_completion_state_{};
 };
 } // namespace Moer::Render
 

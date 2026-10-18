@@ -170,12 +170,10 @@ def present_source_contract_line() -> str:
     )
 
 
-def presentation_completion_integration_line() -> str:
+def presentation_idle_line() -> str:
     return (
-        "[TESTCASE][PASS] name=PresentationCompletionIntegrationBoundary "
-        "present_fence=nonblocking_targeted fence_owner=Completion "
-        "completion_threads=1 queue_idle_fallback=targeted "
-        "queue_idle_owner=Submission outstanding=0\n"
+        "[TESTCASE][PASS] name=PresentationIdleBoundary "
+        "ordinary_idle=0 lifecycle_idle=1 owner=Submission callbacks=completed\n"
     )
 
 
@@ -190,7 +188,7 @@ def present_boundary_line(bridge: str = "required") -> str:
         "recreate=true completion=drained later_batch=success "
         f"present_only=verified bridge={bridge} graphics_native=0 "
         f"prefix_native={prefix_native} readback=verified replay=0\n"
-        + presentation_completion_integration_line()
+        + presentation_idle_line()
         + queued_present_shutdown_line()
     )
 
@@ -296,14 +294,6 @@ def present_legacy_owner_line() -> str:
         "[TESTCASE][PASS] name=LegacyDirectPresentOwnerBoundary "
         "rhi_thread=false owner=Submission thread=caller "
         "receipt=exactly_once native_present=0\n"
-    )
-
-
-def present_completion_shutdown_line() -> str:
-    return (
-        "[TESTCASE][PASS] name=PresentationCompletionShutdownDrainBoundary "
-        "pending=fence+fallback fence_owner=Completion "
-        "queue_idle_owner=Submission outstanding=0 dispose=returned\n"
     )
 
 
@@ -1451,11 +1441,6 @@ class VulkanRunnerTests(unittest.TestCase):
                 present_legacy_owner_line(),
             ),
             (
-                "present-completion-shutdown",
-                "--present-completion-shutdown",
-                present_completion_shutdown_line(),
-            ),
-            (
                 "rt-export-rejection",
                 "--rt-export-rejection",
                 rt_export_rejection_line(),
@@ -1524,7 +1509,7 @@ class VulkanRunnerTests(unittest.TestCase):
                         ],
                     )
 
-    def test_declared_gpu_matrix_contains_all_21_unique_modes(self) -> None:
+    def test_declared_gpu_matrix_contains_all_20_unique_modes(self) -> None:
         modes = [test_case.mode for test_case in runner.VULKAN_TEST_CASES]
         self.assertEqual(
             set(modes),
@@ -1541,7 +1526,6 @@ class VulkanRunnerTests(unittest.TestCase):
                 "present-boundary",
                 "present-hard",
                 "present-legacy-owner",
-                "present-completion-shutdown",
                 "rt-export-rejection",
                 "readback-future",
                 "occlusion-query",
@@ -1552,8 +1536,8 @@ class VulkanRunnerTests(unittest.TestCase):
                 "gpu-scope-stream",
             },
         )
-        self.assertEqual(len(modes), 21)
-        self.assertEqual(len(set(modes)), 21)
+        self.assertEqual(len(modes), 20)
+        self.assertEqual(len(set(modes)), 20)
         self.assertEqual(set(modes), set(runner.VULKAN_TEST_CASE_BY_MODE))
 
     def test_new_focused_modes_reject_weakened_terminal_contracts(self) -> None:
@@ -1562,12 +1546,6 @@ class VulkanRunnerTests(unittest.TestCase):
                 "present-legacy-owner",
                 present_legacy_owner_line().replace(
                     "owner=Submission", "owner=Completion"
-                ),
-            ),
-            (
-                "present-completion-shutdown",
-                present_completion_shutdown_line().replace(
-                    "outstanding=0", "outstanding=1"
                 ),
             ),
             (
@@ -2005,7 +1983,7 @@ class VulkanRunnerTests(unittest.TestCase):
     def test_present_boundary_requires_every_invoked_subtest_marker(self) -> None:
         for marker_name in (
             "PresentSourceContractRejection",
-            "PresentationCompletionIntegrationBoundary",
+            "PresentationIdleBoundary",
         ):
             with self.subTest(marker=marker_name), self.assertRaises(
                 runner.VulkanTestError

@@ -35,9 +35,6 @@ public:
 
     void          Enqueue(RHIBackendSubmissionBatch&& _batch) override;
     GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) override;
-    GraphEventRef DrainPresentation(
-        RHIPresentationDrainTarget _target
-    ) override;
     void          Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU) override;
     void          BeginShutdown() noexcept override;
     void          ShutDown() override;
@@ -61,8 +58,6 @@ private:
         ERequestKind                kind{ERequestKind::Submit};
         RHIBackendSubmissionBatch   batch{};
         ERHISyncDepth               sync_depth{ERHISyncDepth::RHI};
-        std::optional<RHIPresentationDrainTarget>
-                                    presentation_target{};
         std::shared_ptr<Completion> completion{};
     };
 
@@ -270,9 +265,6 @@ private:
         int32*         _result = nullptr
     ) const noexcept;
     void ProcessSync(ERHISyncDepth _depth);
-    void ProcessPresentationDrain(
-        RHIPresentationDrainTarget _target
-    );
     void RejectBatch(
         RHIBackendSubmissionBatch&& _batch,
         int32                       _result,

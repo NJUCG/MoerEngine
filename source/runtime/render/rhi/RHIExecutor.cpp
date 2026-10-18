@@ -1219,18 +1219,10 @@ public:
         if (copy_timeline != 0) {
             RenderDevice::Get().GetCopyQueue().Sync(copy_timeline);
         }
+        if (_depth == ERHISyncDepth::Present) {
+            RenderDevice::Get().WaitIdle();
+        }
         return MakeCompletedBackendEvent();
-    }
-
-    GraphEventRef DrainPresentation(
-        RHIPresentationDrainTarget _target
-    ) override {
-        // The legacy backend has no independent WSI completion lane. Preserve
-        // correctness by degrading the scoped lifecycle boundary to its
-        // existing graphics Present sync. Vulkan overrides this with a
-        // generation-aware per-surface frontier.
-        (void)_target;
-        return Sync(ERHISyncDepth::Present);
     }
 
     void Flush(ERHIFlushDepth) override {
@@ -2282,53 +2274,22 @@ void RHIExecutor::FlushReady(ERHIFlushDepth _depth) {
 
 void RHIExecutor::Sync(ERHISyncDepth _depth) {
     if (RejectOwnedThreadBlockingCall("Sync")) {
+        if (_depth == ERHISyncDepth::Present) {
+            throw std::logic_error("Present sync cannot block on an RHI owner thread");
+        }
         return;
     }
     auto completion = std::make_shared<HandoffSyncCompletion>();
     recording_handoff.RouteReady(RHIExecutorRecordingHandoffWork{
         .prerequisites = {},
-        .resolve = [this, _depth, completion](ERHIRecordingHandoffResult _result) {
-            ScopeExit signal_completion([completion] { completion->Signal(); });
-            if (_result == ERHIRecordingHandoffResult::Consume) {
-                SyncReady(_depth);
-            }
-        },
-    });
-    completion->Wait();
-}
-
-void RHIExecutor::DrainPresentation(
-    RHIPresentationDrainTarget _target
-) {
-    if (RejectOwnedThreadBlockingCall("DrainPresentation")) {
-        throw std::logic_error(
-            "Presentation drain cannot block on an RHI owner thread"
-        );
-    }
-    if (!_target.IsValid()) {
-        LOG_ERROR(
-            "[RHIExecutor] rejected an invalid Presentation drain target"
-        );
-        throw std::invalid_argument(
-            "invalid Presentation drain target"
-        );
-    }
-
-    auto completion = std::make_shared<HandoffSyncCompletion>();
-    recording_handoff.RouteReady(RHIExecutorRecordingHandoffWork{
-        .prerequisites = {},
         .resolve =
-            [this, target = std::move(_target), completion](
-                ERHIRecordingHandoffResult _result
-            ) mutable {
+            [this, _depth, completion](ERHIRecordingHandoffResult _result) {
                 try {
-                    if (_result !=
-                        ERHIRecordingHandoffResult::Consume) {
-                        throw std::runtime_error(
-                            "Presentation drain was cancelled before backend publication"
-                        );
+                    if (_result == ERHIRecordingHandoffResult::Consume) {
+                        SyncReady(_depth);
+                    } else if (_depth == ERHISyncDepth::Present) {
+                        throw std::runtime_error("Present sync cancelled before backend publication");
                     }
-                    DrainPresentationReady(std::move(target));
                     completion->Signal();
                 } catch (...) {
                     completion->Signal(std::current_exception());
@@ -2339,29 +2300,11 @@ void RHIExecutor::DrainPresentation(
 }
 
 void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
-    SyncOrDrainReady(_depth, std::nullopt);
-}
-
-void RHIExecutor::DrainPresentationReady(
-    RHIPresentationDrainTarget _target
-) {
-    SyncOrDrainReady(
-        ERHISyncDepth::Present,
-        std::optional<RHIPresentationDrainTarget>(std::move(_target))
-    );
-}
-
-void RHIExecutor::SyncOrDrainReady(
-    ERHISyncDepth _depth,
-    std::optional<RHIPresentationDrainTarget> _presentation_target
-) {
     {
         std::lock_guard lock(submit_mutex);
         if (lifecycle_state != ELifecycleState::Running) {
-            if (_presentation_target) {
-                throw std::runtime_error(
-                    "Presentation drain rejected while RHIExecutor is not running"
-                );
+            if (_depth == ERHISyncDepth::Present) {
+                throw std::runtime_error("Present sync rejected while RHIExecutor is not running");
             }
             return;
         }
@@ -2430,28 +2373,22 @@ void RHIExecutor::SyncOrDrainReady(
     }
 
     if (backend_creation_failure) {
-        ReportBackendCreationFailure(
-            _presentation_target ? "DrainPresentation" : "Sync",
-            backend_creation_failure
-        );
+        ReportBackendCreationFailure("Sync", backend_creation_failure);
         FinalizeRejectedBackendBatch(
             std::move(failed_batch), "backend creation failed while synchronizing"
         );
-        if (_presentation_target) {
+        if (_depth == ERHISyncDepth::Present) {
             std::rethrow_exception(backend_creation_failure);
         }
         return;
     }
     if (backend_publication_failure) {
-        ReportBackendPublicationFailure(
-            _presentation_target ? "DrainPresentation" : "Sync",
-            backend_publication_failure
-        );
+        ReportBackendPublicationFailure("Sync", backend_publication_failure);
         FinalizeRejectedBackendBatch(
             std::move(failed_batch),
             "backend publication failed while synchronizing"
         );
-        if (_presentation_target) {
+        if (_depth == ERHISyncDepth::Present) {
             std::rethrow_exception(backend_publication_failure);
         }
         return;
@@ -2459,18 +2396,7 @@ void RHIExecutor::SyncOrDrainReady(
 
     GraphEventRef completion{};
     if (backend) {
-        completion = _presentation_target ?
-                         backend->DrainPresentation(
-                             std::move(*_presentation_target)
-                         ) :
-                         backend->Sync(_depth);
-    } else if (
-        _presentation_target &&
-        _presentation_target->completion_state->HasOutstanding()
-    ) {
-        throw std::runtime_error(
-            "Presentation drain has outstanding WSI work but no published backend"
-        );
+        completion = backend->Sync(_depth);
     }
     if (completion) {
         completion->Wait(EThread::UNKNOWN_THREAD);

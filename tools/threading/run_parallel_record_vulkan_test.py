@@ -63,9 +63,6 @@ VULKAN_TEST_CASES = (
     VulkanTestCase("present-boundary", ("--present-boundary",)),
     VulkanTestCase("present-hard", ("--present-hard",)),
     VulkanTestCase("present-legacy-owner", ("--present-legacy-owner",)),
-    VulkanTestCase(
-        "present-completion-shutdown", ("--present-completion-shutdown",)
-    ),
     VulkanTestCase("rt-export-rejection", ("--rt-export-rejection",)),
     VulkanTestCase("readback-future", ("--readback-future",)),
     VulkanTestCase("occlusion-query", ("--occlusion-query",)),
@@ -1141,22 +1138,18 @@ def _require_phase15f_present_boundary(mode: str, text: str) -> None:
             and shutdown_fields.get("replay") == "0",
             f"{mode}: incomplete queued Present shutdown contract",
         )
-        completion = _testcase_marker(
-            "PresentationCompletionIntegrationBoundary", text
-        )
+        completion = _testcase_marker("PresentationIdleBoundary", text)
         _require(
             completion is not None and completion[0] == "PASS",
-            f"{mode}: missing PresentationCompletionIntegrationBoundary PASS marker",
+            f"{mode}: missing PresentationIdleBoundary PASS marker",
         )
         _, completion_fields = completion
         _require(
-            completion_fields.get("present_fence") == "nonblocking_targeted"
-            and completion_fields.get("fence_owner") == "Completion"
-            and completion_fields.get("completion_threads") == "1"
-            and completion_fields.get("queue_idle_fallback") == "targeted"
-            and completion_fields.get("queue_idle_owner") == "Submission"
-            and completion_fields.get("outstanding") == "0",
-            f"{mode}: incomplete Presentation completion integration contract",
+            completion_fields.get("ordinary_idle") == "0"
+            and completion_fields.get("lifecycle_idle") == "1"
+            and completion_fields.get("owner") == "Submission"
+            and completion_fields.get("callbacks") == "completed",
+            f"{mode}: incomplete Presentation idle contract",
         )
 
     marker_name = (
@@ -1422,25 +1415,6 @@ def _require_present_legacy_owner(text: str) -> None:
     )
 
 
-def _require_present_completion_shutdown(text: str) -> None:
-    marker = _testcase_marker(
-        "PresentationCompletionShutdownDrainBoundary", text
-    )
-    _require(
-        marker is not None and marker[0] == "PASS",
-        "present-completion-shutdown: missing shutdown-drain PASS marker",
-    )
-    _, fields = marker
-    _require(
-        fields.get("pending") == "fence+fallback"
-        and fields.get("fence_owner") == "Completion"
-        and fields.get("queue_idle_owner") == "Submission"
-        and fields.get("outstanding") == "0"
-        and fields.get("dispose") == "returned",
-        "present-completion-shutdown: incomplete final owner-drain contract",
-    )
-
-
 def _require_timestamp_query(text: str) -> None:
     completion = _testcase_marker("TimestampQueryCompletionOwnership", text)
     _require(
@@ -1683,9 +1657,6 @@ def validate_log(mode: str, text: str) -> None:
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
     if mode == "present-legacy-owner":
         _require_present_legacy_owner(text)
-        return
-    if mode == "present-completion-shutdown":
-        _require_present_completion_shutdown(text)
         return
     if mode == "readback-future":
         _require_owning_readback_future(text)

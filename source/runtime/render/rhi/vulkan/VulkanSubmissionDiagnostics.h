@@ -317,56 +317,27 @@ RemoveVulkanQueueLocalSyncWaitObserver(
     const VulkanQueueLocalSyncWaitObserver* _observer
 ) noexcept;
 
-struct VulkanQueueIdleWaitEvent {
+struct VulkanDeviceIdleWaitEvent {
     VulkanOperationContext context{};
-    uint64                 native_queue_handle{0};
     uint32                 thread_id{0};
     ERHIThreadRole         thread_role{ERHIThreadRole::Unknown};
 };
 
-using VulkanQueueIdleWaitCallback =
-    void (*)(void*, const VulkanQueueIdleWaitEvent&) noexcept;
+using VulkanDeviceIdleWaitCallback = void (*)(void*, const VulkanDeviceIdleWaitEvent&) noexcept;
 
-struct VulkanQueueIdleWaitObserver {
+struct VulkanDeviceIdleWaitObserver {
     void*                       context{nullptr};
-    VulkanQueueIdleWaitCallback callback{nullptr};
+    VulkanDeviceIdleWaitCallback callback{nullptr};
 };
 
-// Fires after Vulkan queue synchronization has been acquired and immediately
-// before vkQueueWaitIdle. Presentation fallback tests use this seam to prove
-// the native wait remains owned by the sole Submission thread.
+// Fires after all native queue locks have been acquired and immediately
+// before vkDeviceWaitIdle, including Present-depth lifecycle synchronization.
 [[nodiscard]] RENDER_API bool
-TryInstallVulkanQueueIdleWaitObserver(
-    const VulkanQueueIdleWaitObserver* _observer
-) noexcept;
-[[nodiscard]] RENDER_API bool
-RemoveVulkanQueueIdleWaitObserver(
-    const VulkanQueueIdleWaitObserver* _observer
+TryInstallVulkanDeviceIdleWaitObserver(const VulkanDeviceIdleWaitObserver* _observer) noexcept;
+[[nodiscard]] RENDER_API bool RemoveVulkanDeviceIdleWaitObserver(const VulkanDeviceIdleWaitObserver* _observer
 ) noexcept;
 
-void NotifyVulkanQueueIdleWait(
-    const VulkanOperationContext& _context
-) noexcept;
-
-using VulkanScriptedPresentFenceStatusCallback =
-    VkResult (*)(void*, uint64) noexcept;
-
-struct VulkanScriptedPresentFenceStatusOverrideForTesting {
-    void*                                    context{nullptr};
-    VulkanScriptedPresentFenceStatusCallback callback{nullptr};
-};
-
-// Deterministic WSI-fence observation seam. It is valid only for synthetic
-// Presentation completion probes; production Present batches always query
-// their native VkFence when no override is installed.
-[[nodiscard]] RENDER_API bool
-TryInstallVulkanScriptedPresentFenceStatusOverrideForTesting(
-    const VulkanScriptedPresentFenceStatusOverrideForTesting* _override
-) noexcept;
-[[nodiscard]] RENDER_API bool
-RemoveVulkanScriptedPresentFenceStatusOverrideForTesting(
-    const VulkanScriptedPresentFenceStatusOverrideForTesting* _override
-) noexcept;
+void NotifyVulkanDeviceIdleWait(const VulkanOperationContext& _context) noexcept;
 
 using VulkanScriptedQueryPreparationCallback =
     VkResult (*)(void*, EQueueType, uint64, uint32) noexcept;

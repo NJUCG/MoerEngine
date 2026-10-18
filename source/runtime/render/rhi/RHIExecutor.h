@@ -136,7 +136,6 @@ public:
     // Blocking lifecycle boundaries must not be called recursively from an
     // RHI completion callback whose completion they are waiting for.
     void Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI);
-    void DrainPresentation(RHIPresentationDrainTarget _target);
     static void ShutDown();
 
 private:
@@ -155,11 +154,6 @@ private:
     );
     void FlushReady(ERHIFlushDepth _depth);
     void SyncReady(ERHISyncDepth _depth);
-    void DrainPresentationReady(RHIPresentationDrainTarget _target);
-    void SyncOrDrainReady(
-        ERHISyncDepth _depth,
-        std::optional<RHIPresentationDrainTarget> _presentation_target
-    );
 
     std::mutex                              submit_mutex;
     std::condition_variable                 lifecycle_cv;

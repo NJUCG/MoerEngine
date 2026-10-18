@@ -29,7 +29,6 @@
 namespace Moer::Render {
 class CmdReorderer;
 struct FunctionTable;
-struct RHIPresentationDrainTarget;
 
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
@@ -341,26 +340,6 @@ struct VulkanBatchCompletionSettlement {
     std::weak_ptr<VulkanBatchCompletionGroup> group{};
 };
 
-// Optional presentation lifetime data attached to an ordinary GPU submission.
-// GPU completion releases source_texture/previous_present; only WSI data remains
-// while a present fence or the compatibility acquisition dependency is pending.
-struct PendingPresentCompletion {
-    PendingPresentCompletion()                                               = default;
-    PendingPresentCompletion(const PendingPresentCompletion&)                = delete;
-    PendingPresentCompletion& operator=(const PendingPresentCompletion&)     = delete;
-    PendingPresentCompletion(PendingPresentCompletion&&) noexcept            = default;
-    PendingPresentCompletion& operator=(PendingPresentCompletion&&) noexcept = default;
-
-    VulkanOperationContext    context{};
-    SwapchainRef              swapchain{};
-    TextureRef                source_texture{};
-    PresentationCompletionRef completion{};
-    PresentationCompletionRef previous_present{};
-    VkFence                   fence{VK_NULL_HANDLE};
-    bool                      uses_present_fence{false};
-    bool                      scripted_fence_status_allowed{false};
-};
-
 // Runtime-recorded submissions cross the Submission -> Completion boundary as
 // one move-only ownership packet. Keeping the command payload, command context
 // retirement, descriptor lease, callbacks, signals, and deferred releases in
@@ -376,8 +355,7 @@ struct VulkanSubmitCompletionBatch {
         VulkanCommandContextBatch&&                _command_contexts,
         std::optional<VulkanDescriptorPushLease>&& _descriptor_lease,
         Array<RHIResource*>&&                      _deferred_releases,
-        VulkanBatchCompletionTicket                _batch_completion = {},
-        std::optional<PendingPresentCompletion>&&  _present          = {}
+        VulkanBatchCompletionTicket                _batch_completion = {}
     ) noexcept :
         outcome(_outcome),
         context(_context),
@@ -387,20 +365,18 @@ struct VulkanSubmitCompletionBatch {
         command_contexts(std::move(_command_contexts)),
         descriptor_lease(std::move(_descriptor_lease)),
         deferred_releases(std::move(_deferred_releases)),
-        batch_completion(std::move(_batch_completion)),
-        present(std::move(_present)) {}
+        batch_completion(std::move(_batch_completion)) {}
 
     VulkanSubmitCompletionBatch(
-        VulkanOperationResult                     _outcome,
-        VulkanOperationContext                    _context,
-        bool                                      _gpu_submitted,
-        bool                                      _owns_queue_timeline,
-        CmdSubmit&&                               _submit,
-        VulkanCommandContextBatch&&               _command_contexts,
-        VulkanDescriptorPushLease&&               _descriptor_lease,
-        Array<RHIResource*>&&                     _deferred_releases,
-        VulkanBatchCompletionTicket               _batch_completion = {},
-        std::optional<PendingPresentCompletion>&& _present          = {}
+        VulkanOperationResult       _outcome,
+        VulkanOperationContext      _context,
+        bool                        _gpu_submitted,
+        bool                        _owns_queue_timeline,
+        CmdSubmit&&                 _submit,
+        VulkanCommandContextBatch&& _command_contexts,
+        VulkanDescriptorPushLease&& _descriptor_lease,
+        Array<RHIResource*>&&       _deferred_releases,
+        VulkanBatchCompletionTicket _batch_completion = {}
     ) noexcept :
         outcome(_outcome),
         context(_context),
@@ -410,8 +386,7 @@ struct VulkanSubmitCompletionBatch {
         command_contexts(std::move(_command_contexts)),
         descriptor_lease(std::move(_descriptor_lease)),
         deferred_releases(std::move(_deferred_releases)),
-        batch_completion(std::move(_batch_completion)),
-        present(std::move(_present)) {}
+        batch_completion(std::move(_batch_completion)) {}
 
     VulkanSubmitCompletionBatch(const VulkanSubmitCompletionBatch&) = delete;
     VulkanSubmitCompletionBatch& operator=(const VulkanSubmitCompletionBatch&) = delete;
@@ -427,28 +402,6 @@ struct VulkanSubmitCompletionBatch {
     std::optional<VulkanDescriptorPushLease> descriptor_lease;
     Array<RHIResource*>                      deferred_releases;
     VulkanBatchCompletionTicket              batch_completion{};
-    std::optional<PendingPresentCompletion>  present{};
-};
-
-struct VulkanPresentationCompletionProbeForTesting {
-    VulkanPresentationCompletionProbeForTesting(
-        SwapchainRef                 _swapchain,
-        PresentationCompletionRef    _completion,
-        bool                         _uses_present_fence,
-        TextureRef                   _source_texture,
-        PresentationCompletionRef    _previous_present
-    ) noexcept :
-        swapchain(std::move(_swapchain)),
-        completion(std::move(_completion)),
-        uses_present_fence(_uses_present_fence),
-        source_texture(std::move(_source_texture)),
-        previous_present(std::move(_previous_present)) {}
-
-    SwapchainRef                 swapchain{};
-    PresentationCompletionRef    completion{};
-    bool                         uses_present_fence{false};
-    TextureRef                   source_texture{};
-    PresentationCompletionRef    previous_present{};
 };
 
 struct VulkanCompletionMarker {};
@@ -458,7 +411,6 @@ public:
     using EventType = std::variant<
         VulkanSubmissionEvent,
         VulkanSubmitCompletionBatch,
-        VulkanPresentationCompletionProbeForTesting,
         UniquePtr<VulkanCommandContext>,
         VulkanCommandContextBatch,
         VulkanDescriptorPushLease,
@@ -593,18 +545,6 @@ public:
     ) override;
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
-    [[nodiscard]] RENDER_API bool EnqueuePresentationCompletionProbeForTesting(
-        SwapchainRef                 _swapchain,
-        PresentationCompletionRef    _completion,
-        bool                         _uses_present_fence,
-        TextureRef                   _source_texture   = {},
-        PresentationCompletionRef    _previous_present = {}
-    );
-    [[nodiscard]] RENDER_API bool
-    RegisterPresentationCompletionStateForShutdownProbeForTesting(
-        const PresentationCompletionStateRef& _state
-    );
-
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
     VulkanDevice&                             vk_device;
@@ -789,7 +729,6 @@ private:
         Array<VulkanCmdList*>                   ordered_cmd_lists;
         Array<VkSemaphoreSubmitInfo>             native_waits;
         Array<VkSemaphoreSubmitInfo>             native_signals;
-        std::optional<PendingPresentCompletion>  present{};
         VulkanCommandContextBatch                command_contexts;
         std::optional<VulkanDescriptorPushLease> descriptor_lease;
         Array<RHIResource*>                     deferred_releases;
@@ -878,32 +817,7 @@ private:
         CurrentVulkanRecordedSubmit& _recorded,
         const VulkanOperationResult&  _outcome
     ) noexcept;
-    void                       RegisterPresentationCompletionState(
-        const PresentationCompletionStateRef& _state
-    );
-    [[nodiscard]] PresentationDrainPoint FreezePresentationDrain(
-        const RHIPresentationDrainTarget& _target
-    );
-    [[nodiscard]] Array<PresentationDrainPoint>
-    FreezeAllPresentationDrains();
-    void                       ResolvePresentationQueueIdleFallback(
-        const PresentationDrainPoint& _point
-    );
-
-    [[nodiscard]] bool         TryPollPresentRetirement(PendingPresentCompletion& _pending) noexcept;
-    void                       FinalizePresentCompletion(PendingPresentCompletion& _pending) noexcept;
-    void                       CompletePresentSubmission(
-                              PendingPresentCompletion&        _present,
-                              bool                             _gpu_success,
-                              VkResult                         _completion_result,
-                              Array<PendingPresentCompletion>& _pending
-                          ) noexcept;
     UniquePtr<VulkanCommandContext> AcquireCommandContext();
-    [[nodiscard]] VkFence           AcquirePresentFence();
-    void                            RecyclePresentFence(VkFence _fence) noexcept;
-    std::mutex                      present_fence_mutex;
-    Array<VkFence>                  free_present_fences;
-    Array<VkFence>                  all_present_fences;
     void                       CompleteAll(uint64 _timeline);
     void                       EnsureRecordCalibration();
     void                       RecordRhiRecordProfile(const RhiRecordExecuteSample& _sample);
@@ -983,8 +897,6 @@ private:
         EExecutionOwnershipMode::Unclaimed
     };
     std::atomic_bool runtime_dependency_waits_enabled{true};
-    Array<std::weak_ptr<PresentationCompletionState>>
-                       active_presentation_completion_states{};
     std::jthread completion_thread;
     std::jthread rhi_thread;
     Array<UniquePtr<VulkanCommandContext>> command_context_quarantine;

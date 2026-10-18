@@ -38,6 +38,7 @@ public:
 
 private:
     static constexpr uint64 small_block_size = 64 * 1024;
+    static constexpr uint64 max_block_size   = 1024 * 1024;
 
     struct LinearBufferAllocator {
         struct BufferSlice {

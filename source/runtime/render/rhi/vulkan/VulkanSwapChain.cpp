@@ -1,7 +1,3 @@
-//
-// Created by 74535 on 2023/10/5.
-//
-
 #include "VulkanSwapChain.h"
 
 #include "PixelFormat.h"
@@ -220,12 +216,8 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    // PresentationSurface owns this destructive lifecycle boundary and must
-    // complete its targeted Presentation drain before native recreation.
-    assert(
-        !GetPresentationCompletionState()->HasOutstanding() &&
-        "Swapchain recreate requires a completed targeted Presentation drain"
-    );
+    // PresentationSurface drains ordinary submissions and waits for device
+    // idle before replacing native swapchain resources.
     if (device.IsFaulted()) {
         return false;
     }
@@ -607,54 +599,22 @@ VkSwapchain::AcquireResult VkSwapchain::AcquireNextImage(VkSemaphore _ready_sema
         }
     );
     if ((outcome.result == VK_SUCCESS || outcome.result == VK_SUBOPTIMAL_KHR) && image_index != UINT32_MAX) {
-        return {
-            outcome,
-            _ready_semaphore,
-            image_index,
-            std::exchange(swapchain_images[image_index].last_present, {})
-        };
+        return {outcome, _ready_semaphore, image_index};
     }
     return {outcome, VK_NULL_HANDLE, UINT32_MAX};
 }
 
-VkSwapchain::PresentResult VkSwapchain::Present(
-    VkQueue                             _queue,
-    uint                                _index,
-    uint64                              _timeline,
-    uint64                              _work_serial,
-    VkFence                             _completion_fence,
-    const PresentationCompletionRef& _completion
-) {
+VkSwapchain::PresentResult
+VkSwapchain::Present(VkQueue _queue, uint _index, uint64 _timeline, uint64 _work_serial) {
     PresentResult present_result{};
-    const auto set_wsi_mode =
-        [this, &_completion](EPresentationWsiCompletionMode _mode) {
-            if (_completion &&
-                !GetPresentationCompletionState()->SetWsiMode(
-                    _completion, _mode
-                )) {
-                std::terminate();
-            }
-        };
     if (_index == UINT32_MAX) {
         present_result.outcome = {
             EVulkanOperationStatus::Retry, VK_NOT_READY
         };
-        set_wsi_mode(EPresentationWsiCompletionMode::Immediate);
         return present_result;
     }
     VkSemaphore finished_semaphores[] = {GetRenderFinishedSemaphore(_index)};
-    // 如果启用了 VK_EXT_swapchain_maintenance1，则使用 present fence 优化队列同步；
-    // 否则退回到兼容路径，不挂 VkSwapchainPresentFenceInfoEXT，避免验证层报扩展未启用。
-    const bool use_present_fence = _completion_fence != VK_NULL_HANDLE;
-
-    VkSwapchainPresentFenceInfoEXT present_fence_info{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
-    if (use_present_fence) {
-        present_fence_info.swapchainCount = 1;
-        present_fence_info.pFences        = &_completion_fence;
-    }
-
     VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-    present_info.pNext = use_present_fence ? reinterpret_cast<void*>(&present_fence_info) : nullptr;
     present_info.waitSemaphoreCount = 1;
     present_info.pWaitSemaphores    = finished_semaphores;
     present_info.swapchainCount     = 1;
@@ -674,38 +634,6 @@ VkSwapchain::PresentResult VkSwapchain::Present(
     present_result.accepted =
         present_result.outcome.result == VK_SUCCESS ||
         present_result.outcome.result == VK_SUBOPTIMAL_KHR;
-    // Recoverable WSI errors reject the presentation request, but Vulkan
-    // still considers the associated queue operations enqueued. Keep that
-    // lifetime fact separate from the receipt-facing success bit.
-    present_result.wsi_enqueued =
-        present_result.accepted ||
-        present_result.outcome.result == VK_ERROR_OUT_OF_DATE_KHR ||
-        present_result.outcome.result == VK_ERROR_SURFACE_LOST_KHR ||
-        present_result.outcome.result ==
-            VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT;
-    present_result.uses_present_fence =
-        present_result.wsi_enqueued && use_present_fence;
-
-    if (_completion) {
-        // Present fences cover both accepted presentation and the queue
-        // operations retained after recoverable WSI errors.
-        if (present_result.wsi_enqueued && use_present_fence) {
-            set_wsi_mode(
-                EPresentationWsiCompletionMode::PresentFence
-            );
-        } else if (present_result.wsi_enqueued) {
-            set_wsi_mode(
-                EPresentationWsiCompletionMode::QueueIdleFallback
-            );
-            swapchain_images[_index].last_present = _completion;
-        } else {
-            set_wsi_mode(
-                present_result.outcome.status == EVulkanOperationStatus::Faulted ?
-                    EPresentationWsiCompletionMode::Failed :
-                    EPresentationWsiCompletionMode::Immediate
-            );
-        }
-    }
     ++present_serial;
     return present_result;
 }

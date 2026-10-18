@@ -22,8 +22,6 @@ enum class EVulkanFaultOperation : uint8_t {
     QueuePresent,
     AcquireNextImage,
     TimelineHostWait,
-    PresentFenceWait,
-    PresentFenceReset,
     CommandPoolReset,
     QueryPoolCreate,
     QueryPoolResults,
@@ -32,8 +30,6 @@ enum class EVulkanFaultOperation : uint8_t {
     SwapchainCreate,
     SwapchainGetImages,
     SwapchainSemaphoreCreate,
-    PresentFenceCreate,
-    QueueWaitIdle,
     DeviceWaitIdle
 };
 
@@ -94,10 +90,6 @@ struct VulkanFaultRecord {
             return "AcquireNextImage";
         case EVulkanFaultOperation::TimelineHostWait:
             return "TimelineHostWait";
-        case EVulkanFaultOperation::PresentFenceWait:
-            return "PresentFenceWait";
-        case EVulkanFaultOperation::PresentFenceReset:
-            return "PresentFenceReset";
         case EVulkanFaultOperation::CommandPoolReset:
             return "CommandPoolReset";
         case EVulkanFaultOperation::QueryPoolCreate:
@@ -114,10 +106,6 @@ struct VulkanFaultRecord {
             return "SwapchainGetImages";
         case EVulkanFaultOperation::SwapchainSemaphoreCreate:
             return "SwapchainSemaphoreCreate";
-        case EVulkanFaultOperation::PresentFenceCreate:
-            return "PresentFenceCreate";
-        case EVulkanFaultOperation::QueueWaitIdle:
-            return "QueueWaitIdle";
         case EVulkanFaultOperation::DeviceWaitIdle:
             return "DeviceWaitIdle";
         default:
