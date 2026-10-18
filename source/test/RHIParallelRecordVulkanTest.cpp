@@ -9959,10 +9959,10 @@ void RunPresentSourceContractRejection() {
         ERHIExecSubmitFlags::FlushGPU
     );
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(accepted_mutation_done.Get())
-             ->WaitSubmitted(1) ||
-        ResourceCast(backend_tracked_source.Get())
-            ->IsPresentationSourceReady()) {
+    if (!ResourceCast(accepted_mutation_done.Get())->WaitSubmitted(1)) {
+        throw std::runtime_error("standalone Clear signal failed after recoverable Present");
+    }
+    if (ResourceCast(backend_tracked_source.Get())->IsPresentationSourceReady()) {
         throw std::runtime_error(
             "an accepted standalone Clear left stale Present readiness"
         );
@@ -11249,6 +11249,86 @@ void RunLegacyDirectPresentOwnerBoundary() {
         "rhi_thread=false owner=Submission thread=caller "
         "receipt=exactly_once native_present=0"
     );
+}
+
+void RunPresentRetryRecovery() {
+    using namespace std::chrono_literals;
+
+    auto&        device = RenderDevice::Get();
+    SwapchainRef swapchain{MoerNew(HeadlessScriptedSwapchain)()};
+    TextureRef   source = device.CreateTexture(
+        "present_retry_source",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::PRESENTATION_SOURCE | ETextureUsageFlags::TRANSFER_SRC
+    );
+    BufferRef buffer = device.CreateBuffer<uint32>(
+        "present_retry_recovery", 4, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
+    );
+    FenceRef                       done = device.CreateFence();
+    std::array<uint32, 4>          readback{};
+    std::atomic<uint32>            success_callbacks{0};
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    ScriptedPresentCapture         capture({});
+    ScopedScriptedPresentOverride  scripted_override(capture);
+    constexpr std::array           outcomes{
+        VulkanOperationResult{EVulkanOperationStatus::Retry, VK_NOT_READY},
+        VulkanOperationResult{EVulkanOperationStatus::Retry, VK_TIMEOUT},
+        VulkanOperationResult{EVulkanOperationStatus::Recreate, VK_ERROR_OUT_OF_DATE_KHR},
+        VulkanOperationResult{EVulkanOperationStatus::Recreate, VK_ERROR_SURFACE_LOST_KHR},
+    };
+
+    try {
+        for (uint32 index = 0; index < outcomes.size(); ++index) {
+            capture.result            = VulkanScriptedPresentResult{.outcome = outcomes[index]};
+            PresentReceiptRef receipt = MakeShared<PresentReceipt>();
+            RHIExecutor::Get().Present(RHIPresentRequest(swapchain, source->GetView(), receipt), true);
+            const auto result = receipt->WaitForSubmission(5s);
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            if (!result.resolved || result.submitted ||
+                result.recreate_swapchain != (outcomes[index].status == EVulkanOperationStatus::Recreate) ||
+                receipt->ResolutionAttemptCount() != 1 || capture.count.load() != index + 1 ||
+                capture.wrong_owner.load() || native_capture.Count() != index) {
+                throw std::runtime_error("recoverable Present did not retire without native submission");
+            }
+
+            const uint32 expected = 0xC0010000u + index;
+            readback.fill(0);
+            CommandList recovered(EQueueType::Graphics);
+            recovered.ClearResource(buffer->GetView(), expected);
+            recovered.CopyFrom(buffer->GetView(), WritableBytes(readback), "PresentRetryRecoveryReadback");
+            recovered.AddSuccessCallback([&] {
+                success_callbacks.fetch_add(1);
+            });
+            CmdSubmit submit = recovered.Submit();
+            submit.Signal(done.Get(), index + 1);
+            RHIExecutor::Get().Submit(EQueueType::Graphics, std::move(submit), ERHIExecSubmitFlags::FlushGPU);
+            // Do not hide a broken queue wait behind device idle or a direct
+            // HostWait: ordinary Sync must complete the GPU work and readback.
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            auto* fence = ResourceCast(done.Get());
+            if (fence->IsFailed() || fence->IsRejected(index + 1) || done->GetValue() < index + 1 ||
+                !fence->WaitSubmitted(index + 1) || success_callbacks.load() != index + 1 ||
+                !std::ranges::all_of(
+                    readback,
+                    [expected](uint32 value) {
+                        return value == expected;
+                    }
+                ) ||
+                native_capture.Overflowed() || native_capture.Count() != index + 1 ||
+                !native_capture.Event(index).outcome.WasSubmitted()) {
+                throw std::runtime_error("recoverable Present poisoned later GPU completion/readback");
+            }
+        }
+    } catch (...) {
+        // Keep test resources alive while draining a regressed completion path.
+        device.WaitIdle();
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        throw;
+    }
+    LOG_INFO("[TESTCASE][PASS] name=PresentRetryRecovery outcomes=NotReady,Timeout,OutOfDate,SurfaceLost "
+             "later_gpu_submits=4 readback=verified signal=reused success_callbacks=4");
 }
 
 void RunPresentationIdleBoundary() {
@@ -16163,6 +16243,8 @@ int main(int argc, const char** argv) {
 
         if (present_mode) {
             if (present_boundary) {
+                LOG_INFO("[TESTCASE][BEGIN] name=PresentRetryRecovery");
+                RunPresentRetryRecovery();
                 LOG_INFO("[TESTCASE][BEGIN] name=PresentSourceContractRejection");
                 RunPresentSourceContractRejection();
                 LOG_INFO("[TESTCASE][BEGIN] name=SerialControlPipelineBoundary");

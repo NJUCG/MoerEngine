@@ -16,6 +16,7 @@ SUMMARY_RE = re.compile(
     r"\[ParallelRecord\] batch=(?P<batch>\d+).*?effective=(?P<effective>true|false) "
     r"outcome=(?P<outcome>\S+).*?work_units=(?P<work_units>\d+) "
     r"ordered_cb=(?P<ordered_cb>\d+) "
+    r"(?:secondary_cb=\d+ )?"
     r"waves=(?P<waves>\d+) islands=(?P<islands>\d+).*?"
     r"distinct_workers=(?P<workers>\d+) max_active=(?P<max_active>\d+)"
 )
@@ -1150,6 +1151,20 @@ def _require_phase15f_present_boundary(mode: str, text: str) -> None:
             and completion_fields.get("owner") == "Submission"
             and completion_fields.get("callbacks") == "completed",
             f"{mode}: incomplete Presentation idle contract",
+        )
+        recovery = _testcase_marker("PresentRetryRecovery", text)
+        _require(
+            recovery is not None and recovery[0] == "PASS",
+            f"{mode}: missing PresentRetryRecovery PASS marker",
+        )
+        _, recovery_fields = recovery
+        _require(
+            recovery_fields.get("outcomes") == "NotReady,Timeout,OutOfDate,SurfaceLost"
+            and recovery_fields.get("later_gpu_submits") == "4"
+            and recovery_fields.get("readback") == "verified"
+            and recovery_fields.get("signal") == "reused"
+            and recovery_fields.get("success_callbacks") == "4",
+            f"{mode}: incomplete Present recovery contract",
         )
 
     marker_name = (

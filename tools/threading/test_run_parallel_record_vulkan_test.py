@@ -189,6 +189,9 @@ def present_boundary_line(bridge: str = "required") -> str:
         f"present_only=verified bridge={bridge} graphics_native=0 "
         f"prefix_native={prefix_native} readback=verified replay=0\n"
         + presentation_idle_line()
+        + "[TESTCASE][PASS] name=PresentRetryRecovery "
+        "outcomes=NotReady,Timeout,OutOfDate,SurfaceLost later_gpu_submits=4 "
+        "readback=verified signal=reused success_callbacks=4\n"
         + queued_present_shutdown_line()
     )
 
@@ -440,7 +443,7 @@ def summary(batch: int, outcome: str = "parallel") -> str:
     effective = "true" if outcome == "parallel" else "false"
     return (
         f"[ParallelRecord] batch={batch} requested=true effective={effective} "
-        f"outcome={outcome} layers=4 jobs=4 work_units=256 ordered_cb=10 waves=2 islands=1 "
+        f"outcome={outcome} layers=4 jobs=4 work_units=256 ordered_cb=10 secondary_cb=4 waves=2 islands=1 "
         "workers=4 distinct_workers=3 max_active=3 coordinator=9 submit_status=0\n"
     )
 
@@ -1984,6 +1987,7 @@ class VulkanRunnerTests(unittest.TestCase):
         for marker_name in (
             "PresentSourceContractRejection",
             "PresentationIdleBoundary",
+            "PresentRetryRecovery",
         ):
             with self.subTest(marker=marker_name), self.assertRaises(
                 runner.VulkanTestError
@@ -2632,6 +2636,15 @@ class VulkanRunnerTests(unittest.TestCase):
     def test_parallel_requires_wave_island_wave_and_concurrency(self) -> None:
         text = wave(1, 0) + island(1) + wave(1, 1) + summary(1) + pass_line("parallel", "false")
         runner.validate_log("parallel", text)
+
+    def test_parallel_accepts_legacy_summary_without_secondary_count(self) -> None:
+        text = wave(1, 0) + island(1) + wave(1, 1) + summary(1) + pass_line("parallel", "false")
+        runner.validate_log("parallel", text.replace("secondary_cb=4 ", ""))
+
+    def test_parallel_rejects_malformed_secondary_count(self) -> None:
+        text = wave(1, 0) + island(1) + wave(1, 1) + summary(1) + pass_line("parallel", "false")
+        with self.assertRaisesRegex(runner.VulkanTestError, "no parallel backend summary"):
+            runner.validate_log("parallel", text.replace("secondary_cb=4", "secondary_cb=invalid"))
 
     def test_parallel_rejects_missing_second_wave(self) -> None:
         text = wave(1, 0) + island(1) + summary(1) + pass_line("parallel", "false")

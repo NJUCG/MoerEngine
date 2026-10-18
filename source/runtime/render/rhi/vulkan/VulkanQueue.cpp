@@ -5216,9 +5216,12 @@ static void CommitAcceptedPresentationSourceStateTransaction(
 static bool IsRecoverableUnsubmittedSignal(
     VulkanDevice& _device, const VulkanOperationResult& _outcome
 ) {
-    return _outcome.status == EVulkanOperationStatus::Rejected &&
-           !_device.IsFaulted() &&
-           _outcome.result != VK_ERROR_DEVICE_LOST;
+    // A skipped Present reserves a logical value without submitting a GPU
+    // signal. Cancel only that value; later submissions still use this fence.
+    return (_outcome.status == EVulkanOperationStatus::Rejected ||
+            _outcome.status == EVulkanOperationStatus::Retry ||
+            _outcome.status == EVulkanOperationStatus::Recreate) &&
+           !_device.IsFaulted() && _outcome.result != VK_ERROR_DEVICE_LOST;
 }
 
 static void TerminalizeUnsubmittedSignal(
