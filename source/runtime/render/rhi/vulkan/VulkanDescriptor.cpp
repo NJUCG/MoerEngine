@@ -4,7 +4,6 @@
 #include "VulkanDevice.h"
 #include "VulkanQueue.h"
 #include "VulkanMacroUtils.h"
-#include "VulkanPipelineResourceCache.h"
 #include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanUtil.h"
@@ -15,19 +14,6 @@
 #include <cassert>
 #include <stdexcept>
 
-const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
-    4096, // VK_DESCRIPTOR_TYPE_SAMPLER
-    4096, // VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-    4096, // VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
-    //1 / 8.0,// VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-    //1 / 2.0,// VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER
-    //1 / 8.0,// VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER
-    //1 / 4.0,// VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-    //1 / 8.0,// VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
-    //4,      // VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-    //1 / 8.0,// VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC
-    //1 / 8.0 // VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT
-};
 namespace Moer::Render {
 
 static constexpr std::string_view s_ring_desc_buffer_name = "VkDescriporHeap::RingDescriptorBuffer";
@@ -60,58 +46,6 @@ static uint GetBufferDescriptorSize(const VulkanDevice& _device, VkDescriptorTyp
             );
         default:
             throw std::runtime_error("unsupported buffer descriptor type");
-    }
-}
-
-VulkanDescriptorSetsLayout::VulkanDescriptorSetsLayout(
-    VulkanDevice*                                        _device,
-    const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings
-) :
-    VulkanDeviceObject(_device) {
-    m_layouts.resize(_descriptor_bindings.size(), VK_NULL_HANDLE);
-    for (uint32_t set_idx = 0; set_idx < _descriptor_bindings.size(); ++set_idx) {
-        for (const auto& binding : _descriptor_bindings[set_idx]) {
-            m_descriptor_type_count[binding.descriptorType] += binding.descriptorCount;
-        }
-        VkDescriptorSetLayoutCreateInfo set_layout_ci{};
-        set_layout_ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        set_layout_ci.bindingCount = _descriptor_bindings[set_idx].size();
-        set_layout_ci.pBindings    = _descriptor_bindings[set_idx].data();
-        VK_CHECK_RESULT(
-            vkCreateDescriptorSetLayout(m_device->GetDevice(), &set_layout_ci, nullptr, &m_layouts[set_idx])
-        );
-    }
-}
-
-VulkanDescriptorSetsLayout::~VulkanDescriptorSetsLayout() {
-    for (const auto& layout : m_layouts) {
-        vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
-    }
-}
-
-enum class EBindlessSizeType : uint8 {
-    Buffer,
-    Sampler,
-    Image,
-    Num
-};
-enum class EBindlessSetType : uint8 {
-    Buffer,
-    SamplerAndImage,
-    Num
-};
-
-VkImageLayout DecideImageLayout(VkDescriptorType _type) {
-    switch (_type) {
-        case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-        case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-        case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-            return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-            return VK_IMAGE_LAYOUT_GENERAL;
-        default:
-            LOG_ERROR("Unsupported image descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));
-            return VK_IMAGE_LAYOUT_UNDEFINED;
     }
 }
 
@@ -219,7 +153,6 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
 
     //fill sampler descs in image_data
     for (uint32_t i = 0; i < VulkanDevice::bindless_sampler_count; ++i) {
-        VkDescriptorImageInfo  sampler_info{.sampler = VK_NULL_HANDLE};
         VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
         if (i >= m_device->ImmutableSamplerCount()) {
             break;
@@ -242,14 +175,7 @@ VulkanDescriptorHeap::~VulkanDescriptorHeap() {
         MoerDelete(ring_desc_buffer);
         ring_desc_buffer = nullptr;
     }
-    if (buffer_desc_buffer) {
-        MoerDelete(buffer_desc_buffer);
-        buffer_desc_buffer = nullptr;
-    }
-    if (image_desc_buffer) {
-        MoerDelete(image_desc_buffer);
-        image_desc_buffer = nullptr;
-    }
+
 }
 
 uint VulkanDescriptorHeap::GetBufferDescIdx(

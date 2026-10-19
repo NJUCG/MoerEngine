@@ -783,13 +783,6 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 layout = VK_NULL_HANDLE;
             }
         }
-        CHECK_AND_DELETE(m_descriptor_sets_layout);
-    }
-
-    void VulkanPipelineState::InitDescriptorSetLayouts(Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) {
-        if (_descriptor_bindings.empty()) { return; }
-
-        m_descriptor_sets_layout = MoerNew(VulkanDescriptorSetsLayout)(m_device, _descriptor_bindings);
     }
 
 void VulkanPipelineState::CreatePipelineLayout(

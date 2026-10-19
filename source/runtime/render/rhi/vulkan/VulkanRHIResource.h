@@ -33,7 +33,6 @@ namespace Moer::Render {
 class VulkanDevice;
 class VulkanPipelineResourceCache;
 
-class VulkanDescriptorSetsLayout;
 //forward declaration
 class VulkanBuffer;
 class VulkanTexture;
@@ -504,10 +503,6 @@ public:
         return m_pipeline_layout;
     }
 
-    inline const Moer::Render::VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
-        return m_descriptor_sets_layout;
-    }
-
     bool UsesStencilAttachment() const {
         return b_uses_stencil_attachment;
     }
@@ -524,9 +519,6 @@ public:
         return m_argument_infos;
     }
 
-    void InitDescriptorSetLayouts(
-        Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings
-    );
     void CreatePipelineLayout(const std::optional<VkPushConstantRange>& push_constant_range);
     VkPipelineBindPoint GetPipelineBindPoint() {
         switch (m_type) {
@@ -554,8 +546,6 @@ protected:
     VkPipeline                   m_pipeline;
     VkPipelineLayout             m_pipeline_layout;
     Array<VkDescriptorSetLayout> descriptor_set_layouts;
-    // descriptor sets
-    Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout = nullptr;
     EType                                     m_type;
     bool                                      b_uses_stencil_attachment = false;
     uint32_t                                  view_mask                 = 0;

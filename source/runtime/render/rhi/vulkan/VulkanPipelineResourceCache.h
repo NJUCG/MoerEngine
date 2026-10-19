@@ -4,7 +4,6 @@
 #include "VulkanDescriptor.h"
 #include "rhi/RHIResource.h"
 namespace Moer::Render {
-class VulkanDescriptorSetsLayout;
 class VulkanDevice;
 
 struct PushConstantInfo {
