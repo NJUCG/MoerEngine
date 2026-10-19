@@ -229,10 +229,11 @@ void VulkanCmdList::BindShaderArguments(const PipelineHandle& _pipeline_handle, 
                                         "sampler descriptor arrays are not supported by ArrayArguments"
                                     );
                                 }
-                                uint64 source_descriptor_byte_offset = descriptor_heap.GetSamplerDescriptorOffset(
-                                    std::get<Sampler>(_arguments[argument_index])
-                                );
-                                descriptor_heap.WriteSamplerDesc(
+                                uint64 source_descriptor_byte_offset =
+                                    descriptor_heap.GetSamplerDescriptorOffset(
+                                        std::get<Sampler>(_arguments[argument_index])
+                                    );
+                                descriptor_heap.CopySamplerDescriptorToBuffer(
                                     source_descriptor_byte_offset, binding_byte_offset
                                 );
                                 break;
@@ -263,7 +264,7 @@ void VulkanCmdList::BindShaderArguments(const PipelineHandle& _pipeline_handle, 
                                             descriptor_heap.GetOrCreateImageDescriptorOffset(
                                                 &texture, image_layout, resource_binding.descriptor_type
                                             );
-                                        descriptor_heap.WriteImageDesc(
+                                        descriptor_heap.CopyImageDescriptorToBuffer(
                                             source_descriptor_byte_offset,
                                             binding_byte_offset +
                                                 element_index * descriptor_heap.GetDescriptorSize(
@@ -281,7 +282,7 @@ void VulkanCmdList::BindShaderArguments(const PipelineHandle& _pipeline_handle, 
                                     image_layout,
                                     resource_binding.descriptor_type
                                 );
-                                descriptor_heap.WriteImageDesc(
+                                descriptor_heap.CopyImageDescriptorToBuffer(
                                     source_descriptor_byte_offset, binding_byte_offset
                                 );
                                 break;
@@ -311,7 +312,7 @@ void VulkanCmdList::BindShaderArguments(const PipelineHandle& _pipeline_handle, 
                                                 VK_IMAGE_LAYOUT_GENERAL,
                                                 resource_binding.descriptor_type
                                             );
-                                        descriptor_heap.WriteImageDesc(
+                                        descriptor_heap.CopyImageDescriptorToBuffer(
                                             source_descriptor_byte_offset,
                                             binding_byte_offset +
                                                 element_index * descriptor_heap.GetDescriptorSize(
@@ -326,7 +327,7 @@ void VulkanCmdList::BindShaderArguments(const PipelineHandle& _pipeline_handle, 
                                     VK_IMAGE_LAYOUT_GENERAL,
                                     resource_binding.descriptor_type
                                 );
-                                descriptor_heap.WriteImageDesc(
+                                descriptor_heap.CopyImageDescriptorToBuffer(
                                     source_descriptor_byte_offset, binding_byte_offset
                                 );
                                 break;
@@ -341,16 +342,9 @@ void VulkanCmdList::BindShaderArguments(const PipelineHandle& _pipeline_handle, 
                                         descriptor_heap.GetOrCreateBufferDescriptorOffset(
                                             buffer_view, resource_binding.descriptor_type, buffer_format
                                         );
-                                    if (resource_binding.descriptor_type ==
-                                        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
-                                        descriptor_heap.WriteUniformDesc(
-                                            source_descriptor_byte_offset, destination_byte_offset
-                                        );
-                                    } else {
-                                        descriptor_heap.WriteStorageDesc(
-                                            source_descriptor_byte_offset, destination_byte_offset
-                                        );
-                                    }
+                                    descriptor_heap.CopyBufferDescriptorToBuffer(
+                                        source_descriptor_byte_offset, destination_byte_offset
+                                    );
                                 };
                                 if (resource_binding.descriptor_count > 1) {
                                     const BufferViewArray& buffers =
@@ -394,8 +388,10 @@ void VulkanCmdList::BindShaderArguments(const PipelineHandle& _pipeline_handle, 
                                     std::get<RaytracingTlasRef>(_arguments[argument_index]).Get()
                                 );
                                 uint64 source_descriptor_byte_offset =
-                                    descriptor_heap.GetOrCreateAccelerationStructureDescriptorOffset(acceleration_structure);
-                                descriptor_heap.WriteAccelDesc(
+                                    descriptor_heap.GetOrCreateAccelerationStructureDescriptorOffset(
+                                        acceleration_structure
+                                    );
+                                descriptor_heap.CopyAccelerationStructureDescriptorToBuffer(
                                     source_descriptor_byte_offset, binding_byte_offset
                                 );
                                 break;

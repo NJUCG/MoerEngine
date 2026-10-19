@@ -996,7 +996,7 @@ void InitializeDescriptorBufferBindingTemplate(
 
                 if constexpr (std::is_same_v<ResourceBindings, VulkanResourceSetBindings>) {
                     descriptor_buffer.address =
-                        device.GetGlobalDescriptorHeap().descriptor_buffer->DeviceAddress();
+                        device.GetGlobalDescriptorHeap().GetDescriptorBufferAddress();
                     descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
                 } else {
                     // The bindless buffer address is supplied by each draw/dispatch.
@@ -1738,16 +1738,25 @@ void VulkanPipelineState::InitPipelineLayout(
                                     view = view.Slice(_cmd.array_layer, _cmd.array_count);
                                 }
 
-                                uint           src_idx;
+                                uint source_descriptor_byte_offset;
                                 if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
                                     // view.aspect_flags = ETextureAspectFlags::COLOR;
-                                    src_idx = heap.GetOrCreateImageDescriptorOffset(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+                                    source_descriptor_byte_offset = heap.GetOrCreateImageDescriptorOffset(
+                                        &view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                    );
 
                                 } else {
-                                    src_idx = heap.GetOrCreateImageDescriptorOffset(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                    source_descriptor_byte_offset = heap.GetOrCreateImageDescriptorOffset(
+                                        &view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                    );
                                 }
 
-                                memcpy(texture_dat.data() + texture_cnt * texture_handle_stride, &heap.sampler_and_image_descriptor_cache[src_idx], texture_handle_stride);
+                                heap.CopyImageDescriptorToMemory(
+                                    source_descriptor_byte_offset,
+                                    std::span<byte>(texture_dat).subspan(
+                                        texture_cnt * texture_handle_stride, texture_handle_stride
+                                    )
+                                );
                                 uint indirect_handle = (m_device->GetSamplerIndex(_cmd.sampler) & 0xff) | (_cmd.slot & 0xffffff) << 8;
                                 memcpy(array_dat.data() + array_idx * array_handle_stride, &indirect_handle, array_handle_stride);
                                 array_indices_dat[array_idx] = {array_idx, _cmd.array_idx};
@@ -1766,9 +1775,16 @@ void VulkanPipelineState::InitPipelineLayout(
                                 if(_cmd.format != PF_UNDEFINED){
                                     LOG_WARNING("Bindless buffer with format is not supported yet, current buffer: {}", _cmd.buffer->GetName());
                                 }
-                                uint src_idx = heap.GetOrCreateBufferDescriptorOffset(vk_buffer->GetView(_cmd.format), type);
+                                uint source_descriptor_byte_offset = heap.GetOrCreateBufferDescriptorOffset(
+                                    vk_buffer->GetView(_cmd.format), type
+                                );
                                 
-                                memcpy(buffer_dat.data() + buffer_cnt * buffer_handle_stride, &heap.buffer_descriptor_cache[src_idx], buffer_handle_stride);
+                                heap.CopyBufferDescriptorToMemory(
+                                    source_descriptor_byte_offset,
+                                    std::span<byte>(buffer_dat).subspan(
+                                        buffer_cnt * buffer_handle_stride, buffer_handle_stride
+                                    )
+                                );
                                 memcpy(array_dat.data() + array_idx * array_handle_stride, &_cmd.slot, sizeof(uint));
                                 array_indices_dat[array_idx] = {array_idx, _cmd.array_idx};
                                 buffer_indices_dat[buffer_cnt] = {buffer_cnt, _cmd.slot};
