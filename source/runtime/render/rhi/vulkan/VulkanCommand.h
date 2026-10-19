@@ -16,7 +16,7 @@ namespace Moer::Render {
 
 class VulkanDevice;
 class VkNativeQueryPool;
-struct VulkanDescriptorPushLeaseState;
+struct VulkanDescriptorBufferLeaseState;
 
 class VulkanCommandPool : public VulkanDeviceObject {
 public:
@@ -73,8 +73,8 @@ public:
     // Pipeline and shader arguments.
     void BindPipeline(const PipelineHandle& _pso_handle);
     void BindShaderArguments(const PipelineHandle& _pipeline_handle, const ArrayArguments& _arguments);
-    void SetDescriptorPushLease(std::shared_ptr<VulkanDescriptorPushLeaseState> _lease) {
-        descriptor_push_lease = std::move(_lease);
+    void SetDescriptorBufferLease(std::shared_ptr<VulkanDescriptorBufferLeaseState> _lease) {
+        descriptor_buffer_lease = std::move(_lease);
     }
 
     // Vertex input and dynamic state.
@@ -202,7 +202,7 @@ private:
     VulkanCommandPool*                              command_pool;
     VulkanDevice&                                   device;
     VkCommandBufferLevel                            level;
-    std::shared_ptr<VulkanDescriptorPushLeaseState> descriptor_push_lease;
+    std::shared_ptr<VulkanDescriptorBufferLeaseState> descriptor_buffer_lease;
 };
 
 } // namespace Moer::Render

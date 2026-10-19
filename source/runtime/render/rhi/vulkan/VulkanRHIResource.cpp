@@ -996,7 +996,7 @@ void InitializeDescriptorBufferBindingTemplate(
 
                 if constexpr (std::is_same_v<ResourceBindings, VulkanResourceSetBindings>) {
                     descriptor_buffer.address =
-                        device.GetGlobalDescriptorHeap().ring_desc_buffer->DeviceAddress();
+                        device.GetGlobalDescriptorHeap().descriptor_buffer->DeviceAddress();
                     descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
                 } else {
                     // The bindless buffer address is supplied by each draw/dispatch.
@@ -1247,11 +1247,11 @@ void VulkanPipelineState::InitPipelineLayout(
         if (m_alloc.buffer != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) {
             vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc);
         }
-        // if (m_descriptor_idx >= 0) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(m_descriptor_idx); }
-        // for (const auto& idx : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
+        // if (m_descriptor_idx >= 0) { m_device->GetGlobalDescriptorHeap().FreeBufferDescriptorSlot(m_descriptor_idx); }
+        // for (const auto& idx : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeBufferDescriptorSlot(idx.second); }
 
         for (uint i = 0; i < 4; ++i) {
-            for (const auto& idx : m_descriptor_indices[i]) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
+            for (const auto& idx : m_descriptor_indices[i]) { m_device->GetGlobalDescriptorHeap().FreeBufferDescriptorSlot(idx.second); }
         }
     }
 
@@ -1741,13 +1741,13 @@ void VulkanPipelineState::InitPipelineLayout(
                                 uint           src_idx;
                                 if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
                                     // view.aspect_flags = ETextureAspectFlags::COLOR;
-                                    src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+                                    src_idx = heap.GetOrCreateImageDescriptorOffset(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
 
                                 } else {
-                                    src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                    src_idx = heap.GetOrCreateImageDescriptorOffset(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                                 }
 
-                                memcpy(texture_dat.data() + texture_cnt * texture_handle_stride, &heap.image_desc_data[src_idx], texture_handle_stride);
+                                memcpy(texture_dat.data() + texture_cnt * texture_handle_stride, &heap.sampler_and_image_descriptor_cache[src_idx], texture_handle_stride);
                                 uint indirect_handle = (m_device->GetSamplerIndex(_cmd.sampler) & 0xff) | (_cmd.slot & 0xffffff) << 8;
                                 memcpy(array_dat.data() + array_idx * array_handle_stride, &indirect_handle, array_handle_stride);
                                 array_indices_dat[array_idx] = {array_idx, _cmd.array_idx};
@@ -1766,9 +1766,9 @@ void VulkanPipelineState::InitPipelineLayout(
                                 if(_cmd.format != PF_UNDEFINED){
                                     LOG_WARNING("Bindless buffer with format is not supported yet, current buffer: {}", _cmd.buffer->GetName());
                                 }
-                                uint src_idx = heap.GetBufferDescIdx(vk_buffer->GetView(_cmd.format), type);
+                                uint src_idx = heap.GetOrCreateBufferDescriptorOffset(vk_buffer->GetView(_cmd.format), type);
                                 
-                                memcpy(buffer_dat.data() + buffer_cnt * buffer_handle_stride, &heap.buffer_desc_data[src_idx], buffer_handle_stride);
+                                memcpy(buffer_dat.data() + buffer_cnt * buffer_handle_stride, &heap.buffer_descriptor_cache[src_idx], buffer_handle_stride);
                                 memcpy(array_dat.data() + array_idx * array_handle_stride, &_cmd.slot, sizeof(uint));
                                 array_indices_dat[array_idx] = {array_idx, _cmd.array_idx};
                                 buffer_indices_dat[buffer_cnt] = {buffer_cnt, _cmd.slot};
@@ -3172,7 +3172,7 @@ void VulkanPipelineState::InitPipelineLayout(
             underlying_buffer = nullptr;
         }
         if(m_descriptor_idx >= 0){
-            device.GetGlobalDescriptorHeap().FreeAccelDescIdx(m_descriptor_idx);
+            device.GetGlobalDescriptorHeap().FreeAccelerationStructureDescriptorSlot(m_descriptor_idx);
         }
     }
 
@@ -3829,7 +3829,7 @@ void VulkanPipelineState::InitPipelineLayout(
         }
         if (m_alloc.image != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) { vmaDestroyImage(m_device->GetVmaAllocator(), m_alloc.image, m_alloc.alloc); }
         //free descriptors
-        for (auto& [key, desc] : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeImageDescIdx(desc); }
+        for (auto& [key, desc] : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeImageDescriptorSlot(desc); }
     }
 
 #pragma endregion

@@ -3444,12 +3444,12 @@ public:
         //         uint           src_idx;
         //         if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
         //             // view.aspect_flags = ETextureAspectFlags::COLOR;
-        //             src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        //             src_idx = heap.GetOrCreateImageDescriptorOffset(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
 
         //         } else {
-        //             src_idx = heap.GetImageDescIdx(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        //             src_idx = heap.GetOrCreateImageDescriptorOffset(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         //         }
-        //         memcpy(texture_dat.data() + i * texture_handle_stride, &heap.image_desc_data[src_idx], texture_handle_stride);
+        //         memcpy(texture_dat.data() + i * texture_handle_stride, &heap.sampler_and_image_descriptor_cache[src_idx], texture_handle_stride);
         //         texture_indices_dat[i]       = {i, texture_slots[i].slot};
         //         array_indices_dat[array_idx] = {array_idx, texture_slots[i].array_idx};
 
@@ -3470,8 +3470,8 @@ public:
         //     uint buffer_dst_slot_offset = bindless_array->buffers_offset_in_set / buffer_handle_stride;
         //     for (size_t i = 0; i < buffer_slots.size(); ++i) {
         //         VulkanBuffer* vk_buffer = ResourceCast(buffer_slots[i].buffer);
-        //         uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView(), vk_buffer->GetDescriptorType());
-        //         memcpy(buffer_dat.data() + i * buffer_handle_stride, &heap.buffer_desc_data[src_idx], buffer_handle_stride);
+        //         uint          src_idx   = heap.GetOrCreateBufferDescriptorOffset(vk_buffer->GetView(), vk_buffer->GetDescriptorType());
+        //         memcpy(buffer_dat.data() + i * buffer_handle_stride, &heap.buffer_descriptor_cache[src_idx], buffer_handle_stride);
         //         buffer_indices_dat[i] = {i, buffer_slots[i].slot + buffer_dst_slot_offset};
 
         //         array_indices_dat[array_idx] = {array_idx, buffer_slots[i].array_idx};
@@ -5868,7 +5868,7 @@ void VkCommandQueue::RejectForRuntime(
             false,
             std::move(_submit),
             VulkanCommandContextBatch{},
-            std::optional<VulkanDescriptorPushLease>{},
+            std::optional<VulkanDescriptorBufferLease>{},
             Array<RHIResource*>{},
             std::move(_batch_completion)
         );
@@ -6650,8 +6650,8 @@ bool VkCommandQueue::TryExecuteParallel(
     };
 
     VulkanDescriptorHeap& descriptor_heap = vk_device.GetGlobalDescriptorHeap();
-    VulkanDescriptorPushLease descriptor_lease =
-        descriptor_heap.BeginPushDescriptors(EQueueType::Graphics);
+    VulkanDescriptorBufferLease descriptor_lease =
+        descriptor_heap.AcquireDescriptorBufferLease(EQueueType::Graphics);
 
     auto              tracker_owner = AcquireCommandContext();
     auto& tracker       = tracker_owner->GetTracker();
@@ -6854,10 +6854,10 @@ bool VkCommandQueue::TryExecuteParallel(
                                         uint32 _island_count,
                                         bool   _parallel_recorded) -> bool {
         tracker.Reset();
-        descriptor_heap.EndPushDescriptors(descriptor_lease);
+        descriptor_heap.FlushDescriptorWrites(descriptor_lease);
         const uint64 descriptor_bytes =
-            descriptor_heap.CurrentPushDescriptorOffset(descriptor_lease.state) -
-            descriptor_lease.state->begin;
+            descriptor_heap.GetDescriptorWriteOffset(descriptor_lease.state) -
+            descriptor_lease.state->begin_byte_offset;
 
         Array<RHIResource*> deferred_releases = TakeDeferredReleases();
         const double profile_record_wall_ms = parallel_record_profile ?
@@ -7002,7 +7002,7 @@ bool VkCommandQueue::TryExecuteParallel(
             }
         }
         VulkanCmdList& assembly_cmd = tracker_owner->GetCmdList();
-        assembly_cmd.SetDescriptorPushLease(descriptor_lease.state);
+        assembly_cmd.SetDescriptorBufferLease(descriptor_lease.state);
         const VkResult assembly_begin = begin_primary(assembly_cmd, {}, true);
         if (assembly_begin != VK_SUCCESS) {
             reject_prepared_recording("assembly-begin-failed", assembly_begin);
@@ -7075,7 +7075,7 @@ bool VkCommandQueue::TryExecuteParallel(
                         try {
                             chunk.worker_id = Platform::GetCurrentThreadID();
                             VulkanCmdList& cmd_list = chunk.command_context->GetSecondaryCmdList();
-                            cmd_list.SetDescriptorPushLease(descriptor_lease.state);
+                            cmd_list.SetDescriptorBufferLease(descriptor_lease.state);
                             VkResult worker_begin = VK_SUCCESS;
                             if (job_layer.graphics_secondary) {
                                 assert(job_layer.rendering_envelope.has_value());
@@ -7153,7 +7153,7 @@ bool VkCommandQueue::TryExecuteParallel(
             const uint32 wave_index = parallel_wave_count++;
             total_job_count += wave_jobs.size();
             const uint64 worker_descriptor_begin =
-                descriptor_heap.CurrentPushDescriptorOffset(descriptor_lease.state);
+                descriptor_heap.GetDescriptorWriteOffset(descriptor_lease.state);
             ExternalJoinResult join_result = ExternalJoinResult::Failed;
             const auto worker_join_started = std::chrono::steady_clock::now();
             try {
@@ -7195,7 +7195,7 @@ bool VkCommandQueue::TryExecuteParallel(
             }
             if (!wave_recorded) {
                 parallel_recorded = false;
-                descriptor_heap.RewindPushDescriptors(
+                descriptor_heap.RewindDescriptorWrites(
                     descriptor_lease.state, worker_descriptor_begin
                 );
             }
@@ -7439,7 +7439,7 @@ bool VkCommandQueue::TryExecuteParallel(
                         VulkanCmdList& cmd_list = job_layer.use_secondary ?
                                                       chunk.command_context->GetSecondaryCmdList() :
                                                       chunk.command_context->GetCmdList();
-                        cmd_list.SetDescriptorPushLease(descriptor_lease.state);
+                        cmd_list.SetDescriptorBufferLease(descriptor_lease.state);
                         VkResult worker_begin = VK_SUCCESS;
                         if (job_layer.graphics_secondary) {
                             assert(job_layer.rendering_envelope.has_value());
@@ -7528,7 +7528,7 @@ bool VkCommandQueue::TryExecuteParallel(
         const uint32 wave_index = parallel_wave_count++;
         total_job_count += wave_jobs.size();
         const uint64 worker_descriptor_begin =
-            descriptor_heap.CurrentPushDescriptorOffset(descriptor_lease.state);
+            descriptor_heap.GetDescriptorWriteOffset(descriptor_lease.state);
         ExternalJoinResult join_result = ExternalJoinResult::Failed;
         const auto worker_join_started = std::chrono::steady_clock::now();
         try {
@@ -7643,7 +7643,7 @@ bool VkCommandQueue::TryExecuteParallel(
         }
         // The join contract drains all accepted jobs. No worker can still be
         // writing when the submit-local descriptor cursor is rewound.
-        descriptor_heap.RewindPushDescriptors(
+        descriptor_heap.RewindDescriptorWrites(
             descriptor_lease.state, worker_descriptor_begin
         );
         for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
@@ -7654,7 +7654,7 @@ bool VkCommandQueue::TryExecuteParallel(
             runtime.worker_recorded = false;
             runtime.fallback_command_context = AcquireCommandContext();
             VulkanCmdList& fallback_cmd      = runtime.fallback_command_context->GetCmdList();
-            fallback_cmd.SetDescriptorPushLease(descriptor_lease.state);
+            fallback_cmd.SetDescriptorBufferLease(descriptor_lease.state);
             const VkResult fallback_begin =
                 begin_primary(fallback_cmd, runtime.scopes, true);
             if (fallback_begin != VK_SUCCESS) {
@@ -7751,7 +7751,7 @@ bool VkCommandQueue::TryExecuteParallel(
             if (!first_runtime.preprocessed) {
                 first_runtime.primary_command_context = AcquireCommandContext();
                 VulkanCmdList& primary_cmd            = first_runtime.primary_command_context->GetCmdList();
-                primary_cmd.SetDescriptorPushLease(descriptor_lease.state);
+                primary_cmd.SetDescriptorBufferLease(descriptor_lease.state);
                 const VkResult primary_begin =
                     begin_primary(primary_cmd, first_runtime.scopes, true);
                 if (primary_begin != VK_SUCCESS) {
@@ -7836,7 +7836,7 @@ bool VkCommandQueue::TryExecuteParallel(
 
         first_runtime.primary_command_context = AcquireCommandContext();
         VulkanCmdList& island_cmd             = first_runtime.primary_command_context->GetCmdList();
-        island_cmd.SetDescriptorPushLease(descriptor_lease.state);
+        island_cmd.SetDescriptorBufferLease(descriptor_lease.state);
         const VkResult island_begin = begin_primary(island_cmd, first_runtime.scopes, true);
         if (island_begin != VK_SUCCESS) {
             reject_prepared_recording("coordinator-begin-failed", island_begin);
@@ -7928,7 +7928,7 @@ bool VkCommandQueue::TryExecuteParallel(
         tracker.RestoreState();
     }
     VulkanCmdList& epilogue_cmd = tracker_owner->GetCmdList();
-    epilogue_cmd.SetDescriptorPushLease(descriptor_lease.state);
+    epilogue_cmd.SetDescriptorBufferLease(descriptor_lease.state);
     const VkResult epilogue_begin = begin_primary(epilogue_cmd, active_scopes, true);
     if (epilogue_begin != VK_SUCCESS) {
         reject_prepared_recording("epilogue-begin-failed", epilogue_begin);
@@ -8354,7 +8354,7 @@ void VkCommandQueue::ExecuteNow(
     // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
     const auto& cmd_lists = reorderer.m_cmd_lists;
     bool        has_cmd   = !reorderer.m_cmd_lists.empty();
-    std::optional<VulkanDescriptorPushLease> descriptor_lease;
+    std::optional<VulkanDescriptorBufferLease> descriptor_lease;
     uint64      descriptor_begin_offset = 0;
 
     if (record_sample) {
@@ -8502,12 +8502,12 @@ void VkCommandQueue::ExecuteNow(
             // Present work advances the queue timeline without consuming descriptor storage.
             // Keep ring reuse aligned with the execute-only in-flight limit.
             descriptor_lease.emplace(
-                vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(queue.GetType())
+                vk_device.GetGlobalDescriptorHeap().AcquireDescriptorBufferLease(queue.GetType())
             );
-            vk_command_context.GetCmdList().SetDescriptorPushLease(descriptor_lease->state);
+            vk_command_context.GetCmdList().SetDescriptorBufferLease(descriptor_lease->state);
             if (record_sample) {
                 descriptor_begin_offset = vk_device.GetGlobalDescriptorHeap()
-                                              .CurrentPushDescriptorOffset(descriptor_lease->state);
+                                              .GetDescriptorWriteOffset(descriptor_lease->state);
             }
         }
 
@@ -8563,14 +8563,14 @@ void VkCommandQueue::ExecuteNow(
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 const auto* cmd = cmdnode->cmd;
                 const uint64 descriptor_before =
-                    vk_device.GetGlobalDescriptorHeap().CurrentPushDescriptorOffset(
+                    vk_device.GetGlobalDescriptorHeap().GetDescriptorWriteOffset(
                         descriptor_lease->state
                     );
                 const auto  command_started = std::chrono::steady_clock::now();
                 visitor.VisitCmd(cmd);
                 const auto command_finished = std::chrono::steady_clock::now();
                 const uint64 descriptor_after =
-                    vk_device.GetGlobalDescriptorHeap().CurrentPushDescriptorOffset(
+                    vk_device.GetGlobalDescriptorHeap().GetDescriptorWriteOffset(
                         descriptor_lease->state
                     );
                 assert(deferred_index < deferred_diagnostics.size());
@@ -8706,11 +8706,11 @@ void VkCommandQueue::ExecuteNow(
         if (queue.GetType() != EQueueType::Copy) {
             if (record_sample) {
                 record_sample->descriptor_bytes =
-                    vk_device.GetGlobalDescriptorHeap().CurrentPushDescriptorOffset(
+                    vk_device.GetGlobalDescriptorHeap().GetDescriptorWriteOffset(
                         descriptor_lease->state
                     ) - descriptor_begin_offset;
             }
-            vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(*descriptor_lease);
+            vk_device.GetGlobalDescriptorHeap().FlushDescriptorWrites(*descriptor_lease);
         }
         if (record_sample && ends_profiling_frame) {
             const QueryFrameDiagnostics query_diagnostics =
@@ -10060,7 +10060,7 @@ void VkCommandQueue::CompletionThreadMain() {
                     }
 
                     if (_batch.descriptor_lease.has_value()) {
-                        vk_device.GetGlobalDescriptorHeap().RecyclePushDescriptors(
+                        vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(
                             std::move(*_batch.descriptor_lease)
                         );
                         _batch.descriptor_lease.reset();
@@ -10233,8 +10233,8 @@ void VkCommandQueue::CompletionThreadMain() {
                         }
                     }
                 },
-                [this](VulkanDescriptorPushLease& _lease) {
-                    vk_device.GetGlobalDescriptorHeap().RecyclePushDescriptors(std::move(_lease));
+                [this](VulkanDescriptorBufferLease& _lease) {
+                    vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(std::move(_lease));
                 },
 
                 [&batch_gpu_success](VulkanCallbackBatch& _batch) {
@@ -11170,7 +11170,7 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
             _recorded.logical_timeline != 0,
             std::move(_recorded.submit),
             std::move(_recorded.command_contexts),
-            std::optional<VulkanDescriptorPushLease>{},
+            std::optional<VulkanDescriptorBufferLease>{},
             Array<RHIResource*>{},
             std::move(_recorded.batch_completion)
         );
@@ -11393,7 +11393,7 @@ void VkCopyQueue::ExecuteThread() {
                     }
 
                     if (_batch.descriptor_lease.has_value()) {
-                        device.GetGlobalDescriptorHeap().RecyclePushDescriptors(
+                        device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(
                             std::move(*_batch.descriptor_lease)
                         );
                         _batch.descriptor_lease.reset();

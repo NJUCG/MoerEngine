@@ -19,18 +19,21 @@ struct TextureView;
 struct Sampler;
 enum class EQueueType : uint8;
 
-struct VulkanDescriptorPushLeaseState {
-    VulkanDescriptorPushLeaseState(uint32 _slot, uint64 _begin, uint64 _end) :
-        slot(_slot), begin(_begin), end(_end), next(_begin) {}
+struct VulkanDescriptorBufferLeaseState {
+    VulkanDescriptorBufferLeaseState(uint32 _slot_index, uint64 _begin_byte_offset, uint64 _end_byte_offset) :
+        slot_index(_slot_index),
+        begin_byte_offset(_begin_byte_offset),
+        end_byte_offset(_end_byte_offset),
+        next_byte_offset(_begin_byte_offset) {}
 
-    uint32              slot{0};
-    uint64              begin{0};
-    uint64              end{0};
-    std::atomic<uint64> next{0};
+    uint32              slot_index{0};
+    uint64              begin_byte_offset{0};
+    uint64              end_byte_offset{0};
+    std::atomic<uint64> next_byte_offset{0};
 };
 
-struct VulkanDescriptorPushLease {
-    std::shared_ptr<VulkanDescriptorPushLeaseState> state;
+struct VulkanDescriptorBufferLease {
+    std::shared_ptr<VulkanDescriptorBufferLeaseState> state;
 
     bool IsValid() const {
         return state != nullptr;
@@ -46,91 +49,87 @@ public:
     VulkanDescriptorHeap(VulkanDescriptorHeap&&)                 = delete;
     VulkanDescriptorHeap& operator=(VulkanDescriptorHeap&&)      = delete;
 
-    Array<byte> buffer_desc_data;
-    Array<byte> image_desc_data;
-    Array<byte> accel_desc_data;
+    Array<byte> buffer_descriptor_cache;
+    Array<byte> sampler_and_image_descriptor_cache;
+    Array<byte> acceleration_structure_descriptor_cache;
 
-    Array<VkDescriptorType> buffer_desc_types;
-    Array<VkDescriptorType> image_desc_types;
+    Array<VkDescriptorType> buffer_descriptor_types;
+    Array<VkDescriptorType> image_descriptor_types;
 
-    Array<uint> buffer_free_list;
-    Array<uint> image_free_list;
-    Array<uint> accel_free_list;
+    Array<uint> free_buffer_slots;
+    Array<uint> free_image_slots;
+    Array<uint> free_acceleration_structure_slots;
 
-    uint64 buffer_offset;
-    uint64 image_offset;
-    uint64 accel_offset;
+    uint64 next_buffer_cache_byte_offset;
+    uint64 next_image_cache_byte_offset;
+    uint64 next_acceleration_structure_cache_byte_offset;
 
-    uint GetBufferDescIdx(
+    uint GetOrCreateBufferDescriptorOffset(
         const BufferView& _in_buffer,
         VkDescriptorType  _type,
         VkFormat          _format = VK_FORMAT_UNDEFINED
     );
-    void FreeBufferDescIdx(uint _idx);
-    uint GetImageDescIdx(
+    void FreeBufferDescriptorSlot(uint _slot_index);
+    uint GetOrCreateImageDescriptorOffset(
         const TextureView* _in_image,
         VkImageLayout      _layout,
         VkDescriptorType   _descriptor_type = VK_DESCRIPTOR_TYPE_MAX_ENUM
     );
-    void FreeImageDescIdx(uint _idx);
-    uint GetSamplerDescIdx(Sampler _sampler);
-    uint GetAccelDescIdx(VulkanAccelerationStructure* _as);
-    uint FreeAccelDescIdx(uint _idx);
+    void FreeImageDescriptorSlot(uint _slot_index);
+    uint GetSamplerDescriptorOffset(Sampler _sampler);
+    uint GetOrCreateAccelerationStructureDescriptorOffset(VulkanAccelerationStructure* _as);
+    void FreeAccelerationStructureDescriptorSlot(uint _slot_index);
 
 public:
-    VulkanDescriptorPushLease BeginPushDescriptors(EQueueType _queue_type);
-    void EndPushDescriptors(const VulkanDescriptorPushLease& _lease);
-    void RecyclePushDescriptors(VulkanDescriptorPushLease _lease);
+    VulkanDescriptorBufferLease AcquireDescriptorBufferLease(EQueueType _queue_type);
+    void                        FlushDescriptorWrites(const VulkanDescriptorBufferLease& _lease);
+    void                        RecycleDescriptorBufferLease(VulkanDescriptorBufferLease _lease);
 
     // Reserve one immutable descriptor range for a single pipeline bind. The
     // returned absolute offset stays valid until the owning queue timeline is
     // retired; concurrent recorders never share a range.
-    std::optional<uint64> ReservePushDescriptorRange(
-        const std::shared_ptr<VulkanDescriptorPushLeaseState>& _lease,
-        uint64                                                  _size
-    );
-    uint64 CurrentPushDescriptorOffset(
-        const std::shared_ptr<VulkanDescriptorPushLeaseState>& _lease
-    ) const;
-    void RewindPushDescriptors(
-        const std::shared_ptr<VulkanDescriptorPushLeaseState>& _lease,
-        uint64                                                  _offset
-    );
+    std::optional<uint64>
+    ReserveDescriptorRange(const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease, uint64 _size);
+    uint64 GetDescriptorWriteOffset(const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease) const;
+    // All recorders using this lease must have joined and discarded their work
+    // before rolling the cursor back for serial fallback.
+    void
+    RewindDescriptorWrites(const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease, uint64 _offset);
 
     uint GetDescriptorSize(VkDescriptorType _type) const;
 
-    void WriteUniformDesc(uint64 _src_offset, uint64 _dst_offset);
-    void WriteStorageDesc(uint64 _src_offset, uint64 _dst_offset);
-    void WriteImageDesc(uint64 _src_offset, uint64 _dst_offset);
-    void WriteSamplerDesc(uint64 _src_offset, uint64 _dst_offset);
-    void WriteAccelDesc(uint64 _src_offset, uint64 _dst_offset);
+    void WriteUniformDesc(uint64 _source_byte_offset, uint64 _destination_byte_offset);
+    void WriteStorageDesc(uint64 _source_byte_offset, uint64 _destination_byte_offset);
+    void WriteImageDesc(uint64 _source_byte_offset, uint64 _destination_byte_offset);
+    void WriteSamplerDesc(uint64 _source_byte_offset, uint64 _destination_byte_offset);
+    void WriteAccelDesc(uint64 _source_byte_offset, uint64 _destination_byte_offset);
 
 public:
     VulkanDevice* m_device;
 
-    VulkanBuffer* ring_desc_buffer;
+    VulkanBuffer* descriptor_buffer;
 
-    uint storage_desc_stride;
-    uint uniform_desc_stride;
-    uint storage_texel_desc_stride;
-    uint uniform_texel_desc_stride;
-    uint buffer_desc_stride;
+    uint storage_buffer_descriptor_size;
+    uint uniform_buffer_descriptor_size;
+    uint storage_texel_buffer_descriptor_size;
+    uint uniform_texel_buffer_descriptor_size;
+    uint buffer_cache_slot_stride;
 
-    uint sampled_image_desc_stride;
-    uint storage_image_desc_stride;
-    uint image_desc_stride;
-    uint sample_desc_stride;
-    uint accel_desc_stride;
+    uint sampled_image_descriptor_size;
+    uint storage_image_descriptor_size;
+    uint image_cache_slot_stride;
+    uint sampler_descriptor_size;
+    uint acceleration_structure_descriptor_size;
 
-    std::mutex m_mutex;
-    mutable std::mutex push_range_mutex;
-    std::condition_variable push_range_cv;
-    Array<std::shared_ptr<VulkanDescriptorPushLeaseState>> active_push_leases;
-    StaticArray<uint32, 2> next_push_slots{};
-    uint64     texture_desc_offset;
+    std::mutex                                               cache_mutex;
+    mutable std::mutex                                       lease_mutex;
+    std::condition_variable                                  lease_available;
+    Array<std::shared_ptr<VulkanDescriptorBufferLeaseState>> active_leases;
+    StaticArray<uint32, 2>                                   next_queue_slots{};
+    uint64                                                   image_cache_byte_offset;
 
-    Array<uint64> ring_buffer_offsets;
-    uint8*        map_ptr;
+    Array<uint64> lease_slot_byte_offsets;
+    uint8*        mapped_descriptor_data;
 };
 
 } // namespace Moer::Render

@@ -353,7 +353,7 @@ struct VulkanSubmitCompletionBatch {
         bool                                       _owns_queue_timeline,
         CmdSubmit&&                                _submit,
         VulkanCommandContextBatch&&                _command_contexts,
-        std::optional<VulkanDescriptorPushLease>&& _descriptor_lease,
+        std::optional<VulkanDescriptorBufferLease>&& _descriptor_lease,
         Array<RHIResource*>&&                      _deferred_releases,
         VulkanBatchCompletionTicket                _batch_completion = {}
     ) noexcept :
@@ -374,7 +374,7 @@ struct VulkanSubmitCompletionBatch {
         bool                        _owns_queue_timeline,
         CmdSubmit&&                 _submit,
         VulkanCommandContextBatch&& _command_contexts,
-        VulkanDescriptorPushLease&& _descriptor_lease,
+        VulkanDescriptorBufferLease&& _descriptor_lease,
         Array<RHIResource*>&&       _deferred_releases,
         VulkanBatchCompletionTicket _batch_completion = {}
     ) noexcept :
@@ -399,7 +399,7 @@ struct VulkanSubmitCompletionBatch {
     bool                                     owns_queue_timeline{false};
     CmdSubmit                                submit;
     VulkanCommandContextBatch                command_contexts;
-    std::optional<VulkanDescriptorPushLease> descriptor_lease;
+    std::optional<VulkanDescriptorBufferLease> descriptor_lease;
     Array<RHIResource*>                      deferred_releases;
     VulkanBatchCompletionTicket              batch_completion{};
 };
@@ -413,7 +413,7 @@ public:
         VulkanSubmitCompletionBatch,
         UniquePtr<VulkanCommandContext>,
         VulkanCommandContextBatch,
-        VulkanDescriptorPushLease,
+        VulkanDescriptorBufferLease,
         VulkanCallbackBatch,
         VulkanDeferredReleaseBatch,
         VulkanCompletionMarker,
@@ -730,7 +730,7 @@ private:
         Array<VkSemaphoreSubmitInfo>             native_waits;
         Array<VkSemaphoreSubmitInfo>             native_signals;
         VulkanCommandContextBatch                command_contexts;
-        std::optional<VulkanDescriptorPushLease> descriptor_lease;
+        std::optional<VulkanDescriptorBufferLease> descriptor_lease;
         Array<RHIResource*>                     deferred_releases;
         VulkanBatchCompletionTicket             batch_completion{};
         VulkanPresentationSourceStateProgram    presentation_source_program;
