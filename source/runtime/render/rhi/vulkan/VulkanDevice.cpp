@@ -701,7 +701,7 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
 }
 
 void VulkanDevice::CreateDescriptorHeap() {
-    new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
+    m_global_descriptor_heap.emplace(*this);
     //create empty descriptor set layout
     VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
@@ -769,7 +769,7 @@ void VulkanDevice::DestroyImmutableSamplers() {
 }
 
 void VulkanDevice::DestroyDescriptorHeap() {
-    m_global_descriptor_heap.~VulkanDescriptorHeap();
+    m_global_descriptor_heap.reset();
     vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
 }
 

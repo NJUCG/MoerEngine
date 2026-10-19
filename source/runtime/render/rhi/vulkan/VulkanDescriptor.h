@@ -89,9 +89,13 @@ struct VulkanDescriptorHeap {
     VulkanBuffer* image_desc_buffer  = nullptr;
 
 public:
-    VulkanDescriptorHeap() = default;
-    VulkanDescriptorHeap(VulkanDevice& _device);
+    explicit VulkanDescriptorHeap(VulkanDevice& _device);
     ~VulkanDescriptorHeap();
+
+    VulkanDescriptorHeap(const VulkanDescriptorHeap&)            = delete;
+    VulkanDescriptorHeap& operator=(const VulkanDescriptorHeap&) = delete;
+    VulkanDescriptorHeap(VulkanDescriptorHeap&&)                 = delete;
+    VulkanDescriptorHeap& operator=(VulkanDescriptorHeap&&)      = delete;
 
     Array<byte> buffer_desc_data;
     Array<byte> image_desc_data;

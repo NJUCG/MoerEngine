@@ -14,6 +14,7 @@
 #include "rhi/vulkan/VulkanCommandContext.h"
 #include "rhi/vulkan/VulkanCommandQueries.h"
 #include "rhi/vulkan/VulkanDebugCallback.h"
+#include "rhi/vulkan/VulkanDescriptor.h"
 #include "rhi/vulkan/VulkanDeviceFeature.h"
 #include "rhi/vulkan/VulkanFault.h"
 #include "rhi/vulkan/VulkanMemoryAllocator.h"
@@ -45,6 +46,10 @@ static_assert(!std::is_move_constructible_v<Moer::Render::VulkanTemporaryBufferA
 static_assert(!std::is_copy_constructible_v<Moer::Render::VkNativeQueryPool>);
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandQueries>);
 static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandQueries>);
+
+static_assert(!std::is_default_constructible_v<Moer::Render::VulkanDescriptorHeap>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanDescriptorHeap>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanDescriptorHeap>);
 
 int main() {
     return VK_SUCCESS == 0 ? 0 : 1;

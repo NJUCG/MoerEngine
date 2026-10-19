@@ -235,7 +235,7 @@ public:
         return *m_internal_shaders;
     }
     VulkanDescriptorHeap& GetGlobalDescriptorHeap() {
-        return m_global_descriptor_heap;
+        return m_global_descriptor_heap.value();
     }
     VmaAllocator GetVmaAllocator() const {
         return m_allocator;
@@ -407,8 +407,9 @@ private:
     bool                     validation_layer_enabled   = false;
 
     // Shared resources and command queues.
-    VmaAllocator              m_allocator = VK_NULL_HANDLE;
-    VulkanDescriptorHeap      m_global_descriptor_heap{};
+    VmaAllocator m_allocator = VK_NULL_HANDLE;
+    // Construct after the device and samplers; reset before destroying VMA.
+    std::optional<VulkanDescriptorHeap> m_global_descriptor_heap;
     UniquePtr<VkCommandQueue> m_graphics_command_queue{};
     UniquePtr<VkCommandQueue> m_compute_command_queue{};
     UniquePtr<VkCopyQueue>    m_copy_queue{};
