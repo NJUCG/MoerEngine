@@ -558,18 +558,18 @@ protected:
 
 #pragma region viewable resources definitions
 
-struct VkBufferDescKey {
+struct VulkanBufferDescriptorKey {
     uint64   byte_offset{0};
     uint64   byte_size{0};
     VkFormat format{VK_FORMAT_UNDEFINED};
 
-    bool operator==(const VkBufferDescKey& _other) const {
+    bool operator==(const VulkanBufferDescriptorKey& _other) const {
         return byte_offset == _other.byte_offset && byte_size == _other.byte_size &&
                format == _other.format;
     }
 
     struct Hasher {
-        size_t operator()(const VkBufferDescKey& _key) const {
+        size_t operator()(const VulkanBufferDescriptorKey& _key) const {
             size_t hash = std::hash<uint64>()(_key.byte_offset);
             hash ^= std::hash<uint64>()(_key.byte_size) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
             hash ^= std::hash<uint32>()(uint32(_key.format)) + 0x9e3779b9 + (hash << 6) +
@@ -579,8 +579,8 @@ struct VkBufferDescKey {
     };
 };
 
-using VulkanBufferDescriptorIndices =
-    UnorderedMap<VkBufferDescKey, uint, VkBufferDescKey::Hasher>;
+using VulkanBufferDescriptorCacheSlots =
+    UnorderedMap<VulkanBufferDescriptorKey, uint, VulkanBufferDescriptorKey::Hasher>;
 
 // Native allocation policy used during creation; resource lifetime stays with its owner.
 struct VulkanBufferAllocationInfo {
@@ -630,13 +630,13 @@ public:
         return m_alloc.buffer;
     }
 
-    VulkanBufferDescriptorIndices m_descriptor_indices[4];
+    VulkanBufferDescriptorCacheSlots m_descriptor_cache_slots[4];
 
     VkDescriptorType GetDescriptorType() const {
         return m_descriptor_type;
     }
 
-    VulkanBufferDescriptorIndices& GetDescriptorIndices(VkDescriptorType _type);
+    VulkanBufferDescriptorCacheSlots& GetDescriptorCacheSlots(VkDescriptorType _type);
 
 private:
     friend class TempBufferAllocator;
@@ -645,7 +645,7 @@ private:
     VkDescriptorType m_descriptor_type;
 };
 
-struct VkTextureDescKey {
+struct VulkanTextureDescriptorKey {
     VkDescriptorType descriptor_type;
     VkImageLayout    layout;
     uint8            mip_level;
@@ -653,14 +653,14 @@ struct VkTextureDescKey {
     uint8            array_layer;
     uint8            array_count;
 
-    bool operator==(const VkTextureDescKey& _other) const {
+    bool operator==(const VulkanTextureDescriptorKey& _other) const {
         return descriptor_type == _other.descriptor_type && layout == _other.layout &&
                mip_level == _other.mip_level && mip_cnt == _other.mip_cnt &&
                array_layer == _other.array_layer && array_count == _other.array_count;
     }
 
     struct Hasher {
-        size_t operator()(const VkTextureDescKey& _key) const {
+        size_t operator()(const VulkanTextureDescriptorKey& _key) const {
             size_t hash = std::hash<uint32>()(uint32(_key.descriptor_type));
             hash ^= std::hash<uint32>()(uint32(_key.layout)) + 0x9e3779b9 + (hash << 6) +
                     (hash >> 2);
@@ -755,34 +755,8 @@ public:
         }
     }
 
-    int32 GetDescriptorIndex(
-        uint             _mip_level,
-        uint             _mip_count,
-        VkImageLayout    _layout,
-        VkDescriptorType _descriptor_type = VK_DESCRIPTOR_TYPE_MAX_ENUM,
-        uint             _array_layer     = 0,
-        uint             _array_count     = 1
-    ) {
-        if (_descriptor_type == VK_DESCRIPTOR_TYPE_MAX_ENUM) {
-            _descriptor_type = _layout == VK_IMAGE_LAYOUT_GENERAL ?
-                                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE :
-                                   VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        }
-        VkTextureDescKey key = {
-            _descriptor_type,
-            _layout,
-            uint8(_mip_level),
-            uint8(_mip_count),
-            uint8(_array_layer),
-            uint8(_array_count)
-        };
-        auto             it  = m_descriptor_indices.find(key);
-        if (it != m_descriptor_indices.end()) {
-            return it->second;
-        }
-        return -1;
-    }
-    UnorderedMap<VkTextureDescKey, uint64, VkTextureDescKey::Hasher> m_descriptor_indices;
+    UnorderedMap<VulkanTextureDescriptorKey, uint64, VulkanTextureDescriptorKey::Hasher>
+        m_descriptor_cache_slots;
 
 private:
     void Destroy() override;
@@ -973,9 +947,9 @@ struct VulkanAccelerationStructure : public RaytracingTlas {
         return underlying_buffer;
     }
 
-    VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
-    VulkanBufferRef            underlying_buffer = nullptr;
-    int                        m_descriptor_idx  = -1;
+    VkAccelerationStructureKHR handle                  = VK_NULL_HANDLE;
+    VulkanBufferRef            underlying_buffer       = nullptr;
+    int                        m_descriptor_cache_slot = -1;
     VulkanDevice&              device;
     VulkanRaytracingScene&     src_scene;
 };

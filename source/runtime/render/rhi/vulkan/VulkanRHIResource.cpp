@@ -1247,11 +1247,9 @@ void VulkanPipelineState::InitPipelineLayout(
         if (m_alloc.buffer != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) {
             vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc);
         }
-        // if (m_descriptor_idx >= 0) { m_device->GetGlobalDescriptorHeap().FreeBufferDescriptorSlot(m_descriptor_idx); }
-        // for (const auto& idx : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeBufferDescriptorSlot(idx.second); }
 
         for (uint i = 0; i < 4; ++i) {
-            for (const auto& idx : m_descriptor_indices[i]) { m_device->GetGlobalDescriptorHeap().FreeBufferDescriptorSlot(idx.second); }
+            for (const auto& idx : m_descriptor_cache_slots[i]) { m_device->GetGlobalDescriptorHeap().FreeBufferDescriptorSlot(idx.second); }
         }
     }
 
@@ -1348,16 +1346,16 @@ void VulkanPipelineState::InitPipelineLayout(
         SetName(_name);      
     }
 
-    VulkanBufferDescriptorIndices& VulkanBuffer::GetDescriptorIndices(VkDescriptorType _type) {
+    VulkanBufferDescriptorCacheSlots& VulkanBuffer::GetDescriptorCacheSlots(VkDescriptorType _type) {
         switch (_type) {
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: return m_descriptor_indices[0];
-            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: return m_descriptor_indices[1];
-            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: return m_descriptor_indices[2];
-            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: return m_descriptor_indices[3];
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: return m_descriptor_cache_slots[0];
+            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: return m_descriptor_cache_slots[1];
+            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: return m_descriptor_cache_slots[2];
+            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: return m_descriptor_cache_slots[3];
             default: assert(false); 
         
         }
-        return m_descriptor_indices[0]; 
+        return m_descriptor_cache_slots[0];
     }
 
     VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size) :
@@ -3187,8 +3185,8 @@ void VulkanPipelineState::InitPipelineLayout(
         if (underlying_buffer) {
             underlying_buffer = nullptr;
         }
-        if(m_descriptor_idx >= 0){
-            device.GetGlobalDescriptorHeap().FreeAccelerationStructureDescriptorSlot(m_descriptor_idx);
+        if(m_descriptor_cache_slot >= 0){
+            device.GetGlobalDescriptorHeap().FreeAccelerationStructureDescriptorSlot(m_descriptor_cache_slot);
         }
     }
 
@@ -3845,7 +3843,7 @@ void VulkanPipelineState::InitPipelineLayout(
         }
         if (m_alloc.image != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) { vmaDestroyImage(m_device->GetVmaAllocator(), m_alloc.image, m_alloc.alloc); }
         //free descriptors
-        for (auto& [key, desc] : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeImageDescriptorSlot(desc); }
+        for (auto& [key, desc] : m_descriptor_cache_slots) { m_device->GetGlobalDescriptorHeap().FreeImageDescriptorSlot(desc); }
     }
 
 #pragma endregion

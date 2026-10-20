@@ -3378,12 +3378,7 @@ public:
             // never published. Let the queue reject the complete transaction.
             throw StaleBindlessUpdateBatch{};
         }
-        // auto                 texture_slots  = _cmd.StealTextureUpdates();
-        // auto                 buffer_slots   = _cmd.StealBufferUpdates();
 
-        // auto free_textures = _cmd.StealFreeTextures();
-        // auto free_buffers  = _cmd.StealFreeBuffers();
-        // auto free_slots    = _cmd.StealFreeSlots();
 
         auto          array_data          = _cmd.StealArrayData();
         auto          array_indices_dat   = _cmd.StealArrayIndicesData();
@@ -3392,93 +3387,11 @@ public:
         Array<byte>&& buffer_data         = _cmd.StealBufferData();
         auto          buffer_indices_dat  = _cmd.StealBufferIndicesData();
 
-        //update bindless array
-        // {
-        //     bindless_array->Lock();
-        //     for (const VulkanBindlessArray::TextureUpdateInfo& texture : texture_slots) {
-        //         uint indirect_handle                       = (m_device->GetSamplerIndex(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
-        //         bindless_array->handles[texture.array_idx] = {texture.slot, 1, VulkanBindlessArray::Texture};
-        //     }
-        //     for (const auto& buffer : buffer_slots) {
-        //         uint indirect_handle                      = buffer.slot;
-        //         bindless_array->handles[buffer.array_idx] = {buffer.slot, 0, VulkanBindlessArray::Buffer};
-        //     }
-
-        //     bindless_array->OnFree(free_slots, free_textures, free_buffers);
-        //     bindless_array->Unlock();
-        // }
-        // uint64 texture_handle_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
-        // uint64 buffer_handle_stride  = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
-        // uint64 array_handle_stride   = sizeof(uint);
-
-        // // //cpu side data
-        // Array<std::pair<uint, uint>> array_indices_dat(buffer_slots.size() + texture_slots.size());
-        // Array<ubyte>                 array_dat((texture_slots.size() + buffer_slots.size()) * array_handle_stride);
-
-        // Array<std::pair<uint, uint>> texture_indices_dat(texture_slots.size());
-        // Array<ubyte>                 texture_dat(texture_slots.size() * texture_handle_stride);
-
-        // Array<std::pair<uint, uint>> buffer_indices_dat(buffer_slots.size());
-        // Array<ubyte>                 buffer_dat(buffer_slots.size() * buffer_handle_stride);
-
-        // VulkanDescriptorHeap& heap = m_device->GetGlobalDescriptorHeap();
-
-        //shuffle copy shader
         auto& shuffle_sd = m_device->GetInternalShaders().sd_component_shuffle;
-
-        // byte* mapped_image_descs  = nullptr;
-        // byte* mapped_buffer_descs = nullptr;
-
-        uint array_idx = 0;
 
         bool b_array   = !texture_data.empty() || !buffer_data.empty();
         bool b_texture = !texture_data.empty();
         bool b_buffer  = !buffer_data.empty();
-
-        // if (b_texture) {
-        //     //copy texture handles
-        //     for (size_t i = 0; i < texture_slots.size(); ++i) {
-        //         const auto&    texture    = texture_slots[i];
-        //         VulkanTexture* vk_texture = ResourceCast(texture_slots[i].texture);
-        //         TextureView    view(vk_texture, texture.format, texture.mip_level, texture.num_mips);
-        //         uint           src_idx;
-        //         if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
-        //             // view.aspect_flags = ETextureAspectFlags::COLOR;
-        //             src_idx = heap.GetOrCreateImageDescriptorOffset(&view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-
-        //         } else {
-        //             src_idx = heap.GetOrCreateImageDescriptorOffset(&view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        //         }
-        //         memcpy(texture_dat.data() + i * texture_handle_stride, &heap.sampler_and_image_descriptor_cache[src_idx], texture_handle_stride);
-        //         texture_indices_dat[i]       = {i, texture_slots[i].slot};
-        //         array_indices_dat[array_idx] = {array_idx, texture_slots[i].array_idx};
-
-        //         uint indirect_handle = (m_device->GetSamplerIndex(texture.sampler) & 0xff) | (texture.slot & 0xffffff) << 8;
-        //         memcpy(array_dat.data() + array_idx * array_handle_stride, &indirect_handle, array_handle_stride);
-        //         array_idx++;
-        //     }
-        // }
-
-        // if (b_buffer) {
-        //     //copy buffer handles
-
-        //     //buffer desc buffer has array_buffer for offset 0 and allocate from slot 1(0 for invalid handle)
-        //     //array buffer is in same set with other bindless buffer descs, so we need to offset the slot by array_buffer slot(size of storage buffer handle)
-        //     //in gpu:
-        //     // bindless_array_buffer: [binding 0, offset 0]
-        //     // bindless_buffer_descs: [binding 1, offset $sizeofhandle)]
-        //     uint buffer_dst_slot_offset = bindless_array->buffers_offset_in_set / buffer_handle_stride;
-        //     for (size_t i = 0; i < buffer_slots.size(); ++i) {
-        //         VulkanBuffer* vk_buffer = ResourceCast(buffer_slots[i].buffer);
-        //         uint          src_idx   = heap.GetOrCreateBufferDescriptorOffset(vk_buffer->GetView(), vk_buffer->GetDescriptorType());
-        //         memcpy(buffer_dat.data() + i * buffer_handle_stride, &heap.buffer_descriptor_cache[src_idx], buffer_handle_stride);
-        //         buffer_indices_dat[i] = {i, buffer_slots[i].slot + buffer_dst_slot_offset};
-
-        //         array_indices_dat[array_idx] = {array_idx, buffer_slots[i].array_idx};
-        //         memcpy(array_dat.data() + array_idx * sizeof(uint), &buffer_slots[i].slot, sizeof(uint));
-        //         array_idx++;
-        //     }
-        // }
 
         //buffer for all data
         BufferView staging_buffer{};

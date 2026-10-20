@@ -129,7 +129,7 @@ private:
     // a particular descriptor type. Samplers precede images in their cache.
     uint                    buffer_cache_slot_stride;
     uint                    image_cache_slot_stride;
-    uint64                  image_cache_byte_offset;
+    uint64                  image_cache_base_byte_offset;
     Array<byte>             buffer_descriptor_cache;
     Array<byte>             sampler_and_image_descriptor_cache;
     Array<byte>             acceleration_structure_descriptor_cache;
