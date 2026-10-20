@@ -18,8 +18,8 @@ struct FileHandle {
 };
 struct FileDesc {
     FileHandle handle;
-    uint       offset;
-    uint       size;
+    uint64     offset;
+    uint64     size;
 };
 
 struct RawDataDesc {
@@ -28,8 +28,8 @@ struct RawDataDesc {
 
 struct BufferViewDesc {
     uint64_t handle;
-    uint32_t offset;
-    uint32_t size;
+    uint64_t offset;
+    uint64_t size;
 };
 
 struct TextureViewDesc {
@@ -50,8 +50,10 @@ using IODst = std::variant<RawDataDesc, BufferViewDesc, TextureViewDesc>;
 struct IOCmd {
     IOSrc    src;
     IODst    dst;
-    uint64   file_offset;
-    uint32_t flags;
+    // Additional source offset, relative to FileDesc::offset or RawDataDesc::data.
+    // Destination offsets are carried exclusively by dst.
+    uint64   file_offset = 0;
+    uint32_t flags = 0;
 
     uint64 SizeByte() const {
         return std::visit(

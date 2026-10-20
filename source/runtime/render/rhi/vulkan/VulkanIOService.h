@@ -1,132 +1,28 @@
+﻿#pragma once
+
 #include "RenderAPI.h"
-#include "VulkanCommandContext.h"
-#include "VulkanDevice.h"
-#include "VulkanQueue.h"
-#include "misc/STL.h"
-#include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
-#include <atomic>
-#include <thread>
+#include <memory>
+#include <mutex>
+
 namespace Moer::Render {
 
-struct VulkanCommitSession {
-    friend class VulkanStorage;
+class VulkanDevice;
+class VkCopyQueue;
 
-public:
-    VulkanCommitSession(VulkanStorage& _io_interface) : io_interface(_io_interface) {}
-    VulkanStorage& io_interface;
-
-    void Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len);
-    void Enqueue(FileHandle _handle, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
-    void Enqueue(
-        FileHandle   _handle,
-        size_t       _file_offset,
-        void*        _tex_ptr,
-        EPixelFormat _format,
-        uint3        _offset,
-        uint3        _size,
-        uint         _mip_offset
-    );
-    void Enqueue(void const* _mem, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
-    void Enqueue(
-        void const*  _mem,
-        size_t       _file_offset,
-        void*        _tex_ptr,
-        EPixelFormat _format,
-        uint3        _offset,
-        uint3        _size,
-        uint         _mip_offset
-    );
-    void EnqueueSignal(FenceRef _fence, uint64_t _timeline);
-    void Commit();
-    bool IsComplete() const;
-
-private:
-    Array<IOCmd>       file_cmds;
-    Array<IOCmd>       mem_cmds;
-    Array<IOSignalEvt> signal_events;
-    std::atomic_uint   pending_tasks = 0;
-    bool               signaled      = false;
-    uint               task_count    = 0;
-
-    void CommitWithoutSignal();
-    void CommitSignaled();
-    void FlushAllCommit();
-    void CommitIOTask(class VulkanIOTask*);
-    bool HasUncommittedWork() const {
-        return !file_cmds.empty() || !mem_cmds.empty() ||
-               !signal_events.empty();
-    }
-};
-
-struct VkExecCallback {
-    Array<std::function<void()>> callback;
-    Array<FileHandle>            files;
-    uint64                       timeline;
-
-    void Clear() {
-        for (auto& file : files) {
-            Memory::Free(file.file);
-        }
-    }
-};
-class VulkanIOInterface : public IOInterface {
-public:
-    friend VulkanCommitSession;
-    VulkanIOInterface(VulkanDevice& _device, VkCopyQueue& _queue);
-    ~VulkanIOInterface();
-    void      Execute(IOCommandList&& _cmd_list, uint64 _timeline);
-    uint64    Execute(IOCommandList&& _cmd_list) override;
-    WaitEvent GetWaitEvent(uint64 _time_stamp) override;
-    void      Sync(uint64_t _time_stamp) override;
-
-    VulkanCommitSession* NewSession();
-
-    VkCopyQueue& GetQueue() {
-        return m_queue;
-    }
-
-private:
-    UniquePtr<VulkanCommandContext> AcquireCommandContext() {
-        if (command_contexts.size() >= max_command_contexts) {
-        }
-        auto command_context = MakeUnique<VulkanCommandContext>(&m_device, EQueueType::Copy);
-        return std::move(command_context);
-    }
-    void Complete(uint64 _timeline) {
-        while (executed_frame < _timeline) {
-            std::this_thread::yield();
-        }
-    }
-
-    void Tick();
-
-private:
-    VulkanDevice&                           m_device;
-    VkCopyQueue&                            m_queue;
-    DEQueue<UniquePtr<VulkanCommandContext>> command_contexts;
-    static constexpr uint32_t                max_command_contexts = 2;
-    std::atomic_uint64_t                     executed_frame = 0;
-    std::atomic_uint64_t                     last_frame     = 0;
-
-    class VulkanStorage*        storage;
-    Queue<VulkanCommitSession*> commit_sessions;
-
-    Queue<std::pair<IOCommandList&&, uint64>> io_cmdlists;
-    std::mutex                                mut;
-
-    Queue<VkExecCallback> callbacks;
-    FenceRef              event;
-    uint64                timeline = 0;
-};
-
+// Enqueue snapshots memory sources and file paths and retains GPU destinations.
+// CPU destinations remain borrowed until completion. Enqueue/Commit form a
+// single-producer batch; committed batches drain before destruction.
+// Destroy before the device/executor. Completion callbacks must not destroy
+// this service or wait for work whose completion depends on that callback.
 class RENDER_API VulkanStorage {
 public:
-    friend VulkanCommitSession;
-    friend class VulkanIOTaskThread;
     VulkanStorage(VulkanDevice& _device, VkCopyQueue& _copy_queue);
     ~VulkanStorage();
+    VulkanStorage(const VulkanStorage&)            = delete;
+    VulkanStorage& operator=(const VulkanStorage&) = delete;
+
     void Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len);
     void Enqueue(FileHandle _handle, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
     void Enqueue(
@@ -138,9 +34,9 @@ public:
         uint3        _size,
         uint         _mip_offset
     );
-    void Enqueue(void const* _mem, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
+    void Enqueue(const void* _mem, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
     void Enqueue(
-        void const*  _mem,
+        const void*  _mem,
         size_t       _file_offset,
         void*        _tex_ptr,
         EPixelFormat _format,
@@ -148,18 +44,38 @@ public:
         uint3        _size,
         uint         _mip_offset
     );
-    void EnqueueSignal(FenceRef _fence, uint64_t _timeline);
+    void EnqueueSignal(FenceRef _fence, uint64 _timeline);
+    // Queues CPU preparation. Before publishing a GPU consumer of a signal,
+    // use Fence::WaitSubmitted to establish producer submission (or failure).
     void Commit();
 
 private:
-    VulkanCommitSession* GetCurrentSession();
+    friend class VulkanIOInterface;
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
 
-    VkCopyQueue& GetQueue();
-    void         CommitIOTask(VulkanIOTask* _tsk);
+class VulkanIOInterface final : public IOInterface {
+public:
+    VulkanIOInterface(VulkanDevice& _device, VkCopyQueue& _queue);
+    ~VulkanIOInterface();
+    // Consumes the list and snapshots sources before returning. Callbacks are
+    // terminal cleanup (including failure), not success notifications. A CPU
+    // read failure rejects the batch's signal; earlier CPU writes may remain.
+    uint64    Execute(IOCommandList&& _commands) override;
+    // May block for CPU preparation/submission so a consumer cannot overtake
+    // the IO producer in the unified submission stream.
+    // The returned event borrows this interface's fence; keep the interface
+    // alive until consumers have finished waiting on it.
+    WaitEvent GetWaitEvent(uint64 _time_stamp) override;
+    // Waits for the signal or rejection, not for user callbacks to return.
+    void Sync(uint64 _time_stamp) override;
 
 private:
-    VkCopyQueue&               copy_queue;
-    VulkanCommitSession*       current_session{nullptr};
-    struct VulkanIOTaskThread* task_thread;
+    std::mutex    mutex;
+    FenceRef      event;
+    uint64        timeline = 0;
+    VulkanStorage storage;
 };
+
 } // namespace Moer::Render

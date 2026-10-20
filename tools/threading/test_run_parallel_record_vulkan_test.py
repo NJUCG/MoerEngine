@@ -410,7 +410,9 @@ def pass_line(
         "signal=rejected replay=0\n"
         "[TESTCASE][PASS] name=VulkanStorageUnifiedCopySubmission "
         "commits=2 signals=2 native_submit=2 native_owner=Submission "
-        "session_recycle=verified readback=verified\n"
+        "batch_reuse=verified readback=verified\n"
+        "[TESTCASE][PASS] name=VulkanIOOwnedRequests offsets=verified texture_mip_layer=verified binary=verified callbacks=5 errors=2 large_batch=verified\n"
+        "[TESTCASE][PASS] name=VulkanIOReadUploadOverlap next_submit_before_previous_retirement=verified\n"
         "[TESTCASE][PASS] name=ShutdownDependencyCancellation "
         "queues=Copy,Graphics copy_wait=entered dependency=unpublished "
         "native_submit=0 sync_wait=registered concurrent_sync=drained\n"
@@ -2523,7 +2525,7 @@ class VulkanRunnerTests(unittest.TestCase):
         ):
             runner.validate_log("serial", text)
 
-    def test_copy_contracts_require_io_session_recycle_and_native_submit(
+    def test_copy_contracts_require_io_batch_reuse_and_native_submit(
         self,
     ) -> None:
         text = pass_line("serial", "false").replace(

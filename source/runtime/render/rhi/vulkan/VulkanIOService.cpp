@@ -1,897 +1,458 @@
-#include "VulkanIOService.h"
-#include "PixelFormat.h"
-#include "VulkanCommand.h"
+﻿#include "VulkanIOService.h"
 #include "VulkanDevice.h"
-#include "VulkanQueue.h"
-#include "misc/LockFree.h"
-#include "misc/STL.h"
-#include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
-#include "rhi/RHIIO.h"
-#include <atomic>
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <semaphore>
+#include <condition_variable>
+#include <cstdio>
+#include <deque>
+#include <limits>
+#include <stdexcept>
 #include <thread>
-#include <type_traits>
+
 namespace Moer::Render {
+namespace {
 
-struct VulkanIOTask {
-    VulkanCommitSession*  session;
-    std::function<void()> callback;
-    Array<IOCmd>          file_cmds;
-    Array<IOCmd>          mem_cmds;
-    Array<IOSignalEvt>    signal_evts;
+struct FileSource {
+    std::string path;
+    uint64      offset;
+};
+struct BufferTarget {
+    BufferRef buffer;
+    uint64    offset;
+};
+struct TextureTarget {
+    TextureRef  texture;
+    TextureView view;
+};
+struct IORequest {
+    std::variant<FileSource, Array<byte>>                      source;
+    std::variant<std::span<byte>, BufferTarget, TextureTarget> target;
+    uint64                                                     size;
+};
+struct IOSignal {
+    FenceRef fence;
+    uint64   value;
 };
 
-static void CompleteVulkanIOTaskNoexcept(VulkanIOTask* _task) noexcept {
-    if (!_task || !_task->callback) {
-        return;
-    }
+void LogIOError(const char* _message) noexcept {
     try {
-        _task->callback();
+        LOG_ERROR("[VulkanIO] {}", _message);
     } catch (...) {
-        try {
-            LOG_ERROR("[VulkanIO] task completion callback threw");
-        } catch (...) {
-        }
     }
 }
 
-static void RejectVulkanIOTaskSignalsNoexcept(VulkanIOTask* _task) noexcept {
-    if (!_task) {
-        return;
-    }
-    for (const IOSignalEvt& signal : _task->signal_evts) {
-        if (signal.handle == 0) {
-            continue;
+struct FileListCleanup {
+    Array<FileHandle> files;
+    ~FileListCleanup() {
+        for (const auto& file : files) {
+            Memory::Free(file.file);
         }
-        try {
-            reinterpret_cast<Fence*>(signal.handle)->Reject(signal.timeline);
-        } catch (...) {
+    }
+};
+
+struct IOBatch {
+    Array<IORequest>  requests;
+    Array<IOSignal>   signals;
+    Array<IOCallBack> callbacks;
+    FileListCleanup   files;
+    uint64            bytes     = 0;
+    std::atomic_bool  completed = false;
+
+    // Also used for failures before the generic executor accepts the batch.
+    // Once accepted, its ordinary Completion path owns this operation.
+    bool Complete(bool _reject = false) noexcept {
+        if (completed.exchange(true)) {
+            return false;
+        }
+        if (_reject) {
+            for (const auto& signal : signals) {
+                signal.fence->Reject(signal.value);
+            }
+        }
+        for (auto& callback : callbacks) {
             try {
-                LOG_ERROR("[VulkanIO] failed to reject unpublished signal timeline={}", signal.timeline);
+                callback();
             } catch (...) {
+                LogIOError("completion callback threw");
             }
         }
+        callbacks.clear();
+        requests.clear();
+        signals.clear();
+        return true;
     }
-}
-
-struct VulkanIOTaskCompletionState {
-    explicit VulkanIOTaskCompletionState(std::shared_ptr<VulkanIOTask> _task) : task(std::move(_task)) {}
-
-    void Complete() noexcept {
-        if (completed.exchange(true, std::memory_order_acq_rel)) {
-            return;
-        }
-        CompleteVulkanIOTaskNoexcept(task.get());
-        task.reset();
-        done.release();
-    }
-
-    void Wait() noexcept {
-        done.acquire();
-    }
-
-    std::shared_ptr<VulkanIOTask> task{};
-    std::binary_semaphore         done{0};
-    std::atomic_bool              completed{false};
 };
 
-void VulkanCommitSession::Commit() {
-    if (signal_events.empty()) {
-        CommitWithoutSignal();
-    } else {
-        CommitSignaled();
+uint64 CheckedAdd(uint64 _a, uint64 _b) {
+    if (_b > std::numeric_limits<uint64>::max() - _a) {
+        throw std::overflow_error("IO byte range overflows");
+    }
+    return _a + _b;
+}
+
+IORequest OwnRequest(const IOCmd& _command) {
+    if (_command.flags != 0) {
+        throw std::invalid_argument("IO flags are not supported");
+    }
+    IORequest request;
+    request.size   = _command.SizeByte();
+    request.target = std::visit(
+        Overload{
+            [](const RawDataDesc& _dst) -> decltype(request.target) {
+                if (!_dst.data.data() && !_dst.data.empty()) {
+                    throw std::invalid_argument("null IO CPU destination");
+                }
+                return std::span<byte>(reinterpret_cast<byte*>(_dst.data.data()), _dst.data.size());
+            },
+            [&request](const BufferViewDesc& _dst) -> decltype(request.target) {
+                auto* buffer = reinterpret_cast<Buffer*>(_dst.handle);
+                if (!buffer || _dst.offset > buffer->GetByteSize() ||
+                    request.size > buffer->GetByteSize() - _dst.offset || _dst.offset % 4 != 0 ||
+                    request.size % 4 != 0) {
+                    throw std::invalid_argument("invalid IO buffer copy range");
+                }
+                return BufferTarget{BufferRef(buffer), _dst.offset};
+            },
+            [](const TextureViewDesc& _dst) -> decltype(request.target) {
+                auto* texture = reinterpret_cast<Texture*>(_dst.handle);
+                if (!texture || texture->GetFormat() != _dst.pixel_fmt || _dst.mip_cnt > 1 ||
+                    _dst.array_cnt > 1 || _dst.mip_offset >= texture->GetNumMips() || _dst.mip_offset >= 32 ||
+                    _dst.array_offset >= texture->GetNumArray() || texture->GetNumSamples() != 1) {
+                    throw std::invalid_argument("IO texture copy requires one matching subresource");
+                }
+                const auto  format = GetPixelFormatInfo(_dst.pixel_fmt);
+                const auto  base   = texture->GetExtent();
+                const uint3 extent(
+                    std::max(uint(base.x) >> _dst.mip_offset, 1u),
+                    std::max(uint(base.y) >> _dst.mip_offset, 1u),
+                    std::max(uint(base.z) >> _dst.mip_offset, 1u)
+                );
+                const auto valid = [](uint _offset, uint _size, uint _extent, uint _block) {
+                    return _block && _size && _offset < _extent && _size <= _extent - _offset &&
+                           _offset % _block == 0 && (_size % _block == 0 || _offset + _size == _extent);
+                };
+                if (!valid(_dst.offset.x, _dst.size.x, extent.x, format.block_width) ||
+                    !valid(_dst.offset.y, _dst.size.y, extent.y, format.block_height) ||
+                    !valid(_dst.offset.z, _dst.size.z, extent.z, format.block_depth)) {
+                    throw std::invalid_argument("invalid IO texture copy region");
+                }
+                TextureView view(texture, _dst.pixel_fmt, _dst.mip_offset, 1);
+                view.array_layer = _dst.array_offset;
+                view.num_array   = 1;
+                view.offset      = _dst.offset;
+                view.extent      = _dst.size;
+                return TextureTarget{TextureRef(texture), view};
+            }
+        },
+        _command.dst
+    );
+    request.source = std::visit(
+        Overload{
+            [&](const FileDesc& _src) -> decltype(request.source) {
+                if (!_src.handle.file || _command.file_offset > _src.size ||
+                    request.size > _src.size - _command.file_offset) {
+                    throw std::invalid_argument("invalid IO file source range");
+                }
+                const uint64 offset = CheckedAdd(_src.offset, _command.file_offset);
+                if (CheckedAdd(offset, request.size) > uint64(std::numeric_limits<int64_t>::max())) {
+                    throw std::invalid_argument("IO file range exceeds signed 64-bit offsets");
+                }
+                return FileSource{static_cast<const char*>(_src.handle.file), offset};
+            },
+            [&](const RawDataDesc& _src) -> decltype(request.source) {
+                if ((!_src.data.data() && !_src.data.empty()) || _command.file_offset > _src.data.size() ||
+                    request.size > _src.data.size() - _command.file_offset) {
+                    throw std::invalid_argument("invalid IO memory source range");
+                }
+                Array<byte> data(request.size);
+                if (!data.empty()) {
+                    std::memcpy(data.data(), _src.data.data() + _command.file_offset, data.size());
+                }
+                return data;
+            }
+        },
+        _command.src
+    );
+    return request;
+}
+
+void AddRequest(IOBatch& _batch, const IOCmd& _command) {
+    IORequest    request = OwnRequest(_command);
+    const uint64 bytes   = CheckedAdd(_batch.bytes, request.size);
+    _batch.requests.push_back(std::move(request));
+    _batch.bytes = bytes;
+}
+
+void ReadFile(const FileSource& _source, std::span<byte> _destination) {
+    std::unique_ptr<FILE, decltype(&std::fclose)> file(std::fopen(_source.path.c_str(), "rb"), &std::fclose);
+    if (!file) {
+        throw std::runtime_error("cannot open IO source: " + _source.path);
+    }
+#ifdef _WIN32
+    const int seek_result = _fseeki64(file.get(), static_cast<int64_t>(_source.offset), SEEK_SET);
+#else
+    const int seek_result = fseeko(file.get(), static_cast<off_t>(_source.offset), SEEK_SET);
+#endif
+    if (seek_result != 0 ||
+        std::fread(_destination.data(), 1, _destination.size(), file.get()) != _destination.size()) {
+        throw std::runtime_error("seek or short read in IO source: " + _source.path);
     }
 }
 
-bool VulkanCommitSession::IsComplete() const {
-    // Check if all tasks are completed
-    return task_count != 0 &&
-           pending_tasks.load(std::memory_order_acquire) == task_count;
+RawDataDesc MemorySource(const void* _memory, size_t _offset, size_t _size) {
+    if (!_memory && _size != 0) {
+        throw std::invalid_argument("null IO memory source");
+    }
+    auto* data = const_cast<uint8_t*>(static_cast<const uint8_t*>(_memory));
+    return {std::span<uint8_t>(data ? data + _offset : nullptr, _size)};
 }
 
-void VulkanCommitSession::Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len) {
-    // Enqueue file to memory copy
-    file_cmds.push_back(
-        {FileDesc{_handle, uint(_file_offset), uint(_len)},
-         RawDataDesc{std::span<ubyte>((ubyte*)_ptr, _len)},
-         0}
-    );
+TextureViewDesc
+TextureDestination(void* _texture, EPixelFormat _format, uint3 _offset, uint3 _size, uint _mip) {
+    if (_mip > std::numeric_limits<uint8>::max()) {
+        throw std::invalid_argument("invalid IO mip level");
+    }
+    return {_offset, _size, uint64(_texture), _format, _mip, 1, 0, 1};
 }
 
-void VulkanCommitSession::Enqueue(
-    FileHandle _handle,
-    size_t     _file_offset,
-    void*      _buffer_ptr,
-    size_t     _offset,
-    size_t     _len
-) {
-    // Enqueue file to buffer copy
-    file_cmds.push_back(
-        {FileDesc{_handle, uint(_file_offset), uint(_len)},
-         BufferViewDesc{uint64(_buffer_ptr), uint(_offset), uint(_len)},
-         0}
-    );
-}
+} // namespace
 
-void VulkanCommitSession::Enqueue(
-    FileHandle   _handle,
-    size_t       _file_offset,
-    void*        _tex_ptr,
-    EPixelFormat _format,
-    uint3        _offset,
-    uint3        _size,
-    uint         _mip_offset
-) {
-    // Enqueue file to texture copy
-    file_cmds.push_back(
-        {FileDesc{_handle, uint(_file_offset), uint(GetSizeFromImageFormat(_format, _size))},
-         TextureViewDesc{uint3(_offset), uint3(_size), uint64(_tex_ptr), _format, uint(_mip_offset), 0, 0, 0},
-         0}
-    );
-}
+struct VulkanStorage::Impl {
+    // This bounds concurrent prepared/upload payloads, not the caller's queued
+    // memory snapshots or the generic allocator's retained pool capacity.
+    // An oversized batch runs alone; it is never split into partial commits.
+    static constexpr uint64              byte_budget = 128ull * 1024 * 1024;
+    static constexpr size_t              batch_limit = 32;
+    std::shared_ptr<IOBatch>             pending     = std::make_shared<IOBatch>();
+    std::mutex                           mutex;
+    std::condition_variable              changed;
+    std::deque<std::shared_ptr<IOBatch>> queue;
+    uint64                               in_flight_bytes   = 0;
+    size_t                               in_flight_batches = 0;
+    bool                                 stopping          = false;
+    std::jthread                         thread;
 
-void VulkanCommitSession::Enqueue(
-    void const* _mem,
-    size_t      _file_offset,
-    void*       _buffer_ptr,
-    size_t      _offset,
-    size_t      _len
-) {
-    // Enqueue memory to buffer copy
-    mem_cmds.push_back(
-        {RawDataDesc{std::span<ubyte>((ubyte*)_mem, _len)},
-         BufferViewDesc{uint64(_buffer_ptr), uint(_offset), uint(_len)},
-         0}
-    );
-}
-
-void VulkanCommitSession::Enqueue(
-    void const*  _mem,
-    size_t       _file_offset,
-    void*        _tex_ptr,
-    EPixelFormat _format,
-    uint3        _offset,
-    uint3        _size,
-    uint         _mip_offset
-) {
-    // Enqueue memory to texture copy
-    mem_cmds.push_back(
-        {RawDataDesc{std::span<ubyte>((ubyte*)_mem, GetSizeFromImageFormat(_format, _size))},
-         TextureViewDesc{uint3(_offset), uint3(_size), uint64(_tex_ptr), _format, uint(_mip_offset), 0, 0, 0},
-         0}
-    );
-}
-
-void VulkanCommitSession::EnqueueSignal(FenceRef _fence, uint64_t _timeline) {
-    // Enqueue signal command
-    signal_events.push_back({uint64(_fence.Get()), _timeline});
-}
-
-void VulkanCommitSession::CommitWithoutSignal() {
-    VulkanIOTask* tsk = MoerNew(VulkanIOTask)();
-    tsk->session      = this;
-    tsk->file_cmds    = std::move(file_cmds);
-    tsk->mem_cmds     = std::move(mem_cmds);
-    tsk->callback     = [this]() {
-        ++pending_tasks;
-    };
-    task_count++;
-    std::atomic_thread_fence(std::memory_order_acq_rel);
-    CommitIOTask(tsk);
-}
-
-void VulkanCommitSession::CommitSignaled() {
-
-    VulkanIOTask* tsk = MoerNew(VulkanIOTask)();
-    tsk->session      = this;
-    tsk->file_cmds    = std::move(file_cmds);
-    tsk->mem_cmds     = std::move(mem_cmds);
-    tsk->signal_evts  = std::move(signal_events);
-    tsk->callback     = [this]() {
-        ++pending_tasks;
-    };
-    task_count++;
-    CommitIOTask(tsk);
-}
-
-void VulkanCommitSession::CommitIOTask(VulkanIOTask* _tsk) {
-    io_interface.CommitIOTask(_tsk);
-}
-
-struct VulkanIOTaskThread {
-    std::jthread                    thread;
-    std::atomic_bool                enabled{true};
-    LockFreeQueueBase<VulkanIOTask> queue;
-    VulkanIOTaskThread() {
-        thread = std::jthread([this]() {
-            InnerWorkLoop();
+    Impl() :
+        thread([this] {
+            Run();
+        }) {}
+    ~Impl() {
+        pending->Complete(true);
+        {
+            std::lock_guard lock(mutex);
+            stopping = true;
+        }
+        changed.notify_all();
+        thread.join();
+        std::unique_lock lock(mutex);
+        changed.wait(lock, [this] {
+            return in_flight_batches == 0;
         });
     }
 
-    ~VulkanIOTaskThread() {
-        enabled.store(false, std::memory_order_release);
-        thread.join();
+    void Publish(const std::shared_ptr<IOBatch>& _batch) {
+        {
+            std::lock_guard lock(mutex);
+            queue.push_back(_batch);
+        }
+        changed.notify_all();
     }
 
-    void InnerWorkLoop() {
+    void Complete(const std::shared_ptr<IOBatch>& _batch, bool _reject = false) noexcept {
+        if (_batch->Complete(_reject)) {
+            std::lock_guard lock(mutex);
+            in_flight_bytes -= _batch->bytes;
+            --in_flight_batches;
+            changed.notify_all();
+        }
+    }
+
+    void Run() noexcept {
         for (;;) {
-            VulkanIOTask* raw_task = nullptr;
-            if (raw_task = queue.Pop(); raw_task) {
-                std::shared_ptr<VulkanIOTask> task{};
-                try {
-                    task = std::shared_ptr<VulkanIOTask>(raw_task, [](VulkanIOTask* _task) {
-                        MoerDelete(_task);
-                    });
-                } catch (...) {
-                    // Control-block allocation can fail before shared ownership
-                    // is established. Retire every externally visible promise
-                    // before releasing the raw task so no waiter is orphaned.
-                    RejectVulkanIOTaskSignalsNoexcept(raw_task);
-                    CompleteVulkanIOTaskNoexcept(raw_task);
-                    MoerDelete(raw_task);
-                    try {
-                        LOG_ERROR("[VulkanIO] failed to take ownership of queued task");
-                    } catch (...) {
-                    }
-                    continue;
-                }
-                std::shared_ptr<VulkanIOTaskCompletionState> completion{};
-                try {
-                    completion = std::make_shared<VulkanIOTaskCompletionState>(task);
-                    // Process the submission
-                    // ...
-                    auto copy_file_to_mem =
-                        [&](const FileDesc& _src, size_t _file_offset, std::span<ubyte> _dst) {
-                            FILE* result_handle = nullptr;
-                            fopen_s(&result_handle, (const char*)_src.handle.file, "r");
-                            if (!result_handle) {
-                                SPDLOG_ERROR("Failed to open file {}", (const char*)_src.handle.file);
-                                assert(false && "Failed to open file");
-                            }
-                            std::fseek(result_handle, _file_offset, SEEK_SET);
-                            std::fread(_dst.data(), sizeof(ubyte), _dst.size_bytes(), result_handle);
-                            std::fclose(result_handle);
-                        };
-                    uint64 temp_size = 0;
-                    for (auto& cmd : task->file_cmds) {
-                        // Process each command
-                        // ...
-                        std::visit(
-                            Overload{
-                                [&](RawDataDesc& _dst) {
-                                    copy_file_to_mem(std::get<FileDesc>(cmd.src), cmd.file_offset, _dst.data);
-                                },
-                                [&](BufferViewDesc& _dst) {
-                                    temp_size += cmd.SizeByte();
-                                },
-                                [&](TextureViewDesc& _dst) {
-                                    temp_size += cmd.SizeByte();
-                                }
-                            },
-                            cmd.dst
-                        );
-                    }
-                    Array<ubyte> temp_buffer;
-                    temp_buffer.resize(temp_size);
-                    temp_size = 0;
-                    CommandList cmd_list{EQueueType::Copy};
-                    for (auto& cmd : task->file_cmds) {
-                        std::visit(
-                            Overload{
-                                [&](RawDataDesc& _dst) {},
-                                [&](BufferViewDesc& _dst) {
-                                    copy_file_to_mem(
-                                        std::get<FileDesc>(cmd.src),
-                                        cmd.file_offset,
-                                        std::span<ubyte>(temp_buffer.data() + temp_size, _dst.size)
-                                    );
-                                    VulkanBuffer* buffer = (VulkanBuffer*)_dst.handle;
-                                    cmd_list.CopyFrom(
-                                        std::span<byte>((byte*)temp_buffer.data() + temp_size, _dst.size),
-                                        buffer->GetView(_dst.offset, _dst.size)
-                                    );
-                                    temp_size += cmd.SizeByte();
-                                },
-                                [&](TextureViewDesc& _dst) {
-                                    copy_file_to_mem(
-                                        std::get<FileDesc>(cmd.src),
-                                        cmd.file_offset,
-                                        std::span<ubyte>(temp_buffer.data() + temp_size, _dst.GetByteSize())
-                                    );
-                                    VulkanTexture* texture = (VulkanTexture*)_dst.handle;
-                                    TextureView view(texture, _dst.pixel_fmt, _dst.mip_offset, _dst.mip_cnt);
-                                    view.offset = _dst.offset;
-                                    view.extent = _dst.size;
-                                    cmd_list.CopyFrom(
-                                        std::span<byte>(
-                                            (byte*)temp_buffer.data() + temp_size, _dst.GetByteSize()
-                                        ),
-                                        view
-                                    );
-                                    temp_size += cmd.SizeByte();
-                                }
-                            },
-                            cmd.dst
-                        );
-                    }
-                    for (auto& cmd : task->mem_cmds) {
-                        std::visit(
-                            Overload{
-                                [&](RawDataDesc& _src) {},
-                                [&](BufferViewDesc& _dst) {
-                                    const RawDataDesc& src    = std::get<RawDataDesc>(cmd.src);
-                                    VulkanBuffer*      buffer = (VulkanBuffer*)_dst.handle;
-                                    cmd_list.CopyFrom(
-                                        std::span<byte>((byte*)src.data.data(), src.data.size_bytes()),
-                                        buffer->GetView(_dst.offset, _dst.size)
-                                    );
-                                },
-                                [&](TextureViewDesc& _dst) {
-                                    const RawDataDesc& src     = std::get<RawDataDesc>(cmd.src);
-                                    VulkanTexture*     texture = (VulkanTexture*)_dst.handle;
-                                    TextureView view(texture, _dst.pixel_fmt, _dst.mip_offset, _dst.mip_cnt);
-                                    view.offset = _dst.offset;
-                                    view.extent = _dst.size;
-                                    cmd_list.CopyFrom(
-                                        std::span<byte>((byte*)src.data.data(), src.data.size_bytes()), view
-                                    );
-                                }
-                            },
-                            cmd.dst
-                        );
-                    }
-
-                    // Copy GPU work shares the same Translate -> Submission ->
-                    // Completion ownership pipeline as renderer work. The IO
-                    // thread remains a file-read/assembly producer only.
-                    CmdSubmit submit = cmd_list.Submit();
-                    for (const IOSignalEvt& signal : task->signal_evts) {
-                        submit.Signal(reinterpret_cast<Fence*>(signal.handle), signal.timeline);
-                    }
-                    submit.callbacks.emplace_back([completion]() {
-                        completion->Complete();
-                    });
-                    RHIExecutor::Get().Submit(
-                        EQueueType::Copy, std::move(submit), ERHIExecSubmitFlags::FlushGPU
-                    );
-                } catch (...) {
-                    // No successful publication occurred, so every promised
-                    // timeline must become terminal before the session does.
-                    RejectVulkanIOTaskSignalsNoexcept(task.get());
-                    if (completion) {
-                        completion->Complete();
-                    } else {
-                        CompleteVulkanIOTaskNoexcept(task.get());
-                    }
-                    try {
-                        LOG_ERROR("[VulkanIO] task assembly or publication threw");
-                    } catch (...) {
-                    }
-                }
-                if (completion) {
-                    // Wait only for this Copy packet's ordinary Completion
-                    // callback. This avoids coupling IO latency to unrelated
-                    // Graphics/Compute work while keeping session lifetime
-                    // valid until the task is terminal.
-                    completion->Wait();
-                }
-
-            } else if (enabled.load(std::memory_order_acquire)) {
-                std::this_thread::yield();
-            } else {
-                break;
-            }
-        }
-    }
-};
-
-static constexpr uint64_t max_chunk_size = 1024 * 1024 * 64; // 64MB
-VulkanIOInterface::VulkanIOInterface(VulkanDevice& _device, VkCopyQueue& _queue) :
-    m_device(_device),
-    m_queue(_queue) {
-    event   = _device.CreateFence();
-    storage = MoerNew(VulkanStorage)(_device, _queue);
-}
-
-VulkanIOInterface::~VulkanIOInterface() {
-    MoerDelete(storage);
-}
-
-void VulkanIOInterface::Execute(IOCommandList&& _cmdlist, uint64 _timeline) {
-    auto split_commands = [&](Array<IOCmd>& _cmds, Array<IOCmd>& _splited_cmds) {
-        auto cnt = _cmds.size();
-        for (auto i = 0; i < cnt; i++) {
-            auto& cmd  = _cmds[i];
-            auto  size = cmd.SizeByte();
-            if (size < max_chunk_size)
-                continue;
-
-            auto cur_cmd = std::move(cmd);
-            if (i < cnt - 1) {
-                cmd = std::move(_cmds.back());
-            }
-            _cmds.pop_back();
-            i--;
-            cnt--;
-            if (size == 0)
-                continue;
-
-            std::visit(
-                Overload{
-                    [&](RawDataDesc& _dst) {
-                        do {
-
-                            auto sub_buffer_size = std::min(_dst.data.size_bytes(), max_chunk_size);
-                            auto sub_buffer      = _dst.data.subspan(0, sub_buffer_size);
-                            _splited_cmds.emplace_back(
-                                cur_cmd.src, cur_cmd.dst, cur_cmd.file_offset, cur_cmd.flags
-                            );
-
-                            if (_dst.data.size_bytes() - sub_buffer_size > 0) {
-                                cur_cmd.file_offset += sub_buffer_size;
-                                _dst.data = _dst.data.subspan(sub_buffer_size);
-                            } else {
-                                break;
-                            }
-                        } while (true);
-                    },
-                    [&](BufferViewDesc& _dst) {
-                        // Process buffer to buffer copy
-                        do {
-                            auto sub_buffer_size = std::min(uint64(_dst.size), max_chunk_size);
-                            auto buffer_view     = _dst;
-                            buffer_view.size     = sub_buffer_size;
-                            _splited_cmds.emplace_back(
-                                cur_cmd.src, buffer_view, cur_cmd.file_offset, cur_cmd.flags
-                            );
-                            if (_dst.size - sub_buffer_size > 0) {
-                                cur_cmd.file_offset += sub_buffer_size;
-                                _dst.offset += sub_buffer_size;
-                                _dst.size -= sub_buffer_size;
-                            } else {
-                                break;
-                            }
-                        } while (true);
-                    },
-                    [&](TextureViewDesc& _dst) {
-                        const PixelFormatInfo format_info = GetPixelFormatInfo(_dst.pixel_fmt);
-                        MOER_ASSERT(format_info.IsDefined(), "Vulkan IO has no layout for pixel format {}", uint(_dst.pixel_fmt));
-                        auto size = GetSizeFromImageFormat(_dst.pixel_fmt, uint3(_dst.size.xy, 1));
-                        if (size <= max_chunk_size) {
-                            for (auto i = 0; i < _dst.size[2]; i++) {
-                                _splited_cmds.emplace_back(
-                                    cur_cmd.src,
-                                    TextureViewDesc{
-                                        uint3(_dst.offset.xy, _dst.offset.z + i),
-                                        uint3(_dst.size.xy, 1),
-                                        _dst.handle,
-                                        _dst.pixel_fmt,
-                                        _dst.mip_offset,
-                                        _dst.mip_cnt,
-                                        _dst.array_offset,
-                                        _dst.array_cnt
-                                    },
-                                    cur_cmd.file_offset,
-                                    cur_cmd.flags
-                                );
-                                cur_cmd.file_offset += size;
-                            }
-                        } else {
-                            // Split at complete block rows for both compressed
-                            // and uncompressed formats. Only the final chunk
-                            // may contain fewer than one full block height.
-                            const uint rows_per_chunk = GetMaxPixelFormatRowsPerChunk(
-                                _dst.pixel_fmt, _dst.size.x, max_chunk_size
-                            );
-                            MOER_ASSERT(
-                                rows_per_chunk != 0,
-                                "One pixel-format block row exceeds the Vulkan IO chunk limit"
-                            );
-                            MOER_ASSERT(
-                                _dst.offset.y % format_info.block_height == 0,
-                                "Compressed texture IO offset is not block-row aligned"
-                            );
-                            for (auto i = 0; i < _dst.size[2]; i++) {
-                                for (uint row_offset = 0; row_offset < _dst.size.y;) {
-                                    const uint row_count = std::min(rows_per_chunk, _dst.size.y - row_offset);
-                                    _splited_cmds.emplace_back(
-                                        cur_cmd.src,
-                                        TextureViewDesc{
-                                            uint3(
-                                                _dst.offset.x, _dst.offset.y + row_offset, _dst.offset.z + i
-                                            ),
-                                            uint3(_dst.size.x, row_count, 1),
-                                            _dst.handle,
-                                            _dst.pixel_fmt,
-                                            _dst.mip_offset,
-                                            _dst.mip_cnt,
-                                            _dst.array_offset,
-                                            _dst.array_cnt
-                                        },
-                                        cur_cmd.file_offset,
-                                        cur_cmd.flags
-                                    );
-
-                                    cur_cmd.file_offset += GetSizeFromImageFormat(
-                                        _dst.pixel_fmt, uint3(_dst.size.x, row_count, 1)
-                                    );
-                                    row_offset += row_count;
-                                }
-                            }
-                        }
-                    }
-                },
-                cur_cmd.dst
-            );
-        }
-    };
-    Array<IOCmd>      splited_cmds;
-    Array<IOCmd>      src_cmds     = std::move(_cmdlist.cmds);
-    Array<FileHandle> files        = std::move(_cmdlist.files);
-    Array<IOCallBack> callbacks    = std::move(_cmdlist.callbacks);
-    bool              need_execute = false;
-
-    auto&& scope_exit = OnScopeExit([&]() {
-        if (need_execute) {
-            storage->EnqueueSignal(event, _timeline);
-            storage->Commit();
-        }
-        if (files.empty() && callbacks.empty())
-            return;
-        this->callbacks.emplace(std::move(callbacks), std::move(files), _timeline);
-    });
-
-    if (src_cmds.empty()) {
-        return;
-    }
-    need_execute = true;
-    split_commands(src_cmds, splited_cmds);
-    uint64 cmd_size = src_cmds.size();
-
-    Array<std::pair<IOCmd, uint64>> frag_cmds;
-    Array<std::pair<IOCmd, uint64>> staging_cmds;
-    auto                            divide_cmds = [&](Array<IOCmd>& _cmds) {
-        for (auto& cmd : _cmds) {
-            if (cmd.SizeByte() < max_chunk_size) {
-                frag_cmds.push_back({cmd, cmd_size});
-            } else {
-                staging_cmds.push_back({cmd, cmd_size});
-            }
-        }
-    };
-
-    divide_cmds(src_cmds);
-    divide_cmds(splited_cmds);
-    std::sort(frag_cmds.begin(), frag_cmds.end(), [](auto& _lhs, auto& _rhs) {
-        return _lhs.second < _rhs.second;
-    });
-    auto commit = [&]() {
-        if (!need_execute)
-            return;
-        storage->Commit();
-        need_execute = false;
-    };
-
-    if (!frag_cmds.empty()) {
-        uint64 byte_offset = 0;
-        for (auto& cmd : frag_cmds) {
-            auto& src = cmd.first.src;
-            auto& dst = cmd.first.dst;
-            if (cmd.second > max_chunk_size - byte_offset) {
-                commit();
-                byte_offset = 0;
-            }
-            need_execute = true;
-            std::visit(
-                Overload{
-                    [&](RawDataDesc& _src, BufferViewDesc& _dst) {
-
-                    },
-                    [&](RawDataDesc& _src, TextureViewDesc& _dst) {
-                        storage->Enqueue(
-                            _src.data.data(),
-                            cmd.first.file_offset,
-                            (void*)_dst.handle,
-                            cmd.first.file_offset,
-                            cmd.first.SizeByte()
-                        );
-                    },
-                    [&](FileDesc& _src, BufferViewDesc& _dst) {
-                        storage->Enqueue(
-                            _src.handle,
-                            cmd.first.file_offset,
-                            (void*)_dst.handle,
-                            cmd.first.file_offset,
-                            cmd.first.SizeByte()
-                        );
-                    },
-                    [&](FileDesc& _src, TextureViewDesc& _dst) {
-                        storage->Enqueue(
-                            _src.handle,
-                            cmd.first.file_offset,
-                            (void*)_dst.handle,
-                            cmd.first.file_offset,
-                            cmd.first.SizeByte()
-                        );
-                    },
-                    [&](FileDesc& _src, RawDataDesc& _dst) {
-                        storage->Enqueue(
-                            _src.handle,
-                            cmd.first.file_offset,
-                            (void*)_dst.data.data(),
-                            cmd.first.file_offset,
-                            cmd.first.SizeByte()
-                        );
-                    },
-                    [&](auto& _src, auto& _dst) {
-                        assert(false && "Invalid command");
-                    }
-                },
-                cmd.first.src,
-                cmd.first.dst
-            );
-
-            byte_offset += cmd.second;
-        }
-    }
-
-    if (!staging_cmds.empty()) {
-        for (auto& cmd : staging_cmds) {
-            auto& src = cmd.first.src;
-            auto& dst = cmd.first.dst;
-            commit();
-            need_execute = true;
-            std::visit(
-                Overload{
-                    [&](RawDataDesc& _src, BufferViewDesc& _dst) {
-                        storage->Enqueue(
-                            _src.data.data(),
-                            cmd.first.file_offset,
-                            (void*)_dst.handle,
-                            cmd.first.file_offset,
-                            cmd.first.SizeByte()
-                        );
-                    },
-                    [&](RawDataDesc& _src, TextureViewDesc& _dst) {
-                        storage->Enqueue(
-                            _src.data.data(),
-                            cmd.first.file_offset,
-                            (void*)_dst.handle,
-                            cmd.first.file_offset,
-                            cmd.first.SizeByte()
-                        );
-                    },
-                    [&](FileDesc& _src, BufferViewDesc& _dst) {
-                        storage->Enqueue(
-                            _src.handle,
-                            cmd.first.file_offset,
-                            (void*)_dst.handle,
-                            cmd.first.file_offset,
-                            cmd.first.SizeByte()
-                        );
-                    },
-                    [&](FileDesc& _src, TextureViewDesc& _dst) {
-                        storage->Enqueue(
-                            _src.handle,
-                            cmd.first.file_offset,
-                            (void*)_dst.handle,
-                            cmd.first.file_offset,
-                            cmd.first.SizeByte()
-                        );
-                    },
-                    [&](FileDesc& _src, RawDataDesc& _dst) {
-                        storage->Enqueue(
-                            _src.handle,
-                            cmd.first.file_offset,
-                            (void*)_dst.data.data(),
-                            cmd.first.file_offset,
-                            cmd.first.SizeByte()
-                        );
-                    },
-                    [&](auto& _src, auto& _dst) {
-                        assert(false && "Invalid command");
-                    }
-                },
-                src,
-                dst
-            );
-        }
-    }
-}
-
-uint64 VulkanIOInterface::Execute(IOCommandList&& _cmdlist) {
-    uint64 timline;
-    if (_cmdlist.callbacks.empty() && _cmdlist.files.empty() && _cmdlist.cmds.empty() &&
-        _cmdlist.import_cmds.empty() && _cmdlist.export_cmds.empty()) {
-        timline = this->timeline;
-        return timline;
-    }
-    timline = ++this->timeline;
-    {
-        std::unique_lock<std::mutex> lock(mut);
-        io_cmdlists.emplace(std::move(_cmdlist), timline);
-    }
-    return timline;
-}
-
-WaitEvent VulkanIOInterface::GetWaitEvent(uint64 _timeline) {
-    return {uint64(event.Get()), _timeline};
-}
-
-void VulkanIOInterface::Sync(uint64 _timeline) {
-    event->Wait(_timeline);
-}
-
-void VulkanIOInterface::Tick() {
-    {
-        std::unique_lock<std::mutex> lock(mut);
-        if (!io_cmdlists.empty()) {
-            auto& cmd_list_pair = io_cmdlists.front();
-            Execute(std::move(cmd_list_pair.first), cmd_list_pair.second);
-            io_cmdlists.pop();
-        }
-    }
-    if (!callbacks.empty()) {
-        auto*        event_fence       = ResourceCast(event.Get());
-        const uint64 callback_timeline = callbacks.front().timeline;
-        const bool   terminal          = event->GetValue() >= callback_timeline ||
-                              event_fence->IsRejected(callback_timeline) || event_fence->IsFailed();
-        if (terminal) {
-            // Remove the terminal batch before invoking user code. A throwing
-            // or re-entrant callback must never replay already attempted
-            // callbacks or retain the batch's file handles indefinitely.
-            VkExecCallback callback = std::move(callbacks.front());
-            callbacks.pop();
-            for (auto& cb : callback.callback) {
-                try {
-                    cb();
-                } catch (...) {
-                    try {
-                        LOG_ERROR("[VulkanIO] user completion callback threw");
-                    } catch (...) {
-                    }
-                }
-            }
-            callback.Clear();
-        }
-    } else {
-        //yield if no callback
-        std::this_thread::yield();
-    }
-}
-
-struct SessionThread {
-    std::jthread            thread;
-    std::mutex              mutex;
-    std::condition_variable cv;
-    bool                    enabled = true;
-
-    Queue<VulkanCommitSession*> commit_sessions;
-    SessionThread() {
-        thread = std::jthread([this]() {
-            InnerWorkLoop();
-        });
-    }
-    ~SessionThread() {
-        enabled = false;
-        thread.join();
-    }
-
-    void InnerWorkLoop() {
-        while (enabled) {
-
-            while (true) {
-                VulkanCommitSession* session = nullptr;
-                {
-                    std::unique_lock<std::mutex> lk(mutex);
-                    if (commit_sessions.empty()) {
-                        break;
-                    }
-                    session = std::move(commit_sessions.front());
-                }
-
-                assert(session != nullptr && "Session is null");
-            }
-
+            std::shared_ptr<IOBatch> batch;
             {
-                //wait for queue submission
-                std::unique_lock<std::mutex> lock(mutex);
-                while (enabled && commit_sessions.empty()) {
-                    cv.wait(lock);
+                std::unique_lock lock(mutex);
+                changed.wait(lock, [this] {
+                    return stopping || !queue.empty();
+                });
+                if (queue.empty()) {
+                    return;
                 }
+                const uint64 bytes = queue.front()->bytes;
+                changed.wait(lock, [this, bytes] {
+                    return in_flight_batches == 0 ||
+                           (in_flight_batches < batch_limit && bytes <= byte_budget &&
+                            in_flight_bytes <= byte_budget - bytes);
+                });
+                batch = std::move(queue.front());
+                queue.pop_front();
+                in_flight_bytes += bytes;
+                ++in_flight_batches;
+            }
+            try {
+                CommandList commands(EQueueType::Copy);
+                for (auto& request : batch->requests) {
+                    if (request.size == 0) {
+                        continue;
+                    }
+                    if (auto* destination = std::get_if<std::span<byte>>(&request.target)) {
+                        if (auto* file = std::get_if<FileSource>(&request.source)) {
+                            ReadFile(*file, *destination);
+                        } else {
+                            const auto& data = std::get<Array<byte>>(request.source);
+                            std::memcpy(destination->data(), data.data(), data.size());
+                        }
+                        continue;
+                    }
+                    Array<byte> data;
+                    if (auto* file = std::get_if<FileSource>(&request.source)) {
+                        data.resize(request.size);
+                        ReadFile(*file, data);
+                    } else {
+                        data = std::move(std::get<Array<byte>>(request.source));
+                    }
+                    if (auto* buffer = std::get_if<BufferTarget>(&request.target)) {
+                        commands.CopyFrom(
+                            std::move(data), BufferView(buffer->buffer.Get(), buffer->offset, request.size, 1)
+                        );
+                    } else {
+                        commands.CopyFrom(std::move(data), std::get<TextureTarget>(request.target).view);
+                    }
+                }
+                for (const auto& signal : batch->signals) {
+                    commands.Signal(signal.fence, signal.value);
+                }
+                commands.AddCallback([this, batch] {
+                    Complete(batch);
+                });
+                RHIExecutor::Get().Submit(EQueueType::Copy, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+            } catch (const std::exception& error) {
+                LogIOError(error.what());
+                Complete(batch, true);
+            } catch (...) {
+                LogIOError("failed to prepare or publish IO batch");
+                Complete(batch, true);
             }
         }
     }
 };
 
-VulkanStorage::VulkanStorage(VulkanDevice& _device, VkCopyQueue& _queue) : copy_queue(_queue) {
-    task_thread = MoerNew(VulkanIOTaskThread)();
-}
-
-VulkanStorage::~VulkanStorage() {
-    MoerDelete(task_thread);
-    task_thread = nullptr;
-    MoerDelete(current_session);
-    current_session = nullptr;
-}
-
-VulkanCommitSession* VulkanStorage::GetCurrentSession() {
-    if (current_session) {
-        // A completion can race with the caller staging the next command on
-        // the same session. Never recycle a session that still owns
-        // uncommitted commands, and do not consider a fresh zero-task session
-        // complete.
-        if (!current_session->IsComplete() ||
-            current_session->HasUncommittedWork()) {
-            return current_session;
-        }
-        MoerDelete(current_session);
-        current_session = nullptr;
-    }
-    current_session = MoerNew(VulkanCommitSession)(*this);
-    return current_session;
-}
-
-VkCopyQueue& VulkanStorage::GetQueue() {
-    return copy_queue;
-}
-
-void VulkanStorage::CommitIOTask(VulkanIOTask* _tsk) {
-    task_thread->queue.Push(_tsk);
-}
+VulkanStorage::VulkanStorage(VulkanDevice&, VkCopyQueue&) : impl(std::make_unique<Impl>()) {}
+VulkanStorage::~VulkanStorage() = default;
 
 void VulkanStorage::Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len) {
-    GetCurrentSession()->Enqueue(_handle, _file_offset, _ptr, _len);
+    AddRequest(
+        *impl->pending,
+        {FileDesc{_handle, _file_offset, _len},
+         RawDataDesc{std::span<uint8_t>(static_cast<uint8_t*>(_ptr), _len)}}
+    );
 }
 void VulkanStorage::Enqueue(
     FileHandle _handle,
     size_t     _file_offset,
-    void*      _buffer_ptr,
+    void*      _buffer,
     size_t     _offset,
     size_t     _len
 ) {
-    GetCurrentSession()->Enqueue(_handle, _file_offset, _buffer_ptr, _offset, _len);
+    AddRequest(
+        *impl->pending,
+        {FileDesc{_handle, _file_offset, _len}, BufferViewDesc{uint64(_buffer), _offset, _len}}
+    );
 }
 void VulkanStorage::Enqueue(
     FileHandle   _handle,
     size_t       _file_offset,
-    void*        _tex_ptr,
+    void*        _texture,
     EPixelFormat _format,
     uint3        _offset,
     uint3        _size,
-    uint         _mip_offset
+    uint         _mip
 ) {
-    GetCurrentSession()->Enqueue(_handle, _file_offset, _tex_ptr, _format, _offset, _size, _mip_offset);
+    const auto destination = TextureDestination(_texture, _format, _offset, _size, _mip);
+    AddRequest(*impl->pending, {FileDesc{_handle, _file_offset, destination.GetByteSize()}, destination});
 }
 void VulkanStorage::Enqueue(
-    void const* _mem,
-    size_t      _file_offset,
-    void*       _buffer_ptr,
+    const void* _memory,
+    size_t      _source_offset,
+    void*       _buffer,
     size_t      _offset,
     size_t      _len
 ) {
-    GetCurrentSession()->Enqueue(_mem, _file_offset, _buffer_ptr, _offset, _len);
+    AddRequest(
+        *impl->pending,
+        {MemorySource(_memory, _source_offset, _len), BufferViewDesc{uint64(_buffer), _offset, _len}}
+    );
 }
 void VulkanStorage::Enqueue(
-    void const*  _mem,
-    size_t       _file_offset,
-    void*        _tex_ptr,
+    const void*  _memory,
+    size_t       _source_offset,
+    void*        _texture,
     EPixelFormat _format,
     uint3        _offset,
     uint3        _size,
-    uint         _mip_offset
+    uint         _mip
 ) {
-    GetCurrentSession()->Enqueue(_mem, _file_offset, _tex_ptr, _format, _offset, _size, _mip_offset);
+    const auto destination = TextureDestination(_texture, _format, _offset, _size, _mip);
+    AddRequest(
+        *impl->pending, {MemorySource(_memory, _source_offset, destination.GetByteSize()), destination}
+    );
 }
-void VulkanStorage::EnqueueSignal(FenceRef _fence, uint64_t _timeline) {
-    GetCurrentSession()->EnqueueSignal(_fence, _timeline);
+void VulkanStorage::EnqueueSignal(FenceRef _fence, uint64 _timeline) {
+    if (!_fence.IsValid() || _timeline == 0) {
+        throw std::invalid_argument("IO signal requires a fence and non-zero value");
+    }
+    impl->pending->signals.push_back({std::move(_fence), _timeline});
 }
 void VulkanStorage::Commit() {
-    GetCurrentSession()->Commit();
+    if (impl->pending->requests.empty() && impl->pending->signals.empty()) {
+        return;
+    }
+    auto next = std::make_shared<IOBatch>();
+    impl->Publish(impl->pending);
+    impl->pending = std::move(next);
+}
+
+VulkanIOInterface::VulkanIOInterface(VulkanDevice& _device, VkCopyQueue& _queue) :
+    event(_device.CreateFence()),
+    storage(_device, _queue) {}
+VulkanIOInterface::~VulkanIOInterface() = default;
+
+uint64 VulkanIOInterface::Execute(IOCommandList&& _commands) {
+    FileListCleanup files{std::move(_commands.files)};
+    auto            batch = std::make_shared<IOBatch>();
+    batch->callbacks      = std::move(_commands.callbacks);
+    batch->files.files    = std::move(files.files);
+    try {
+        if (!_commands.import_cmds.empty() || !_commands.export_cmds.empty()) {
+            throw std::invalid_argument("IO queue ownership transfers are not supported");
+        }
+        for (const auto& command : _commands.cmds) {
+            AddRequest(*batch, command);
+        }
+        _commands.cmds.clear();
+        std::lock_guard lock(mutex);
+        if (batch->requests.empty() && batch->callbacks.empty() && batch->files.files.empty()) {
+            return timeline;
+        }
+        const uint64 value = CheckedAdd(timeline, 1);
+        batch->signals.push_back({event, value});
+        // Admission failure rejects this value. Never reuse it on a retry.
+        timeline = value;
+        storage.impl->Publish(batch);
+        return value;
+    } catch (...) {
+        batch->Complete(true);
+        throw;
+    }
+}
+WaitEvent VulkanIOInterface::GetWaitEvent(uint64 _time_stamp) {
+    // The unified Submission owner cannot wait for a producer queued behind
+    // its consumer. Establish native acceptance (or rejection) before exposing
+    // a GPU dependency; this does not wait for the copy to finish on the GPU.
+    (void)event->WaitSubmitted(_time_stamp);
+    return {uint64(event.Get()), _time_stamp};
+}
+void VulkanIOInterface::Sync(uint64 _time_stamp) {
+    event->Wait(_time_stamp);
 }
 
 } // namespace Moer::Render

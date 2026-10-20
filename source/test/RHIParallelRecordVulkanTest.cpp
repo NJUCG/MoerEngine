@@ -30,6 +30,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -6637,14 +6638,12 @@ void RunDirectCopyExecuteRejected() {
 }
 
 void RunVulkanStorageUnifiedCopySubmission() {
-    auto& device = RenderDevice::Get();
-    auto* vulkan_device =
-        static_cast<VulkanDevice*>(device.GetImpl());
-    auto& copy_queue =
-        static_cast<VkCopyQueue&>(device.GetCopyQueue());
+    auto& device        = RenderDevice::Get();
+    auto* vulkan_device = static_cast<VulkanDevice*>(device.GetImpl());
+    auto& copy_queue    = static_cast<VkCopyQueue&>(device.GetCopyQueue());
 
-    constexpr size_t element_count = 16;
-    constexpr size_t byte_size = sizeof(uint32) * element_count;
+    constexpr size_t                  element_count = 16;
+    constexpr size_t                  byte_size     = sizeof(uint32) * element_count;
     std::array<uint32, element_count> first_values{};
     std::array<uint32, element_count> expected{};
     std::array<uint32, element_count> readback{};
@@ -6656,101 +6655,271 @@ void RunVulkanStorageUnifiedCopySubmission() {
     BufferRef destination = device.CreateBuffer<uint32>(
         "phase15b_io_copy_destination",
         element_count,
-        EBufferUsageFlags::TRANSFER_SRC |
-            EBufferUsageFlags::TRANSFER_DST
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
     );
-    FenceRef done = device.CreateFence();
+    FenceRef                done = device.CreateFence();
     NativeSubmissionCapture native_capture{};
     {
         ScopedNativeSubmissionObserver native_observer(native_capture);
-        VulkanStorage storage(*vulkan_device, copy_queue);
+        VulkanStorage                  storage(*vulkan_device, copy_queue);
 
-        storage.Enqueue(
-            first_values.data(),
-            0,
-            ResourceCast(destination.Get()),
-            0,
-            byte_size
-        );
+        storage.Enqueue(first_values.data(), 0, ResourceCast(destination.Get()), 0, byte_size);
         storage.EnqueueSignal(done, 1);
         storage.Commit();
         if (ResourceCast(done.Get())->HostWait(1) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "first Vulkan storage Copy commit did not signal completion"
-            );
+            throw std::runtime_error("first Vulkan storage Copy commit did not signal completion");
         }
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-        // The first session is now terminal. A second Enqueue must recycle it
-        // without dropping the newly staged command or signal.
+        // Snapshot a non-zero source offset before Commit. Modifying the
+        // caller's bytes must not change the independently owned next batch.
+        std::array<uint32, element_count + 2> second_source{};
+        std::copy(expected.begin(), expected.end(), second_source.begin() + 2);
         storage.Enqueue(
-            expected.data(),
-            0,
-            ResourceCast(destination.Get()),
-            0,
-            byte_size
+            second_source.data(), 2 * sizeof(uint32), ResourceCast(destination.Get()), 0, byte_size
         );
+        second_source.fill(0);
         storage.EnqueueSignal(done, 2);
         storage.Commit();
         if (ResourceCast(done.Get())->HostWait(2) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "second Vulkan storage Copy commit did not signal completion"
-            );
+            throw std::runtime_error("second Vulkan storage Copy commit did not signal completion");
         }
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     }
 
     if (native_capture.Overflowed() || native_capture.Count() != 2) {
-        throw std::runtime_error(
-            "Vulkan storage commits did not issue exactly two native submits"
-        );
+        throw std::runtime_error("Vulkan storage commits did not issue exactly two native submits");
     }
-    const uint32 submission_thread_id =
-        native_capture.Event(0).thread_id;
+    const uint32 submission_thread_id = native_capture.Event(0).thread_id;
     for (size_t index = 0; index < native_capture.Count(); ++index) {
-        const VulkanNativeSubmissionEvent& event =
-            native_capture.Event(index);
-        if (event.queue != EQueueType::Copy ||
-            event.thread_role != ERHIThreadRole::Submission ||
-            event.thread_id != submission_thread_id ||
-            event.thread_id == Platform::GetCurrentThreadID() ||
+        const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
+        if (event.queue != EQueueType::Copy || event.thread_role != ERHIThreadRole::Submission ||
+            event.thread_id != submission_thread_id || event.thread_id == Platform::GetCurrentThreadID() ||
             !event.outcome.WasSubmitted()) {
-            throw std::runtime_error(
-                "Vulkan storage Copy commit escaped the unified "
-                "Submission owner"
-            );
+            throw std::runtime_error("Vulkan storage Copy commit escaped the unified "
+                                     "Submission owner");
         }
     }
-    if (ResourceCast(done.Get())->IsRejected(1) ||
-        ResourceCast(done.Get())->IsRejected(2) ||
+    if (ResourceCast(done.Get())->IsRejected(1) || ResourceCast(done.Get())->IsRejected(2) ||
         ResourceCast(done.Get())->IsFailed()) {
-        throw std::runtime_error(
-            "Vulkan storage Copy signals were terminalized incorrectly"
-        );
+        throw std::runtime_error("Vulkan storage Copy signals were terminalized incorrectly");
     }
 
     CommandList verify(EQueueType::Copy);
-    verify.CopyFrom(
-        destination->GetView(),
-        WritableBytes(readback),
-        "Phase15BIOCopyReadback"
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Copy,
-        verify.Submit(),
-        ERHIExecSubmitFlags::FlushGPU
-    );
+    verify.CopyFrom(destination->GetView(), WritableBytes(readback), "Phase15BIOCopyReadback");
+    RHIExecutor::Get().Submit(EQueueType::Copy, verify.Submit(), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     if (readback != expected) {
-        throw std::runtime_error(
-            "Vulkan storage unified Copy submission readback mismatch"
-        );
+        throw std::runtime_error("Vulkan storage unified Copy submission readback mismatch");
     }
 
-    LOG_INFO(
-        "[TESTCASE][PASS] name=VulkanStorageUnifiedCopySubmission "
-        "commits=2 signals=2 native_submit=2 native_owner=Submission "
-        "session_recycle=verified readback=verified"
+    LOG_INFO("[TESTCASE][PASS] name=VulkanStorageUnifiedCopySubmission "
+             "commits=2 signals=2 native_submit=2 native_owner=Submission "
+             "batch_reuse=verified readback=verified");
+}
+
+void RunVulkanIOOwnedRequests() {
+    auto&      device = RenderDevice::Get();
+    const auto path   = std::filesystem::temp_directory_path() /
+                      ("moer_io_owned_" + std::to_string(Platform::GetCurrentThreadID()) + ".bin");
+    struct RemoveFile {
+        std::filesystem::path path;
+        ~RemoveFile() {
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
+    } cleanup{path};
+    std::array<uint32, 32> file_words{};
+    for (uint32 i = 0; i < file_words.size(); ++i) {
+        file_words[i] = 0x1a0a0d00u + i; // Text-mode reads must not alter these bytes.
+    }
+    {
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(file_words.data()), sizeof(file_words));
+        if (!file)
+            throw std::runtime_error("cannot create IO regression input");
+    }
+    BufferRef buffer = device.CreateBuffer<uint32>(
+        "io_owned_buffer", 16, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
+    );
+    TextureRef texture = device.CreateTexture(
+        "io_owned_texture",
+        Extent3D(8, 8, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST,
+        2,
+        2
+    );
+    std::array<uint32, 20> source{};
+    for (uint32 i = 0; i < source.size(); ++i)
+        source[i] = 0x12345600u + i;
+    std::array<uint32, 16> expected_buffer{};
+    std::copy_n(source.begin() + 4, 16, expected_buffer.begin());
+    auto expected_texture = expected_buffer;
+    std::copy_n(file_words.begin() + 3, 4, expected_buffer.begin() + 2);
+    expected_texture[5]  = file_words[4];
+    expected_texture[6]  = file_words[5];
+    expected_texture[9]  = file_words[6];
+    expected_texture[10] = file_words[7];
+    std::array<uint32, 4> cpu_readback{};
+    std::atomic_uint      callbacks{0};
+    {
+        auto              io = device.GetImpl()->CreateIOInterface(device.GetCopyQueue());
+        IOCommandList     commands;
+        const FileHandle  file = commands.ResolveFileHandle(path);
+        const RawDataDesc memory{std::span<uint8_t>(reinterpret_cast<uint8_t*>(source.data()), sizeof(source))
+        };
+        commands.cmds.push_back({memory, BufferViewDesc{uint64(buffer.Get()), 0, sizeof(expected_buffer)}, 16}
+        );
+        commands.cmds.push_back({FileDesc{file, 4, 32}, BufferViewDesc{uint64(buffer.Get()), 8, 16}, 8});
+        commands.cmds.push_back(
+            {memory,
+             TextureViewDesc{uint3(0), uint3(4, 4, 1), uint64(texture.Get()), PF_R8G8B8A8_UNORM, 1, 1, 1, 1},
+             16}
+        );
+        commands.cmds.push_back(
+            {FileDesc{file, 16, 16},
+             TextureViewDesc{
+                 uint3(1, 1, 0), uint3(2, 2, 1), uint64(texture.Get()), PF_R8G8B8A8_UNORM, 1, 1, 1, 1
+             }}
+        );
+        commands.CopyFrom(
+            FileDesc{file, 4, sizeof(cpu_readback)},
+            RawDataDesc{
+                std::span<uint8_t>(reinterpret_cast<uint8_t*>(cpu_readback.data()), sizeof(cpu_readback))
+            }
+        );
+        commands.AddCallback([&] {
+            ++callbacks;
+        });
+        const uint64 value = io->Execute(std::move(commands));
+        source.fill(0); // Execute must already own the source bytes and paths.
+        const WaitEvent dependency = io->GetWaitEvent(value);
+        auto* fence = reinterpret_cast<Fence*>(dependency.timeline_handle);
+        CommandList consumer(EQueueType::Copy);
+        consumer.AddCallback([] {});
+        CmdSubmit consumer_submit = consumer.Submit();
+        consumer_submit.Wait(dependency);
+        RHIExecutor::Get().Submit(EQueueType::Copy, std::move(consumer_submit));
+        RHIExecutor::Get().Sync();
+        if (fence->IsRejected(value))
+            throw std::runtime_error("valid IO batch was rejected");
+
+        IOCommandList short_read;
+        const auto    short_file = short_read.ResolveFileHandle(path);
+        short_read.cmds.push_back(
+            {FileDesc{short_file, sizeof(file_words) - 4, 16}, BufferViewDesc{uint64(buffer.Get()), 0, 16}}
+        );
+        short_read.AddCallback([&] {
+            ++callbacks;
+            throw std::runtime_error("expected IO callback failure");
+        });
+        short_read.AddCallback([&] {
+            ++callbacks;
+        });
+        const uint64 failed = io->Execute(std::move(short_read));
+        io->Sync(failed);
+        if (!fence->IsRejected(failed))
+            throw std::runtime_error("short IO read was reported successful");
+
+        IOCommandList missing;
+        std::string   missing_path = path.string() + ".missing";
+        missing.cmds.push_back(
+            {FileDesc{{missing_path.data(), missing_path.size()}, 0, 16},
+             BufferViewDesc{uint64(buffer.Get()), 0, 16}}
+        );
+        missing.AddCallback([&] {
+            ++callbacks;
+        });
+        const uint64 absent = io->Execute(std::move(missing));
+        io->Sync(absent);
+        if (!fence->IsRejected(absent))
+            throw std::runtime_error("missing IO file was reported successful");
+
+        IOCommandList callback_only;
+        callback_only.AddCallback([&] {
+            ++callbacks;
+        });
+        const uint64 recovered = io->Execute(std::move(callback_only));
+        io->Sync(recovered);
+        if (fence->IsRejected(recovered))
+            throw std::runtime_error("IO did not recover after a read failure");
+    } // Destruction drains callbacks as well as GPU work.
+    if (callbacks != 5 || !std::equal(cpu_readback.begin(), cpu_readback.end(), file_words.begin() + 1)) {
+        throw std::runtime_error("IO callback drain or binary CPU copy mismatch");
+    }
+    std::array<uint32, 16> buffer_readback{}, texture_readback{};
+    TextureView            view(texture.Get(), PF_R8G8B8A8_UNORM, 1, 1);
+    view.array_layer = 1;
+    view.num_array   = 1;
+    CommandList verify(EQueueType::Copy);
+    verify.CopyFrom(buffer->GetView(), WritableBytes(buffer_readback), "IOBufferReadback");
+    verify.CopyFrom(view, WritableBytes(texture_readback), "IOTextureReadback");
+    RHIExecutor::Get().Submit(EQueueType::Copy, verify.Submit());
+    RHIExecutor::Get().Sync();
+    if (buffer_readback != expected_buffer || texture_readback != expected_texture) {
+        throw std::runtime_error("IO buffer/texture ordering, offsets or source ownership mismatch");
+    }
+
+    // Cross the removed 64 MiB splitter and exercise an oversized exclusive
+    // batch without allocating a second GPU buffer or splitting its outcome.
+    Array<uint8_t> large(65ull * 1024 * 1024 + 4, uint8_t{0x5a});
+    {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char*>(large.data()), large.size());
+        if (!file)
+            throw std::runtime_error("cannot create large IO regression input");
+    }
+    std::fill(large.begin(), large.end(), 0);
+    {
+        auto          io = device.GetImpl()->CreateIOInterface(device.GetCopyQueue());
+        IOCommandList commands;
+        const auto    file = commands.ResolveFileHandle(path);
+        for (uint i = 0; i != 2; ++i) {
+            commands.CopyFrom(FileDesc{file, 0, large.size()}, RawDataDesc{large});
+        }
+        io->Sync(io->Execute(std::move(commands)));
+    }
+    if (!std::all_of(large.begin(), large.end(), [](uint8_t value) {
+            return value == 0x5a;
+        })) {
+        throw std::runtime_error("large IO request was truncated or overwritten");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=VulkanIOOwnedRequests offsets=verified texture_mip_layer=verified "
+             "binary=verified callbacks=5 errors=2 large_batch=verified");
+}
+
+void RunVulkanIOReadUploadOverlap() {
+    using namespace std::chrono_literals;
+    auto&                 device = RenderDevice::Get();
+    std::binary_semaphore entered{0}, release{0};
+    std::atomic_bool      timed_out   = false;
+    VkResult              next_result = VK_TIMEOUT;
+    {
+        auto          io = device.GetImpl()->CreateIOInterface(device.GetCopyQueue());
+        IOCommandList first;
+        first.AddCallback([&] {
+            entered.release();
+            if (!release.try_acquire_for(10s))
+                timed_out = true;
+        });
+        io->Execute(std::move(first));
+        if (!entered.try_acquire_for(10s)) {
+            release.release();
+            throw std::runtime_error("IO Completion callback did not start");
+        }
+        IOCommandList next;
+        next.AddCallback([] {});
+        const uint64 value = io->Execute(std::move(next));
+        const auto   wait  = io->GetWaitEvent(value);
+        auto*        fence = ResourceCast(reinterpret_cast<Fence*>(wait.timeline_handle));
+        next_result        = fence->HostWait(value);
+        release.release();
+    }
+    if (timed_out || next_result != VK_SUCCESS) {
+        throw std::runtime_error("IO preparation still waits for each previous Completion callback");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=VulkanIOReadUploadOverlap next_submit_before_previous_retirement=verified"
     );
 }
 
@@ -16332,6 +16501,8 @@ int main(int argc, const char** argv) {
         RunCrossQueueTopologyBatch();
         RunDirectCopyExecuteRejected();
         RunVulkanStorageUnifiedCopySubmission();
+        RunVulkanIOOwnedRequests();
+        RunVulkanIOReadUploadOverlap();
         RunAsyncQueueParallelTranslateSmoke();
         RunMultiSegmentSourceExecution();
         RunMultiSegmentCopyRoundTrip();
