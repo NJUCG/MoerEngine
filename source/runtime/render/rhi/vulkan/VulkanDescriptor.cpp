@@ -21,6 +21,7 @@ namespace {
 
 static constexpr std::string_view s_descriptor_buffer_name         = "VulkanDescriptorHeap::DescriptorBuffer";
 static constexpr uint32           s_descriptor_cache_slot_capacity = 10086;
+static constexpr uint32           s_descriptor_queue_count         = 2;
 
 static uint GetBufferDescriptorSize(const VulkanDevice& _device, VkDescriptorType _type) {
     const auto& properties = _device.GetOptionalProperties().descriptor_buffer_properties;
@@ -50,6 +51,29 @@ static uint GetBufferDescriptorSize(const VulkanDevice& _device, VkDescriptorTyp
         default:
             throw std::runtime_error("unsupported buffer descriptor type");
     }
+}
+
+uint AllocateDescriptorCacheSlot(
+    Array<uint>&     _free_slots,
+    uint64&          _next_byte_offset,
+    uint             _slot_stride,
+    size_t           _capacity,
+    std::string_view _resource_kind
+) {
+    if (!_free_slots.empty()) {
+        const uint slot_index = _free_slots.back();
+        _free_slots.pop_back();
+        if (slot_index >= _capacity) {
+            throw std::runtime_error(std::string(_resource_kind) + " descriptor free-list index is invalid");
+        }
+        return slot_index;
+    }
+    const uint slot_index = _next_byte_offset / _slot_stride;
+    if (slot_index >= _capacity) {
+        throw std::runtime_error(std::string(_resource_kind) + " descriptor cache exhausted");
+    }
+    _next_byte_offset += _slot_stride;
+    return slot_index;
 }
 
 void CopyDescriptorBytes(std::span<const byte> _descriptor, std::span<byte> _destination) {
@@ -94,6 +118,16 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     image_cache_slot_stride(std::max(sampled_image_descriptor_size, storage_image_descriptor_size)),
     image_cache_base_byte_offset(sampler_descriptor_size * VulkanDevice::bindless_sampler_count) {
 
+    InitializeDescriptorCaches();
+    CreateDescriptorBuffer();
+    InitializeLeaseSlots();
+    vmaMapMemory(
+        m_device->GetVmaAllocator(), descriptor_buffer->GetAllocation(), (void**)&mapped_descriptor_data
+    );
+    InitializeSamplerDescriptors();
+}
+
+void VulkanDescriptorHeap::InitializeDescriptorCaches() {
     buffer_descriptor_cache.resize(s_descriptor_cache_slot_capacity * buffer_cache_slot_stride);
     sampler_and_image_descriptor_cache.resize(
         image_cache_base_byte_offset + s_descriptor_cache_slot_capacity * image_cache_slot_stride
@@ -103,15 +137,16 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     );
     buffer_descriptor_types.resize(s_descriptor_cache_slot_capacity, VK_DESCRIPTOR_TYPE_MAX_ENUM);
     image_descriptor_types.resize(s_descriptor_cache_slot_capacity, VK_DESCRIPTOR_TYPE_MAX_ENUM);
+}
 
+void VulkanDescriptorHeap::CreateDescriptorBuffer() {
     VkBuffer           desc_buffer            = VK_NULL_HANDLE;
     VmaAllocation      desc_buffer_allocation = VK_NULL_HANDLE;
     VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     // Graphics and compute each retain their own in-flight slice budget. A
     // shared three-slice pool can deadlock when one queue holds every slice
     // while waiting on work that the other queue has not yet recorded.
-    constexpr uint32 descriptor_queue_count = 2;
-    buffer_ci.size  = descriptor_queue_count * s_queue_max_frame_in_flight * 1024 * 1024;
+    buffer_ci.size  = s_descriptor_queue_count * s_queue_max_frame_in_flight * 1024 * 1024;
     buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
@@ -124,7 +159,7 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     alloc_ci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
     alloc_ci.usage = VMA_MEMORY_USAGE_AUTO;
     VK_CHECK_RESULT(vmaCreateBuffer(
-        _device.GetVmaAllocator(), &buffer_ci, &alloc_ci, &desc_buffer, &desc_buffer_allocation, nullptr
+        m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &desc_buffer, &desc_buffer_allocation, nullptr
     ));
 
     BufferInfo buffer_info{};
@@ -135,24 +170,26 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     descriptor_buffer = MoerNew(VulkanBuffer)(
         s_descriptor_buffer_name, buffer_info, *m_device, desc_buffer, desc_buffer_allocation, false, true
     );
+}
 
+void VulkanDescriptorHeap::InitializeLeaseSlots() {
     // Partition descriptor storage into aligned submission lease slots.
-    lease_slot_byte_offsets.resize(descriptor_queue_count * m_device->command_allocator_slot_count);
+    lease_slot_byte_offsets.resize(s_descriptor_queue_count * m_device->command_allocator_slot_count);
 
     // Use descriptorBufferOffsetAlignment for ring buffer offset alignment
     uint64 alignment =
         m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
 
-    uint64 lease_slot_size = (buffer_ci.size / lease_slot_byte_offsets.size() / alignment) * alignment;
+    uint64 lease_slot_size =
+        (descriptor_buffer->GetByteSize() / lease_slot_byte_offsets.size() / alignment) * alignment;
 
     for (uint32_t i = 0; i < lease_slot_byte_offsets.size(); ++i) {
         lease_slot_byte_offsets[i] = Moer::AlignUp(lease_slot_size * i, alignment);
     }
     active_leases.resize(lease_slot_byte_offsets.size());
-    vmaMapMemory(
-        m_device->GetVmaAllocator(), descriptor_buffer->GetAllocation(), (void**)&mapped_descriptor_data
-    );
+}
 
+void VulkanDescriptorHeap::InitializeSamplerDescriptors() {
     // Store immutable sampler descriptors before the image cache.
     for (uint32_t i = 0; i < VulkanDevice::bindless_sampler_count; ++i) {
         VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
@@ -235,59 +272,50 @@ uint VulkanDescriptorHeap::GetOrCreateBufferDescriptorOffset(
     auto cached = cache_slots.find(key);
     if (cached != cache_slots.end()) {
         return cached->second * buffer_cache_slot_stride;
-    } else {
-        VkDescriptorAddressInfoEXT buffer_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
-        buffer_info.address = vk_buffer->DeviceAddress() + _buffer.byte_offset;
-        buffer_info.range   = _buffer.GetByteSize();
-        VkDescriptorGetInfoEXT buffer_desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
-        buffer_desc_info.type = _type;
-        const uint desc_size  = GetDescriptorSize(_type);
-        switch (_type) {
-            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-                buffer_info.format                        = _format;
-                buffer_desc_info.data.pStorageTexelBuffer = &buffer_info;
-                break;
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-                buffer_desc_info.data.pStorageBuffer = &buffer_info;
-                break;
-            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-                buffer_desc_info.data.pUniformBuffer = &buffer_info;
-                break;
-            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-                buffer_info.format                        = _format;
-                buffer_desc_info.data.pUniformTexelBuffer = &buffer_info;
-                break;
-            default:
-                LOG_ERROR(
-                    "Unsupported buffer descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type)
-                );
-                assert(false && "Unsupported buffer descriptor type");
-                return 0;
-        }
-        if (free_buffer_slots.empty()) {
-            slot_index = next_buffer_cache_byte_offset / buffer_cache_slot_stride;
-            if (slot_index >= buffer_descriptor_types.size()) {
-                throw std::runtime_error("buffer descriptor cache exhausted");
-            }
-            next_buffer_cache_byte_offset += buffer_cache_slot_stride;
-        } else {
-            slot_index = free_buffer_slots.back();
-            free_buffer_slots.pop_back();
-            if (slot_index >= buffer_descriptor_types.size()) {
-                throw std::runtime_error("buffer descriptor free-list index is invalid");
-            }
-        }
-
-        cache_slots[key]                    = slot_index;
-        buffer_descriptor_types[slot_index] = _type;
-
-        vkGetDescriptorEXT(
-            m_device->GetDevice(),
-            &buffer_desc_info,
-            desc_size,
-            buffer_descriptor_cache.data() + slot_index * buffer_cache_slot_stride
-        );
     }
+    VkDescriptorAddressInfoEXT buffer_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
+    buffer_info.address = vk_buffer->DeviceAddress() + _buffer.byte_offset;
+    buffer_info.range   = _buffer.GetByteSize();
+    VkDescriptorGetInfoEXT buffer_desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+    buffer_desc_info.type = _type;
+    const uint desc_size  = GetDescriptorSize(_type);
+    switch (_type) {
+        case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+            buffer_info.format                        = _format;
+            buffer_desc_info.data.pStorageTexelBuffer = &buffer_info;
+            break;
+        case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+            buffer_desc_info.data.pStorageBuffer = &buffer_info;
+            break;
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+            buffer_desc_info.data.pUniformBuffer = &buffer_info;
+            break;
+        case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+            buffer_info.format                        = _format;
+            buffer_desc_info.data.pUniformTexelBuffer = &buffer_info;
+            break;
+        default:
+            LOG_ERROR("Unsupported buffer descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));
+            assert(false && "Unsupported buffer descriptor type");
+            return 0;
+    }
+    slot_index = AllocateDescriptorCacheSlot(
+        free_buffer_slots,
+        next_buffer_cache_byte_offset,
+        buffer_cache_slot_stride,
+        buffer_descriptor_types.size(),
+        "buffer"
+    );
+
+    cache_slots[key]                    = slot_index;
+    buffer_descriptor_types[slot_index] = _type;
+
+    vkGetDescriptorEXT(
+        m_device->GetDevice(),
+        &buffer_desc_info,
+        desc_size,
+        buffer_descriptor_cache.data() + slot_index * buffer_cache_slot_stride
+    );
     return slot_index * buffer_cache_slot_stride;
 }
 
@@ -329,39 +357,31 @@ uint VulkanDescriptorHeap::GetOrCreateImageDescriptorOffset(
     if (cached != texture->m_descriptor_cache_slots.end()) {
         return cached->second * image_cache_slot_stride + image_cache_base_byte_offset;
     }
-    uint slot_index = 0;
-    {
-        VkDescriptorImageInfo  image_info{.imageView = image_view, .imageLayout = _layout};
-        VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
-        desc_info.type = _descriptor_type;
-        if (_descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
-            desc_info.data.pStorageImage = &image_info;
-        } else {
-            desc_info.data.pSampledImage = &image_info;
-        }
-        if (free_image_slots.empty()) {
-            slot_index = next_image_cache_byte_offset / image_cache_slot_stride;
-            if (slot_index >= image_descriptor_types.size()) {
-                throw std::runtime_error("image descriptor cache exhausted");
-            }
-            next_image_cache_byte_offset += image_cache_slot_stride;
-        } else {
-            slot_index = free_image_slots.back();
-            free_image_slots.pop_back();
-            if (slot_index >= image_descriptor_types.size()) {
-                throw std::runtime_error("image descriptor free-list index is invalid");
-            }
-        }
-        texture->m_descriptor_cache_slots.emplace(key, slot_index);
-        image_descriptor_types[slot_index] = _descriptor_type;
-        vkGetDescriptorEXT(
-            m_device->GetDevice(),
-            &desc_info,
-            GetDescriptorSize(_descriptor_type),
-            sampler_and_image_descriptor_cache.data() + slot_index * image_cache_slot_stride +
-                image_cache_base_byte_offset
-        );
+    uint                   slot_index = 0;
+    VkDescriptorImageInfo  image_info{.imageView = image_view, .imageLayout = _layout};
+    VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+    desc_info.type = _descriptor_type;
+    if (_descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
+        desc_info.data.pStorageImage = &image_info;
+    } else {
+        desc_info.data.pSampledImage = &image_info;
     }
+    slot_index = AllocateDescriptorCacheSlot(
+        free_image_slots,
+        next_image_cache_byte_offset,
+        image_cache_slot_stride,
+        image_descriptor_types.size(),
+        "image"
+    );
+    texture->m_descriptor_cache_slots.emplace(key, slot_index);
+    image_descriptor_types[slot_index] = _descriptor_type;
+    vkGetDescriptorEXT(
+        m_device->GetDevice(),
+        &desc_info,
+        GetDescriptorSize(_descriptor_type),
+        sampler_and_image_descriptor_cache.data() + slot_index * image_cache_slot_stride +
+            image_cache_base_byte_offset
+    );
     return slot_index * image_cache_slot_stride + image_cache_base_byte_offset;
 }
 
@@ -383,21 +403,13 @@ uint VulkanDescriptorHeap::GetOrCreateAccelerationStructureDescriptorOffset(
     desc_info.data.accelerationStructure =
         vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &address_info);
     uint slot_index = 0;
-    if (free_acceleration_structure_slots.empty()) {
-        slot_index = next_acceleration_structure_cache_byte_offset / acceleration_structure_descriptor_size;
-        if (slot_index >=
-            acceleration_structure_descriptor_cache.size() / acceleration_structure_descriptor_size) {
-            throw std::runtime_error("acceleration-structure descriptor cache exhausted");
-        }
-        next_acceleration_structure_cache_byte_offset += acceleration_structure_descriptor_size;
-    } else {
-        slot_index = free_acceleration_structure_slots.back();
-        free_acceleration_structure_slots.pop_back();
-        if (slot_index >=
-            acceleration_structure_descriptor_cache.size() / acceleration_structure_descriptor_size) {
-            throw std::runtime_error("acceleration-structure descriptor free-list index is invalid");
-        }
-    }
+    slot_index      = AllocateDescriptorCacheSlot(
+        free_acceleration_structure_slots,
+        next_acceleration_structure_cache_byte_offset,
+        acceleration_structure_descriptor_size,
+        acceleration_structure_descriptor_cache.size() / acceleration_structure_descriptor_size,
+        "acceleration-structure"
+    );
     _acceleration_structure->m_descriptor_cache_slot = slot_index;
     vkGetDescriptorEXT(
         m_device->GetDevice(),

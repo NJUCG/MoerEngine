@@ -108,6 +108,11 @@ public:
     );
 
 private:
+    void InitializeDescriptorCaches();
+    void CreateDescriptorBuffer();
+    void InitializeLeaseSlots();
+    void InitializeSamplerDescriptors();
+
     // Call with cache_mutex held; views never escape the descriptor copy.
     std::span<const byte> GetCachedBufferDescriptor(uint64 _byte_offset) const;
     std::span<const byte> GetCachedImageDescriptor(uint64 _byte_offset) const;
