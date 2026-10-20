@@ -12,6 +12,7 @@
 #include "taskgraph/TaskGraph.h"
 
 #include <algorithm>
+#include <cctype>
 #include <entt/entt.hpp>
 #include <filesystem>
 #include <system_error>
@@ -116,6 +117,17 @@ Scene::Scene() = default;
 void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     ScopedLogTimer startup_timer("[Startup][Scene] LoadSceneInternal total");
 
+    // A failed Gaussian load must not destroy an already edited scene.
+    std::optional<SceneImportResult> gaussian_source;
+    auto extension = file_path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension == ".ply") {
+        SceneLoadRequest gaussian_request{};
+        gaussian_request.file_path = file_path;
+        gaussian_source.emplace(LoaderInterface::LoadScene(gaussian_request));
+        if (!*gaussian_source) return;
+    }
+
     m_scene_load_info.Reset();
     m_scene_load_info.StartLoading();
 
@@ -125,7 +137,7 @@ void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     // 先加载逻辑场景，再基于其完整快照重建 CPU 场景。
     SceneLoadRequest request{};
     request.file_path = file_path;
-    SceneImportResult result = LoaderInterface::LoadScene(request);
+    SceneImportResult result = gaussian_source ? std::move(*gaussian_source) : LoaderInterface::LoadScene(request);
 
     if (!result) {
         LOG_ERROR("Scene load failed: path={}", file_path.string());
@@ -154,6 +166,10 @@ void Scene::LoadSceneFromFile(const std::filesystem::path& file_path) {
 }
 
 bool Scene::SaveStateCache() const {
+    if (m_logical_scene && !r().view<const ecs::CGaussianInstance>().empty()) {
+        LOG_WARNING("Gaussian scene persistence is not implemented yet; refusing to save a Mesh-only cache that would lose Gaussian instances.");
+        return false;
+    }
     if (!m_logical_scene || !IsReady()) {
         const std::string error = "Cannot save scene state cache because scene is not ready.";
         LOG_WARNING("Scene State Cache save failed: {}", error);
@@ -217,6 +233,9 @@ bool Scene::ResetToSourceScene() {
 }
 
 Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::filesystem::path& file_path) {
+    auto extension = file_path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension == ".ply") return ImportGaussianPly(file_path);
     ImportSceneFromFileResult import_result{};
 
     if (!IsReady()) {
@@ -420,6 +439,7 @@ const std::filesystem::path& Scene::GetSourceFilePath() const {
 
 void Scene::Reset() {
     m_bindless_array = nullptr;
+    m_last_gaussian_snapshot.reset();
 
     m_logical_scene.reset();
     m_cpu_scene.reset();

@@ -226,6 +226,11 @@ SceneUpdateBatch Scene::PrepareUpdateBatch(bool is_run_test_case, bool capture_g
         );
     }
 
+    if (auto gaussian_update = CaptureGaussianUpdate(full_gpu_scene_rebuild)) {
+        if (!batch.update_gpu_update) batch.update_gpu_update.emplace();
+        batch.update_gpu_update->gaussian_update = std::move(gaussian_update);
+    }
+
     batch.main_camera = GetMainCamera().camera;
     batch.light_count = m_cpu_scene->GetLightCount();
 

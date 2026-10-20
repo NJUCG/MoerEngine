@@ -966,6 +966,10 @@ bool SceneCacheSerializer::SaveLogicalScene(
     SceneCacheHeader             header,
     const ecs::LogicalScene&     logical_scene
 ) {
+    if (!logical_scene.r().view<const ecs::CGaussianInstance>().empty()) {
+        LOG_WARNING("Cannot serialize Gaussian instances with the Mesh-only cache format.");
+        return false;
+    }
     std::error_code             ec;
     const std::filesystem::path parent_path = cache_path.parent_path();
     if (!parent_path.empty()) {

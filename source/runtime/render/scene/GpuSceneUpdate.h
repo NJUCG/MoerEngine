@@ -4,6 +4,7 @@
 #include "misc/STL.h"
 #include "rhi/RHICommandDrawData.h"
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
+#include "scene/gaussian/GaussianAsset.h"
 
 #include <climits>
 #include <cstdint>
@@ -64,6 +65,7 @@ enum class EGpuSceneRaytracingUpdate : uint8 {
 };
 
 struct GpuSceneUpdate {
+    std::shared_ptr<const GaussianSceneSnapshot> gaussian_update;
     bool full_rebuild     = false;
     bool update_lights    = false;
     bool update_materials = false;
@@ -87,10 +89,11 @@ struct GpuSceneUpdate {
     Array<GpuSceneRtMeshData>           rt_meshes;
     Array<GpuSceneRtInstanceData>       rt_instances;
 
-    bool HasWork() const {
+    bool HasMeshWork() const {
         return full_rebuild || update_lights || update_materials || update_meshes ||
                raytracing_update != EGpuSceneRaytracingUpdate::None;
     }
+    bool HasWork() const { return HasMeshWork() || gaussian_update != nullptr; }
 };
 
 } // namespace Moer::Render

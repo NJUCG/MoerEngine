@@ -6,6 +6,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "scene/camera/Camera.h"
+#include "scene/gaussian/GaussianAsset.h"
 #include "shaderheaders/shared/raster/SharedEnum.h"
 
 #include <entt/entity/entity.hpp>
@@ -21,6 +22,11 @@
  *   - 所有Context的类型名 均以Ctx开头
  */
 namespace Moer::ecs {
+
+struct CGaussianInstance {
+    GaussianAssetRef asset;
+    GaussianInstanceSettings settings;
+};
 
 // MARK: Camera
 struct CTagMainCamera {};

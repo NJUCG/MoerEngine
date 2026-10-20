@@ -1,5 +1,11 @@
 set(moer_test_folder "test")
 
+add_executable(TestGaussianSceneData GaussianSceneDataTest.cpp)
+target_link_libraries(TestGaussianSceneData PRIVATE Moer::Render)
+set_target_properties(TestGaussianSceneData PROPERTIES FOLDER "${moer_test_folder}")
+add_test(NAME GaussianSceneDataContract COMMAND $<TARGET_FILE:TestGaussianSceneData>)
+set_tests_properties(GaussianSceneDataContract PROPERTIES TIMEOUT 60 WORKING_DIRECTORY "$<TARGET_FILE_DIR:TestGaussianSceneData>")
+
 add_subdirectory(math)
 add_subdirectory(remote)
 add_subdirectory(scripting)

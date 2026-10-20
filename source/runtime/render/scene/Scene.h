@@ -213,6 +213,15 @@ public:
 
     ImportSceneFromFileResult ImportSceneFromFileSync(const std::filesystem::path& file_path);
 
+    // PLY import is atomic and does not modify Mesh assets or invalidate Mesh geometry.
+    ImportSceneFromFileResult ImportGaussianPly(const std::filesystem::path& file_path);
+    entt::entity CreateGaussianInstance(GaussianAssetRef asset, const EntityWithNodeCreateInfo& info = {});
+    GaussianAssetRef GetGaussianAsset(entt::entity entity) const;
+    std::optional<GaussianInstanceSettings> GetGaussianInstanceSettings(entt::entity entity) const;
+    bool SetGaussianInstanceSettings(entt::entity entity, const GaussianInstanceSettings& settings);
+    bool DestroyGaussianInstance(entt::entity entity);
+    EGaussianSceneContent GetGaussianSceneContent() const;
+
     const std::filesystem::path& GetSourceFilePath() const;
 
     /**
@@ -267,6 +276,7 @@ private:
     /////////////////////////////////
 
     TickState BuildPendingTickState() const;
+    std::shared_ptr<const GaussianSceneSnapshot> CaptureGaussianUpdate(bool force);
 
 public:
     ///////////////////////
@@ -457,6 +467,8 @@ private:
     TickState             m_last_tick_state;
     std::filesystem::path m_source_file_path;
     bool                  m_has_pending_gpu_scene_update = false;
+    std::shared_ptr<const GaussianSceneSnapshot> m_last_gaussian_snapshot;
+    uint64 m_gaussian_revision = 0;
 };
 
 struct SceneGeometryInstanceSnapshot {

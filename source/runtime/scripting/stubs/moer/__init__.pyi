@@ -169,6 +169,10 @@ Entity = int
 
 
 class SceneApi:
+    def get_gaussian_scene_content(self) -> EGaussianSceneContent: ...
+    def get_gaussian_instance_settings(self, entity: Entity) -> GaussianInstanceSettings | None: ...
+    def set_gaussian_instance_settings(self, entity: Entity, settings: GaussianInstanceSettings) -> bool: ...
+    def destroy_gaussian_instance(self, entity: Entity) -> bool: ...
     def get_source_file_path(self) -> str: ...
     def is_start_loading(self) -> bool: ...
     def is_ready(self) -> bool: ...
@@ -209,3 +213,18 @@ class SceneApi:
 
 
 def scene() -> SceneApi: ...
+
+
+class EGaussianSceneContent(Enum):
+    Empty: EGaussianSceneContent
+    MeshOnly: EGaussianSceneContent
+    GaussianOnly: EGaussianSceneContent
+    Mixed: EGaussianSceneContent
+
+
+class GaussianInstanceSettings:
+    color_multiplier: float3
+    opacity_multiplier: float
+    enabled: bool
+
+    def __init__(self) -> None: ...

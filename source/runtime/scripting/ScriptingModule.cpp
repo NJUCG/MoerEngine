@@ -555,6 +555,32 @@ void BindSceneImportApi(SceneApiClass& scene_api_class) {
         );
 }
 
+void BindGaussianApi(py::module_& module, SceneApiClass& scene_api_class) {
+    py::enum_<EGaussianSceneContent>(module, "EGaussianSceneContent")
+        .value("Empty", EGaussianSceneContent::Empty)
+        .value("MeshOnly", EGaussianSceneContent::MeshOnly)
+        .value("GaussianOnly", EGaussianSceneContent::GaussianOnly)
+        .value("Mixed", EGaussianSceneContent::Mixed);
+    py::class_<GaussianInstanceSettings>(module, "GaussianInstanceSettings")
+        .def(py::init<>())
+        .def_readwrite("color_multiplier", &GaussianInstanceSettings::color_multiplier)
+        .def_readwrite("opacity_multiplier", &GaussianInstanceSettings::opacity_multiplier)
+        .def_readwrite("enabled", &GaussianInstanceSettings::enabled);
+    scene_api_class
+        .def("get_gaussian_scene_content", [](MainThreadCommandQueue& queue) {
+            return CallScene(queue, [](Scene& scene) { return scene.GetGaussianSceneContent(); });
+        })
+        .def("get_gaussian_instance_settings", [](MainThreadCommandQueue& queue, entt::entity entity) {
+            return CallScene(queue, [entity](Scene& scene) { return scene.GetGaussianInstanceSettings(entity); });
+        })
+        .def("set_gaussian_instance_settings", [](MainThreadCommandQueue& queue, entt::entity entity, const GaussianInstanceSettings& settings) {
+            return CallScene(queue, [entity, settings](Scene& scene) { return scene.SetGaussianInstanceSettings(entity, settings); });
+        })
+        .def("destroy_gaussian_instance", [](MainThreadCommandQueue& queue, entt::entity entity) {
+            return CallScene(queue, [entity](Scene& scene) { return scene.DestroyGaussianInstance(entity); });
+        });
+}
+
 void BindScenePrimaryEntityQueryApi(SceneApiClass& scene_api_class) {
     scene_api_class
         .def(
@@ -763,6 +789,7 @@ void BindSceneApi(py::module_& module) {
 
     BindSceneInspectionApi(scene_api_class);
     BindSceneImportApi(scene_api_class);
+    BindGaussianApi(module, scene_api_class);
     BindScenePrimaryEntityQueryApi(scene_api_class);
     BindSceneCreationApi(scene_api_class);
     BindSceneUpdateApi(scene_api_class);

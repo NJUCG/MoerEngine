@@ -6,7 +6,10 @@
 #include "scene/cache/SceneCache.h"
 #include "scene/cache/SceneCacheSerializer.h"
 #include "scene/loader/assimp/Parser.h"
+#include "scene/loader/GaussianPlyLoader.h"
 #include <chrono>
+#include <algorithm>
+#include <cctype>
 #include <entt/entt.hpp>
 #include <filesystem>
 
@@ -99,6 +102,31 @@ bool LoaderInterface::LoadSceneFromFileCommon(
     ESceneLoadSource*       out_source
 ) {
     const std::filesystem::path& file_path = request.file_path;
+    auto gaussian_extension = file_path.extension().string();
+    std::transform(gaussian_extension.begin(), gaussian_extension.end(), gaussian_extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (gaussian_extension == ".ply") {
+        const auto loaded = LoadGaussianPly(file_path);
+        if (!loaded) {
+            LOG_WARNING("Gaussian PLY load failed: {}", loaded.error_message);
+            return false;
+        }
+        auto& registry = out_logical_scene.r();
+        const auto root = registry.create();
+        registry.emplace<ecs::CTagRootNode>(root);
+        registry.emplace<ecs::CNode>(root).name = file_path.stem().string();
+        registry.ctx().emplace<ecs::CtxMegaBuffers>();
+        EntityWithNodeCreateInfo info;
+        info.name = file_path.stem().string();
+        const auto entity = out_logical_scene.UCreateEntityWithNode(info);
+        registry.emplace<ecs::CGaussianInstance>(entity, loaded.asset, GaussianInstanceSettings{});
+        out_logical_scene.UCreateDefaultCamera();
+        out_logical_scene.UCreateDefaultLights();
+        out_logical_scene.Update();
+        // The Mesh cache format cannot serialize Gaussian assets yet; never silently drop them.
+        if (out_source) *out_source = ESceneLoadSource::Parser;
+        return true;
+    }
     if (out_source) {
         *out_source = ESceneLoadSource::None;
     }
