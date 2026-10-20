@@ -41,9 +41,9 @@ P1 已完成并验证。原 Mesh 数据布局和 shader 未修改；高斯数据
 
 本任务 outputs 中保存 `MoerEngine-Gaussian-P1-Runtime.log`、精简运行摘要、CTest 和构建日志。测试编辑器已正常关闭。
 
-## 下一步：先定位 P0 严格门禁，再进入 P2
+## 下一步：按用户决定，暂搁置 Sponza 波动，推进 P2
 
-- 先定位 Sponza 普通 PBR 的不确定性；保持 Mesh 数据与 shader 不变，不放宽比较阈值。
+- 用户已决定暂不处理 Sponza 基线波动；保留原始失败报告，不把它标为通过，也不再用它阻塞后续开发。
 - P2 计划：为 GaussianOnly 接入标准投影 → tile 计数/扫描 → 配对/排序 → tile 区间 → 像素累积。
 - 输出预乘颜色与透射率，使用独立相机/高斯 bounds，处理背景与参考颜色变换。
 - 先验证解析样例，再使用真实标准 PLY 对照参考图；保留容量溢出检测。
@@ -57,3 +57,12 @@ P1 已完成并验证。原 Mesh 数据布局和 shader 未修改；高斯数据
 - P1 作为独立功能提交：标准 PLY、Scene/实例/快照、独立 GPU 数据链路、Python API 与契约测试。实现和验证范围见上文。
 - 当前版本重新编译成功，`GaussianSceneDataContract` 再次通过（0.25 秒；CTest 总耗时 0.28 秒）。工作区测试编辑器均已关闭。
 - P2 高斯绘制、编辑器完整面板、持久化和混合渲染仍未实现。
+
+## 开发手册命名整理
+
+- 按 `docs/DEVELOPMENT.md` 整理本次新增 C++ 模块及测试中的变量名，保留历史 Mesh 模块命名。
+- 基线常量改用 `k_` 前缀；观测状态对象成员使用 `m_`；布尔变量和参数使用 `is_` / `has_` / `should_`。
+- 高斯 GPU Buffer 成员明确为 `m_gaussian_buffer` / `m_instance_buffer`；上传、PLY 解析及测试中的计数与索引补齐语义及 `_count` / `_id`。
+- C++ 实例设置使用 `is_enabled`，Python 仍暴露原 `enabled` 属性。PLY 字段、抓图 JSON、日志字符串与 GPU 共享布局保持原样。
+- 使用现有契约测试与固定 Mesh 控制场景验证重命名；不添加新渲染功能。
+- 验证结果：MoerEditor / TestGaussianSceneData 编译通过；CTest 通过（0.57 秒）；控制场景 3 帧 × 4 层与重命名前逐字节一致，正常退出且未发现运行/验证错误。

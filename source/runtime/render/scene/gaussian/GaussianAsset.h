@@ -32,7 +32,7 @@ struct GaussianLoadResult {
 struct GaussianInstanceSettings {
     float3 color_multiplier   = float3(1.f);
     float  opacity_multiplier = 1.f;
-    bool   enabled            = true;
+    bool   is_enabled         = true;
 };
 
 struct GaussianInstanceSnapshot {
@@ -41,8 +41,8 @@ struct GaussianInstanceSnapshot {
     float4x4                 world_transform = float4x4::Identity();
     Box3D                    world_bounds;
     GaussianInstanceSettings settings;
-    bool                     visible_in_game   = true;
-    bool                     visible_in_editor = true;
+    bool                     is_visible_in_game   = true;
+    bool                     is_visible_in_editor = true;
 };
 
 enum class EGaussianSceneContent {

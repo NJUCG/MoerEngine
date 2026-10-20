@@ -16,7 +16,7 @@ namespace {
 struct Property {
     std::string name;
     std::string type;
-    size_t      bytes;
+    size_t      byte_count;
 };
 
 size_t ScalarSize(const std::string& type) {
@@ -62,8 +62,8 @@ double ReadBinary(std::istream& input, const std::string& type) {
 float Sigmoid(float value) {
     if (value >= 0.f)
         return 1.f / (1.f + std::exp(-value));
-    const float e = std::exp(value);
-    return e / (1.f + e);
+    const float exp_value = std::exp(value);
+    return exp_value / (1.f + exp_value);
 }
 } // namespace
 
@@ -82,12 +82,12 @@ GaussianLoadResult LoadGaussianPly(const std::filesystem::path& path) {
         next_line();
         if (line != "ply")
             throw std::runtime_error("Missing PLY magic");
-        bool                  ascii = false, format_seen = false, vertices_seen = false, in_vertices = false;
-        bool                  header_ended = false;
-        uint64_t              vertex_count = 0;
-        size_t                header_bytes = 4;
+        bool     is_ascii = false, has_format = false, has_vertices = false, is_in_vertices = false;
+        bool     has_header_ended = false;
+        uint64_t vertex_count     = 0;
+        size_t   header_bytes     = 4;
         std::vector<Property> properties;
-        while (!header_ended) {
+        while (!has_header_ended) {
             next_line();
             header_bytes += line.size() + 1;
             if (header_bytes > 1024 * 1024)
@@ -98,65 +98,65 @@ GaussianLoadResult LoadGaussianPly(const std::filesystem::path& path) {
             if (keyword == "format") {
                 std::string format, version;
                 fields >> format >> version;
-                if (format_seen || version != "1.0" ||
+                if (has_format || version != "1.0" ||
                     (format != "ascii" && format != "binary_little_endian")) {
                     throw std::runtime_error("Expected PLY 1.0 ASCII or binary_little_endian");
                 }
-                format_seen = true;
-                ascii       = format == "ascii";
+                has_format = true;
+                is_ascii   = format == "ascii";
             } else if (keyword == "element") {
                 std::string name, count_text;
                 fields >> name >> count_text;
-                size_t consumed = 0;
+                size_t consumed_count = 0;
                 if (count_text.empty() || count_text.front() == '-')
                     throw std::runtime_error("Invalid element count");
-                const uint64_t count = std::stoull(count_text, &consumed);
-                if (consumed != count_text.size())
+                const uint64_t count = std::stoull(count_text, &consumed_count);
+                if (consumed_count != count_text.size())
                     throw std::runtime_error("Invalid element count");
                 if (name == "vertex") {
-                    if (vertices_seen)
+                    if (has_vertices)
                         throw std::runtime_error("Duplicate vertex element");
-                    vertices_seen = in_vertices = true;
-                    vertex_count                = count;
+                    has_vertices = is_in_vertices = true;
+                    vertex_count                  = count;
                 } else {
                     // Strict Gaussian assets contain only vertices (zero-sized extra elements are harmless).
                     if (count != 0)
                         throw std::runtime_error(
                             "Non-vertex PLY elements are not supported for Gaussian assets"
                         );
-                    in_vertices = false;
+                    is_in_vertices = false;
                 }
-            } else if (keyword == "property" && in_vertices) {
+            } else if (keyword == "property" && is_in_vertices) {
                 Property property;
                 fields >> property.type >> property.name;
                 if (property.type == "list" || property.name.empty())
                     throw std::runtime_error("Expected scalar vertex property");
-                property.bytes = ScalarSize(property.type);
+                property.byte_count = ScalarSize(property.type);
                 properties.push_back(std::move(property));
                 if (properties.size() > 256)
                     throw std::runtime_error("Too many PLY vertex properties");
             } else if (keyword == "end_header") {
-                header_ended = true;
+                has_header_ended = true;
             } else if (
                 keyword != "comment" && keyword != "obj_info" && !keyword.empty() && keyword != "property"
             ) {
                 throw std::runtime_error("Unsupported PLY header directive: " + keyword);
             }
         }
-        if (!format_seen || !vertices_seen)
+        if (!has_format || !has_vertices)
             throw std::runtime_error("Missing PLY format or vertex element");
-        if (!ascii && std::endian::native != std::endian::little)
+        if (!is_ascii && std::endian::native != std::endian::little)
             throw std::runtime_error("Unsupported host byte order");
         // One typed GPU buffer has a uint32 byte size in the current RHI.
         if (vertex_count > std::numeric_limits<uint32_t>::max() / sizeof(Render::GGaussian)) {
             throw std::runtime_error("Gaussian asset exceeds current RHI buffer size limit");
         }
         std::unordered_map<std::string, size_t> indices;
-        size_t                                  stride = 0;
-        for (size_t i = 0; i < properties.size(); ++i) {
-            if (!indices.emplace(properties[i].name, i).second)
-                throw std::runtime_error("Duplicate PLY property: " + properties[i].name);
-            stride += properties[i].bytes;
+        size_t                                  vertex_byte_stride = 0;
+        for (size_t property_id = 0; property_id < properties.size(); ++property_id) {
+            if (!indices.emplace(properties[property_id].name, property_id).second)
+                throw std::runtime_error("Duplicate PLY property: " + properties[property_id].name);
+            vertex_byte_stride += properties[property_id].byte_count;
         }
         const auto require = [&](const std::string& name) {
             const auto it = indices.find(name);
@@ -164,95 +164,109 @@ GaussianLoadResult LoadGaussianPly(const std::filesystem::path& path) {
                 throw std::runtime_error("Missing standard 3DGS property: " + name);
             return it->second;
         };
-        std::array<size_t, 3> xyz, scales, dc;
-        std::array<size_t, 4> rotation;
-        for (int i = 0; i < 3; ++i) {
-            xyz[i]    = require(std::string(1, "xyz"[i]));
-            scales[i] = require("scale_" + std::to_string(i));
-            dc[i]     = require("f_dc_" + std::to_string(i));
+        std::array<size_t, 3> position_property_ids, scale_property_ids, dc_property_ids;
+        std::array<size_t, 4> rotation_property_ids;
+        for (int property_id = 0; property_id < 3; ++property_id) {
+            position_property_ids[property_id] = require(std::string(1, "xyz"[property_id]));
+            scale_property_ids[property_id]    = require("scale_" + std::to_string(property_id));
+            dc_property_ids[property_id]       = require("f_dc_" + std::to_string(property_id));
         }
-        for (int i = 0; i < 4; ++i)
-            rotation[i] = require("rot_" + std::to_string(i));
-        const size_t opacity    = require("opacity");
-        size_t       rest_count = 0;
+        for (int property_id = 0; property_id < 4; ++property_id)
+            rotation_property_ids[property_id] = require("rot_" + std::to_string(property_id));
+        const size_t opacity_property_id = require("opacity");
+        size_t       rest_count          = 0;
         for (const auto& property : properties)
             if (property.name.starts_with("f_rest_"))
                 ++rest_count;
-        uint32 degree = 0;
+        uint32 sh_degree = 0;
         if (rest_count == 9)
-            degree = 1;
+            sh_degree = 1;
         else if (rest_count == 24)
-            degree = 2;
+            sh_degree = 2;
         else if (rest_count == 45)
-            degree = 3;
+            sh_degree = 3;
         else if (rest_count != 0)
             throw std::runtime_error("SH coefficients must describe degree 0, 1, 2 or 3");
-        std::vector<size_t> rest;
-        for (size_t i = 0; i < rest_count; ++i)
-            rest.push_back(require("f_rest_" + std::to_string(i)));
+        std::vector<size_t> rest_property_ids;
+        for (size_t property_id = 0; property_id < rest_count; ++property_id)
+            rest_property_ids.push_back(require("f_rest_" + std::to_string(property_id)));
         const auto data_start = input.tellg();
         input.seekg(0, std::ios::end);
         const auto data_bytes = input.tellg() - data_start;
-        if (data_bytes < 0 || (!ascii && static_cast<uint64_t>(data_bytes) < vertex_count * stride) ||
-            (ascii && static_cast<uint64_t>(data_bytes) < vertex_count * properties.size())) {
+        if (data_bytes < 0 ||
+            (!is_ascii && static_cast<uint64_t>(data_bytes) < vertex_count * vertex_byte_stride) ||
+            (is_ascii && static_cast<uint64_t>(data_bytes) < vertex_count * properties.size())) {
             throw std::runtime_error("Truncated PLY vertex payload");
         }
         input.seekg(data_start);
         auto asset         = std::make_shared<GaussianAsset>();
         asset->source_path = std::filesystem::absolute(path).lexically_normal();
-        asset->sh_degree   = degree;
+        asset->sh_degree   = sh_degree;
         asset->gaussians.reserve(static_cast<size_t>(vertex_count));
         std::vector<float> values(properties.size());
-        for (uint64_t vertex = 0; vertex < vertex_count; ++vertex) {
-            for (size_t i = 0; i < properties.size(); ++i) {
+        for (uint64_t vertex_id = 0; vertex_id < vertex_count; ++vertex_id) {
+            for (size_t property_id = 0; property_id < properties.size(); ++property_id) {
                 double number;
-                if (ascii) {
+                if (is_ascii) {
                     if (!(input >> number))
                         throw std::runtime_error("Invalid or truncated ASCII PLY vertex");
                 } else
-                    number = ReadBinary(input, properties[i].type);
+                    number = ReadBinary(input, properties[property_id].type);
                 if (!std::isfinite(number) || std::abs(number) > std::numeric_limits<float>::max()) {
                     throw std::runtime_error("PLY vertex contains non-finite or out-of-range values");
                 }
-                values[i] = static_cast<float>(number);
+                values[property_id] = static_cast<float>(number);
             }
-            Render::GGaussian g{};
-            g.position = float4(values[xyz[0]], values[xyz[1]], values[xyz[2]], 1.f);
+            Render::GGaussian gaussian{};
+            gaussian.position = float4(
+                values[position_property_ids[0]],
+                values[position_property_ids[1]],
+                values[position_property_ids[2]],
+                1.f
+            );
             const float3 scale(
-                std::exp(values[scales[0]]), std::exp(values[scales[1]]), std::exp(values[scales[2]])
+                std::exp(values[scale_property_ids[0]]),
+                std::exp(values[scale_property_ids[1]]),
+                std::exp(values[scale_property_ids[2]])
             );
             if (!std::isfinite(scale.x) || !std::isfinite(scale.y) || !std::isfinite(scale.z) ||
                 scale.x <= 0.f || scale.y <= 0.f || scale.z <= 0.f)
                 throw std::runtime_error("Invalid Gaussian scale after exp");
-            g.scale_opacity = float4(scale.x, scale.y, scale.z, Sigmoid(values[opacity]));
-            const double w = values[rotation[0]], x = values[rotation[1]], y = values[rotation[2]],
-                         z      = values[rotation[3]];
+            gaussian.scale_opacity = float4(scale.x, scale.y, scale.z, Sigmoid(values[opacity_property_id]));
+            const double w = values[rotation_property_ids[0]], x = values[rotation_property_ids[1]],
+                         y = values[rotation_property_ids[2]], z = values[rotation_property_ids[3]];
             const double length = std::sqrt(w * w + x * x + y * y + z * z);
             if (!(length > 1e-12))
                 throw std::runtime_error("Zero-length Gaussian quaternion");
-            g.rotation = float4(
+            gaussian.rotation = float4(
                 static_cast<float>(x / length),
                 static_cast<float>(y / length),
                 static_cast<float>(z / length),
                 static_cast<float>(w / length)
             );
-            g.sh[0]                  = float4(values[dc[0]], values[dc[1]], values[dc[2]], 0.f);
-            const size_t per_channel = rest_count / 3;
-            for (size_t i = 0; i < per_channel; ++i) {
-                g.sh[i + 1] = float4(
-                    values[rest[i]], values[rest[per_channel + i]], values[rest[2 * per_channel + i]], 0.f
+            gaussian.sh[0] = float4(
+                values[dc_property_ids[0]], values[dc_property_ids[1]], values[dc_property_ids[2]], 0.f
+            );
+            const size_t coefficients_per_channel = rest_count / 3;
+            for (size_t property_id = 0; property_id < coefficients_per_channel; ++property_id) {
+                gaussian.sh[property_id + 1] = float4(
+                    values[rest_property_ids[property_id]],
+                    values[rest_property_ids[coefficients_per_channel + property_id]],
+                    values[rest_property_ids[2 * coefficients_per_channel + property_id]],
+                    0.f
                 );
             }
             // Conservative rotation-independent 3-sigma support; exact filtering is a rendering decision.
             const float  radius = 3.f * std::max({scale.x, scale.y, scale.z});
-            const float3 center(g.position.x, g.position.y, g.position.z);
-            const float3 lo = center - float3(radius), hi = center + float3(radius);
-            if (!std::isfinite(radius) || !std::isfinite(lo.x) || !std::isfinite(lo.y) ||
-                !std::isfinite(lo.z) || !std::isfinite(hi.x) || !std::isfinite(hi.y) || !std::isfinite(hi.z))
+            const float3 center(gaussian.position.x, gaussian.position.y, gaussian.position.z);
+            const float3 min_bounds = center - float3(radius), max_bounds = center + float3(radius);
+            if (!std::isfinite(radius) || !std::isfinite(min_bounds.x) || !std::isfinite(min_bounds.y) ||
+                !std::isfinite(min_bounds.z) || !std::isfinite(max_bounds.x) ||
+                !std::isfinite(max_bounds.y) || !std::isfinite(max_bounds.z))
                 throw std::runtime_error("Gaussian bounds overflow");
-            asset->bounds.Expand(lo);
-            asset->bounds.Expand(hi);
-            asset->gaussians.push_back(g);
+            asset->bounds.Expand(min_bounds);
+            asset->bounds.Expand(max_bounds);
+            asset->gaussians.push_back(gaussian);
         }
         return {std::move(asset), {}};
     } catch (const std::exception& error) {

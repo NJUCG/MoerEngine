@@ -565,7 +565,7 @@ void BindGaussianApi(py::module_& module, SceneApiClass& scene_api_class) {
         .def(py::init<>())
         .def_readwrite("color_multiplier", &GaussianInstanceSettings::color_multiplier)
         .def_readwrite("opacity_multiplier", &GaussianInstanceSettings::opacity_multiplier)
-        .def_readwrite("enabled", &GaussianInstanceSettings::enabled);
+        .def_readwrite("enabled", &GaussianInstanceSettings::is_enabled);
     scene_api_class
         .def("get_gaussian_scene_content", [](MainThreadCommandQueue& queue) {
             return CallScene(queue, [](Scene& scene) { return scene.GetGaussianSceneContent(); });

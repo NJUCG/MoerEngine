@@ -276,7 +276,7 @@ private:
     /////////////////////////////////
 
     TickState BuildPendingTickState() const;
-    std::shared_ptr<const GaussianSceneSnapshot> CaptureGaussianUpdate(bool force);
+    std::shared_ptr<const GaussianSceneSnapshot> CaptureGaussianUpdate(bool should_force_update);
 
 public:
     ///////////////////////

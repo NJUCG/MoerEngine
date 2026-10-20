@@ -13,10 +13,10 @@
 using namespace Moer;
 
 namespace {
-int  failures = 0;
-void Check(bool condition, const char* message) {
-    if (!condition) {
-        ++failures;
+int  failure_count = 0;
+void Check(bool is_condition_met, const char* message) {
+    if (!is_condition_met) {
+        ++failure_count;
         std::cerr << "FAIL: " << message << '\n';
     }
 }
@@ -24,9 +24,10 @@ bool Near(float a, float b) {
     return std::abs(a - b) < 1e-5f;
 }
 
-std::string Header(bool binary, int rest = 0, int count = 1) {
-    std::string h = "ply\nformat " + std::string(binary ? "binary_little_endian" : "ascii") +
-                    " 1.0\ncomment Gaussian fixture\nelement vertex " + std::to_string(count) + "\n";
+std::string Header(bool is_binary, int rest_coefficient_count = 0, int vertex_count = 1) {
+    std::string header = "ply\nformat " + std::string(is_binary ? "binary_little_endian" : "ascii") +
+                         " 1.0\ncomment Gaussian fixture\nelement vertex " + std::to_string(vertex_count) +
+                         "\n";
     // Deliberately shuffled fields and an unknown scalar attribute.
     for (const char* field :
          {"opacity",
@@ -44,11 +45,11 @@ std::string Header(bool binary, int rest = 0, int count = 1) {
           "rot_2",
           "f_dc_1",
           "unused"}) {
-        h += "property float " + std::string(field) + "\n";
+        header += "property float " + std::string(field) + "\n";
     }
-    for (int i = 0; i < rest; ++i)
-        h += "property float f_rest_" + std::to_string(i) + "\n";
-    return h + "end_header\n";
+    for (int coefficient_id = 0; coefficient_id < rest_coefficient_count; ++coefficient_id)
+        header += "property float f_rest_" + std::to_string(coefficient_id) + "\n";
+    return header + "end_header\n";
 }
 void Write(const std::filesystem::path& path, const std::string& text) {
     std::ofstream(path, std::ios::binary) << text;
@@ -68,19 +69,22 @@ int main() {
         Check(bool(loaded), "reordered ASCII degree-one PLY loads");
         if (!loaded)
             throw std::runtime_error(loaded.error_message);
-        const auto& g = loaded.asset->gaussians.front();
+        const auto& gaussian = loaded.asset->gaussians.front();
         Check(
             loaded.asset->sh_degree == 1 && loaded.asset->gaussians.size() == 1, "SH degree and vertex count"
         );
         Check(
-            Near(g.position.x, 1) && Near(g.position.y, 2) && Near(g.position.z, 3), "position fields by name"
+            Near(gaussian.position.x, 1) && Near(gaussian.position.y, 2) && Near(gaussian.position.z, 3),
+            "position fields by name"
         );
         Check(
-            Near(g.scale_opacity.x, 1) && Near(g.scale_opacity.w, 0.5f) && Near(g.rotation.w, 1),
+            Near(gaussian.scale_opacity.x, 1) && Near(gaussian.scale_opacity.w, 0.5f) &&
+                Near(gaussian.rotation.w, 1),
             "exp / sigmoid / quaternion normalization"
         );
         Check(
-            Near(g.sh[1].x, 1) && Near(g.sh[1].y, 4) && Near(g.sh[1].z, 7) && Near(g.sh[3].z, 9),
+            Near(gaussian.sh[1].x, 1) && Near(gaussian.sh[1].y, 4) && Near(gaussian.sh[1].z, 7) &&
+                Near(gaussian.sh[3].z, 9),
             "channel-major source SH converted to coefficient-major RGB"
         );
         Check(
@@ -95,14 +99,17 @@ int main() {
             const float raw[] = {0, 3, 1, 2, 0.3f, 0, 0, 2, 0.1f, 0, 0, 0, 0, 0.2f, 123};
             output.write(reinterpret_cast<const char*>(raw), sizeof(raw));
         }
-        auto binary = LoadGaussianPly(binary_path);
-        Check(bool(binary) && Near(binary.asset->gaussians[0].position.z, 3), "binary little-endian loads");
+        auto binary_result = LoadGaussianPly(binary_path);
+        Check(
+            bool(binary_result) && Near(binary_result.asset->gaussians[0].position.z, 3),
+            "binary little-endian loads"
+        );
         for (int degree = 0; degree <= 3; ++degree) {
-            const int   rest = 3 * ((degree + 1) * (degree + 1) - 1);
-            std::string row  = values;
-            for (int i = 0; i < rest; ++i)
+            const int   rest_coefficient_count = 3 * ((degree + 1) * (degree + 1) - 1);
+            std::string row                    = values;
+            for (int coefficient_id = 0; coefficient_id < rest_coefficient_count; ++coefficient_id)
                 row += " 0";
-            Write(directory / "degree.ply", Header(false, rest) + row + "\n");
+            Write(directory / "degree.ply", Header(false, rest_coefficient_count) + row + "\n");
             auto result = LoadGaussianPly(directory / "degree.ply");
             Check(bool(result) && result.asset->sh_degree == degree, "all supported SH degrees load");
         }
@@ -161,7 +168,8 @@ int main() {
         );
 
         EntityWithNodeCreateInfo duplicate_info;
-        const auto duplicate  = scene.CreateGaussianInstance(scene.GetGaussianAsset(entity), duplicate_info);
+        const auto               duplicate_entt =
+            scene.CreateGaussianInstance(scene.GetGaussianAsset(entity), duplicate_info);
         auto       duplicated = scene.PrepareUpdateBatch(false, false);
         const auto packed = Render::BuildGaussianGpuUpload(*duplicated.update_gpu_update->gaussian_update);
         Check(
@@ -180,7 +188,7 @@ int main() {
             "Gaussian visibility does not rebuild Mesh"
         );
         Check(
-            snapshot->instances[0].visible_in_game &&
+            snapshot->instances[0].is_visible_in_game &&
                 Near(snapshot->instances[0].settings.opacity_multiplier, 1),
             "old snapshot remains immutable after settings change"
         );
@@ -194,7 +202,7 @@ int main() {
         );
         Check(!scene.SaveStateCache(), "Mesh-only cache cannot silently drop Gaussian data");
         Check(
-            scene.DestroyEntity(duplicate) && scene.DestroyGaussianInstance(entity),
+            scene.DestroyEntity(duplicate_entt) && scene.DestroyGaussianInstance(entity),
             "generic and dedicated deletion supported"
         );
         auto removed = scene.PrepareUpdateBatch(false, false);
@@ -216,10 +224,10 @@ int main() {
             !after.update_gpu_update || !after.update_gpu_update->HasWork(),
             "empty scene has no repeating Gaussian update"
         );
-    } catch (const std::exception& e) {
-        Check(false, e.what());
+    } catch (const std::exception& error) {
+        Check(false, error.what());
     }
     std::filesystem::remove_all(directory); // Test-owned unique directory only.
-    std::cout << "Gaussian scene data failures: " << failures << '\n';
-    return failures ? 1 : 0;
+    std::cout << "Gaussian scene data failures: " << failure_count << '\n';
+    return failure_count ? 1 : 0;
 }

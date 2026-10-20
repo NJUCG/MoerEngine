@@ -7,16 +7,17 @@
 
 namespace Moer {
 namespace {
-bool Same(const GaussianInstanceSnapshot& a, const GaussianInstanceSnapshot& b) {
-    if (a.key != b.key || a.asset != b.asset || a.visible_in_game != b.visible_in_game ||
-        a.visible_in_editor != b.visible_in_editor || a.settings.enabled != b.settings.enabled ||
-        a.settings.opacity_multiplier != b.settings.opacity_multiplier ||
-        a.settings.color_multiplier.x != b.settings.color_multiplier.x ||
-        a.settings.color_multiplier.y != b.settings.color_multiplier.y ||
-        a.settings.color_multiplier.z != b.settings.color_multiplier.z)
+bool Same(const GaussianInstanceSnapshot& lhs, const GaussianInstanceSnapshot& rhs) {
+    if (lhs.key != rhs.key || lhs.asset != rhs.asset || lhs.is_visible_in_game != rhs.is_visible_in_game ||
+        lhs.is_visible_in_editor != rhs.is_visible_in_editor ||
+        lhs.settings.is_enabled != rhs.settings.is_enabled ||
+        lhs.settings.opacity_multiplier != rhs.settings.opacity_multiplier ||
+        lhs.settings.color_multiplier.x != rhs.settings.color_multiplier.x ||
+        lhs.settings.color_multiplier.y != rhs.settings.color_multiplier.y ||
+        lhs.settings.color_multiplier.z != rhs.settings.color_multiplier.z)
         return false;
     return std::equal(
-        std::begin(a.world_transform.e), std::end(a.world_transform.e), std::begin(b.world_transform.e)
+        std::begin(lhs.world_transform.e), std::end(lhs.world_transform.e), std::begin(rhs.world_transform.e)
     );
 }
 } // namespace
@@ -86,29 +87,29 @@ bool Scene::DestroyGaussianInstance(entt::entity entity) {
 EGaussianSceneContent Scene::GetGaussianSceneContent() const {
     if (!IsReady())
         return EGaussianSceneContent::Empty;
-    bool mesh = false, gaussian = false;
+    bool has_mesh = false, has_gaussian = false;
     for (auto entity : r().view<const ecs::CRenderable, const ecs::CNode>()) {
         if (GetNodeVisibility(entity).effectively_visible_in_game) {
-            mesh = true;
+            has_mesh = true;
             break;
         }
     }
     for (auto entity : r().view<const ecs::CGaussianInstance, const ecs::CNode>()) {
         const auto& instance = r().get<ecs::CGaussianInstance>(entity);
-        if (instance.asset && !instance.asset->gaussians.empty() && instance.settings.enabled &&
+        if (instance.asset && !instance.asset->gaussians.empty() && instance.settings.is_enabled &&
             GetNodeVisibility(entity).effectively_visible_in_game) {
-            gaussian = true;
+            has_gaussian = true;
             break;
         }
     }
-    if (mesh && gaussian)
+    if (has_mesh && has_gaussian)
         return EGaussianSceneContent::Mixed;
-    if (gaussian)
+    if (has_gaussian)
         return EGaussianSceneContent::GaussianOnly;
-    return mesh ? EGaussianSceneContent::MeshOnly : EGaussianSceneContent::Empty;
+    return has_mesh ? EGaussianSceneContent::MeshOnly : EGaussianSceneContent::Empty;
 }
 
-std::shared_ptr<const GaussianSceneSnapshot> Scene::CaptureGaussianUpdate(bool force) {
+std::shared_ptr<const GaussianSceneSnapshot> Scene::CaptureGaussianUpdate(bool should_force_update) {
     const auto view = r().view<const ecs::CGaussianInstance, const ecs::CNode>();
     if (view.size_hint() == 0 && !m_last_gaussian_snapshot)
         return {};
@@ -122,30 +123,30 @@ std::shared_ptr<const GaussianSceneSnapshot> Scene::CaptureGaussianUpdate(bool f
         item.asset    = instance.asset;
         item.settings = instance.settings;
         // Compute from authoritative local transforms. Gaussian edits do not require Mesh GPU updates.
-        auto current = entity;
-        while (current != entt::null) {
-            const auto& node = r().get<ecs::CNode>(current);
+        auto current_entt = entity;
+        while (current_entt != entt::null) {
+            const auto& node = r().get<ecs::CNode>(current_entt);
             item.world_transform =
                 Transform(node.translation, node.scale, node.rotation).GetMatrix4x4() * item.world_transform;
-            current = node.parent_entt;
+            current_entt = node.parent_entt;
         }
         const auto& local_bounds = instance.asset->bounds;
         if (local_bounds.IsValid()) {
             const Transform transform(item.world_transform);
-            for (int corner = 0; corner < 8; ++corner) {
+            for (int corner_id = 0; corner_id < 8; ++corner_id) {
                 item.world_bounds.Expand(
                     transform * float3(
-                                    (corner & 1) ? local_bounds.max.x : local_bounds.min.x,
-                                    (corner & 2) ? local_bounds.max.y : local_bounds.min.y,
-                                    (corner & 4) ? local_bounds.max.z : local_bounds.min.z
+                                    (corner_id & 1) ? local_bounds.max.x : local_bounds.min.x,
+                                    (corner_id & 2) ? local_bounds.max.y : local_bounds.min.y,
+                                    (corner_id & 4) ? local_bounds.max.z : local_bounds.min.z
                                 )
                 );
             }
         }
-        const auto visibility  = GetNodeVisibility(entity);
-        item.visible_in_game   = visibility.effectively_visible_in_game;
-        item.visible_in_editor = visibility.effectively_visible_in_editor;
-        if (item.settings.enabled && (item.visible_in_game || item.visible_in_editor) &&
+        const auto visibility     = GetNodeVisibility(entity);
+        item.is_visible_in_game   = visibility.effectively_visible_in_game;
+        item.is_visible_in_editor = visibility.effectively_visible_in_editor;
+        if (item.settings.is_enabled && (item.is_visible_in_game || item.is_visible_in_editor) &&
             item.world_bounds.IsValid()) {
             snapshot->bounds.Expand(item.world_bounds);
         }
@@ -157,10 +158,10 @@ std::shared_ptr<const GaussianSceneSnapshot> Scene::CaptureGaussianUpdate(bool f
         }
         snapshot->instances.push_back(std::move(item));
     }
-    std::sort(snapshot->instances.begin(), snapshot->instances.end(), [](const auto& a, const auto& b) {
-        return a.key < b.key;
+    std::sort(snapshot->instances.begin(), snapshot->instances.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.key < rhs.key;
     });
-    if (!force && m_last_gaussian_snapshot &&
+    if (!should_force_update && m_last_gaussian_snapshot &&
         snapshot->instances.size() == m_last_gaussian_snapshot->instances.size() &&
         std::equal(
             snapshot->instances.begin(),
