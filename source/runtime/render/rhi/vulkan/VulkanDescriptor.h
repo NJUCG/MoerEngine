@@ -109,9 +109,10 @@ public:
 
 private:
     void InitializeDescriptorCaches();
+    void InitializeSamplerDescriptors();
     void CreateDescriptorBuffer();
     void InitializeLeaseSlots();
-    void InitializeSamplerDescriptors();
+    void MapDescriptorBuffer();
 
     // Call with cache_mutex held; views never escape the descriptor copy.
     std::span<const byte> GetCachedBufferDescriptor(uint64 _byte_offset) const;
@@ -149,8 +150,8 @@ private:
     std::mutex              cache_mutex;
 
     // Owned GPU storage; destroyed before the device's VMA allocator.
-    VulkanBuffer* descriptor_buffer{nullptr};
-    uint8*        mapped_descriptor_data{nullptr};
+    std::unique_ptr<VulkanBuffer> descriptor_buffer;
+    uint8*                        mapped_descriptor_data{nullptr};
 
     // Submission leases partition storage between graphics and compute.
     Array<uint64>                                            lease_slot_byte_offsets;

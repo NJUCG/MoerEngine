@@ -9,12 +9,14 @@
 #include "VulkanUtil.h"
 
 #include "misc/MacroUtils.h"
+#include "misc/RAII.h"
 #include "rhi/RHIResource.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 namespace Moer::Render {
 namespace {
@@ -119,12 +121,11 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     image_cache_base_byte_offset(sampler_descriptor_size * VulkanDevice::bindless_sampler_count) {
 
     InitializeDescriptorCaches();
+    InitializeSamplerDescriptors();
     CreateDescriptorBuffer();
     InitializeLeaseSlots();
-    vmaMapMemory(
-        m_device->GetVmaAllocator(), descriptor_buffer->GetAllocation(), (void**)&mapped_descriptor_data
-    );
-    InitializeSamplerDescriptors();
+    // Map last: no potentially throwing initialization remains after success.
+    MapDescriptorBuffer();
 }
 
 void VulkanDescriptorHeap::InitializeDescriptorCaches() {
@@ -137,56 +138,6 @@ void VulkanDescriptorHeap::InitializeDescriptorCaches() {
     );
     buffer_descriptor_types.resize(s_descriptor_cache_slot_capacity, VK_DESCRIPTOR_TYPE_MAX_ENUM);
     image_descriptor_types.resize(s_descriptor_cache_slot_capacity, VK_DESCRIPTOR_TYPE_MAX_ENUM);
-}
-
-void VulkanDescriptorHeap::CreateDescriptorBuffer() {
-    VkBuffer           desc_buffer            = VK_NULL_HANDLE;
-    VmaAllocation      desc_buffer_allocation = VK_NULL_HANDLE;
-    VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    // Graphics and compute each retain their own in-flight slice budget. A
-    // shared three-slice pool can deadlock when one queue holds every slice
-    // while waiting on work that the other queue has not yet recorded.
-    buffer_ci.size  = s_descriptor_queue_count * s_queue_max_frame_in_flight * 1024 * 1024;
-    buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
-                      VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
-                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-
-#if WITH_CUDA
-    buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
-#endif
-
-    VmaAllocationCreateInfo alloc_ci{};
-    alloc_ci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    alloc_ci.usage = VMA_MEMORY_USAGE_AUTO;
-    VK_CHECK_RESULT(vmaCreateBuffer(
-        m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &desc_buffer, &desc_buffer_allocation, nullptr
-    ));
-
-    BufferInfo buffer_info{};
-    buffer_info.size   = buffer_ci.size;
-    buffer_info.stride = 1;
-    buffer_info.usage  = EBufferUsageFlags::UNORDERED_ACCESS;
-
-    descriptor_buffer = MoerNew(VulkanBuffer)(
-        s_descriptor_buffer_name, buffer_info, *m_device, desc_buffer, desc_buffer_allocation, false, true
-    );
-}
-
-void VulkanDescriptorHeap::InitializeLeaseSlots() {
-    // Partition descriptor storage into aligned submission lease slots.
-    lease_slot_byte_offsets.resize(s_descriptor_queue_count * m_device->command_allocator_slot_count);
-
-    // Use descriptorBufferOffsetAlignment for ring buffer offset alignment
-    uint64 alignment =
-        m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
-
-    uint64 lease_slot_size =
-        (descriptor_buffer->GetByteSize() / lease_slot_byte_offsets.size() / alignment) * alignment;
-
-    for (uint32_t i = 0; i < lease_slot_byte_offsets.size(); ++i) {
-        lease_slot_byte_offsets[i] = Moer::AlignUp(lease_slot_size * i, alignment);
-    }
-    active_leases.resize(lease_slot_byte_offsets.size());
 }
 
 void VulkanDescriptorHeap::InitializeSamplerDescriptors() {
@@ -208,11 +159,79 @@ void VulkanDescriptorHeap::InitializeSamplerDescriptors() {
     }
 }
 
+void VulkanDescriptorHeap::CreateDescriptorBuffer() {
+    VkBuffer           desc_buffer            = VK_NULL_HANDLE;
+    VmaAllocation      desc_buffer_allocation = VK_NULL_HANDLE;
+    VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    // Graphics and compute each retain their own in-flight slice budget. A
+    // shared three-slice pool can deadlock when one queue holds every slice
+    // while waiting on work that the other queue has not yet recorded.
+    buffer_ci.size  = s_descriptor_queue_count * s_queue_max_frame_in_flight * 1024 * 1024;
+    buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
+                      VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
+                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+#if WITH_CUDA
+    buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
+
+    VmaAllocationCreateInfo alloc_ci{};
+    alloc_ci.flags        = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    alloc_ci.usage        = VMA_MEMORY_USAGE_AUTO;
+    const VkResult result = vmaCreateBuffer(
+        m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &desc_buffer, &desc_buffer_allocation, nullptr
+    );
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error("failed to create descriptor buffer: " + std::to_string(result));
+    }
+    // Release the native allocation if C++ wrapper construction fails.
+    auto release_unowned_buffer = OnScopeExit([&] {
+        if (desc_buffer_allocation != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(m_device->GetVmaAllocator(), desc_buffer, desc_buffer_allocation);
+        }
+    });
+
+    BufferInfo buffer_info{};
+    buffer_info.size   = buffer_ci.size;
+    buffer_info.stride = 1;
+    buffer_info.usage  = EBufferUsageFlags::UNORDERED_ACCESS;
+
+    descriptor_buffer = std::make_unique<VulkanBuffer>(
+        s_descriptor_buffer_name, buffer_info, *m_device, desc_buffer, desc_buffer_allocation, false, true
+    );
+    desc_buffer_allocation = VK_NULL_HANDLE;
+}
+
+void VulkanDescriptorHeap::InitializeLeaseSlots() {
+    // Partition descriptor storage into aligned submission lease slots.
+    lease_slot_byte_offsets.resize(s_descriptor_queue_count * m_device->command_allocator_slot_count);
+
+    // Use descriptorBufferOffsetAlignment for ring buffer offset alignment
+    uint64 alignment =
+        m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
+
+    uint64 lease_slot_size =
+        (descriptor_buffer->GetByteSize() / lease_slot_byte_offsets.size() / alignment) * alignment;
+
+    for (uint32_t i = 0; i < lease_slot_byte_offsets.size(); ++i) {
+        lease_slot_byte_offsets[i] = Moer::AlignUp(lease_slot_size * i, alignment);
+    }
+    active_leases.resize(lease_slot_byte_offsets.size());
+}
+
+void VulkanDescriptorHeap::MapDescriptorBuffer() {
+    void*          mapped_data = nullptr;
+    const VkResult result =
+        vmaMapMemory(m_device->GetVmaAllocator(), descriptor_buffer->GetAllocation(), &mapped_data);
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error("failed to map descriptor buffer: " + std::to_string(result));
+    }
+    mapped_descriptor_data = static_cast<uint8*>(mapped_data);
+}
+
 VulkanDescriptorHeap::~VulkanDescriptorHeap() {
-    if (descriptor_buffer) {
+    if (mapped_descriptor_data) {
         vmaUnmapMemory(m_device->GetVmaAllocator(), descriptor_buffer->GetAllocation());
-        MoerDelete(descriptor_buffer);
-        descriptor_buffer = nullptr;
     }
 }
 

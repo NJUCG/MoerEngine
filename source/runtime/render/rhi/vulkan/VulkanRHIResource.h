@@ -630,16 +630,17 @@ public:
         return m_alloc.buffer;
     }
 
-    VulkanBufferDescriptorCacheSlots m_descriptor_cache_slots[4];
-
     VkDescriptorType GetDescriptorType() const {
         return m_descriptor_type;
     }
 
-    VulkanBufferDescriptorCacheSlots& GetDescriptorCacheSlots(VkDescriptorType _type);
-
 private:
     friend class TempBufferAllocator;
+    friend class VulkanDescriptorHeap;
+
+    VulkanBufferDescriptorCacheSlots& GetDescriptorCacheSlots(VkDescriptorType _type);
+    VulkanBufferDescriptorCacheSlots  m_descriptor_cache_slots[4];
+
     BufferAlloc      m_alloc;
     uint64           m_device_address = 0;
     VkDescriptorType m_descriptor_type;
@@ -755,10 +756,12 @@ public:
         }
     }
 
+private:
+    friend class VulkanDescriptorHeap;
+
     UnorderedMap<VulkanTextureDescriptorKey, uint64, VulkanTextureDescriptorKey::Hasher>
         m_descriptor_cache_slots;
 
-private:
     void Destroy() override;
     struct TextureAlloc {
         VkImage       image;
@@ -947,11 +950,14 @@ struct VulkanAccelerationStructure : public RaytracingTlas {
         return underlying_buffer;
     }
 
-    VkAccelerationStructureKHR handle                  = VK_NULL_HANDLE;
-    VulkanBufferRef            underlying_buffer       = nullptr;
-    int                        m_descriptor_cache_slot = -1;
+    VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
+    VulkanBufferRef            underlying_buffer = nullptr;
     VulkanDevice&              device;
     VulkanRaytracingScene&     src_scene;
+
+private:
+    friend class VulkanDescriptorHeap;
+    int m_descriptor_cache_slot = -1;
 };
 
 using VulkanAccelRef = CountableRef<VulkanAccelerationStructure>;
