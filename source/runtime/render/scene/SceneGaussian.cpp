@@ -85,11 +85,19 @@ bool Scene::DestroyGaussianInstance(entt::entity entity) {
 }
 
 EGaussianSceneContent Scene::GetGaussianSceneContent() const {
+    return GetGaussianSceneContentForView(false);
+}
+
+EGaussianSceneContent Scene::GetGaussianSceneContentForView(bool is_editor_view) const {
     if (!IsReady())
         return EGaussianSceneContent::Empty;
+    const auto is_visible = [&](entt::entity entity) {
+        const auto visibility = GetNodeVisibility(entity);
+        return is_editor_view ? visibility.effectively_visible_in_editor : visibility.effectively_visible_in_game;
+    };
     bool has_mesh = false, has_gaussian = false;
     for (auto entity : r().view<const ecs::CRenderable, const ecs::CNode>()) {
-        if (GetNodeVisibility(entity).effectively_visible_in_game) {
+        if (is_visible(entity)) {
             has_mesh = true;
             break;
         }
@@ -97,7 +105,7 @@ EGaussianSceneContent Scene::GetGaussianSceneContent() const {
     for (auto entity : r().view<const ecs::CGaussianInstance, const ecs::CNode>()) {
         const auto& instance = r().get<ecs::CGaussianInstance>(entity);
         if (instance.asset && !instance.asset->gaussians.empty() && instance.settings.is_enabled &&
-            GetNodeVisibility(entity).effectively_visible_in_game) {
+            is_visible(entity)) {
             has_gaussian = true;
             break;
         }

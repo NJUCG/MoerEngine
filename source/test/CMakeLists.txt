@@ -1,5 +1,13 @@
 set(moer_test_folder "test")
 
+# Explicit integration test: requires a Vulkan device and runtime shader compilation.
+if (NOT APPLE)
+    add_executable(TestGaussianRasterGpu GaussianRasterGpuTest.cpp
+        "${moer_source_dir}/runtime/render/scene/camera/Camera.cpp")
+    target_link_libraries(TestGaussianRasterGpu PRIVATE Moer::Render)
+    set_target_properties(TestGaussianRasterGpu PROPERTIES FOLDER "${moer_test_folder}")
+endif()
+
 add_executable(TestGaussianSceneData GaussianSceneDataTest.cpp)
 target_link_libraries(TestGaussianSceneData PRIVATE Moer::Render)
 set_target_properties(TestGaussianSceneData PROPERTIES FOLDER "${moer_test_folder}")

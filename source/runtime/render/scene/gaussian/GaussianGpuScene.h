@@ -31,11 +31,13 @@ public:
     uint32 GetInstanceCount() const {
         return m_instance_count;
     }
+    const std::vector<GGaussianInstance>& GetInstances() const { return m_instances; }
     uint64 GetRevision() const {
         return m_revision;
     }
 
 private:
+    std::vector<GGaussianInstance> m_instances;
     BufferRef                     m_gaussian_buffer;
     BufferRef                     m_instance_buffer;
     std::vector<GaussianAssetRef> m_assets;

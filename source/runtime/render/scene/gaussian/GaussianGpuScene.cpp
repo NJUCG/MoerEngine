@@ -87,6 +87,7 @@ void GaussianGpuScene::ApplyUpdate(
     if (has_geometry_changed)
         upload_buffer(upload->gaussians, m_gaussian_buffer, "Gaussian geometry");
     upload_buffer(upload->instances, m_instance_buffer, "Gaussian instances");
+    m_instances      = upload->instances;
     m_assets         = upload->assets;
     m_gaussian_count = 0;
     for (const auto& asset : m_assets)

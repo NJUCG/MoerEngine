@@ -12,6 +12,7 @@ namespace Moer::Render::Raster {
 
 class RasterContext;
 class HiZBuildPass;
+class GaussianSplatPass;
 class ShadowDepthPass;
 class GeometryPass;
 class TessellatedSurfacePass;
@@ -75,6 +76,8 @@ private:
     UniquePtr<RasterContext> raster_context_ptr;
 
     // 按执行顺序排列的 Raster Pass。
+    UniquePtr<GaussianSplatPass>           m_gaussian_splat_pass;
+    bool m_has_warned_mixed = false;
     UniquePtr<HiZBuildPass>                hiz_build_pass;
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
     UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;

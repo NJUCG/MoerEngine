@@ -10,6 +10,8 @@
 #include "CsmGizmoPass.h"
 #include "DirectionalShadowMaskPass.h"
 #include "GeometryPass.h"
+#include "GaussianSplatPass.h"
+#include <cmath>
 #include "TessellatedSurfacePass.h"
 #include "HiZBuildPass.h"
 #include "LightingPass.h"
@@ -485,7 +487,27 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
                 capture_scene_geometry_snapshot = false;
             }
 
+            frame_packet.gaussian_content = scene.GetGaussianSceneContentForView(
+                editor_config->active_viewport_mode == EEditorViewportMode::Scene);
+            const auto gaussian_snapshot = scene.GetGaussianSnapshot();
+            // Retain the empty path after deleting the last splat; empty mesh buffers are not renderable.
+            frame_packet.has_gaussian_assets = gaussian_snapshot != nullptr;
             Camera main_camera = frame_packet.scene_updates.main_camera;
+            // A PLY has no authored camera. Fit only on full scene load.
+            if (frame_packet.scene_updates.initial_gpu_update &&
+                frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly &&
+                gaussian_snapshot && gaussian_snapshot->bounds.IsValid()) {
+                const auto& bounds = gaussian_snapshot->bounds;
+                const auto extent = bounds.max - bounds.min;
+                const float radius = std::max(0.01f, std::sqrt(extent.x*extent.x + extent.y*extent.y + extent.z*extent.z)*0.5f);
+                const float aspect = std::max(0.1f, float(camera_input.viewport_resolution.x) / std::max(1u, camera_input.viewport_resolution.y));
+                const float distance = radius * 2.4f / std::min(1.f, aspect);
+                main_camera.Initialize(bounds.GetCenter() + float3(0,0,distance), -90.f, 0.f, 60.f, aspect,
+                    std::max(0.001f, radius*0.001f), distance + radius*4.f);
+                scene.GetMainCamera().camera = main_camera;
+                frame_packet.scene_updates.main_camera = main_camera;
+                scene_view_camera_initialized = false;
+            }
             if (!scene_view_camera_initialized) {
                 scene_view_camera             = main_camera;
                 scene_view_camera_initialized = true;
@@ -858,6 +880,32 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             );
         }
 
+        const bool should_render_gaussians = frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
+            frame_packet.gaussian_content == EGaussianSceneContent::Mixed ||
+            (frame_packet.gaussian_content == EGaussianSceneContent::Empty && frame_packet.has_gaussian_assets);
+        if (should_render_gaussians) {
+            static_cast<void>(ensure_profile_source(cmd_list, graphics_profile_binding, next_profile_source_order++));
+            if (!m_gaussian_splat_pass) m_gaussian_splat_pass = MakeUnique<GaussianSplatPass>(manager);
+            const bool is_mixed = frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
+            if (is_mixed && !m_has_warned_mixed)
+                LOG_WARNING("[GaussianRaster] Mixed rendering is not implemented yet; invalid magenta frame");
+            m_has_warned_mixed = is_mixed;
+            const auto gaussian_display = m_gaussian_splat_pass->Record(cmd_list, render_scene->GetGaussianGpuScene(),
+                frame_packet.render_camera, raster_context.GetResolution(),
+                frame_packet.active_viewport_mode == EEditorViewportMode::Scene, is_mixed);
+            const auto& ui_frame = frame_packet.ui_composition;
+            const auto window_view = ui_frame.window_frame_buffer ? ui_frame.window_frame_buffer->GetView() : TextureView{};
+            default_output_texture = ui_combine_pass->Process(cmd_list,
+                ui_frame.enabled ? ui_frame.separate_window : true,
+                ui_frame.enabled ? ui_frame.output_resolution : presentation_resolution,
+                ui_frame.enabled ? ui_frame.scene_color_position : float2(0),
+                ui_frame.enabled ? ui_frame.scene_color_resolution : float2(presentation_resolution.x, presentation_resolution.y),
+                ui_frame.enabled ? window_view : raster_context.textures.output.tex->GetView(),
+                gaussian_display->GetView(), raster_context.textures.output.tex->GetView());
+            raster_context.InvalidateHiZHistory();
+            aa_pass->ResetHistory();
+            rtao_denoiser_pass->ResetHistory();
+        } else {
         const Camera& main_camera = scene_updates.main_camera;
         Camera        camera      = frame_packet.render_camera;
         const uint8 smaa_t2x_phase =
@@ -2165,6 +2213,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         }
 
         scene_updates.main_camera = std::move(main_camera);
+        } // Existing mesh path.
     }
 
     // 因为目前Vulkan的输出信息会聚合后再print，所以我们需要轮询，打印出最后添加的信息

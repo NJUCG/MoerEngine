@@ -26,6 +26,8 @@ struct RasterFramePacket {
     UiCompositionFrameData     ui_composition{};
     UiDrawFramePacket          ui_draw_frame{};
     SceneUpdateBatch           scene_updates{};
+    EGaussianSceneContent      gaussian_content = EGaussianSceneContent::Empty;
+    bool                       has_gaussian_assets = false;
 };
 
 static_assert(std::is_move_constructible_v<RasterFramePacket>);

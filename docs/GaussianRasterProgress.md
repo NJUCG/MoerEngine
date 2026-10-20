@@ -10,11 +10,11 @@
 - [x] P0 固定相机/时间/配置、HDR/LDR 与 G-buffer 原始像素采集、上游参考构建、严格比较工具及控制资产。
 - [ ] P0 严格图像验收：Control/Mizuki 两种管线已位一致；Sponza 上游存在间歇差异，240 帧额外预热也未稳定消除，暂不能将它作为确定性金标准。详细采集报告仅保留在本地。
 - [x] P1：标准 PLY 解析、资产与实例、Scene API、独立更新快照和 GPU 数据链路。
-- [ ] P2：标准高斯投影、排序、Splat 和参考图验证。
+- [x] P2：标准高斯投影、排序、Splat 和参考图验证（2026-10-20）。
 - [ ] P3：编辑器操作、持久化与图像导出。
 - [ ] P4/P5：Mesh 转材质高斯及混合光栅化近似。
 
-P1 已完成并验证。原 Mesh 数据布局和 shader 未修改；高斯数据接入不代表已经能显示高斯，绘制 Pass 在 P2。
+P1/P2 已完成：标准 PLY 可沿独立光栅路径输出图像。原 Mesh 数据布局和 shader 未修改。编辑器完整操作面板、持久化与混合渲染仍在后续阶段。
 
 原始构建运行证据保存在本任务 outputs/MoerEngine-Baseline-Build-Run.md 及关联日志。
 
@@ -82,3 +82,28 @@ P1 已完成并验证。原 Mesh 数据布局和 shader 未修改；高斯数据
 - 移除 deprecated `writeImage.hlsl` 中未使用的旧版头文件引用；更新 Shader 目录说明和 P2 实施计划。
 - 当前 C++ 没有调用旧版 Shader，保留 P1 数据链路与原 Mesh 管线；P2 按当前架构重新实现。
 - 验证：MoerEditor 编译成功，GaussianSceneDataContract 通过（0.50 秒）；源码无旧版 include 引用。同步清理生成目录中这 9 个 Shader 的残留副本。
+
+## P2：独立标准高斯光栅路径（2026-10-20）
+
+- 新增懒创建的 `GaussianSplatPass`，GPU 执行投影、tile 计数、分层前缀扫描、tile/depth 配对、稳定 radix 排序、区间构建和前向透明度累积。没有使用废弃的 3DGS 实现。
+- GaussianOnly 使用独立 Pass，输出预乘 RGB/alpha、透射率和显示纹理；跳过 Mesh 光照、AO、AA、曝光和 tonemapping。标准 SH 保留烘焙外观语义。
+- 相机和实例矩阵显式使用 HLSL row_major，对齐 Moer 的 CPU 矩阵存储；SH 在资产局部观察方向计算。标准训练 RGB 解码后进入硬件 sRGB UI 目标，原始 RGB 输出用于数值对照。
+- 游戏线程捕获当前视口的内容分类；PLY 首次加载按高斯 bounds 适配相机。空资产、禁用或删除最后一个高斯时输出黑背景。
+- MeshOnly 保留原有执行代码与资源布局。Mixed 暂时明确告警并显示诊断色；论文的材质高斯与 Mesh 转换不属于 P2。
+- 默认 tile-pair 容量为 4,194,304，可通过 C++ `GaussianRasterSettings` 配置（范围 1..2^24）；展开实例的高斯数量上限为 2,097,152。扫描饱和计数、容量检查和诊断输出防止越界及静默丢点；暂不自动扩大容量。
+- 相机、工作区、纹理及几何/实例资源持有到 GPU 完成，支持在途帧与 resize 重叠。实际编辑器运行发现的相机 Buffer 提前释放问题已修复。
+- RenderGraph 开关不改变高斯算法：P2 的高斯分支串行记录 RHI 命令，尚未逐 Pass 纳入 RDG/并行录制；Mesh RDG 路径保持不变。
+
+验证：
+
+1. `MoerEditor`、`TestGaussianSceneData`、`TestGaussianRasterGpu` 构建成功，P1 CTest 通过。
+2. GPU 集成测试验证单/双高斯、逆序与同深度的 600 高斯、多实例平移/缩放/opacity、提前终止、清空后 resize、8 帧在途 resize、sRGB 显示解码及容量溢出诊断。合成 RGB/T 对双精度 CPU 参考的最大误差约 2.2e-6；验证层日志无错误。
+3. 真实资产：DX.GL Apple，36,313 Gaussian，SH3，8.6 MiB，数据集标注 CC0。来源 https://huggingface.co/datasets/dxgl/multiview-datasets ，下载 https://dx.gl/splat/apple.ply ，SHA256 `972ebac43d0ac46c375ba83d92be3866b337ae3d9a5307137617883e3ebee879`。资产仅本地保存。
+4. 固定 256x256 视角，真实 PLY GPU 原始 RGB 与独立 NumPy 双精度参考对照：最大绝对误差 0.000538，RMSE 1.78e-6，PSNR 115.02 dB。此参考独立计算协方差/SH 并逐 splat 合成，不调用官方 INRIA 渲染器，不能据此声称与所有官方配置逐像素一致。
+5. 固定 Mesh 控制场景的 linear / graph 两路，各 3 帧 × 4 层（HDR、LDR、base color、normal），与 P0 已验证版本逐字节一致。Sponza 既有波动仍按用户决定暂不处理。
+6. 编辑器实测：同步模式与 Render/RHI 双线程 + RenderGraph 开关模式均可运行；纯 PLY 首次呈现、viewport resize、修改 opacity/平移、禁用和删除最后一个实例均成功。GPU 日志确认独立 Gaussian revision 更新，运行及正常退出无 Vulkan 校验错误。
+7. 生产源码已撤去本地 Mesh 观测补丁；基线工具、第三方资产和运行证据均不进入 Git 提交。
+
+运行 GPU 检查：在 `target/bin/Debug` 执行 `TestGaussianRasterGpu.exe [asset.ply capture.ppm]`。可选的真实资产对照脚本为 `source/test/gaussian/ReferenceGaussianPly.py`，依赖 NumPy/Pillow；未加入默认 CTest，避免要求无 GPU 的构建机运行 Vulkan 测试。
+
+下一步为 P3：编辑器导入/Inspector、属性交互、持久化、图像导出及统计/诊断面板。混合材质与论文转换路径保留在 P4/P5。
