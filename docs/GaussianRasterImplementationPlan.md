@@ -128,7 +128,7 @@ shaderheaders/shared/gaussian/
 
 多个高斯资产统一排序，不把每个资产先渲染成一张图后依次覆盖。区分有效 count 与容量；溢出必须报告并重试/扩容，不静默截断。首期 Vulkan；D3D12 间接计算路径单独验证，不默认承诺。
 
-现有 shaders/features/3dgs 作为原型参考，修正排序越界和 subgroup 假设、相机空间、SH clamp、tile 清理、count/capacity、透明度输出；不是直接挂载即完成。
+废弃的旧版高斯 Shader 已按用户要求删除。P2 基于当前 RHI 和 P1 共享数据结构重新实现；验证排序边界与 subgroup 能力、相机空间、SH clamp、tile 清理、count/capacity 和透明度输出。
 
 ### 图像一致性
 

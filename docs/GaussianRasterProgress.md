@@ -75,3 +75,10 @@ P1 已完成并验证。原 Mesh 数据布局和 shader 未修改；高斯数据
 - 基线文件通过 `.git/info/exclude` 本地忽略。按需应用观测补丁，使用后撤回；生产渲染器不包含该补丁。
 - 本地历史已重建：高斯接入 `1676ed4a`、命名整理 `0a797d3d`；旧历史的恢复备份只在仓库外的本地工作目录。没有推送远端。
 - 本地工具的 `getenv` 修复通过了实际抓图验证，控制场景 12 个输出层与此前逐字节一致。原有 `fopen` / `u8path` 修改随后按用户要求全部撤回；允许保留上游既有警告，不以全仓库零警告为本次目标。
+
+## 旧版 3DGS 清理
+
+- 按用户要求删除废弃的 `shaders/features/3dgs/` 中全部 9 个旧版 Shader。
+- 移除 deprecated `writeImage.hlsl` 中未使用的旧版头文件引用；更新 Shader 目录说明和 P2 实施计划。
+- 当前 C++ 没有调用旧版 Shader，保留 P1 数据链路与原 Mesh 管线；P2 按当前架构重新实现。
+- 验证：MoerEditor 编译成功，GaussianSceneDataContract 通过（0.50 秒）；源码无旧版 include 引用。同步清理生成目录中这 9 个 Shader 的残留副本。
