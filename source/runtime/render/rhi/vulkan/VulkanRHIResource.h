@@ -358,12 +358,6 @@ struct VulkanDescriptorSetLayoutCreateInfo {
     bool                                            is_bindless = false;
 };
 
-// Resolved position for one descriptor-set binding command.
-struct DescriptorSetBufferBinding {
-    uint   set_index;
-    uint   buffer_index;
-    uint64 offset;
-};
 struct VulkanResourceBinding {
     uint             binding_index;
     uint             argument_index;
@@ -401,15 +395,20 @@ using VulkanSetResourceBindings = std::variant<
 
 struct VulkanDescriptorSetBinding {
     uint buffer_index = 0;
-    // Fixed bindless offset; ordinary sets resolve their offset when recording.
-    uint64                    initial_byte_offset = 0;
+    // Ordinary sets: relative to the draw's resource allocation.
+    // Bindless sets: absolute offset in the bound descriptor buffer.
+    uint64                    byte_offset = 0;
     VulkanSetResourceBindings resource_bindings;
 };
 
 struct VulkanPipelineBindingTemplate {
+    // Ordinary resources, bindless buffers, and bindless images/samplers.
+    static constexpr size_t descriptor_buffer_capacity = 3;
+
     UnorderedMap<uint, VulkanDescriptorSetBinding> set_bindings;
     VkPushConstantsInfoKHR                         push_constants_info{};
-    //descriptor buffer bind template
+    uint64                                         resource_descriptor_allocation_size = 0;
+    // Shared immutable metadata; bindless addresses are resolved per recording.
     Array<VkDescriptorBufferBindingInfoEXT> descriptor_buffers;
 };
 
@@ -520,7 +519,7 @@ public:
     }
 
     void CreatePipelineLayout(const std::optional<VkPushConstantRange>& push_constant_range);
-    VkPipelineBindPoint GetPipelineBindPoint() {
+    VkPipelineBindPoint GetPipelineBindPoint() const {
         switch (m_type) {
             case GFX:
                 return VK_PIPELINE_BIND_POINT_GRAPHICS;

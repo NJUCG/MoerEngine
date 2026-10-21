@@ -14,6 +14,7 @@
 #include "shader/ShaderPipeline.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <format>
@@ -182,17 +183,6 @@ VkImageLayout GetSampledImageLayout(const TextureView& _view) {
                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
-uint64 GetResourceDescriptorAllocationSize(const VulkanPipelineBindingTemplate& _binding_template) {
-    uint64 allocation_size = 0;
-    for (const auto& [set_index, set_binding] : _binding_template.set_bindings) {
-        if (const auto* resource_bindings =
-                std::get_if<VulkanResourceSetBindings>(&set_binding.resource_bindings)) {
-            allocation_size += resource_bindings->allocation_size;
-        }
-    }
-    return allocation_size;
-}
-
 template<typename View, typename WriteDescriptor>
 void WriteViewDescriptors(
     const TArg&       _argument,
@@ -323,19 +313,15 @@ void WriteResourceSetDescriptors(
     }
 }
 
-Array<DescriptorSetBufferBinding> ResolveDescriptorSetBindings(
-    VulkanDescriptorHeap&                    _heap,
-    const VulkanPipelineState&               _pipeline,
-    const ArrayArguments&                    _arguments,
-    Array<VkDescriptorBufferBindingInfoEXT>& _descriptor_buffers,
-    uint64                                   _next_set_byte_offset
+void WriteShaderArgumentDescriptors(
+    VulkanDescriptorHeap&                       _heap,
+    const VulkanPipelineState&                  _pipeline,
+    const ArrayArguments&                       _arguments,
+    std::span<VkDescriptorBufferBindingInfoEXT> _descriptor_buffers,
+    uint64                                      _resource_byte_offset
 ) {
-    const auto&                       set_bindings = _pipeline.binding_template->set_bindings;
-    Array<DescriptorSetBufferBinding> resolved_set_bindings;
-    resolved_set_bindings.reserve(set_bindings.size());
-    for (const auto& [set_index, set_binding] : set_bindings) {
-        auto&  descriptor_buffer = _descriptor_buffers[set_binding.buffer_index];
-        uint64 set_byte_offset   = set_binding.initial_byte_offset;
+    for (const auto& [set_index, set_binding] : _pipeline.binding_template->set_bindings) {
+        auto& descriptor_buffer = _descriptor_buffers[set_binding.buffer_index];
         std::visit(
             Overload{
                 [&]<VkDescriptorType DescriptorType>(
@@ -351,41 +337,45 @@ Array<DescriptorSetBufferBinding> ResolveDescriptorSetBindings(
                     }
                 },
                 [&](const VulkanResourceSetBindings& resource_bindings) {
-                    set_byte_offset = _next_set_byte_offset;
-                    _next_set_byte_offset += resource_bindings.allocation_size;
                     WriteResourceSetDescriptors(
-                        _heap, _pipeline, resource_bindings, _arguments, set_byte_offset
+                        _heap,
+                        _pipeline,
+                        resource_bindings,
+                        _arguments,
+                        _resource_byte_offset + set_binding.byte_offset
                     );
                 }
             },
             set_binding.resource_bindings
         );
-        resolved_set_bindings.emplace_back(set_index, set_binding.buffer_index, set_byte_offset);
     }
-    return resolved_set_bindings;
 }
 
 void BindDescriptorBufferSets(
     VkCommandBuffer                                   _command_buffer,
-    VkPipelineBindPoint                               _bind_point,
-    VkPipelineLayout                                  _pipeline_layout,
+    const VulkanPipelineState&                        _pipeline,
     std::span<const VkDescriptorBufferBindingInfoEXT> _descriptor_buffers,
-    std::span<const DescriptorSetBufferBinding>       _set_bindings
+    uint64                                            _resource_byte_offset
 ) {
     if (!_descriptor_buffers.empty()) {
         vkCmdBindDescriptorBuffersEXT(
             _command_buffer, _descriptor_buffers.size(), _descriptor_buffers.data()
         );
     }
-    for (const auto& set_binding : _set_bindings) {
+    for (const auto& [set_index, set_binding] : _pipeline.binding_template->set_bindings) {
+        const VkDeviceSize byte_offset =
+            set_binding.byte_offset +
+            (std::holds_alternative<VulkanResourceSetBindings>(set_binding.resource_bindings) ?
+                 _resource_byte_offset :
+                 0);
         vkCmdSetDescriptorBufferOffsetsEXT(
             _command_buffer,
-            _bind_point,
-            _pipeline_layout,
-            set_binding.set_index,
+            _pipeline.GetPipelineBindPoint(),
+            _pipeline.GetPipelineLayout(),
+            set_index,
             1,
             &set_binding.buffer_index,
-            &set_binding.offset
+            &byte_offset
         );
     }
 }
@@ -423,25 +413,29 @@ void VulkanCommandList::BindShaderArguments(
     VulkanDescriptorHeap&                descriptor_heap = command_pool.GetDevice().GetGlobalDescriptorHeap();
 
     const std::optional<uint64> allocation_offset = descriptor_heap.ReserveDescriptorRange(
-        descriptor_buffer_lease, GetResourceDescriptorAllocationSize(binding_template)
+        descriptor_buffer_lease, binding_template.resource_descriptor_allocation_size
     );
     if (!allocation_offset.has_value()) {
         throw std::runtime_error("descriptor submission lease exhausted");
     }
 
-    // Pipeline metadata is shared and immutable. Only resolved addresses and
-    // set offsets belong to this recording; the binding map need not be copied.
-    auto       descriptor_buffers = binding_template.descriptor_buffers;
-    const auto set_bindings       = ResolveDescriptorSetBindings(
+    // Only addresses are mutable per recording. The backend binds at most three
+    // buffer categories, so this scratch storage does not need a heap allocation.
+    std::array<VkDescriptorBufferBindingInfoEXT, VulkanPipelineBindingTemplate::descriptor_buffer_capacity>
+        descriptor_buffer_storage;
+    assert(binding_template.descriptor_buffers.size() <= descriptor_buffer_storage.size());
+    std::copy(
+        binding_template.descriptor_buffers.begin(),
+        binding_template.descriptor_buffers.end(),
+        descriptor_buffer_storage.begin()
+    );
+    const std::span<VkDescriptorBufferBindingInfoEXT> descriptor_buffers{
+        descriptor_buffer_storage.data(), binding_template.descriptor_buffers.size()
+    };
+    WriteShaderArgumentDescriptors(
         descriptor_heap, *pipeline, _arguments, descriptor_buffers, *allocation_offset
     );
-    BindDescriptorBufferSets(
-        command_buffer,
-        pipeline->GetPipelineBindPoint(),
-        pipeline->GetPipelineLayout(),
-        descriptor_buffers,
-        set_bindings
-    );
+    BindDescriptorBufferSets(command_buffer, *pipeline, descriptor_buffers, *allocation_offset);
     PushShaderConstants(command_buffer, binding_template.push_constants_info, _arguments.constants);
 }
 

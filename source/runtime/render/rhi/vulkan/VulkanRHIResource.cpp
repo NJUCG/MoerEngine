@@ -985,6 +985,7 @@ void InitializeDescriptorBufferBindingTemplate(
     VulkanDevice&                  device,
     VulkanPipelineBindingTemplate& binding_template
 ) {
+    binding_template.resource_descriptor_allocation_size = 0;
     for (auto& [set_index, set_binding] : binding_template.set_bindings) {
         auto& descriptor_buffer = binding_template.descriptor_buffers[set_binding.buffer_index];
         std::visit(
@@ -995,6 +996,8 @@ void InitializeDescriptorBufferBindingTemplate(
                                           VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
 
                 if constexpr (std::is_same_v<ResourceBindings, VulkanResourceSetBindings>) {
+                    set_binding.byte_offset = binding_template.resource_descriptor_allocation_size;
+                    binding_template.resource_descriptor_allocation_size += resource_bindings.allocation_size;
                     descriptor_buffer.address =
                         device.GetGlobalDescriptorHeap().GetDescriptorBufferAddress();
                     descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
@@ -1005,7 +1008,7 @@ void InitializeDescriptorBufferBindingTemplate(
                         descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
                     }
                     if constexpr (ResourceBindings::descriptor_type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
-                        set_binding.initial_byte_offset = GetBindlessTextureDescriptorOffset(device);
+                        set_binding.byte_offset = GetBindlessTextureDescriptorOffset(device);
                     }
                 }
             },
