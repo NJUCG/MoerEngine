@@ -12,8 +12,8 @@ struct ArrayArguments;
 class PipelineHandle;
 struct VulkanPipelineBindingTemplate;
 
-// Profile-only recorder for the Phase 9.0 serial baseline. Native handles are
-// accepted only as lookup keys and never enter a digest.
+// Profile-only diagnostics for comparing serial command recording across runs.
+// Native handles are lookup keys only and never enter a digest.
 class VulkanSerialGoldenTrace {
 public:
     VulkanSerialGoldenTrace();

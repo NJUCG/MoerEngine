@@ -1,9 +1,9 @@
 #pragma once
 
 #include "RenderAPI.h"
-#include "VulkanFault.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIThreadOwnership.h"
+#include "rhi/vulkan/VulkanFault.h"
 
 namespace Moer::Render {
 

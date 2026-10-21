@@ -1,7 +1,7 @@
 #include "VulkanSerialGolden.h"
 
-#include "VulkanRHIResource.h"
 #include "rhi/RHIImpl.h"
+#include "rhi/vulkan/VulkanRHIResource.h"
 
 #include <algorithm>
 #include <bit>

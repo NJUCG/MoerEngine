@@ -1,5 +1,5 @@
 #include "VulkanResourceTracker.h"
-#include "VulkanSerialGolden.h"
+#include "diagnostics/VulkanSerialGolden.h"
 #include "rhi/RHIRecordDiagnostics.h"
 #include "VulkanCommand.h"
 #include "VulkanPlatform.h"

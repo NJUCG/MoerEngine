@@ -9,7 +9,7 @@
 #include "taskgraph/TaskGraph.h"
 #include "VulkanDevice.h"
 #include "VulkanQueue.h"
-#include "VulkanSubmissionDiagnostics.h"
+#include "diagnostics/VulkanSubmissionDiagnostics.h"
 #include "VulkanTranslateWaveScheduler.h"
 
 #include <algorithm>
