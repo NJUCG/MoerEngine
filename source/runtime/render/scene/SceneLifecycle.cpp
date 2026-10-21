@@ -121,7 +121,7 @@ void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     std::optional<SceneImportResult> gaussian_source;
     auto extension = file_path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (extension == ".ply") {
+    if (extension == ".ply" || extension == ".moergs") {
         SceneLoadRequest gaussian_request{};
         gaussian_request.file_path = file_path;
         gaussian_source.emplace(LoaderInterface::LoadScene(gaussian_request));
@@ -237,6 +237,10 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (extension == ".ply") return ImportGaussianPly(file_path);
     ImportSceneFromFileResult import_result{};
+    if (extension == ".moergs") {
+        import_result.error_message = "Use Open Scene for .moergs documents; import individual PLY assets instead";
+        return import_result;
+    }
 
     if (!IsReady()) {
         import_result.error_message = "Cannot import scene because current scene is not ready.";

@@ -493,8 +493,18 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
             // Retain the empty path after deleting the last splat; empty mesh buffers are not renderable.
             frame_packet.has_gaussian_assets = gaussian_snapshot != nullptr;
             Camera main_camera = frame_packet.scene_updates.main_camera;
+            auto source_extension = scene.GetSourceFilePath().extension().string();
+            std::transform(source_extension.begin(), source_extension.end(), source_extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const bool has_saved_gaussian_camera = source_extension == ".moergs";
+            if (frame_packet.scene_updates.initial_gpu_update && has_saved_gaussian_camera) {
+                // The document camera is authoritative on load; match subsequent UI projection overrides.
+                camera_input.projection_override_enabled = false;
+                editor_config->camera_fovy = main_camera.GetFov();
+                editor_config->camera_near_clip_log10 = std::log10(main_camera.GetNearClip());
+                editor_config->camera_far_clip_log10 = std::log10(main_camera.GetFarClip());
+            }
             // A PLY has no authored camera. Fit only on full scene load.
-            if (frame_packet.scene_updates.initial_gpu_update &&
+            if (frame_packet.scene_updates.initial_gpu_update && !has_saved_gaussian_camera &&
                 frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly &&
                 gaussian_snapshot && gaussian_snapshot->bounds.IsValid()) {
                 const auto& bounds = gaussian_snapshot->bounds;

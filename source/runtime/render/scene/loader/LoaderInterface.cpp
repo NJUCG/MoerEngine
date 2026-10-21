@@ -7,6 +7,7 @@
 #include "scene/cache/SceneCacheSerializer.h"
 #include "scene/loader/assimp/Parser.h"
 #include "scene/loader/GaussianPlyLoader.h"
+#include "scene/gaussian/GaussianSceneFile.h"
 #include <chrono>
 #include <algorithm>
 #include <cctype>
@@ -105,6 +106,15 @@ bool LoaderInterface::LoadSceneFromFileCommon(
     auto gaussian_extension = file_path.extension().string();
     std::transform(gaussian_extension.begin(), gaussian_extension.end(), gaussian_extension.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (gaussian_extension == ".moergs") {
+        std::string error;
+        if (!LoadGaussianSceneFile(file_path, out_logical_scene, error)) {
+            LOG_WARNING("Gaussian scene load failed: {}", error);
+            return false;
+        }
+        if (out_source) *out_source = ESceneLoadSource::Parser;
+        return true;
+    }
     if (gaussian_extension == ".ply") {
         const auto loaded = LoadGaussianPly(file_path);
         if (!loaded) {

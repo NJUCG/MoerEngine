@@ -636,6 +636,17 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
         }
     }
 
+    if (ImGui::MenuItem("Save Gaussian Scene As...", nullptr, false, scene.IsReady() && !m_gaussian_import.valid())) {
+        NFD::UniquePath selected_path;
+        const nfdfilteritem_t filter{"Moer Gaussian Scene", "moergs"};
+        if (NFD::SaveDialog(selected_path, &filter, 1, nullptr, "scene.moergs") == NFD_OKAY) {
+            std::filesystem::path path(selected_path.get());
+            if (!path.has_extension()) path += ".moergs";
+            std::string error;
+            m_last_file_action_status = scene.SaveGaussianDocument(path, error) ?
+                "Gaussian scene saved: " + path.string() : "Save failed: " + error;
+        }
+    }
     if (ImGui::BeginMenu("Scene Cache")) {
         if (ImGui::MenuItem("Save State Cache")) {
             if (scene.SaveStateCache()) {

@@ -1,6 +1,7 @@
 #include "Scene.h"
 #include "loader/GaussianPlyLoader.h"
 #include "math/Transform.h"
+#include "gaussian/GaussianSceneFile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -108,6 +109,11 @@ entt::entity Scene::DuplicateGaussianInstance(entt::entity entity) {
 
 EGaussianSceneContent Scene::GetGaussianSceneContent() const {
     return GetGaussianSceneContentForView(false);
+}
+
+bool Scene::SaveGaussianDocument(const std::filesystem::path& path, std::string& out_error) const {
+    if (!IsReady()) { out_error = "Scene is not ready"; return false; }
+    return SaveGaussianSceneFile(path, *m_logical_scene, out_error);
 }
 
 EGaussianSceneContent Scene::GetGaussianSceneContentForView(bool is_editor_view) const {

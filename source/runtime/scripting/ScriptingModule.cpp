@@ -567,6 +567,13 @@ void BindGaussianApi(py::module_& module, SceneApiClass& scene_api_class) {
         .def_readwrite("opacity_multiplier", &GaussianInstanceSettings::opacity_multiplier)
         .def_readwrite("enabled", &GaussianInstanceSettings::is_enabled);
     scene_api_class
+        .def("save_gaussian_document", [](MainThreadCommandQueue& queue, const std::string& path) {
+            return CallScene(queue, [path](Scene& scene) {
+                std::string error;
+                if (!scene.SaveGaussianDocument(path, error)) throw std::runtime_error(error);
+                return true;
+            });
+        })
         .def("duplicate_gaussian_instance", [](MainThreadCommandQueue& queue, entt::entity entity) {
             return CallScene(queue, [entity](Scene& scene) { return scene.DuplicateGaussianInstance(entity); });
         })

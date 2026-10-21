@@ -1,6 +1,7 @@
 #include "scene/Scene.h"
 #include "scene/gaussian/GaussianGpuScene.h"
 #include "scene/loader/GaussianPlyLoader.h"
+#include <nlohmann/json.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -202,6 +203,41 @@ int main() {
             "failed full PLY load also preserves the previous scene"
         );
         Check(!scene.SaveStateCache(), "Mesh-only cache cannot silently drop Gaussian data");
+        std::string document_error;
+        const auto document_path = directory / "scene.moergs";
+        Check(scene.SaveGaussianDocument(document_path, document_error), document_error.c_str());
+        Check(scene.SaveGaussianDocument(document_path, document_error), "atomic replacement of existing document");
+        Scene restored;
+        restored.LoadSceneFromFile(document_path);
+        restored.PrepareUpdateBatch(false, false);
+        const auto restored_snapshot = restored.GetGaussianSnapshot();
+        Check(restored.IsReady() && restored_snapshot && restored_snapshot->instances.size() == 2, "document restores instances and hierarchy");
+        if (restored_snapshot && restored_snapshot->instances.size() == 2) {
+            const auto& instances = restored_snapshot->instances;
+            Check(instances[0].asset == instances[1].asset, "document restores shared asset geometry");
+            Check(Near(instances[0].world_transform.GetColumn(3).x, 4), "document restores transform");
+            Check(!instances[0].is_visible_in_game && Near(instances[0].settings.opacity_multiplier, .25f), "document restores hidden instance settings");
+        }
+        Check(!scene.SaveGaussianDocument(directory / "do-not-overwrite.ply", document_error), "document cannot overwrite a source PLY");
+        std::ifstream document_input(document_path);
+        nlohmann::json document; document_input >> document;
+        Check(document.at("assets").size() == 1 && std::filesystem::path(document["assets"][0].get<std::string>()).is_relative(), "portable relative source references");
+        const auto corrupt_path = directory / "broken.moergs";
+        const auto test_invalid_document = [&](nlohmann::json value, const char* message) {
+            { std::ofstream output(corrupt_path); output << value; }
+            const auto asset_before = restored_snapshot->instances[0].asset;
+            restored.LoadSceneFromFile(corrupt_path);
+            Check(restored.IsReady() && restored.GetGaussianSnapshot()->instances[0].asset == asset_before, message);
+        };
+        auto invalid_document = document;
+        invalid_document["nodes"][1]["parent"] = 1;
+        test_invalid_document(invalid_document, "cyclic document preserves active scene");
+        invalid_document = document; invalid_document["assets"][0] = "missing.ply";
+        test_invalid_document(invalid_document, "missing asset preserves active scene");
+        invalid_document = document; invalid_document["version"] = 999;
+        test_invalid_document(invalid_document, "unsupported document version preserves active scene");
+        invalid_document = document; invalid_document["nodes"][1]["gaussian"]["opacity"] = -1;
+        test_invalid_document(invalid_document, "invalid multiplier preserves active scene");
         Check(
             scene.DestroyEntity(duplicate_entt) && scene.DestroyGaussianInstance(entity),
             "generic and dedicated deletion supported"
