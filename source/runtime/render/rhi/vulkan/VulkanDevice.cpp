@@ -2325,7 +2325,7 @@ BindlessArrayRef VulkanDevice::CreateBindlessArray(uint _max_size) {
 }
 
 FenceRef VulkanDevice::CreateFence() {
-    return FenceRef{MoerNew(VulkanFence)(*this)};
+    return FenceRef{MoerNew(VulkanTimeline)(*this)};
 }
 
 #pragma region[ raytracing ]

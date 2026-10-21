@@ -1459,7 +1459,7 @@ void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
         }
         for (const RejectionSignalHandle& signal : source.signals) {
             auto* fence =
-                reinterpret_cast<VulkanFence*>(signal.fence.Get());
+                reinterpret_cast<VulkanTimeline*>(signal.fence.Get());
             if (fence == nullptr) {
                 continue;
             }
@@ -2637,7 +2637,7 @@ void VulkanSubmissionExecutor::RejectBatch(
         submit.signal_rejection_keepalives.clear();
         for (const SignalEvent& signal : rejected_signals) {
             auto* fence =
-                reinterpret_cast<VulkanFence*>(signal.timeline_handle);
+                reinterpret_cast<VulkanTimeline*>(signal.timeline_handle);
             if (fence == nullptr) {
                 continue;
             }

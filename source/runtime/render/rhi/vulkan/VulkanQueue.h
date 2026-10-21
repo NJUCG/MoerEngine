@@ -51,13 +51,13 @@ public:
         VkFence                       _fence = VK_NULL_HANDLE
     );
     void Wait(
-        VulkanFence*          _fence,
+        VulkanTimeline*          _fence,
         uint64                _timeline,
         VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
     );
     void Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     void Signal(
-        VulkanFence*          _fence,
+        VulkanTimeline*          _fence,
         uint64                _timeline,
         VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
     );
@@ -416,7 +416,7 @@ public:
         VulkanCallbackBatch,
         VulkanDeferredReleaseBatch,
         VulkanCompletionMarker,
-        VulkanFence*,
+        VulkanTimeline*,
         SignalEvent,
         WaitEvent>;
 
@@ -852,7 +852,7 @@ private:
     uint64                                             retirement_enqueued_serial{0};
     std::atomic<uint64>                                retirement_settled_serial{0};
     Array<VulkanBatchCompletionSettlement>             batch_completion_settlements{};
-    VulkanFence*                                       timeline = nullptr;
+    VulkanTimeline*                                       timeline = nullptr;
     std::mutex                                         event_mutex;
     bool                                               completion_worker_running{false};
     std::condition_variable_any                        queue_cv;
@@ -1016,7 +1016,7 @@ private:
     uint64                  retirement_enqueued_serial{0};
     std::atomic<uint64>     retirement_settled_serial{0};
     Array<VulkanBatchCompletionSettlement> batch_completion_settlements{};
-    VulkanFenceRef          timeline       = nullptr;
+    VulkanTimelineRef          timeline       = nullptr;
     std::mutex              event_mutex;
     std::atomic_bool        enabled{false};
     std::condition_variable_any queue_cv; // wake up execute thread from sleeping

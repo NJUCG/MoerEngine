@@ -12970,7 +12970,7 @@ void RunTimestampQuerySuccessfulBatchPublication() {
     second.EndTimestampQuery(second_query);
 
     auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(signals[_index].Get())
         );
         return fence != nullptr && signals[_index]->GetValue() >= 1 &&
@@ -13200,7 +13200,7 @@ void RunTimestampQueryCrossQueueBatchPublication() {
     );
 
     auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(signals[_index].Get())
         );
         return fence != nullptr && signals[_index]->GetValue() >= 1 &&
@@ -13611,7 +13611,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     std::array<std::atomic<uint32>, 2> success_callbacks{};
 
     auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(signals[_index].Get())
         );
         return fence != nullptr && signals[_index]->GetValue() >= 1 &&
@@ -13896,7 +13896,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     copy_submit.async_queue_scope = async_queue_scope;
 
     auto graphics_signal_succeeded = [&] {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(graphics_done.Get())
         );
         return fence != nullptr && graphics_done->GetValue() >= 1 &&
@@ -14148,7 +14148,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
         FenceRef            done = device.CreateFence();
 
         auto signal_succeeded = [&] {
-            auto* fence = static_cast<VulkanFence*>(
+            auto* fence = static_cast<VulkanTimeline*>(
                 ResourceCast(done.Get())
             );
             return fence != nullptr && done->GetValue() >= 1 &&
@@ -14439,13 +14439,13 @@ void RunTimestampQueryPreparationRejection() {
     FenceRef rejected_done = device.CreateFence();
     FenceRef sibling_done  = device.CreateFence();
     FenceRef recovered_done = device.CreateFence();
-    auto* rejected_fence = static_cast<VulkanFence*>(
+    auto* rejected_fence = static_cast<VulkanTimeline*>(
         ResourceCast(rejected_done.Get())
     );
-    auto* sibling_fence = static_cast<VulkanFence*>(
+    auto* sibling_fence = static_cast<VulkanTimeline*>(
         ResourceCast(sibling_done.Get())
     );
-    auto* recovered_fence = static_cast<VulkanFence*>(
+    auto* recovered_fence = static_cast<VulkanTimeline*>(
         ResourceCast(recovered_done.Get())
     );
     if (rejected_fence == nullptr || sibling_fence == nullptr ||
@@ -14966,7 +14966,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         const std::optional<QueryResult> suffix_result =
             suffix_future.TryGet();
         auto* prefix_fence =
-            static_cast<VulkanFence*>(ResourceCast(prefix_done.Get()));
+            static_cast<VulkanTimeline*>(ResourceCast(prefix_done.Get()));
         if (_result.status != QueryStatus::Ready ||
             GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
             prefix_fence == nullptr ||
@@ -15065,7 +15065,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     const GpuCompletionResult suffix_completion_result =
         suffix_completion.Get();
     auto* suffix_fence =
-        static_cast<VulkanFence*>(ResourceCast(suffix_done.Get()));
+        static_cast<VulkanTimeline*>(ResourceCast(suffix_done.Get()));
     if (prefix_result.status != QueryStatus::Ready ||
         suffix_result.status != QueryStatus::Error ||
         prefix_completion_result.status !=
@@ -15160,7 +15160,7 @@ void RunTimestampQuerySerialRecordFailure() {
 
     auto fence_failed =
         [](const FenceRef& _fence) {
-            auto* fence = static_cast<VulkanFence*>(
+            auto* fence = static_cast<VulkanTimeline*>(
                 ResourceCast(_fence.Get())
             );
             return fence != nullptr && fence->IsFailed() &&

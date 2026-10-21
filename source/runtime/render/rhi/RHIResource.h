@@ -1050,6 +1050,10 @@ public:
 protected:
     Array<RaytracingInstance> instances;
 };
+// Value-based synchronization timeline for CPU waits and queue wait/signal
+// dependencies. Backends may use a timeline semaphore rather than a native
+// fence. Submission acceptance and rejection are tracked separately from
+// successful completion of a value.
 class Fence : public RHIResource {
 public:
     Fence() : RHIResource(RRT_GPU_FENCE) {}

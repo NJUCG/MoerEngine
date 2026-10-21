@@ -36,11 +36,11 @@ class VulkanPipelineResourceCache;
 //forward declaration
 class VulkanBuffer;
 class VulkanTexture;
-class VulkanFence;
+class VulkanTimeline;
 
-using VulkanBufferRef  = CountableRef<VulkanBuffer>;
-using VulkanTextureRef = CountableRef<VulkanTexture>;
-using VulkanFenceRef   = CountableRef<VulkanFence>;
+using VulkanBufferRef   = CountableRef<VulkanBuffer>;
+using VulkanTextureRef  = CountableRef<VulkanTexture>;
+using VulkanTimelineRef = CountableRef<VulkanTimeline>;
 
 class VulkanMemoryManager final {
 public:
@@ -1077,10 +1077,12 @@ private:
         return static_cast<VkType*>(_val);       \
     }
 
-class VulkanFence final : public Fence, VulkanDeviceObject {
+// RHI synchronization timeline backed by a VkSemaphore and host-side
+// submission/completion state.
+class VulkanTimeline final : public Fence, VulkanDeviceObject {
 public:
-    VulkanFence(VulkanDevice&);
-    virtual ~VulkanFence();
+    VulkanTimeline(VulkanDevice&);
+    virtual ~VulkanTimeline();
 
     uint64_t GetValue() const override;
 
@@ -1090,7 +1092,7 @@ public:
     void Reject(uint64_t _value) noexcept override;
     // can be called on any thread to block current thread
     void Sync(uint64);
-    // can be called on any thread to signal fence
+    // Publish observed completion to CPU waiters; does not signal the semaphore.
     void  Notify(uint64);
     void  MarkSubmitted(uint64_t _value) override;
     RENDER_API bool WaitSubmitted(
@@ -1107,10 +1109,7 @@ public:
     RENDER_API void Fail(VkResult _result);
     RENDER_API bool IsFailed() const;
     RENDER_API void SignalHost(uint64_t _value);
-    auto& GetFence() {
-        return timeline;
-    }
-    VkSemaphore GetUnderlyingHandle() {
+    VkSemaphore GetSemaphore() const noexcept {
         return timeline;
     }
 
@@ -1138,7 +1137,7 @@ public:
 #pragma region[ resource cast ]
 RESOURCE_CAST(Buffer, VulkanBuffer)
 RESOURCE_CAST(Texture, VulkanTexture)
-RESOURCE_CAST(Fence, VulkanFence)
+RESOURCE_CAST(Fence, VulkanTimeline)
 RESOURCE_CAST(Swapchain, VkSwapchain)
 
 RESOURCE_CAST(RaytracingGeometry, VulkanRaytracingGeometry)

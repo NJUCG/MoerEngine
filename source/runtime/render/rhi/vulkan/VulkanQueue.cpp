@@ -3963,8 +3963,8 @@ VulkanOperationResult VkNativeQueue::Submit(
     return outcome;
 }
 
-void VkNativeQueue::Wait(VulkanFence* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
-    VkSemaphore sem = _fence->GetUnderlyingHandle();
+void VkNativeQueue::Wait(VulkanTimeline* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
+    VkSemaphore sem = _fence->GetSemaphore();
     wait_infos.push_back(
         VkSemaphoreSubmitInfo{
             .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -3987,8 +3987,8 @@ void VkNativeQueue::Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
         }
     );
 }
-void VkNativeQueue::Signal(VulkanFence* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
-    VkSemaphore sem = _fence->GetUnderlyingHandle();
+void VkNativeQueue::Signal(VulkanTimeline* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
+    VkSemaphore sem = _fence->GetSemaphore();
     signal_infos.push_back(
         VkSemaphoreSubmitInfo{
             .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -4011,7 +4011,7 @@ void VkNativeQueue::Signal(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
     );
 }
 void VkCommandQueue::Wait(WaitEvent _evt) {
-    auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
+    auto* fence = reinterpret_cast<VulkanTimeline*>(_evt.timeline_handle);
     {
         std::unique_lock<std::mutex> lock(event_mutex);
         event_queue.emplace_back(_evt, _evt.value, false);
@@ -4286,7 +4286,7 @@ static bool WaitForSubmittedDependencies(
     const std::atomic_bool* _continue_waiting = nullptr
 ) {
     for (const WaitEvent& event : _wait_events) {
-        auto* fence = reinterpret_cast<VulkanFence*>(event.timeline_handle);
+        auto* fence = reinterpret_cast<VulkanTimeline*>(event.timeline_handle);
         if (fence == nullptr ||
             !fence->WaitSubmitted(
                 event.value,
@@ -4320,11 +4320,11 @@ static VulkanOperationResult MakeUnsubmittedOutcome(
 }
 
 static void MarkSubmissionAccepted(
-    VulkanFence* _queue_timeline, uint64 _timeline, const Array<SignalEvent>& _signal_events
+    VulkanTimeline* _queue_timeline, uint64 _timeline, const Array<SignalEvent>& _signal_events
 ) {
     _queue_timeline->MarkSubmitted(_timeline);
     for (const SignalEvent& event : _signal_events) {
-        reinterpret_cast<VulkanFence*>(event.timeline_handle)->MarkSubmitted(event.value);
+        reinterpret_cast<VulkanTimeline*>(event.timeline_handle)->MarkSubmitted(event.value);
     }
 }
 
@@ -5138,7 +5138,7 @@ static bool IsRecoverableUnsubmittedSignal(
 
 static void TerminalizeUnsubmittedSignal(
     VulkanDevice&                _device,
-    VulkanFence*                 _fence,
+    VulkanTimeline*                 _fence,
     uint64                       _value,
     const VulkanOperationResult& _outcome
 ) {
@@ -5162,7 +5162,7 @@ static void TerminalizeUnsubmittedSignals(
     for (const SignalEvent& event : _signal_events) {
         TerminalizeUnsubmittedSignal(
             _device,
-            reinterpret_cast<VulkanFence*>(event.timeline_handle),
+            reinterpret_cast<VulkanTimeline*>(event.timeline_handle),
             event.value,
             _outcome
         );
@@ -5295,7 +5295,7 @@ VkCommandQueue::VkCommandQueue(
                                       : std::clamp(_parallel_record_workers, 2u, hardware_threads);
         parallel_record_pool = MakeUnique<ExternalCpuJoinPool>(parallel_record_workers);
     }
-    timeline = MoerNew(VulkanFence(vk_device));
+    timeline = MoerNew(VulkanTimeline(vk_device));
 
     try {
         completion_worker_running = true;
@@ -6058,7 +6058,7 @@ VkCommandQueue::SubmitRecorded(
             queue.Signal(timeline, _recorded.timeline, end_tag);
             for (auto& event : _recorded.submit.wait_events) {
                 queue.Wait(
-                    reinterpret_cast<VulkanFence*>(
+                    reinterpret_cast<VulkanTimeline*>(
                         event.timeline_handle
                     ),
                     event.value,
@@ -6067,7 +6067,7 @@ VkCommandQueue::SubmitRecorded(
             }
             for (auto& event : _recorded.submit.signal_events) {
                 queue.Signal(
-                    reinterpret_cast<VulkanFence*>(
+                    reinterpret_cast<VulkanTimeline*>(
                         event.timeline_handle
                     ),
                     event.value,
@@ -9910,7 +9910,7 @@ void VkCommandQueue::CompletionThreadMain() {
 
                     for (const SignalEvent& event : _batch.submit.signal_events) {
                         auto* fence =
-                            reinterpret_cast<VulkanFence*>(event.timeline_handle);
+                            reinterpret_cast<VulkanTimeline*>(event.timeline_handle);
                         if (fence == nullptr) {
                             continue;
                         }
@@ -10169,7 +10169,7 @@ void VkCommandQueue::CompletionThreadMain() {
                 },
                 [](VulkanCompletionMarker&) {},
                 [this, &batch_gpu_success](SignalEvent& _evt) {
-                    auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
+                    auto* fence = reinterpret_cast<VulkanTimeline*>(_evt.timeline_handle);
                     if (batch_gpu_success) {
                         fence->Notify(_evt.value);
                     } else if (vk_device.IsFaulted()) {
@@ -10177,7 +10177,7 @@ void VkCommandQueue::CompletionThreadMain() {
                     }
                 },
                 [](WaitEvent&) {},
-                [](VulkanFence*) {
+                [](VulkanTimeline*) {
                     assert(false && "Invalid event");
                 }
             },
@@ -10268,7 +10268,7 @@ VkCopyQueue::VkCopyQueue(VulkanDevice& _device) :
     CopyQueue(),
     device(_device),
     queue(EQueueType::Copy, _device) {
-    timeline = MoerNew(VulkanFence)(_device);
+    timeline = MoerNew(VulkanTimeline)(_device);
     enabled  = true;
     try {
         thread = std::jthread([this]() {
@@ -10826,7 +10826,7 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
                     for (auto& event :
                          _recorded.submit.wait_events) {
                         queue.Wait(
-                            reinterpret_cast<VulkanFence*>(
+                            reinterpret_cast<VulkanTimeline*>(
                                 event.timeline_handle
                             ),
                             event.value
@@ -10835,7 +10835,7 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
                     for (auto& event :
                          _recorded.submit.signal_events) {
                         queue.Signal(
-                            reinterpret_cast<VulkanFence*>(
+                            reinterpret_cast<VulkanTimeline*>(
                                 event.timeline_handle
                             ),
                             event.value,
@@ -11157,7 +11157,7 @@ void VkCopyQueue::ExecuteThread() {
 
         for (const SignalEvent& event : batch.submit.signal_events) {
             auto* fence =
-                reinterpret_cast<VulkanFence*>(event.timeline_handle);
+                reinterpret_cast<VulkanTimeline*>(event.timeline_handle);
             if (fence == nullptr) {
                 continue;
             }
