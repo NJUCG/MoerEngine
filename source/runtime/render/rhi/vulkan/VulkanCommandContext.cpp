@@ -43,12 +43,12 @@ VulkanCommandContext::VulkanCommandContext(VulkanDevice* _device, EQueueType _ty
     queue_type(_type),
     tracker(_type),
     command_pool(_device, _type),
-    cmd_list(&command_pool, *_device),
+    cmd_list(command_pool),
     queries(*_device, _type) {}
 
 VulkanCommandList& VulkanCommandContext::PrepareSecondaryCommandList() {
     if (!secondary_cmd_list.has_value()) {
-        secondary_cmd_list.emplace(&command_pool, *m_device, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
+        secondary_cmd_list.emplace(command_pool, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
     }
     return secondary_cmd_list.value();
 }

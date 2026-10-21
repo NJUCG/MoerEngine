@@ -73,18 +73,14 @@ std::string_view VulkanCommandPool::GetQueueName() const {
     }
 }
 
-VulkanCommandList::VulkanCommandList(
-    VulkanCommandPool*   _command_pool,
-    VulkanDevice&        _device,
-    VkCommandBufferLevel _level
-) :
+VulkanCommandList::VulkanCommandList(VulkanCommandPool& _command_pool, VkCommandBufferLevel _level) :
     command_pool(_command_pool),
-    device(_device),
     level(_level) {
+    VulkanDevice&               device              = command_pool.GetDevice();
     VkCommandBufferAllocateInfo command_buffer_info = {
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext              = nullptr,
-        .commandPool        = command_pool->GetHandle(),
+        .commandPool        = command_pool.GetHandle(),
         .level              = level,
         .commandBufferCount = 1
     };
@@ -94,7 +90,7 @@ VulkanCommandList::VulkanCommandList(
         device.TryLatchFirstFault(
             VulkanOperationContext{
                 .operation  = EVulkanFaultOperation::CommandBufferAllocate,
-                .queue_type = command_pool->GetQueueType(),
+                .queue_type = command_pool.GetQueueType(),
             },
             result
         );
@@ -109,18 +105,18 @@ VulkanCommandList::VulkanCommandList(
             std::format(
                 "{}CommandBuffer_{}",
                 level == VK_COMMAND_BUFFER_LEVEL_PRIMARY ? "Primary" : "Secondary",
-                command_pool->GetQueueName()
+                command_pool.GetQueueName()
             )
         );
     } catch (...) {
         // A failed constructor has no destructor to release the native buffer.
-        vkFreeCommandBuffers(device.GetDevice(), command_pool->GetHandle(), 1, &command_buffer);
+        vkFreeCommandBuffers(device.GetDevice(), command_pool.GetHandle(), 1, &command_buffer);
         throw;
     }
 }
 
 VulkanCommandList::~VulkanCommandList() {
-    vkFreeCommandBuffers(device.GetDevice(), command_pool->GetHandle(), 1, &command_buffer);
+    vkFreeCommandBuffers(command_pool.GetDevice().GetDevice(), command_pool.GetHandle(), 1, &command_buffer);
 }
 
 // Recording lifecycle.
@@ -424,7 +420,7 @@ void VulkanCommandList::BindShaderArguments(
     auto* pipeline = static_cast<VulkanPipelineState*>(_pipeline_handle.GetState());
     assert(pipeline && pipeline->binding_template != nullptr && "Pipeline state has no bind template!");
     const VulkanPipelineBindingTemplate& binding_template = *pipeline->binding_template;
-    VulkanDescriptorHeap&                descriptor_heap  = device.GetGlobalDescriptorHeap();
+    VulkanDescriptorHeap&                descriptor_heap = command_pool.GetDevice().GetGlobalDescriptorHeap();
 
     const std::optional<uint64> allocation_offset = descriptor_heap.ReserveDescriptorRange(
         descriptor_buffer_lease, GetResourceDescriptorAllocationSize(binding_template)

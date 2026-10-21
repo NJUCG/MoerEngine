@@ -30,6 +30,9 @@ public:
     VkCommandPool GetHandle() const {
         return command_pool;
     }
+    VulkanDevice& GetDevice() const {
+        return *m_device;
+    }
     EQueueType GetQueueType() const {
         return queue_type;
     }
@@ -44,9 +47,8 @@ private:
 // to the surrounding command context; recording here does not submit work.
 class VulkanCommandList {
 public:
-    VulkanCommandList(
-        VulkanCommandPool*   _command_pool,
-        VulkanDevice&        _device,
+    explicit VulkanCommandList(
+        VulkanCommandPool&   _command_pool,
         VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY
     );
     ~VulkanCommandList();
@@ -57,9 +59,6 @@ public:
 
     VkCommandBuffer GetHandle() const {
         return command_buffer;
-    }
-    VkCommandBufferLevel GetLevel() const {
-        return level;
     }
 
     // Recording lifecycle.
@@ -206,8 +205,7 @@ public:
 
 private:
     VkCommandBuffer                                   command_buffer{VK_NULL_HANDLE};
-    VulkanCommandPool*                                command_pool;
-    VulkanDevice&                                     device;
+    VulkanCommandPool&                                command_pool;
     VkCommandBufferLevel                              level;
     std::shared_ptr<VulkanDescriptorBufferLeaseState> descriptor_buffer_lease;
 };
