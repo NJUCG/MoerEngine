@@ -10,7 +10,7 @@
 #include "VulkanCommandQueries.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
-#include "VulkanMacroUtils.h"
+#include "VulkanFault.h"
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
@@ -40,7 +40,17 @@ VulkanCommandPool::VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_ty
         .queueFamilyIndex = family_index
     };
 
-    VK_CHECK_RESULT(vkCreateCommandPool(_device->GetDevice(), &pool_info, nullptr, &command_pool));
+    const VkResult result = vkCreateCommandPool(_device->GetDevice(), &pool_info, nullptr, &command_pool);
+    if (result != VK_SUCCESS) {
+        _device->TryLatchFirstFault(
+            VulkanOperationContext{
+                .operation  = EVulkanFaultOperation::CommandPoolCreate,
+                .queue_type = queue_type,
+            },
+            result
+        );
+        throw std::runtime_error("Vulkan command-pool creation failed: " + std::string(VulkanResultName(result)));
+    }
 }
 
 VulkanCommandPool::~VulkanCommandPool() {
@@ -78,16 +88,32 @@ VulkanCmdList::VulkanCmdList(
         .level              = level,
         .commandBufferCount = 1
     };
-    VK_CHECK_RESULT(vkAllocateCommandBuffers(device.GetDevice(), &command_buffer_info, &command_buffer));
-    _device.SetResourceName(
-        (uint64)command_buffer,
-        VK_OBJECT_TYPE_COMMAND_BUFFER,
-        std::format(
-            "{}CommandBuffer_{}",
-            level == VK_COMMAND_BUFFER_LEVEL_PRIMARY ? "Primary" : "Secondary",
-            command_pool->GetQueueName()
-        )
-    );
+    const VkResult result = vkAllocateCommandBuffers(device.GetDevice(), &command_buffer_info, &command_buffer);
+    if (result != VK_SUCCESS) {
+        device.TryLatchFirstFault(
+            VulkanOperationContext{
+                .operation  = EVulkanFaultOperation::CommandBufferAllocate,
+                .queue_type = command_pool->GetQueueType(),
+            },
+            result
+        );
+        throw std::runtime_error("Vulkan command-buffer allocation failed: " + std::string(VulkanResultName(result)));
+    }
+    try {
+        device.SetResourceName(
+            (uint64)command_buffer,
+            VK_OBJECT_TYPE_COMMAND_BUFFER,
+            std::format(
+                "{}CommandBuffer_{}",
+                level == VK_COMMAND_BUFFER_LEVEL_PRIMARY ? "Primary" : "Secondary",
+                command_pool->GetQueueName()
+            )
+        );
+    } catch (...) {
+        // A failed constructor has no destructor to release the native buffer.
+        vkFreeCommandBuffers(device.GetDevice(), command_pool->GetHandle(), 1, &command_buffer);
+        throw;
+    }
 }
 
 VulkanCmdList::~VulkanCmdList() {
@@ -812,10 +838,11 @@ void VulkanCmdList::WriteTimestamp(
 
 // Debug labels.
 void VulkanCmdList::BeginLabel(std::string_view _label, float4 _color) {
+    const std::string label_name(_label);
     VkDebugUtilsLabelEXT label = {
         .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
         .pNext      = nullptr,
-        .pLabelName = _label.data(),
+        .pLabelName = label_name.c_str(),
         .color      = {_color.x, _color.y, _color.z, _color.w}
     };
     vkCmdBeginDebugUtilsLabelEXT(command_buffer, &label);
@@ -826,10 +853,11 @@ void VulkanCmdList::EndLabel() {
 }
 
 void VulkanCmdList::InsertLabel(std::string_view _label, float4 _color) {
+    const std::string label_name(_label);
     VkDebugUtilsLabelEXT label = {
         .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
         .pNext      = nullptr,
-        .pLabelName = _label.data(),
+        .pLabelName = label_name.c_str(),
         .color      = {_color.x, _color.y, _color.z, _color.w}
     };
     vkCmdInsertDebugUtilsLabelEXT(command_buffer, &label);

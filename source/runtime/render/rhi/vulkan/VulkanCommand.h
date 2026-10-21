@@ -30,6 +30,9 @@ public:
     VkCommandPool GetHandle() const {
         return command_pool;
     }
+    EQueueType GetQueueType() const {
+        return queue_type;
+    }
     std::string_view GetQueueName() const;
 
 private:
