@@ -1,8 +1,8 @@
 #include "VulkanQueue.h"
 #include "PixelFormat.h"
 #include "RHICmdReorderer.h"
-#include "VulkanCommand.h"
 #include "VulkanCommandContext.h"
+#include "VulkanCommandList.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
@@ -2021,7 +2021,7 @@ class VkCmdVisitor : VulkanDeviceObject {
         Draw,
         Common
     } state = EState::Common;
-    VulkanCmdList&         cmd_list;
+    VulkanCommandList&     cmd_list;
     VulkanCommandContext&  command_context;
     VkTracker&             tracker;
     const TCachedArgArray& cached_args;
@@ -2031,11 +2031,8 @@ class VkCmdVisitor : VulkanDeviceObject {
 
     class ScopedNativeLabel {
     public:
-        ScopedNativeLabel(
-            VulkanCmdList&   _cmd_list,
-            std::string_view _name,
-            float4           _color
-        ) : cmd_list(_cmd_list) {
+        ScopedNativeLabel(VulkanCommandList& _cmd_list, std::string_view _name, float4 _color) :
+            cmd_list(_cmd_list) {
             cmd_list.BeginLabel(_name, _color);
         }
 
@@ -2047,7 +2044,7 @@ class VkCmdVisitor : VulkanDeviceObject {
         ScopedNativeLabel& operator=(const ScopedNativeLabel&) = delete;
 
     private:
-        VulkanCmdList& cmd_list;
+        VulkanCommandList& cmd_list;
     };
 
 public:
@@ -2055,7 +2052,7 @@ public:
         VulkanDevice&          _device,
         VulkanCommandContext&  _command_context,
         VkTracker&             _tracker,
-        VulkanCmdList&         _cmd_list,
+        VulkanCommandList&     _cmd_list,
         const TCachedArgArray& _cached_args,
         ProfilerStorage*       _profiler                   = nullptr,
         bool                   _query_profiling_enabled    = false,
@@ -2956,7 +2953,7 @@ public:
                         },
                         _cmd.ClearValue()
                     );
-                    cmd_list.ClearTexture(vk_texture, value, range);
+                    cmd_list.ClearColorTexture(vk_texture, value, range);
                 },
                 [&](BufferView _arg) {
                     auto* vk_buffer = ResourceCast(_arg.GetBuffer());
@@ -3512,19 +3509,16 @@ VulkanOperationResult VkNativeQueue::SubmitEmpty(
     return outcome;
 }
 
-VulkanOperationResult VkNativeQueue::Submit(
-    VulkanCmdList&                _cmdlist,
-    const VulkanOperationContext& _context,
-    VkFence                       _fence
-) {
-    VulkanCmdList* command_lists[] = {&_cmdlist};
-    return Submit(std::span<VulkanCmdList* const>(command_lists), _context, _fence);
+VulkanOperationResult
+VkNativeQueue::Submit(VulkanCommandList& _cmdlist, const VulkanOperationContext& _context, VkFence _fence) {
+    VulkanCommandList* command_lists[] = {&_cmdlist};
+    return Submit(std::span<VulkanCommandList* const>(command_lists), _context, _fence);
 }
 
 VulkanOperationResult VkNativeQueue::Submit(
-    std::span<VulkanCmdList* const> _cmdlists,
-    const VulkanOperationContext&   _context,
-    VkFence                         _fence
+    std::span<VulkanCommandList* const> _cmdlists,
+    const VulkanOperationContext&       _context,
+    VkFence                             _fence
 ) {
     assert(!_cmdlists.empty() && "ordered command-buffer submit must not be empty");
     if (device.IsFaulted()) {
@@ -3551,7 +3545,7 @@ VulkanOperationResult VkNativeQueue::Submit(
     VkSubmitInfo2 submit_info{};
     Array<VkCommandBufferSubmitInfo> cmd_infos;
     cmd_infos.reserve(_cmdlists.size());
-    for (VulkanCmdList* cmd_list : _cmdlists) {
+    for (VulkanCommandList* cmd_list : _cmdlists) {
         assert(cmd_list != nullptr && "ordered command-buffer submit contains null entry");
         cmd_infos.push_back(
             VkCommandBufferSubmitInfo{
@@ -3761,7 +3755,7 @@ int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {
 }
 
 void ProfilerStorage::BeginProfilerSession(
-    VulkanCmdList&          _cmd_list,
+    VulkanCommandList&      _cmd_list,
     std::string_view        _name,
     VkPipelineStageFlagBits _stage
 ) {
@@ -3779,7 +3773,7 @@ void ProfilerStorage::BeginProfilerSession(
 }
 
 void ProfilerStorage::EndProfilerSession(
-    VulkanCmdList&          _cmd_list,
+    VulkanCommandList&      _cmd_list,
     std::string_view        _name,
     VkPipelineStageFlagBits _stage
 ) {
@@ -5699,17 +5693,15 @@ VkCommandQueue::SubmitRecorded(
             for (const VkSemaphoreSubmitInfo& signal : _recorded.native_signals) {
                 queue.Signal(signal.semaphore, signal.stageMask);
             }
-            submit_outcome = _recorded.has_commands ?
-                                 queue.Submit(
-                                     std::span<VulkanCmdList* const>(
-                                         _recorded.ordered_cmd_lists.data(),
-                                         _recorded.ordered_cmd_lists.size()
-                                     ),
-                                     _recorded.context
-                                 ) :
-                                 queue.SubmitEmpty(
-                                     _recorded.context
-                                 );
+            submit_outcome =
+                _recorded.has_commands ?
+                    queue.Submit(
+                        std::span<VulkanCommandList* const>(
+                            _recorded.ordered_cmd_lists.data(), _recorded.ordered_cmd_lists.size()
+                        ),
+                        _recorded.context
+                    ) :
+                    queue.SubmitEmpty(_recorded.context);
             _recorded.native_submit_resolved = true;
             // Persist the native result before any signal-fence bookkeeping
             // can throw. Once vkQueueSubmit2 accepts the packet, every later
@@ -6087,11 +6079,9 @@ bool VkCommandQueue::TryExecuteParallel(
                                          float4{1.0f, 0.0f, 0.0f, 1.0f};
     Timer execute_timer;
     bool  profiling_started = false;
-    auto begin_primary = [&] (
-                             VulkanCmdList& _cmd_list,
+    auto              begin_primary     = [&](VulkanCommandList&            _cmd_list,
                              const Array<const ScopeCmd*>& _scopes,
-                             bool _coordinator
-                         ) -> VkResult {
+                             bool                          _coordinator) -> VkResult {
         const VkResult begin_result = _cmd_list.Begin();
         if (begin_result != VK_SUCCESS) {
             return begin_result;
@@ -6117,10 +6107,8 @@ bool VkCommandQueue::TryExecuteParallel(
         }
         return VK_SUCCESS;
     };
-    auto begin_compute_secondary = [&] (
-                                       VulkanCmdList& _cmd_list,
-                                       const Array<const ScopeCmd*>& _scopes
-                                   ) -> VkResult {
+    auto begin_compute_secondary = [&](VulkanCommandList&            _cmd_list,
+                                       const Array<const ScopeCmd*>& _scopes) -> VkResult {
         const VkCommandBufferInheritanceInfo inheritance{
             .sType                = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
             .pNext                = nullptr,
@@ -6141,11 +6129,9 @@ bool VkCommandQueue::TryExecuteParallel(
         }
         return VK_SUCCESS;
     };
-    auto begin_graphics_secondary = [&] (
-                                        VulkanCmdList& _cmd_list,
-                                        const Array<const ScopeCmd*>& _scopes,
-                                        const VulkanDynamicRenderingEnvelope& _envelope
-                                    ) -> VkResult {
+    auto begin_graphics_secondary = [&](VulkanCommandList&                    _cmd_list,
+                                        const Array<const ScopeCmd*>&         _scopes,
+                                        const VulkanDynamicRenderingEnvelope& _envelope) -> VkResult {
         const VkCommandBufferInheritanceRenderingInfo rendering_inheritance =
             _envelope.InheritanceInfo();
         const VkCommandBufferInheritanceInfo inheritance{
@@ -6172,7 +6158,8 @@ bool VkCommandQueue::TryExecuteParallel(
         }
         return VK_SUCCESS;
     };
-    auto end_command_buffer = [&](VulkanCmdList& _cmd_list, const Array<const ScopeCmd*>& _scopes) -> VkResult {
+    auto end_command_buffer = [&](VulkanCommandList&            _cmd_list,
+                                  const Array<const ScopeCmd*>& _scopes) -> VkResult {
         for (auto scope = _scopes.rbegin(); scope != _scopes.rend(); ++scope) {
             _cmd_list.EndLabel();
         }
@@ -6329,7 +6316,7 @@ bool VkCommandQueue::TryExecuteParallel(
                                std::chrono::steady_clock::now() - preprocess_begin
                            ).count();
     };
-    auto record_layer_prefix = [&](size_t _layer_index, VulkanCmdList& _cmd_list) {
+    auto record_layer_prefix = [&](size_t _layer_index, VulkanCommandList& _cmd_list) {
         ParallelLayerRuntime& runtime = runtime_layers[_layer_index];
         prepare_layer_prefix(_layer_index);
         runtime.barrier_prefix.Record(_cmd_list);
@@ -6374,7 +6361,7 @@ bool VkCommandQueue::TryExecuteParallel(
     bool                  parallel_recorded = true;
     double                worker_join_time = 0.0;
 
-    auto finalize_parallel_record = [&](Array<VulkanCmdList*>&&                  _ordered_cmd_lists,
+    auto finalize_parallel_record = [&](Array<VulkanCommandList*>&&              _ordered_cmd_lists,
                                         Array<UniquePtr<VulkanCommandContext>>&& _submitted_command_contexts,
                                         Array<UniquePtr<VulkanCommandContext>>&& _abandoned_command_contexts,
                                         uint32 _secondary_command_buffer_count,
@@ -6532,7 +6519,7 @@ bool VkCommandQueue::TryExecuteParallel(
                     plan.jobs[layer_plan.first_job + job_index].work_units;
             }
         }
-        VulkanCmdList& assembly_cmd = tracker_owner->GetCmdList();
+        VulkanCommandList& assembly_cmd = tracker_owner->GetCommandList();
         assembly_cmd.SetDescriptorBufferLease(descriptor_lease.state);
         const VkResult assembly_begin = begin_primary(assembly_cmd, {}, true);
         if (assembly_begin != VK_SUCCESS) {
@@ -6577,7 +6564,7 @@ bool VkCommandQueue::TryExecuteParallel(
                         .range           = plan.jobs[layer_plan.first_job + job_index],
                         .command_context = AcquireCommandContext(),
                     };
-                    chunk.command_context->PrepareSecondaryCmdList();
+                    chunk.command_context->PrepareSecondaryCommandList();
                     runtime.chunks.push_back(std::move(chunk));
                 }
 
@@ -6605,7 +6592,7 @@ bool VkCommandQueue::TryExecuteParallel(
 
                         try {
                             chunk.worker_id = Platform::GetCurrentThreadID();
-                            VulkanCmdList& cmd_list = chunk.command_context->GetSecondaryCmdList();
+                            VulkanCommandList& cmd_list = chunk.command_context->GetSecondaryCommandList();
                             cmd_list.SetDescriptorBufferLease(descriptor_lease.state);
                             VkResult worker_begin = VK_SUCCESS;
                             if (job_layer.graphics_secondary) {
@@ -6746,7 +6733,8 @@ bool VkCommandQueue::TryExecuteParallel(
                         Array<VkCommandBuffer> secondaries;
                         secondaries.reserve(runtime.chunks.size());
                         for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                            secondaries.push_back(chunk.command_context->GetSecondaryCmdList().GetHandle());
+                            secondaries.push_back(chunk.command_context->GetSecondaryCommandList().GetHandle()
+                            );
                         }
                         if (runtime.graphics_secondary) {
                             VkRenderingInfo rendering_info =
@@ -6898,7 +6886,7 @@ bool VkCommandQueue::TryExecuteParallel(
             return true;
         }
 
-        Array<VulkanCmdList*> ordered_cmd_lists{&assembly_cmd};
+        Array<VulkanCommandList*>              ordered_cmd_lists{&assembly_cmd};
         Array<UniquePtr<VulkanCommandContext>> submitted_command_contexts;
         Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
         submitted_command_contexts.reserve(total_job_count + 1);
@@ -6967,9 +6955,9 @@ bool VkCommandQueue::TryExecuteParallel(
 
                     try {
                         chunk.worker_id = Platform::GetCurrentThreadID();
-                        VulkanCmdList& cmd_list = job_layer.use_secondary ?
-                                                      chunk.command_context->GetSecondaryCmdList() :
-                                                      chunk.command_context->GetCmdList();
+                        VulkanCommandList& cmd_list = job_layer.use_secondary ?
+                                                          chunk.command_context->GetSecondaryCommandList() :
+                                                          chunk.command_context->GetCommandList();
                         cmd_list.SetDescriptorBufferLease(descriptor_lease.state);
                         VkResult worker_begin = VK_SUCCESS;
                         if (job_layer.graphics_secondary) {
@@ -7124,12 +7112,12 @@ bool VkCommandQueue::TryExecuteParallel(
                 if (!runtime.parallel || !runtime.use_secondary) {
                     continue;
                 }
-                VulkanCmdList& primary = runtime.primary_command_context->GetCmdList();
+                VulkanCommandList& primary = runtime.primary_command_context->GetCommandList();
                 if (_execute_workers) {
                     Array<VkCommandBuffer> secondaries;
                     secondaries.reserve(runtime.chunks.size());
                     for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                        secondaries.push_back(chunk.command_context->GetSecondaryCmdList().GetHandle());
+                        secondaries.push_back(chunk.command_context->GetSecondaryCommandList().GetHandle());
                     }
                     if (runtime.graphics_secondary) {
                         assert(runtime.rendering_envelope.has_value());
@@ -7184,7 +7172,7 @@ bool VkCommandQueue::TryExecuteParallel(
             }
             runtime.worker_recorded = false;
             runtime.fallback_command_context = AcquireCommandContext();
-            VulkanCmdList& fallback_cmd      = runtime.fallback_command_context->GetCmdList();
+            VulkanCommandList& fallback_cmd  = runtime.fallback_command_context->GetCommandList();
             fallback_cmd.SetDescriptorBufferLease(descriptor_lease.state);
             const VkResult fallback_begin =
                 begin_primary(fallback_cmd, runtime.scopes, true);
@@ -7281,7 +7269,7 @@ bool VkCommandQueue::TryExecuteParallel(
         if (first_runtime.parallel) {
             if (!first_runtime.preprocessed) {
                 first_runtime.primary_command_context = AcquireCommandContext();
-                VulkanCmdList& primary_cmd            = first_runtime.primary_command_context->GetCmdList();
+                VulkanCommandList& primary_cmd = first_runtime.primary_command_context->GetCommandList();
                 primary_cmd.SetDescriptorBufferLease(descriptor_lease.state);
                 const VkResult primary_begin =
                     begin_primary(primary_cmd, first_runtime.scopes, true);
@@ -7332,7 +7320,7 @@ bool VkCommandQueue::TryExecuteParallel(
                 if (first_runtime.use_secondary) {
                     // Allocate from the chunk's private pool on the
                     // coordinator before the worker can observe it.
-                    chunk.command_context->PrepareSecondaryCmdList();
+                    chunk.command_context->PrepareSecondaryCommandList();
                 }
                 first_runtime.chunks.push_back(std::move(chunk));
             }
@@ -7366,7 +7354,7 @@ bool VkCommandQueue::TryExecuteParallel(
         }
 
         first_runtime.primary_command_context = AcquireCommandContext();
-        VulkanCmdList& island_cmd             = first_runtime.primary_command_context->GetCmdList();
+        VulkanCommandList& island_cmd         = first_runtime.primary_command_context->GetCommandList();
         island_cmd.SetDescriptorBufferLease(descriptor_lease.state);
         const VkResult island_begin = begin_primary(island_cmd, first_runtime.scopes, true);
         if (island_begin != VK_SUCCESS) {
@@ -7458,7 +7446,7 @@ bool VkCommandQueue::TryExecuteParallel(
     if (!_submit.HasExplicitResourceStateOwnership()) {
         tracker.RestoreState();
     }
-    VulkanCmdList& epilogue_cmd = tracker_owner->GetCmdList();
+    VulkanCommandList& epilogue_cmd = tracker_owner->GetCommandList();
     epilogue_cmd.SetDescriptorBufferLease(descriptor_lease.state);
     const VkResult epilogue_begin = begin_primary(epilogue_cmd, active_scopes, true);
     if (epilogue_begin != VK_SUCCESS) {
@@ -7475,7 +7463,7 @@ bool VkCommandQueue::TryExecuteParallel(
         reject_prepared_recording("epilogue-end-failed", epilogue_end);
         return true;
     }
-    Array<VulkanCmdList*> ordered_cmd_lists;
+    Array<VulkanCommandList*>              ordered_cmd_lists;
     Array<UniquePtr<VulkanCommandContext>> submitted_command_contexts;
     Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
     uint32 secondary_command_buffer_count = 0;
@@ -7483,7 +7471,7 @@ bool VkCommandQueue::TryExecuteParallel(
     submitted_command_contexts.reserve(plan.layers.size() + total_job_count + 1);
     for (ParallelLayerRuntime& runtime : runtime_layers) {
         if (runtime.primary_command_context) {
-            ordered_cmd_lists.push_back(&runtime.primary_command_context->GetCmdList());
+            ordered_cmd_lists.push_back(&runtime.primary_command_context->GetCommandList());
             submitted_command_contexts.push_back(std::move(runtime.primary_command_context));
         }
         if (!runtime.parallel) {
@@ -7492,14 +7480,14 @@ bool VkCommandQueue::TryExecuteParallel(
         if (runtime.worker_recorded) {
             for (ParallelChunkRuntime& chunk : runtime.chunks) {
                 if (!runtime.use_secondary) {
-                    ordered_cmd_lists.push_back(&chunk.command_context->GetCmdList());
+                    ordered_cmd_lists.push_back(&chunk.command_context->GetCommandList());
                 } else {
                     ++secondary_command_buffer_count;
                 }
                 submitted_command_contexts.push_back(std::move(chunk.command_context));
             }
         } else {
-            ordered_cmd_lists.push_back(&runtime.fallback_command_context->GetCmdList());
+            ordered_cmd_lists.push_back(&runtime.fallback_command_context->GetCommandList());
             submitted_command_contexts.push_back(std::move(runtime.fallback_command_context));
             // Keep every abandoned recorder pool alive and retire/reset it as
             // part of the same timeline transaction, but never submit its CB.
@@ -7508,7 +7496,7 @@ bool VkCommandQueue::TryExecuteParallel(
             }
         }
     }
-    ordered_cmd_lists.push_back(&tracker_owner->GetCmdList());
+    ordered_cmd_lists.push_back(&tracker_owner->GetCommandList());
     submitted_command_contexts.push_back(std::move(tracker_owner));
     return finalize_parallel_record(
         std::move(ordered_cmd_lists),
@@ -7864,7 +7852,7 @@ void VkCommandQueue::ExecuteNow(
         vk_device,
         vk_command_context,
         tracker,
-        vk_command_context.GetCmdList(),
+        vk_command_context.GetCommandList(),
         _submit.cached_args,
         &profiler_storage,
         emits_profiling_queries
@@ -7991,7 +7979,7 @@ void VkCommandQueue::ExecuteNow(
 
     auto record_serial_commands = [&] {
     if (has_cmd) {
-        const VkResult begin_result = vk_command_context.GetCmdList().Begin();
+        const VkResult begin_result = vk_command_context.GetCommandList().Begin();
         if (begin_result != VK_SUCCESS) {
             throw SerialNativeRecordFailure{"command-buffer-begin-failed", begin_result};
         }
@@ -7999,7 +7987,7 @@ void VkCommandQueue::ExecuteNow(
             if (serial_golden) {
                 serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
             }
-            profiler_storage.CollectProfiling(vk_command_context.GetCmdList().GetHandle());
+            profiler_storage.CollectProfiling(vk_command_context.GetCommandList().GetHandle());
             if (serial_golden) {
                 serial_golden->RecordQueryEvent(
                     SerialQueryEvent::Reset,
@@ -8011,7 +7999,7 @@ void VkCommandQueue::ExecuteNow(
                 std::unique_lock<std::mutex> profiler_lock(profiler_mutex);
                 cached_profiler_entry = profiler_storage.GetProfilerEntry();
             }
-            profiler_storage.BeginProfilerSession(vk_command_context.GetCmdList(), "Graphics Exec");
+            profiler_storage.BeginProfilerSession(vk_command_context.GetCommandList(), "Graphics Exec");
             if (serial_golden) {
                 serial_golden->RecordQueryEvent(
                     SerialQueryEvent::Begin,
@@ -8033,7 +8021,7 @@ void VkCommandQueue::ExecuteNow(
             descriptor_lease.emplace(
                 vk_device.GetGlobalDescriptorHeap().AcquireDescriptorBufferLease(queue.GetType())
             );
-            vk_command_context.GetCmdList().SetDescriptorBufferLease(descriptor_lease->state);
+            vk_command_context.GetCommandList().SetDescriptorBufferLease(descriptor_lease->state);
             if (record_sample) {
                 descriptor_begin_offset = vk_device.GetGlobalDescriptorHeap()
                                               .GetDescriptorWriteOffset(descriptor_lease->state);
@@ -8048,7 +8036,7 @@ void VkCommandQueue::ExecuteNow(
         const float4 queue_label_color = !_submit.debug_label.empty() ?
                                              _submit.debug_label_color :
                                              float4{1.0f, 0.0f, 0.0f, 1.0f};
-        vk_command_context.GetCmdList().BeginLabel(queue_label, queue_label_color);
+        vk_command_context.GetCommandList().BeginLabel(queue_label, queue_label_color);
     }
 
     uint layer = 0;
@@ -8060,7 +8048,7 @@ void VkCommandQueue::ExecuteNow(
                 continue;
             }
             if (layer == 0) {
-                vk_command_context.GetCmdList().BeginLabel(
+                vk_command_context.GetCommandList().BeginLabel(
                     "[RHI Diagnostics] Command Layers", {0.15f, 0.25f, 0.55f, 1.0f}
                 );
             }
@@ -8071,10 +8059,10 @@ void VkCommandQueue::ExecuteNow(
             }
             tracker.ResolveBarriers();
             record_pending_barriers(current_raw_layer);
-            tracker.DispatchBarriers(vk_command_context.GetCmdList());
+            tracker.DispatchBarriers(vk_command_context.GetCommandList());
             reorder_timer.Stop();
             preprocess_time += reorder_timer.ElapsedMilliseconds();
-            vk_command_context.GetCmdList().InsertLabel(
+            vk_command_context.GetCommandList().InsertLabel(
                 std::format("[RHI] Layer {}", layer++), {0.15f, 0.25f, 0.55f, 1.0f}
             );
             RecordLayerTiming& layer_timing = record_sample->layer_timings[current_raw_layer];
@@ -8196,7 +8184,7 @@ void VkCommandQueue::ExecuteNow(
                 preprocessor.VisitCmd(cmdnode->cmd);
             }
             tracker.ResolveBarriers();
-            tracker.DispatchBarriers(vk_command_context.GetCmdList());
+            tracker.DispatchBarriers(vk_command_context.GetCommandList());
             reorder_timer.Stop();
             preprocess_time += reorder_timer.ElapsedMilliseconds();
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
@@ -8205,7 +8193,7 @@ void VkCommandQueue::ExecuteNow(
         }
     }
     if (record_sample && layer > 0) {
-        vk_command_context.GetCmdList().EndLabel();
+        vk_command_context.GetCommandList().EndLabel();
     }
 
     if (has_cmd) {
@@ -8215,9 +8203,9 @@ void VkCommandQueue::ExecuteNow(
         if (record_sample) {
             record_pending_barriers(std::numeric_limits<uint64>::max());
         }
-        tracker.DispatchBarriers(vk_command_context.GetCmdList());
+        tracker.DispatchBarriers(vk_command_context.GetCommandList());
         if (ends_profiling_frame) {
-            profiler_storage.EndProfilerSession(vk_command_context.GetCmdList(), "Graphics Exec");
+            profiler_storage.EndProfilerSession(vk_command_context.GetCommandList(), "Graphics Exec");
             if (serial_golden) {
                 serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
                 serial_golden->RecordQueryEvent(
@@ -8227,8 +8215,8 @@ void VkCommandQueue::ExecuteNow(
                 );
             }
         }
-        vk_command_context.GetCmdList().EndLabel();
-        const VkResult end_result = vk_command_context.GetCmdList().End();
+        vk_command_context.GetCommandList().EndLabel();
+        const VkResult end_result = vk_command_context.GetCommandList().End();
         if (end_result != VK_SUCCESS) {
             throw SerialNativeRecordFailure{"command-buffer-end-failed", end_result};
         }
@@ -8296,11 +8284,11 @@ void VkCommandQueue::ExecuteNow(
                                                   std::chrono::steady_clock::now()
                                               ) :
                                               0.0;
-    Array<VulkanCmdList*> serial_cmd_lists;
+    Array<VulkanCommandList*> serial_cmd_lists;
     VulkanCommandContextBatch serial_command_contexts;
     if (has_cmd) {
         serial_cmd_lists.reserve(1);
-        serial_cmd_lists.emplace_back(&vk_command_context.GetCmdList());
+        serial_cmd_lists.emplace_back(&vk_command_context.GetCommandList());
     }
     serial_command_contexts.submitted.reserve(1);
     serial_command_contexts.submitted.emplace_back(std::move(command_context_ptr));
@@ -8515,7 +8503,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 // An acquired binary semaphore cannot be reused if this
                 // recording never reaches the GPU wait operation.
                 vk_command_context.MarkImageAcquired();
-                auto&      vk_cmd_list   = vk_command_context.GetCmdList();
+                auto&      vk_cmd_list   = vk_command_context.GetCommandList();
                 auto&      vk_tracker    = vk_command_context.GetTracker();
                 auto*      vk_src_tex    = static_cast<VulkanTexture*>(_view.texture);
                 const uint idx           = acquire.image_index;
@@ -10215,7 +10203,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
         }
         recorded->command_contexts.submitted.emplace_back(std::move(command_context_ptr));
         auto& vk_command_context = *recorded->command_contexts.submitted.front();
-        auto& vk_cmd_list        = vk_command_context.GetCmdList();
+        auto& vk_cmd_list        = vk_command_context.GetCommandList();
         auto& vk_tracker         = vk_command_context.GetTracker();
 
         VkCmdPreprocessor preprocessor(
@@ -10438,7 +10426,7 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
                     );
                     auto& vk_command_context = *_recorded.command_contexts.submitted.front();
                     _recorded.retirement_outcome =
-                        queue.Submit(vk_command_context.GetCmdList(), _recorded.context);
+                        queue.Submit(vk_command_context.GetCommandList(), _recorded.context);
                     _recorded.native_submit_resolved = true;
                     if (_recorded.retirement_outcome.Succeeded()) {
                         CommitAcceptedPresentationSourceStateTransaction(

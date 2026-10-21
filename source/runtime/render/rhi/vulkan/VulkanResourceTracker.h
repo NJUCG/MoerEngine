@@ -31,7 +31,7 @@ struct VulkanResolvedBarrierBatch {
                memory_barriers.empty();
     }
 
-    void Record(class VulkanCmdList& _cmd_list) const;
+    void Record(class VulkanCommandList& _cmd_list) const;
 };
 
 template<typename TTexture>
@@ -287,7 +287,7 @@ public:
         const SerialQueueFamilyMap& _queue_family_map
     ) const;
 
-    void DispatchBarriers(class VulkanCmdList& _cmd_list);
+    void DispatchBarriers(class VulkanCommandList& _cmd_list);
     void RestoreState();
     void Reset();
 

@@ -1,24 +1,22 @@
-//
-// Created by 74535 on 2023/10/17.
-//
+#include "VulkanCommandList.h"
 
 #include "misc/STL.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 
-#include "VulkanCommand.h"
 #include "VulkanCommandQueries.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanFault.h"
-#include "VulkanPipelineResourceCache.h"
-#include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include <string_view>
 
 #include "shader/ShaderPipeline.h"
 
+#include <algorithm>
+#include <cassert>
 #include <cstdint>
+#include <format>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -31,7 +29,7 @@ VulkanCommandPool::VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_ty
     queue_type(_queue_type) {
     // Use the selected queue-role mapping, including vendor overrides, so the
     // command pool belongs to the same family as the actual submission queue.
-    uint32_t family_index = m_device->GetQueueFamilyIndex(_queue_type);
+    const uint32_t family_index = m_device->GetQueueFamilyIndex(_queue_type);
 
     VkCommandPoolCreateInfo pool_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -49,7 +47,9 @@ VulkanCommandPool::VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_ty
             },
             result
         );
-        throw std::runtime_error("Vulkan command-pool creation failed: " + std::string(VulkanResultName(result)));
+        throw std::runtime_error(
+            "Vulkan command-pool creation failed: " + std::string(VulkanResultName(result))
+        );
     }
 }
 
@@ -73,7 +73,7 @@ std::string_view VulkanCommandPool::GetQueueName() const {
     }
 }
 
-VulkanCmdList::VulkanCmdList(
+VulkanCommandList::VulkanCommandList(
     VulkanCommandPool*   _command_pool,
     VulkanDevice&        _device,
     VkCommandBufferLevel _level
@@ -88,7 +88,8 @@ VulkanCmdList::VulkanCmdList(
         .level              = level,
         .commandBufferCount = 1
     };
-    const VkResult result = vkAllocateCommandBuffers(device.GetDevice(), &command_buffer_info, &command_buffer);
+    const VkResult result =
+        vkAllocateCommandBuffers(device.GetDevice(), &command_buffer_info, &command_buffer);
     if (result != VK_SUCCESS) {
         device.TryLatchFirstFault(
             VulkanOperationContext{
@@ -97,7 +98,9 @@ VulkanCmdList::VulkanCmdList(
             },
             result
         );
-        throw std::runtime_error("Vulkan command-buffer allocation failed: " + std::string(VulkanResultName(result)));
+        throw std::runtime_error(
+            "Vulkan command-buffer allocation failed: " + std::string(VulkanResultName(result))
+        );
     }
     try {
         device.SetResourceName(
@@ -116,12 +119,12 @@ VulkanCmdList::VulkanCmdList(
     }
 }
 
-VulkanCmdList::~VulkanCmdList() {
+VulkanCommandList::~VulkanCommandList() {
     vkFreeCommandBuffers(device.GetDevice(), command_pool->GetHandle(), 1, &command_buffer);
 }
 
 // Recording lifecycle.
-VkResult VulkanCmdList::Begin() {
+VkResult VulkanCommandList::Begin() {
     assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     VkCommandBufferBeginInfo begin_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -132,7 +135,7 @@ VkResult VulkanCmdList::Begin() {
     return vkBeginCommandBuffer(command_buffer, &begin_info);
 }
 
-VkResult VulkanCmdList::BeginSecondary(
+VkResult VulkanCommandList::BeginSecondary(
     const VkCommandBufferInheritanceInfo& _inheritance,
     VkCommandBufferUsageFlags             _flags
 ) {
@@ -146,37 +149,33 @@ VkResult VulkanCmdList::BeginSecondary(
     return vkBeginCommandBuffer(command_buffer, &begin_info);
 }
 
-VkResult VulkanCmdList::End() {
+VkResult VulkanCommandList::End() {
     return vkEndCommandBuffer(command_buffer);
 }
 
-void VulkanCmdList::ExecuteSecondaryCommands(
-    std::span<const VkCommandBuffer> _secondary_buffers
-) {
+void VulkanCommandList::ExecuteSecondaryCommands(std::span<const VkCommandBuffer> _secondary_buffers) {
     assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     if (_secondary_buffers.empty()) {
         return;
     }
     vkCmdExecuteCommands(
-        command_buffer,
-        static_cast<uint32_t>(_secondary_buffers.size()),
-        _secondary_buffers.data()
+        command_buffer, static_cast<uint32_t>(_secondary_buffers.size()), _secondary_buffers.data()
     );
 }
 
 // Rendering scope.
-void VulkanCmdList::BeginRendering(const VkRenderingInfo& _info) {
+void VulkanCommandList::BeginRendering(const VkRenderingInfo& _info) {
     vkCmdBeginRendering(command_buffer, &_info);
 }
 
-void VulkanCmdList::EndRendering() {
+void VulkanCommandList::EndRendering() {
     vkCmdEndRendering(command_buffer);
 }
 
 // Pipeline and shader arguments.
-void VulkanCmdList::BindPipeline(const PipelineHandle& _pso_handle) {
-    auto* vk_pso = static_cast<VulkanPipelineState*>(_pso_handle.GetState());
-    vkCmdBindPipeline(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetHandle());
+void VulkanCommandList::BindPipeline(const PipelineHandle& _pipeline_handle) {
+    auto* pipeline = static_cast<VulkanPipelineState*>(_pipeline_handle.GetState());
+    vkCmdBindPipeline(command_buffer, pipeline->GetPipelineBindPoint(), pipeline->GetHandle());
 }
 
 namespace {
@@ -418,7 +417,7 @@ void PushShaderConstants(
 
 } // namespace
 
-void VulkanCmdList::BindShaderArguments(
+void VulkanCommandList::BindShaderArguments(
     const PipelineHandle& _pipeline_handle,
     const ArrayArguments& _arguments
 ) {
@@ -451,7 +450,7 @@ void VulkanCmdList::BindShaderArguments(
 }
 
 // Vertex input and dynamic state.
-void VulkanCmdList::SetVertexBuffers(
+void VulkanCommandList::SetVertexBuffers(
     uint32_t                      _first_binding,
     std::span<const VkBuffer>     _buffers,
     std::span<const VkDeviceSize> _offsets
@@ -471,148 +470,152 @@ void VulkanCmdList::SetVertexBuffers(
     );
 }
 
-void VulkanCmdList::SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _index_type) {
+void VulkanCommandList::SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _index_type) {
     vkCmdBindIndexBuffer(command_buffer, _buffer->GetHandle(), _offset, _index_type);
 }
 
-void VulkanCmdList::SetScissor(const VkRect2D& _scissor) {
+void VulkanCommandList::SetScissor(const VkRect2D& _scissor) {
     vkCmdSetScissor(command_buffer, 0, 1, &_scissor);
 }
 
-void VulkanCmdList::SetViewport(const VkViewport& _view_port) {
+void VulkanCommandList::SetViewport(const VkViewport& _viewport) {
 
-    vkCmdSetViewport(command_buffer, 0, 1, &_view_port);
+    vkCmdSetViewport(command_buffer, 0, 1, &_viewport);
 }
 
 // Draw and mesh commands.
-void VulkanCmdList::DrawInstanced(
-    uint32_t _vertex_cnt,
-    uint32_t _instance_cnt,
+void VulkanCommandList::DrawInstanced(
+    uint32_t _vertex_count,
+    uint32_t _instance_count,
     uint32_t _first_vertex,
     uint32_t _first_instance
 ) {
-    vkCmdDraw(command_buffer, _vertex_cnt, _instance_cnt, _first_vertex, _first_instance);
+    vkCmdDraw(command_buffer, _vertex_count, _instance_count, _first_vertex, _first_instance);
 }
 
-void VulkanCmdList::DrawIndexedInstanced(
-    uint32_t _index_cnt,
-    uint32_t _instance_cnt,
+void VulkanCommandList::DrawIndexedInstanced(
+    uint32_t _index_count,
+    uint32_t _instance_count,
     uint32_t _first_index,
     uint32_t _vertex_offset,
     uint32_t _first_instance
 ) {
     vkCmdDrawIndexed(
-        command_buffer, _index_cnt, _instance_cnt, _first_index, _vertex_offset, _first_instance
+        command_buffer, _index_count, _instance_count, _first_index, _vertex_offset, _first_instance
     );
 }
 
-void VulkanCmdList::DrawIndirect(
+void VulkanCommandList::DrawIndirect(
     VulkanBuffer* _buffer,
     uint64        _offset,
-    uint32_t      _draw_cnt,
+    uint32_t      _draw_count,
     uint32_t      _stride
 ) {
-    vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+    vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_count, _stride);
 }
 
-void VulkanCmdList::DrawIndirectCount(
+void VulkanCommandList::DrawIndirectCount(
     VulkanBuffer* _commands,
     uint64        _commands_offset,
-    VulkanBuffer* _count,
-    uint64        _count_offset,
-    uint32_t      _max_cnt,
+    VulkanBuffer* _count_buffer,
+    uint64        _count_buffer_offset,
+    uint32_t      _max_draw_count,
     uint32_t      _stride
 ) {
     vkCmdDrawIndirectCount(
         command_buffer,
         _commands->GetHandle(),
         _commands_offset,
-        _count->GetHandle(),
-        _count_offset,
-        _max_cnt,
+        _count_buffer->GetHandle(),
+        _count_buffer_offset,
+        _max_draw_count,
         _stride
     );
 }
 
-void VulkanCmdList::DrawIndexedIndirect(
+void VulkanCommandList::DrawIndexedIndirect(
     VulkanBuffer* _buffer,
     uint64        _offset,
-    uint32_t      _draw_cnt,
+    uint32_t      _draw_count,
     uint32_t      _stride
 ) {
-    vkCmdDrawIndexedIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+    vkCmdDrawIndexedIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_count, _stride);
 }
 
-void VulkanCmdList::DrawIndexedIndirectCount(
+void VulkanCommandList::DrawIndexedIndirectCount(
     VulkanBuffer* _commands,
     uint64        _commands_offset,
-    VulkanBuffer* _count,
-    uint64        _count_offset,
-    uint32_t      _max_cnt,
+    VulkanBuffer* _count_buffer,
+    uint64        _count_buffer_offset,
+    uint32_t      _max_draw_count,
     uint32_t      _stride
 ) {
     vkCmdDrawIndexedIndirectCount(
         command_buffer,
         _commands->GetHandle(),
         _commands_offset,
-        _count->GetHandle(),
-        _count_offset,
-        _max_cnt,
+        _count_buffer->GetHandle(),
+        _count_buffer_offset,
+        _max_draw_count,
         _stride
     );
 }
 
-void VulkanCmdList::DispatchMesh(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
+void VulkanCommandList::DispatchMesh(
+    uint32_t _group_count_x,
+    uint32_t _group_count_y,
+    uint32_t _group_count_z
+) {
     vkCmdDrawMeshTasksEXT(command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
 
-void VulkanCmdList::DispatchMeshIndirect(
+void VulkanCommandList::DispatchMeshIndirect(
     VulkanBuffer* _buffer,
     uint64        _offset,
-    uint32_t      _draw_cnt,
+    uint32_t      _draw_count,
     uint32_t      _stride
 ) {
-    vkCmdDrawMeshTasksIndirectEXT(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+    vkCmdDrawMeshTasksIndirectEXT(command_buffer, _buffer->GetHandle(), _offset, _draw_count, _stride);
 }
 
-void VulkanCmdList::DispatchMeshIndirectCount(
+void VulkanCommandList::DispatchMeshIndirectCount(
     VulkanBuffer* _commands,
     uint64        _commands_offset,
-    VulkanBuffer* _count,
-    uint64        _count_offset,
-    uint32_t      _max_cnt,
+    VulkanBuffer* _count_buffer,
+    uint64        _count_buffer_offset,
+    uint32_t      _max_draw_count,
     uint32_t      _stride
 ) {
     vkCmdDrawMeshTasksIndirectCountEXT(
         command_buffer,
         _commands->GetHandle(),
         _commands_offset,
-        _count->GetHandle(),
-        _count_offset,
-        _max_cnt,
+        _count_buffer->GetHandle(),
+        _count_buffer_offset,
+        _max_draw_count,
         _stride
     );
 }
 
 // Compute commands.
-void VulkanCmdList::Dispatch(uint _group_count_x, uint _group_count_y, uint _group_count_z) {
+void VulkanCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
     vkCmdDispatch(command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
 
-void VulkanCmdList::DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset) {
+void VulkanCommandList::DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset) {
     vkCmdDispatchIndirect(command_buffer, _buffer->GetHandle(), _offset);
 }
 
 // Transfer and clear commands.
-void VulkanCmdList::CopyBuffer(
+void VulkanCommandList::CopyBuffer(
     VulkanBuffer* _src,
     VulkanBuffer* _dst,
-    uint64        _size,
+    uint64        _byte_size,
     uint64        _src_offset,
     uint64        _dst_offset
 ) {
 
-    VkBufferCopy copy_region = {.srcOffset = _src_offset, .dstOffset = _dst_offset, .size = _size};
+    VkBufferCopy copy_region = {.srcOffset = _src_offset, .dstOffset = _dst_offset, .size = _byte_size};
     vkCmdCopyBuffer(command_buffer, _src->GetHandle(), _dst->GetHandle(), 1, &copy_region);
 }
 
@@ -654,7 +657,11 @@ VkBufferImageCopy MakeBufferImageCopy(
     if (_byte_size != expected_byte_size) {
         throw std::invalid_argument(std::format(
             "Texture copy size mismatch: texture='{}', mip={}, layer={}, bytes={}, expected={}",
-            _texture.GetName(), _mip_level, _array_layer, _byte_size, expected_byte_size
+            _texture.GetName(),
+            _mip_level,
+            _array_layer,
+            _byte_size,
+            expected_byte_size
         ));
     }
     if (_buffer_offset > _buffer.GetByteSize() || _byte_size > _buffer.GetByteSize() - _buffer_offset) {
@@ -676,7 +683,7 @@ VkBufferImageCopy MakeBufferImageCopy(
 
 } // namespace
 
-void VulkanCmdList::CopyBufferToTexture(
+void VulkanCommandList::CopyBufferToTexture(
     VulkanBuffer*  _src,
     VulkanTexture* _dst,
     uint64         _byte_size,
@@ -699,7 +706,7 @@ void VulkanCmdList::CopyBufferToTexture(
     );
 }
 
-void VulkanCmdList::CopyTextureToBuffer(
+void VulkanCommandList::CopyTextureToBuffer(
     VulkanTexture* _src,
     VulkanBuffer*  _dst,
     uint64         _byte_size,
@@ -722,7 +729,7 @@ void VulkanCmdList::CopyTextureToBuffer(
     );
 }
 
-void VulkanCmdList::CopyTexture(
+void VulkanCommandList::CopyTexture(
     VulkanTexture* _src,
     VulkanTexture* _dst,
     uint3          _extent,
@@ -733,13 +740,9 @@ void VulkanCmdList::CopyTexture(
     VkImageLayout  _src_layout,
     VkImageLayout  _dst_layout
 ) {
-    if ((_src_layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
-         _src_layout != VK_IMAGE_LAYOUT_GENERAL) ||
-        (_dst_layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
-         _dst_layout != VK_IMAGE_LAYOUT_GENERAL)) {
-        throw std::invalid_argument(
-            "vkCmdCopyImage requires GENERAL or transfer-optimal layouts"
-        );
+    if ((_src_layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && _src_layout != VK_IMAGE_LAYOUT_GENERAL) ||
+        (_dst_layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && _dst_layout != VK_IMAGE_LAYOUT_GENERAL)) {
+        throw std::invalid_argument("vkCmdCopyImage requires GENERAL or transfer-optimal layouts");
     }
     const VkImageAspectFlags aspect = GetCopyAspect(*_src);
     if (aspect != GetCopyAspect(*_dst)) {
@@ -747,46 +750,38 @@ void VulkanCmdList::CopyTexture(
     }
     VkImageCopy copy_region = {
         .srcSubresource =
-            {.aspectMask     = aspect,
-             .mipLevel       = _src_mip_level,
-             .baseArrayLayer = 0,
-             .layerCount     = 1},
+            {.aspectMask = aspect, .mipLevel = _src_mip_level, .baseArrayLayer = 0, .layerCount = 1},
         .srcOffset =
             {static_cast<int32_t>(_src_offset.x),
              static_cast<int32_t>(_src_offset.y),
              static_cast<int32_t>(_src_offset.z)},
         .dstSubresource =
-            {.aspectMask     = aspect,
-             .mipLevel       = _dst_mip_level,
-             .baseArrayLayer = 0,
-             .layerCount     = 1},
+            {.aspectMask = aspect, .mipLevel = _dst_mip_level, .baseArrayLayer = 0, .layerCount = 1},
         .dstOffset =
             {static_cast<int32_t>(_dst_offset.x),
              static_cast<int32_t>(_dst_offset.y),
              static_cast<int32_t>(_dst_offset.z)},
-        .extent = {
-            static_cast<uint32_t>(_extent.x),
-            static_cast<uint32_t>(_extent.y),
-            static_cast<uint32_t>(_extent.z)
-        }
+        .extent =
+            {static_cast<uint32_t>(_extent.x),
+             static_cast<uint32_t>(_extent.y),
+             static_cast<uint32_t>(_extent.z)}
     };
 
     vkCmdCopyImage(
-        command_buffer,
-        _src->GetHandle(),
-        _src_layout,
-        _dst->GetHandle(),
-        _dst_layout,
-        1,
-        &copy_region
+        command_buffer, _src->GetHandle(), _src_layout, _dst->GetHandle(), _dst_layout, 1, &copy_region
     );
 }
 
-void VulkanCmdList::ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _size, uint32 _data) {
-    vkCmdFillBuffer(command_buffer, _buffer->GetHandle(), _offset, _size, _data);
+void VulkanCommandList::ClearBufferUInt(
+    VulkanBuffer* _buffer,
+    uint64        _offset,
+    uint64        _byte_size,
+    uint32        _data
+) {
+    vkCmdFillBuffer(command_buffer, _buffer->GetHandle(), _offset, _byte_size, _data);
 }
 
-void VulkanCmdList::ClearTexture(
+void VulkanCommandList::ClearColorTexture(
     VulkanTexture*                 _texture,
     const VkClearColorValue&       _color,
     const VkImageSubresourceRange& _range
@@ -797,7 +792,7 @@ void VulkanCmdList::ClearTexture(
 }
 
 // Acceleration structures.
-void VulkanCmdList::BuildAccelerationStructures(
+void VulkanCommandList::BuildAccelerationStructures(
     const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos,
     const Array<VkAccelerationStructureBuildRangeInfoKHR*>&   _build_ranges
 ) {
@@ -807,38 +802,37 @@ void VulkanCmdList::BuildAccelerationStructures(
 }
 
 // Queries.
-void VulkanCmdList::ResetQueryPool(VkNativeQueryPool& _query_pool, uint32 _first_query, uint32 _query_cnt) {
-    vkCmdResetQueryPool(command_buffer, _query_pool.GetHandle(), _first_query, _query_cnt);
+void VulkanCommandList::ResetQueryPool(
+    VkNativeQueryPool& _query_pool,
+    uint32             _first_query,
+    uint32             _query_count
+) {
+    vkCmdResetQueryPool(command_buffer, _query_pool.GetHandle(), _first_query, _query_count);
 }
 
-void VulkanCmdList::BeginQuery(
+void VulkanCommandList::BeginQuery(
     VkNativeQueryPool&  _query_pool,
     uint32              _query,
     VkQueryControlFlags _flags
 ) {
-    vkCmdBeginQuery(
-        command_buffer, _query_pool.GetHandle(), _query, _flags
-    );
+    vkCmdBeginQuery(command_buffer, _query_pool.GetHandle(), _query, _flags);
 }
 
-void VulkanCmdList::EndQuery(
-    VkNativeQueryPool& _query_pool,
-    uint32             _query
-) {
+void VulkanCommandList::EndQuery(VkNativeQueryPool& _query_pool, uint32 _query) {
     vkCmdEndQuery(command_buffer, _query_pool.GetHandle(), _query);
 }
 
-void VulkanCmdList::WriteTimestamp(
+void VulkanCommandList::WriteTimestamp(
     VkNativeQueryPool&       _query_pool,
-    uint32                   _query_idx,
+    uint32                   _query,
     VkPipelineStageFlagBits2 _stage
 ) {
-    vkCmdWriteTimestamp2(command_buffer, _stage, _query_pool.GetHandle(), _query_idx);
+    vkCmdWriteTimestamp2(command_buffer, _stage, _query_pool.GetHandle(), _query);
 }
 
 // Debug labels.
-void VulkanCmdList::BeginLabel(std::string_view _label, float4 _color) {
-    const std::string label_name(_label);
+void VulkanCommandList::BeginLabel(std::string_view _label, float4 _color) {
+    const std::string    label_name(_label);
     VkDebugUtilsLabelEXT label = {
         .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
         .pNext      = nullptr,
@@ -848,12 +842,12 @@ void VulkanCmdList::BeginLabel(std::string_view _label, float4 _color) {
     vkCmdBeginDebugUtilsLabelEXT(command_buffer, &label);
 }
 
-void VulkanCmdList::EndLabel() {
+void VulkanCommandList::EndLabel() {
     vkCmdEndDebugUtilsLabelEXT(command_buffer);
 }
 
-void VulkanCmdList::InsertLabel(std::string_view _label, float4 _color) {
-    const std::string label_name(_label);
+void VulkanCommandList::InsertLabel(std::string_view _label, float4 _color) {
+    const std::string    label_name(_label);
     VkDebugUtilsLabelEXT label = {
         .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
         .pNext      = nullptr,

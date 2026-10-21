@@ -40,18 +40,20 @@ private:
     VkCommandPool command_pool{VK_NULL_HANDLE};
 };
 
-class VulkanCmdList {
+// Owns one native command buffer. Submission completion and pool reset belong
+// to the surrounding command context; recording here does not submit work.
+class VulkanCommandList {
 public:
-    VulkanCmdList(
+    VulkanCommandList(
         VulkanCommandPool*   _command_pool,
         VulkanDevice&        _device,
         VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY
     );
-    ~VulkanCmdList();
-    VulkanCmdList(const VulkanCmdList&)            = delete;
-    VulkanCmdList& operator=(const VulkanCmdList&) = delete;
-    VulkanCmdList(VulkanCmdList&&)                 = delete;
-    VulkanCmdList& operator=(VulkanCmdList&&)      = delete;
+    ~VulkanCommandList();
+    VulkanCommandList(const VulkanCommandList&)            = delete;
+    VulkanCommandList& operator=(const VulkanCommandList&) = delete;
+    VulkanCommandList(VulkanCommandList&&)                 = delete;
+    VulkanCommandList& operator=(VulkanCommandList&&)      = delete;
 
     VkCommandBuffer GetHandle() const {
         return command_buffer;
@@ -74,7 +76,7 @@ public:
     void EndRendering();
 
     // Pipeline and shader arguments.
-    void BindPipeline(const PipelineHandle& _pso_handle);
+    void BindPipeline(const PipelineHandle& _pipeline_handle);
     void BindShaderArguments(const PipelineHandle& _pipeline_handle, const ArrayArguments& _arguments);
     void SetDescriptorBufferLease(std::shared_ptr<VulkanDescriptorBufferLeaseState> _lease) {
         descriptor_buffer_lease = std::move(_lease);
@@ -86,7 +88,7 @@ public:
         std::span<const VkBuffer>     _buffers,
         std::span<const VkDeviceSize> _offsets
     );
-    void SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _type);
+    void SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _index_type);
     void SetScissor(const VkRect2D& _scissor);
     void SetViewport(const VkViewport& _viewport);
 
@@ -94,34 +96,29 @@ public:
     void DrawInstanced(
         uint32_t _vertex_count,
         uint32_t _instance_count,
-        uint32_t _start_vertex_location,
-        uint32_t _start_instance_location
+        uint32_t _first_vertex,
+        uint32_t _first_instance
     );
     void DrawIndexedInstanced(
         uint32_t _index_count,
         uint32_t _instance_count,
-        uint32_t _start_index_location,
-        uint32_t _base_vertex_location,
-        uint32_t _start_instance_location
+        uint32_t _first_index,
+        uint32_t _vertex_offset,
+        uint32_t _first_instance
     );
-    void DrawIndirect(VulkanBuffer* _arg_buffer, uint64 _arg_offset, uint32_t _draw_count, uint32_t _stride);
+    void DrawIndirect(VulkanBuffer* _buffer, uint64 _offset, uint32_t _draw_count, uint32_t _stride);
     void DrawIndirectCount(
-        VulkanBuffer* _arg_buffer,
-        uint64        _arg_offset,
+        VulkanBuffer* _commands,
+        uint64        _commands_offset,
         VulkanBuffer* _count_buffer,
         uint64        _count_buffer_offset,
         uint32_t      _max_draw_count,
         uint32_t      _stride
     );
-    void DrawIndexedIndirect(
-        VulkanBuffer* _arg_buffer,
-        uint64        _arg_offset,
-        uint32_t      _draw_count,
-        uint32_t      _stride
-    );
+    void DrawIndexedIndirect(VulkanBuffer* _buffer, uint64 _offset, uint32_t _draw_count, uint32_t _stride);
     void DrawIndexedIndirectCount(
-        VulkanBuffer* _arg_buffer,
-        uint64        _arg_offset,
+        VulkanBuffer* _commands,
+        uint64        _commands_offset,
         VulkanBuffer* _count_buffer,
         uint64        _count_buffer_offset,
         uint32_t      _max_draw_count,
@@ -130,8 +127,8 @@ public:
     void DispatchMesh(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z);
     void DispatchMeshIndirect(VulkanBuffer* _buffer, uint64 _offset, uint32_t _draw_count, uint32_t _stride);
     void DispatchMeshIndirectCount(
-        VulkanBuffer* _arg_buffer,
-        uint64        _arg_offset,
+        VulkanBuffer* _commands,
+        uint64        _commands_offset,
         VulkanBuffer* _count_buffer,
         uint64        _count_buffer_offset,
         uint32_t      _max_draw_count,
@@ -143,8 +140,13 @@ public:
     void DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset);
 
     // Transfer and clear commands.
-    void
-    CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
+    void CopyBuffer(
+        VulkanBuffer* _src,
+        VulkanBuffer* _dst,
+        uint64        _byte_size,
+        uint64        _src_offset,
+        uint64        _dst_offset
+    );
     // Tightly packed copies of one mip/layer in a supported single-aspect format.
     void CopyBufferToTexture(
         VulkanBuffer*  _src,
@@ -178,8 +180,8 @@ public:
         VkImageLayout  _src_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         VkImageLayout  _dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
     );
-    void ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _size, uint _data);
-    void ClearTexture(
+    void ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _byte_size, uint32 _data);
+    void ClearColorTexture(
         VulkanTexture*                 _texture,
         const VkClearColorValue&       _color,
         const VkImageSubresourceRange& _range
@@ -188,7 +190,7 @@ public:
     // Acceleration structures.
     void BuildAccelerationStructures(
         const Array<VkAccelerationStructureBuildGeometryInfoKHR>& _build_infos,
-        const Array<VkAccelerationStructureBuildRangeInfoKHR*>&   _range_infos
+        const Array<VkAccelerationStructureBuildRangeInfoKHR*>&   _build_ranges
     );
 
     // Queries.
@@ -203,10 +205,10 @@ public:
     void InsertLabel(std::string_view _label, float4 _color);
 
 private:
-    VkCommandBuffer                                 command_buffer{VK_NULL_HANDLE};
-    VulkanCommandPool*                              command_pool;
-    VulkanDevice&                                   device;
-    VkCommandBufferLevel                            level;
+    VkCommandBuffer                                   command_buffer{VK_NULL_HANDLE};
+    VulkanCommandPool*                                command_pool;
+    VulkanDevice&                                     device;
+    VkCommandBufferLevel                              level;
     std::shared_ptr<VulkanDescriptorBufferLeaseState> descriptor_buffer_lease;
 };
 

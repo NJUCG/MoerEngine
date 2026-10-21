@@ -1,8 +1,8 @@
 #include "VulkanResourceTracker.h"
+#include "VulkanCommandList.h"
+#include "VulkanPlatform.h"
 #include "diagnostics/VulkanSerialGolden.h"
 #include "rhi/RHIRecordDiagnostics.h"
-#include "VulkanCommand.h"
-#include "VulkanPlatform.h"
 
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
@@ -1392,7 +1392,7 @@ BarrierSemanticDiagnostics VkTracker::GetPendingBarrierDiagnostics(
     return diagnostics;
 }
 
-void VulkanResolvedBarrierBatch::Record(VulkanCmdList& _cmd_list) const {
+void VulkanResolvedBarrierBatch::Record(VulkanCommandList& _cmd_list) const {
     if (!Empty()) {
         VkDependencyInfoKHR dependency_info{};
         dependency_info.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
@@ -1419,7 +1419,7 @@ VulkanResolvedBarrierBatch VkTracker::TakeResolvedBarriers() {
     return batch;
 }
 
-void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
+void VkTracker::DispatchBarriers(VulkanCommandList& _cmdlist) {
     TakeResolvedBarriers().Record(_cmdlist);
 }
 

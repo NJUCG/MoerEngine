@@ -1,6 +1,6 @@
 #pragma once
 
-#include "VulkanCommand.h"
+#include "VulkanCommandList.h"
 #include "VulkanCommandQueries.h"
 #include "VulkanResourceTracker.h"
 #include "VulkanTemporaryBufferAllocator.h"
@@ -22,18 +22,18 @@ public:
     VulkanCommandContext(VulkanCommandContext&&)                 = delete;
     VulkanCommandContext& operator=(VulkanCommandContext&&)      = delete;
 
-    VulkanCmdList& GetCmdList() {
+    VulkanCommandList& GetCommandList() {
         return cmd_list;
     }
     // Secondary allocation is deliberately explicit. Call this on the
     // coordinator before publishing work to a record worker: Vulkan command
     // pools require external synchronization even when different command
     // buffers are allocated from the pool.
-    VulkanCmdList& PrepareSecondaryCmdList();
-    VulkanCmdList& GetSecondaryCmdList() {
+    VulkanCommandList& PrepareSecondaryCommandList();
+    VulkanCommandList& GetSecondaryCommandList() {
         return secondary_cmd_list.value();
     }
-    [[nodiscard]] bool HasSecondaryCmdList() const noexcept {
+    [[nodiscard]] bool HasSecondaryCommandList() const noexcept {
         return secondary_cmd_list.has_value();
     }
     VkTracker& GetTracker() {
@@ -54,7 +54,7 @@ public:
     void EnsureQueryCapacity(size_t _timestamp_slot_count, size_t _occlusion_pair_count);
     void
     ConfigureTimestampCapabilityForRecording(uint32 _valid_bits, EVulkanTimestampQueryResetMode _reset_mode);
-    void RecordQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
+    void RecordQuery(VulkanCommandList& _cmd_list, const QueryCmd& _cmd);
 
     [[nodiscard]] bool HasQueries() const noexcept {
         return queries.HasQueries();
@@ -88,8 +88,8 @@ private:
     VkTracker                                 tracker;
     Array<std::function<void()>>              on_complete;
     VulkanCommandPool                         command_pool;
-    VulkanCmdList                             cmd_list;
-    std::optional<VulkanCmdList>              secondary_cmd_list;
+    VulkanCommandList                         cmd_list;
+    std::optional<VulkanCommandList>          secondary_cmd_list;
     UniquePtr<VulkanTemporaryBufferAllocator> temporary_buffer_allocator;
     VulkanCommandQueries                      queries;
     VkSemaphore                               image_ready_semaphore{VK_NULL_HANDLE};

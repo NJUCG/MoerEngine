@@ -1,7 +1,7 @@
 #pragma once
 #include "PixelFormat.h"
-#include "VulkanCommand.h"
 #include "VulkanCommandContext.h"
+#include "VulkanCommandList.h"
 #include "VulkanCommandQueries.h"
 #include "VulkanCommon.h"
 #include "VulkanDescriptor.h"
@@ -38,14 +38,14 @@ public:
     ~VkNativeQueue();
 
     VulkanOperationResult Submit(
-        VulkanCmdList&               _cmdlist,
+        VulkanCommandList&            _cmdlist,
         const VulkanOperationContext& _context,
         VkFence                       _fence = VK_NULL_HANDLE
     );
     VulkanOperationResult Submit(
-        std::span<VulkanCmdList* const> _cmdlists,
-        const VulkanOperationContext&   _context,
-        VkFence                         _fence = VK_NULL_HANDLE
+        std::span<VulkanCommandList* const> _cmdlists,
+        const VulkanOperationContext&       _context,
+        VkFence                             _fence = VK_NULL_HANDLE
     );
     VulkanOperationResult SubmitEmpty(
         const VulkanOperationContext& _context,
@@ -184,14 +184,14 @@ struct ProfilerStorage {
     }
 
     void BeginProfilerSession(
-        VulkanCmdList&           _cmd,
-        std::string_view         _name,
-        VkPipelineStageFlagBits  _stage = kBeginTimestampStage
+        VulkanCommandList&      _cmd,
+        std::string_view        _name,
+        VkPipelineStageFlagBits _stage = kBeginTimestampStage
     );
     void EndProfilerSession(
-        VulkanCmdList&           _cmd,
-        std::string_view         _name,
-        VkPipelineStageFlagBits  _stage = kEndTimestampStage
+        VulkanCommandList&      _cmd,
+        std::string_view        _name,
+        VkPipelineStageFlagBits _stage = kEndTimestampStage
     );
     QueryFrameDiagnostics GetCurrentFrameQueryDiagnostics() const;
 
@@ -718,7 +718,7 @@ private:
         VulkanOperationContext                  context;
         uint64                                  timeline{0};
         bool                                    has_commands{false};
-        Array<VulkanCmdList*>                   ordered_cmd_lists;
+        Array<VulkanCommandList*>                  ordered_cmd_lists;
         Array<VkSemaphoreSubmitInfo>             native_waits;
         Array<VkSemaphoreSubmitInfo>             native_signals;
         VulkanCommandContextBatch                command_contexts;

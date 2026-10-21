@@ -1,6 +1,6 @@
 #include "VulkanCommandQueries.h"
 
-#include "VulkanCommand.h"
+#include "VulkanCommandList.h"
 #include "VulkanDevice.h"
 #include "rhi/RHIImpl.h"
 
@@ -146,7 +146,7 @@ void VulkanCommandQueries::ConfigureTimestampCapabilityForRecording(
     timestamp_reset_mode = _reset_mode;
 }
 
-void VulkanCommandQueries::RecordQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd) {
+void VulkanCommandQueries::RecordQuery(VulkanCommandList& _cmd_list, const QueryCmd& _cmd) {
     const QueryToken& token = _cmd.Token();
     if (!token.Valid()) {
         throw std::runtime_error("invalid Vulkan query token");
@@ -251,7 +251,7 @@ uint32 VulkanCommandQueries::AllocateTimestampQuerySlot() {
     return next_timestamp_query++;
 }
 
-void VulkanCommandQueries::RecordTimestampQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd) {
+void VulkanCommandQueries::RecordTimestampQuery(VulkanCommandList& _cmd_list, const QueryCmd& _cmd) {
     const QueryToken& token = _cmd.Token();
     if (!token.Valid() || token.Kind() != QueryKind::Timestamp) {
         throw std::runtime_error("invalid Vulkan timestamp query token");
@@ -340,7 +340,7 @@ uint32 VulkanCommandQueries::AllocateOcclusionQuerySlot() {
     return next_occlusion_query++;
 }
 
-void VulkanCommandQueries::RecordOcclusionQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd) {
+void VulkanCommandQueries::RecordOcclusionQuery(VulkanCommandList& _cmd_list, const QueryCmd& _cmd) {
     const QueryToken& token = _cmd.Token();
     if (!token.Valid() || token.Kind() != QueryKind::Occlusion) {
         throw std::runtime_error("invalid Vulkan occlusion query token");

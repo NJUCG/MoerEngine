@@ -46,7 +46,7 @@ VulkanCommandContext::VulkanCommandContext(VulkanDevice* _device, EQueueType _ty
     cmd_list(&command_pool, *_device),
     queries(*_device, _type) {}
 
-VulkanCmdList& VulkanCommandContext::PrepareSecondaryCmdList() {
+VulkanCommandList& VulkanCommandContext::PrepareSecondaryCommandList() {
     if (!secondary_cmd_list.has_value()) {
         secondary_cmd_list.emplace(&command_pool, *m_device, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
     }
@@ -109,7 +109,7 @@ void VulkanCommandContext::ConfigureTimestampCapabilityForRecording(
     queries.ConfigureTimestampCapabilityForRecording(_valid_bits, _reset_mode);
 }
 
-void VulkanCommandContext::RecordQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd) {
+void VulkanCommandContext::RecordQuery(VulkanCommandList& _cmd_list, const QueryCmd& _cmd) {
     queries.RecordQuery(_cmd_list, _cmd);
 }
 
