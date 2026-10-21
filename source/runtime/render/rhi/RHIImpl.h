@@ -2015,10 +2015,6 @@ public:
         return nullptr;
     }
 
-    virtual IOInterfaceRef CreateIOInterface(CopyQueue&) {
-        return nullptr;
-    };
-
     virtual void FlushDebugMessages() const {
         ; // do nothing by default
     }

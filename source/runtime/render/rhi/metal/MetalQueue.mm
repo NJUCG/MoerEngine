@@ -595,8 +595,7 @@ public:
     explicit MetalCopyQueue(id<MTLCommandQueue> queue) :
         queue_(queue), timeline_fence_(MoerNew(MetalFence)()) {}
 
-    IOWaitEvt Execute(IOQueueSubmission&&) override { Unsupported("IO queue submission"); }
-    IOWaitEvt Execute(CmdSubmit&& submit) override {
+    WaitEvent Execute(CmdSubmit&& submit) override {
         std::lock_guard lock(mutex_);
         if (!submit.wait_events.empty() || !submit.signal_events.empty() ||
             !submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty() ||

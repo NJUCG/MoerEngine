@@ -408,11 +408,6 @@ def pass_line(
         "[TESTCASE][PASS] name=DirectCopyExecuteRejected "
         "runtime_claim=exclusive native_submit=0 callbacks=exactly_once "
         "signal=rejected replay=0\n"
-        "[TESTCASE][PASS] name=VulkanStorageUnifiedCopySubmission "
-        "commits=2 signals=2 native_submit=2 native_owner=Submission "
-        "batch_reuse=verified readback=verified\n"
-        "[TESTCASE][PASS] name=VulkanIOOwnedRequests offsets=verified texture_mip_layer=verified binary=verified callbacks=5 errors=2 large_batch=verified\n"
-        "[TESTCASE][PASS] name=VulkanIOReadUploadOverlap next_submit_before_previous_retirement=verified\n"
         "[TESTCASE][PASS] name=ShutdownDependencyCancellation "
         "queues=Copy,Graphics copy_wait=entered dependency=unpublished "
         "native_submit=0 sync_wait=registered concurrent_sync=drained\n"
@@ -2522,18 +2517,6 @@ class VulkanRunnerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError, "direct Copy fail-closed"
-        ):
-            runner.validate_log("serial", text)
-
-    def test_copy_contracts_require_io_batch_reuse_and_native_submit(
-        self,
-    ) -> None:
-        text = pass_line("serial", "false").replace(
-            "commits=2 signals=2 native_submit=2 native_owner=Submission",
-            "commits=2 signals=2 native_submit=1 native_owner=Submission",
-        )
-        with self.assertRaisesRegex(
-            runner.VulkanTestError, "VulkanStorage unified Copy submission"
         ):
             runner.validate_log("serial", text)
 

@@ -1154,11 +1154,11 @@ public:
                     ordered_copy_timeline = 0;
                     break;
                 case EQueueType::Copy: {
-                    const IOWaitEvt completion =
+                    const WaitEvent completion =
                         RenderDevice::Get().GetCopyQueue().Execute(std::move(entry.submit));
-                    ordered_copy_timeline = completion.timeline;
+                    ordered_copy_timeline = completion.value;
                     std::lock_guard lock(state_mutex);
-                    last_copy_timeline = std::max(last_copy_timeline, completion.timeline);
+                    last_copy_timeline = std::max(last_copy_timeline, completion.value);
                     break;
                 }
                 case EQueueType::Ignore:

@@ -109,8 +109,6 @@ public:
     RaytracingSceneRef CreateRaytracingScene() override;
     SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
-    IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;
-
     // RHI pipeline creation.
     PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
     PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders) override;

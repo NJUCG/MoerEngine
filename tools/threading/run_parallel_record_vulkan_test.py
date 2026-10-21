@@ -474,35 +474,6 @@ def _require_phase15b_copy_contracts(mode: str, text: str) -> None:
         f"{mode}: incomplete direct Copy fail-closed contract",
     )
 
-    io_copy = _testcase_marker("VulkanStorageUnifiedCopySubmission", text)
-    _require(
-        io_copy is not None and io_copy[0] == "PASS",
-        f"{mode}: missing VulkanStorage unified Copy submission marker",
-    )
-    _, io_copy_fields = io_copy
-    _require(
-        io_copy_fields.get("commits") == "2"
-        and io_copy_fields.get("signals") == "2"
-        and io_copy_fields.get("native_submit") == "2"
-        and io_copy_fields.get("native_owner") == "Submission"
-        and io_copy_fields.get("batch_reuse") == "verified"
-        and io_copy_fields.get("readback") == "verified",
-        f"{mode}: incomplete VulkanStorage unified Copy submission contract",
-    )
-
-    for name, expected in (
-        ("VulkanIOOwnedRequests", {"offsets": "verified", "texture_mip_layer": "verified",
-                                   "binary": "verified", "callbacks": "5", "errors": "2",
-                                   "large_batch": "verified"}),
-        ("VulkanIOReadUploadOverlap", {"next_submit_before_previous_retirement": "verified"}),
-    ):
-        marker = _testcase_marker(name, text)
-        _require(
-            marker is not None and marker[0] == "PASS"
-            and all(marker[1].get(key) == value for key, value in expected.items()),
-            f"{mode}: incomplete {name} contract",
-        )
-
     shutdown = _testcase_marker("ShutdownDependencyCancellation", text)
     _require(
         shutdown is not None and shutdown[0] == "PASS",

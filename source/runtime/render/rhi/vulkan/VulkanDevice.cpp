@@ -39,7 +39,6 @@
 // #include <vk_mem_alloc.h>
 #include "VulkanMemoryAllocator.h"
 
-#include "VulkanIOService.h"
 #include <algorithm>
 #include <array>
 #include <config.h>
@@ -2345,10 +2344,6 @@ SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
     return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)};
 }
 
-IOInterfaceRef VulkanDevice::CreateIOInterface(CopyQueue& _copy_queue) {
-    VkCopyQueue* copy_queue_vk = static_cast<VkCopyQueue*>(&_copy_queue);
-    return MakeShared<VulkanIOInterface>(*this, *copy_queue_vk);
-}
 void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) {
     deferred_release_queue.Push(_object);
 }

@@ -10,7 +10,6 @@
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIIO.h"
 #include "rhi/ExternalCpuJoinPool.h"
 #include "rhi/RHIParallelRecord.h"
 #include "rhi/RHIRecordDiagnostics.h"
@@ -907,63 +906,24 @@ public:
     friend class VulkanSubmissionExecutor;
     VkCopyQueue(VulkanDevice& _device);
     ~VkCopyQueue();
-    using EventType = std::variant<
-        VulkanSubmissionEvent,
-        VulkanSubmitCompletionBatch,
-        UniquePtr<VulkanCommandContext>,
-        VulkanCallbackBatch,
-        VulkanCompletionMarker,
-        IOSignalEvt,
-        IOWaitEvt>;
-    struct IOEvent {
-        EventType event;
-        uint64    timeline;
-        bool      wake_thread;
-        uint64    retirement_serial;
-        template<typename Arg>
-            requires std::is_constructible_v<EventType, Arg&&>
-        IOEvent(Arg&& _event, uint64 _timeline, bool _wake_thread) :
-            event(std::forward<Arg>(_event)),
-            timeline(_timeline),
-            wake_thread(_wake_thread),
-            retirement_serial(0) {}
+    struct CompletionEvent {
+        VulkanSubmitCompletionBatch batch;
+        uint64                      timeline;
+        uint64                      retirement_serial;
 
-        template<typename Arg>
-            requires std::is_constructible_v<EventType, Arg&&>
-        IOEvent(
-            Arg&&  _event,
+        template<typename... Args>
+            requires std::is_constructible_v<VulkanSubmitCompletionBatch, Args&&...>
+        CompletionEvent(
             uint64 _timeline,
-            bool   _wake_thread,
-            uint64 _retirement_serial
-        ) :
-            event(std::forward<Arg>(_event)),
-            timeline(_timeline),
-            wake_thread(_wake_thread),
-            retirement_serial(_retirement_serial) {}
-
-        template<typename Event, typename... Args>
-            requires std::is_constructible_v<Event, Args&&...>
-        IOEvent(
-            std::in_place_type_t<Event>,
-            uint64 _timeline,
-            bool   _wake_thread,
             uint64 _retirement_serial,
             Args&&... _args
-        ) noexcept(std::is_nothrow_constructible_v<Event, Args&&...>) :
-            event(std::in_place_type<Event>, std::forward<Args>(_args)...),
+        ) noexcept(std::is_nothrow_constructible_v<VulkanSubmitCompletionBatch, Args&&...>) :
+            batch(std::forward<Args>(_args)...),
             timeline(_timeline),
-            wake_thread(_wake_thread),
             retirement_serial(_retirement_serial) {}
-
-        IOEvent(IOEvent&& _other) noexcept :
-            event(std::move(_other.event)),
-            timeline(_other.timeline),
-            wake_thread(_other.wake_thread),
-            retirement_serial(_other.retirement_serial) {}
     };
 
-    IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
-    IOWaitEvt Execute(CmdSubmit&& _submit) override;
+    WaitEvent Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;
 
@@ -976,43 +936,8 @@ public:
     virtual void CopyFrom(std::span<byte> _data, BufferView _dst) override {};
     virtual void CopyFrom(std::span<byte> _data, TextureView _dst) override {};
 
-    ///
-    void Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len);
-    void Enqueue(FileHandle _handle, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
-    void Enqueue(
-        FileHandle   _handle,
-        size_t       _file_offset,
-        void*        _tex_ptr,
-        EPixelFormat _format,
-        uint3        _offset,
-        uint3        _size,
-        uint         _mip_offset
-    );
-    void Enqueue(void const* _mem, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
-    void Enqueue(
-        void const*  _mem,
-        size_t       _file_offset,
-        void*        _tex_ptr,
-        EPixelFormat _format,
-        uint3        _offset,
-        uint3        _size,
-        uint         _mip_offset
-    );
-    void EnqueueSignal(FenceRef _fence, uint64_t _timeline);
-    void Execute();
-
+private:
     void ExecuteThread();
-    void Submit(IOQueueCommandList&& _cmd_list);
-    void SubmitSignal(FenceRef _fence, uint64_t _timeline);
-    void SubmitWait(FenceRef _fence, uint64_t _timeline);
-
-private:
-    void ExecuteIOThread(IOQueueCommandList&& _cmd_list, uint64_t _timeline);
-
-    void IOThreadLoop();
-    void RHIThreadLoop();
-
-private:
     void RejectForRuntime(
         CmdSubmit&& _submit,
         VkResult    _result,
@@ -1076,7 +1001,7 @@ private:
     UniquePtr<VulkanCommandContext>                AcquireCommandContext();
     void                                      CompleteAll(uint64 _timeline);
     LockFreeQueueBase<VulkanCommandContext, false> command_contexts;
-    DEQueue<IOEvent>                          event_queue;
+    DEQueue<CompletionEvent>                      event_queue;
 
 private:
     enum class EExecutionOwnershipMode : uint8_t {
@@ -1101,19 +1026,11 @@ private:
 
     std::atomic_bool dependency_waits_enabled{true};
 
-    //tmp
-    LockFreeQueueBase<IOCmd> commands;
-
     std::mutex                                     exec_mutex;
     RHITransferableOwnershipGate                   runtime_execution_gate;
     std::atomic<EExecutionOwnershipMode>           execution_ownership_mode{
         EExecutionOwnershipMode::Unclaimed
     };
-    Array<VkSemaphore>                             pending_semaphores;
-    Queue<std::pair<IOQueueCommandList&&, uint64>> io_thread_cmds;
-    std::mutex                                     io_mutex;
-    Queue<std::pair<CommandList&&, uint64>>        io_rhi_cmdlists;
-    std::mutex                                     rhi_mutex;
     Array<UniquePtr<VulkanCommandContext>>         command_context_quarantine;
 };
 } // namespace Moer::Render

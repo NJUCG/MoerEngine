@@ -138,10 +138,6 @@ BufferRef RenderDevice::CreateBuffer(std::string_view _name, const BufferInfo& _
     );
 }
 
-IOInterfaceRef RenderDevice::CreateIOInterface(CopyQueue& _copy_queue) {
-    return impl->CreateIOInterface(_copy_queue);
-}
-
 const EShaderPlatform RenderDevice::GetShaderPlatform() const {
     switch (rhi_type) {
         case ERHIType::Vulkan:

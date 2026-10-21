@@ -3,7 +3,6 @@
 
 #include "RHI.h"
 #include "RHICommandDrawData.h"
-#include "RHIIO.h"
 #include "RenderAPI.h"
 #include "math/Base.h"
 #include "misc/STL.h"
@@ -2494,9 +2493,8 @@ public:
 class RENDER_API CopyQueue {
 public:
     CopyQueue() {};
-    ~CopyQueue()                                           = default;
-    virtual IOWaitEvt Execute(IOQueueSubmission&& _submit) = 0;
-    virtual IOWaitEvt Execute(CmdSubmit&& _submit)         = 0;
+    ~CopyQueue() = default;
+    virtual WaitEvent Execute(CmdSubmit&& _submit) = 0;
 
     virtual void CopyFrom(BufferView _src, BufferView _dst)        = 0;
     virtual void CopyFrom(TextureView _src, TextureView _dst)      = 0;
@@ -2515,26 +2513,5 @@ public:
     CopyQueue(CopyQueue&& other)            = delete;
 };
 
-class IOInterface;
-using IOInterfaceRef = std::shared_ptr<IOInterface>;
-struct IOService {
-    static void Init();
-    static void Dispose();
-
-    static uint64_t     Execute(class IOCommandList& _cmd_list);
-    static void         Sync(uint64_t _time_stamp);
-    static IOInterface* CreateGPUService(CopyQueue* _copy_queue);
-    static IOInterface* CreateCPUService();
-
-    static void Destroy(IOInterface* _service);
-    struct Impl;
-};
-
-class IOInterface {
-public:
-    virtual WaitEvent GetWaitEvent(uint64 _time_stamp)   = 0;
-    virtual uint64    Execute(IOCommandList&& _cmd_list) = 0;
-    virtual void      Sync(uint64_t _time_stamp)         = 0;
-};
 } // namespace Moer::Render
 #endif
