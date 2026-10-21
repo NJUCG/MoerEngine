@@ -267,6 +267,21 @@ int main() {
             snapshot->instances[0].asset->gaussians.size() == 1,
             "asset lifetime extends through old frame snapshots"
         );
+        const auto empty_document=directory/"empty.moergs";
+        Check(scene.SaveGaussianDocument(empty_document,document_error),"empty Gaussian document can be saved");
+        Scene empty_restored;empty_restored.LoadSceneFromFile(empty_document);
+        Check(empty_restored.IsReady() && empty_restored.HasGaussianSceneData() && empty_restored.GetGaussianSceneContent()==EGaussianSceneContent::Empty,"empty document retains Gaussian routing metadata");
+        Check(!scene.RequestGaussianImageExport(directory/"bad.ply",document_error),"PNG request rejects a PLY destination");
+        Check(scene.RequestGaussianImageExport(directory/"image.png",document_error),"PNG request accepted");
+        const auto pending_export=scene.TakeGaussianImageExportRequest();
+        Check(pending_export && !scene.TakeGaussianImageExportRequest(),"PNG request consumed exactly once");
+        Check(!scene.RequestGaussianImageExport(directory/"other.png",document_error),"busy export cannot be replaced");
+        const auto current_status=scene.GetGaussianImageExportStatus();
+        auto stale_status=current_status;stale_status.request_id++;stale_status.is_busy=false;
+        scene.ApplyGaussianImageExportStatus(stale_status);
+        Check(scene.GetGaussianImageExportStatus().is_busy,"stale export completion ignored");
+        scene.ApplyGaussianImageExportStatus({current_status.request_id,false,true,"saved"});
+        Check(scene.GetGaussianImageExportStatus().is_successful,"current export completion applied");
         auto after = scene.PrepareUpdateBatch(false, false);
         Check(
             !after.update_gpu_update || !after.update_gpu_update->HasWork(),

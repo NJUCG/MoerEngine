@@ -30,6 +30,12 @@ class GaussianViewSettings:
     tile_pair_capacity: int
     def __init__(self) -> None: ...
 
+class GaussianExportStatus:
+    request_id: int
+    is_busy: bool
+    is_successful: bool
+    message: str
+
 class float2:
     x: float
     y: float
@@ -186,6 +192,8 @@ Entity = int
 
 
 class SceneApi:
+    def request_gaussian_image_export(self, path: str) -> bool: ...
+    def get_gaussian_image_export_status(self) -> GaussianExportStatus: ...
     def get_gaussian_view_settings(self) -> GaussianViewSettings: ...
     def set_gaussian_view_settings(self, settings: GaussianViewSettings) -> bool: ...
     def save_gaussian_document(self, path: str) -> bool: ...

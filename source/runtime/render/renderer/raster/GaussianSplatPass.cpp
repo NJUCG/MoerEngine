@@ -295,6 +295,7 @@ TextureRef GaussianSplatPass::Record(
             if (instance.range.w & visibility_mask)
                 work_count_64 += instance.range.y;
     const bool is_work_overflow = work_count_64 > k_max_work_count;
+    state.m_telemetry.has_work_overflow = is_work_overflow;
     const uint work_count       = is_work_overflow ? 0u : static_cast<uint>(work_count_64);
     if (!IsValidGaussianViewSettings(view_settings))
         throw std::invalid_argument("Invalid Gaussian view settings");

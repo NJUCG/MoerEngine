@@ -134,6 +134,7 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
     const std::string node_display_name = scene->GetNodeDisplayName(selected_node);
 
     if (m_rotation_cache_entity != selected_node) {
+        m_gaussian_edit_error.clear();
         m_rotation_cache_entity = selected_node;
         m_rotation_euler        = EulerDegreesFromQuaternion(local_transform->rotation);
     }
@@ -180,7 +181,9 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
     const auto gaussian_asset = scene->GetGaussianAsset(selected_node);
     if (gaussian_asset) {
         ImGui::SeparatorText("Gaussian Splat");
-        ImGui::TextWrapped("Source: %s", gaussian_asset->source_path.string().c_str());
+        const auto source_utf8 = gaussian_asset->source_path.generic_u8string();
+        const std::string source_path(reinterpret_cast<const char*>(source_utf8.data()),source_utf8.size());
+        ImGui::TextWrapped("Source: %s", source_path.c_str());
         ImGui::Text("Gaussians: %zu | SH degree: %u", gaussian_asset->gaussians.size(), gaussian_asset->sh_degree);
         ImGui::Text("Geometry buffer: %.2f MiB (shared)",
             double(gaussian_asset->gaussians.size() * sizeof(Render::GGaussian)) / (1024.0 * 1024.0));
@@ -190,13 +193,16 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
             ImGui::Text("Local max: %.3f, %.3f, %.3f", bounds.max.x, bounds.max.y, bounds.max.z);
         }
         auto settings = *scene->GetGaussianInstanceSettings(selected_node);
+        ImGui::PushItemWidth(std::max(80.f,ImGui::GetContentRegionAvail().x-140.f));
         bool has_changed = ImGui::Checkbox("Enabled##gaussian", &settings.is_enabled);
         has_changed |= ImGui::DragFloat("Opacity multiplier", &settings.opacity_multiplier, .01f, 0.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         has_changed |= ImGui::ColorEdit3("Color multiplier", &settings.color_multiplier.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-        if (has_changed && !scene->SetGaussianInstanceSettings(selected_node, settings))
-            ImGui::TextWrapped("Invalid values: multipliers must be finite and nonnegative.");
-        ImGui::TextDisabled("SH appearance is baked; scene lights do not relight it.");
-        if (ImGui::Button("Reset appearance")) scene->SetGaussianInstanceSettings(selected_node, {});
+        ImGui::PopItemWidth();
+        if (has_changed) m_gaussian_edit_error = scene->SetGaussianInstanceSettings(selected_node, settings) ? "" :
+            "Invalid values: multipliers must be finite and nonnegative.";
+        if (!m_gaussian_edit_error.empty()) ImGui::TextWrapped("%s",m_gaussian_edit_error.c_str());
+        ImGui::TextWrapped("SH appearance is baked; scene lights do not relight it.");
+        if (ImGui::Button("Reset appearance")) {scene->SetGaussianInstanceSettings(selected_node, {});m_gaussian_edit_error.clear();}
         ImGui::SameLine();
         if (ImGui::Button("Duplicate instance")) {
             const auto duplicate_entity = scene->DuplicateGaussianInstance(selected_node);

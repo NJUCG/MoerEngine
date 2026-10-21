@@ -12,6 +12,7 @@
 #include "EditorUIStyle.h"
 #include "scene/Scene.h"
 #include "scene/loader/GaussianPlyLoader.h"
+#include "scene/loader/LoaderInterface.h"
 #include <chrono>
 #include <cctype>
 #include "scene_editing_ui/SceneFileDialog.h"
@@ -593,11 +594,25 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
         std::string selected_path;
         switch (OpenSceneFileDialog(selected_path)) {
             case ESceneFileDialogResult::Selected:
+            {
+                auto extension = std::filesystem::path(selected_path).extension().string();
+                std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c) {return static_cast<char>(std::tolower(c));});
+                if (extension == ".ply" || extension == ".moergs") {
+                    // Renderer reload destroys the old Scene. Validate before requesting that boundary.
+                    SceneLoadRequest request;
+                    request.file_path = std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(selected_path.data()),selected_path.size()));
+                    if (!LoaderInterface::LoadScene(request)) {
+                        m_last_file_action_status = "Open failed: invalid Gaussian scene or missing PLY. Current scene retained; check log.";
+                        break;
+                    }
+                    m_config->selected_render_method = ERenderMethod::Raster;
+                }
                 LOG_INFO("User selected file: {}", selected_path);
                 m_b_need_reload           = true;
                 m_config->scene_path      = std::move(selected_path);
                 m_last_file_action_status = "Open Scene requested";
                 break;
+            }
             case ESceneFileDialogResult::Cancelled:
                 LOG_INFO("User pressed cancel.");
                 break;
@@ -616,7 +631,7 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
                 m_gaussian_import_scene_path = scene.GetSourceFilePath();
                 m_should_cancel_gaussian_import = false;
                 m_last_file_action_status = "Loading Gaussian PLY...";
-                m_gaussian_import = std::async(std::launch::async, [selected_path]() { return LoadGaussianPly(selected_path); });
+                m_gaussian_import = std::async(std::launch::async, [selected_path]() { return LoadGaussianPly(std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(selected_path.data()),selected_path.size()))); });
             } else {
             const Scene::ImportSceneFromFileResult result = scene.ImportSceneFromFileSync(selected_path);
             if (result) {
@@ -640,13 +655,27 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
         NFD::UniquePath selected_path;
         const nfdfilteritem_t filter{"Moer Gaussian Scene", "moergs"};
         if (NFD::SaveDialog(selected_path, &filter, 1, nullptr, "scene.moergs") == NFD_OKAY) {
-            std::filesystem::path path(selected_path.get());
+            std::filesystem::path path(std::u8string(reinterpret_cast<const char8_t*>(selected_path.get())));
             if (!path.has_extension()) path += ".moergs";
             std::string error;
             m_last_file_action_status = scene.SaveGaussianDocument(path, error) ?
                 "Gaussian scene saved: " + path.string() : "Save failed: " + error;
         }
     }
+    const auto export_status = scene.GetGaussianImageExportStatus();
+    if (ImGui::MenuItem("Export Gaussian PNG...", nullptr, false, scene.HasGaussianSceneData() &&
+            m_config->selected_render_method == ERenderMethod::Raster && !export_status.is_busy)) {
+        NFD::UniquePath selected_path;
+        const nfdfilteritem_t filter{"PNG image", "png"};
+        if (NFD::SaveDialog(selected_path, &filter, 1, nullptr, "gaussian.png") == NFD_OKAY) {
+            std::filesystem::path path(std::u8string(reinterpret_cast<const char8_t*>(selected_path.get())));
+            if (!path.has_extension()) path += ".png";
+            std::string error;
+            m_last_file_action_status = scene.RequestGaussianImageExport(path, error) ?
+                "Gaussian PNG export requested (current viewport, no UI)" : "Export failed: " + error;
+        }
+    }
+    if (!export_status.message.empty()) ImGui::TextWrapped("%s", export_status.message.c_str());
     if (ImGui::BeginMenu("Scene Cache")) {
         if (ImGui::MenuItem("Save State Cache")) {
             if (scene.SaveStateCache()) {
@@ -986,7 +1015,7 @@ void EditorUI::ShowViewportWindow(
 
 void EditorUI::ShowGaussianSettings(Scene& scene) {
     if (!scene.HasGaussianSceneData() || !ImGui::CollapsingHeader("Gaussian Rendering", ImGuiTreeNodeFlags_DefaultOpen)) return;
-    const auto content = scene.GetGaussianSceneContent();
+    const auto content = scene.GetGaussianSceneContentForView(m_config->active_viewport_mode == EEditorViewportMode::Scene);
     if (content == EGaussianSceneContent::Mixed)
         ImGui::TextWrapped("Mixed Mesh/Gaussian rendering is not implemented yet. The magenta image is diagnostic.");
     ImGui::TextDisabled("Standard SH appearance; scene lights do not relight it.");
@@ -1014,13 +1043,16 @@ void EditorUI::ShowGaussianSettings(Scene& scene) {
     if(ImGui::Button("Frame Gaussian bounds")) m_config->raster_config.should_frame_gaussians=true;
     ImGui::EndDisabled();
     const auto& status=m_config->raster_config.gaussian_status;
+    const auto export_status=scene.GetGaussianImageExportStatus();
+    if(!export_status.message.empty()) ImGui::TextWrapped("%s",export_status.message.c_str());
     if(!status.is_active) {ImGui::TextDisabled("Gaussian renderer inactive.");return;}
     ImGui::Text("Unique: %u | Instances: %u | Submitted: %u",status.unique_gaussian_count,status.instance_count,status.work_count);
     if(status.has_completed_counts) ImGui::Text("Projected: %u | Tile pairs: %u",status.visible_count,status.tile_pair_count);
     else ImGui::TextDisabled("Waiting for GPU counts...");
     ImGui::Text("Geometry: %.2f MiB | Workspace: ~%.2f MiB",double(status.geometry_bytes)/(1024*1024),double(status.workspace_bytes)/(1024*1024));
     if(status.has_gpu_time) ImGui::Text("Last completed GPU: %.3f ms",status.gpu_ms);
-    if(status.has_overflow) ImGui::TextWrapped("Capacity exceeded. The magenta frame is invalid; increase the tile-pair capacity.");
+    if(status.has_work_overflow) ImGui::TextWrapped("Expanded Gaussian count exceeds 2,097,152. Reduce the number of instances or use a smaller asset.");
+    else if(status.has_overflow) ImGui::TextWrapped("Tile-pair capacity exceeded. The magenta frame is invalid; increase the capacity.");
 }
 
 void EditorUI::ShowConfig(Scene& scene) {
@@ -1101,7 +1133,7 @@ void EditorUI::ShowConfig(Scene& scene) {
         switch (m_config->selected_render_method) {
             case ERenderMethod::Raster:
                 ShowGaussianSettings(scene);
-                if (scene.GetGaussianSceneContent() != EGaussianSceneContent::GaussianOnly)
+                if (scene.GetGaussianSceneContentForView(m_config->active_viewport_mode == EEditorViewportMode::Scene) != EGaussianSceneContent::GaussianOnly)
                     m_raster_ui.ShowConfig();
                 break;
             case ERenderMethod::Raytracing:

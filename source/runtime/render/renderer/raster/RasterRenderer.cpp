@@ -11,6 +11,7 @@
 #include "DirectionalShadowMaskPass.h"
 #include "GeometryPass.h"
 #include "GaussianSplatPass.h"
+#include "GaussianImageExport.h"
 #include <cmath>
 #include "TessellatedSurfacePass.h"
 #include "HiZBuildPass.h"
@@ -178,6 +179,10 @@ RasterRenderer::~RasterRenderer() {
 
     // 必须在派生 Pass 对象仍然存活时释放其 Pass 资源。
     ReleaseResources();
+    if (m_gaussian_export) {
+        m_gaussian_export->Finish();
+        if (IsCurrentlyGameThread()) scene.ApplyGaussianImageExportStatus(m_gaussian_export->GetStatus());
+    }
     LOG_INFO(
         "[Threading] RasterRenderer destruction finished on {} Thread.",
         IsCurrentlyRenderThread() ? "Render" : "Game"
@@ -493,6 +498,9 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
             // Retain the empty path after deleting the last splat; empty mesh buffers are not renderable.
             frame_packet.has_gaussian_assets = scene.HasGaussianSceneData();
             frame_packet.gaussian_view_settings = scene.GetGaussianViewSettings();
+            frame_packet.gaussian_export_request = scene.TakeGaussianImageExportRequest();
+            if (frame_packet.gaussian_export_request)
+                frame_packet.gaussian_view_settings = frame_packet.gaussian_export_request->view_settings;
             Camera main_camera = frame_packet.scene_updates.main_camera;
             auto source_extension = scene.GetSourceFilePath().extension().string();
             std::transform(source_extension.begin(), source_extension.end(), source_extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -892,6 +900,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             );
         }
 
+        if (m_gaussian_export) m_gaussian_export->Poll();
+        if (frame_packet.gaussian_export_request && !m_gaussian_export)
+            m_gaussian_export = MakeUnique<GaussianImageExport>();
         const bool should_render_gaussians = frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
             frame_packet.gaussian_content == EGaussianSceneContent::Mixed ||
             (frame_packet.gaussian_content == EGaussianSceneContent::Empty && frame_packet.has_gaussian_assets);
@@ -907,6 +918,12 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             const auto gaussian_display = m_gaussian_splat_pass->Record(cmd_list, render_scene->GetGaussianGpuScene(),
                 frame_packet.render_camera, raster_context.GetResolution(),
                 frame_packet.active_viewport_mode == EEditorViewportMode::Scene, is_mixed, frame_packet.gaussian_view_settings);
+            if (frame_packet.gaussian_export_request) {
+                const auto& request = *frame_packet.gaussian_export_request;
+                if (is_mixed) m_gaussian_export->Reject(request.request_id,"Mixed rendering is not implemented; PNG was not written");
+                else m_gaussian_export->Request(cmd_list,gaussian_display->GetView(),m_gaussian_splat_pass->GetStatusBuffer(),
+                    raster_context.GetResolution(),request.path,request.request_id);
+            }
             const auto& ui_frame = frame_packet.ui_composition;
             const auto window_view = ui_frame.window_frame_buffer ? ui_frame.window_frame_buffer->GetView() : TextureView{};
             default_output_texture = ui_combine_pass->Process(cmd_list,
@@ -920,6 +937,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             aa_pass->ResetHistory();
             rtao_denoiser_pass->ResetHistory();
         } else {
+        if (frame_packet.gaussian_export_request)
+            m_gaussian_export->Reject(frame_packet.gaussian_export_request->request_id,"No Gaussian raster output in this viewport");
         const Camera& main_camera = scene_updates.main_camera;
         Camera        camera      = frame_packet.render_camera;
         const uint8 smaa_t2x_phase =
@@ -2382,6 +2401,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     }
 
     RasterFrameFeedback feedback{};
+    if (m_gaussian_export) feedback.gaussian_export_status = m_gaussian_export->GetStatus();
     if (m_gaussian_splat_pass && frame_packet.has_gaussian_assets && frame_packet.gaussian_content != EGaussianSceneContent::MeshOnly)
         feedback.gaussian_status = m_gaussian_splat_pass->GetStatus();
     feedback.frame_id              = frame_packet.frame_id;
@@ -2412,6 +2432,7 @@ void RasterRenderer::ApplyFrameFeedback(
     assert(IsCurrentlyGameThread());
     ApplyMainPresentReceipt(feedback.main_present_receipt, hooks);
     target_config.gaussian_status = feedback.gaussian_status;
+    scene.ApplyGaussianImageExportStatus(feedback.gaussian_export_status);
     target_config.culling_stats          = feedback.culling_stats;
     target_config.cooperative_ops_status = feedback.cooperative_ops_status;
     if (!feedback.displayable_frame_buffer_names.empty() &&

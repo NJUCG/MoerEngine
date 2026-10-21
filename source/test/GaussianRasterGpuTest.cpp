@@ -1,5 +1,6 @@
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "renderer/raster/GaussianImageExport.h"
 #include "renderer/raster/GaussianSplatPass.h"
 #include "rhi/RHIExecutor.h"
 #include "scene/loader/GaussianPlyLoader.h"
@@ -9,7 +10,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <stb/stb_image.h>
 #include <stdexcept>
+#include <thread>
 using namespace Moer;
 using namespace Moer::Render;
 namespace {
@@ -88,6 +91,60 @@ void Run(
                 encoded <= .04045 ? encoded / 12.92 : std::pow((encoded + .055) / 1.055, 2.4);
             Require(std::abs(linear - (*display_pixels)[value_id]) < 0.00002, "Display sRGB decode differs");
         }
+    }
+    {
+        const auto directory = std::filesystem::temp_directory_path() /
+                               ("moer-gaussian-export-" +
+                                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directory(directory);
+        const auto path = output.empty() ? directory / std::filesystem::path(u8"高斯.png") :
+                                           std::filesystem::path(output.string() + ".export.png");
+        if (should_test_overflow) {
+            std::ofstream existing(path, std::ios::binary);
+            existing << "keep-existing";
+        }
+        Raster::GaussianImageExport exporter;
+        CommandList                 export_commands(EQueueType::Graphics);
+        exporter.Request(
+            export_commands, display->GetView(), pass.GetStatusBuffer(), uint2(width, height), path, 1
+        );
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics, export_commands.Submit(), ERHIExecSubmitFlags::FlushGPU
+        );
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (exporter.GetStatus().is_busy && std::chrono::steady_clock::now() < deadline) {
+            exporter.Poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        Require(!exporter.GetStatus().is_busy, "PNG export timed out");
+        if (should_test_overflow) {
+            Require(!exporter.GetStatus().is_successful, "Invalid overflow frame was exported");
+            std::ifstream existing(path, std::ios::binary);
+            std::string   content((std::istreambuf_iterator<char>(existing)), {});
+            Require(content == "keep-existing", "Invalid PNG export changed existing destination");
+        } else {
+            Require(exporter.GetStatus().is_successful, exporter.GetStatus().message.c_str());
+            std::ifstream              input(path, std::ios::binary);
+            std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)), {});
+            int                        decoded_width = 0, decoded_height = 0, component_count = 0;
+            auto*                      pixels = stbi_load_from_memory(
+                bytes.data(), int(bytes.size()), &decoded_width, &decoded_height, &component_count, 3
+            );
+            Require(
+                pixels && decoded_width == int(width) && decoded_height == int(height),
+                "PNG dimensions mismatch"
+            );
+            for (uint pixel_id = 0; pixel_id < width * height; ++pixel_id)
+                for (uint channel_id = 0; channel_id < 3; ++channel_id) {
+                    const float expected = std::clamp((*color)[pixel_id * 4 + channel_id], 0.f, 1.f) * 255.f;
+                    Require(
+                        std::abs(float(pixels[pixel_id * 3 + channel_id]) - expected) < 1.1f,
+                        "PNG RGB / sRGB encoding mismatch"
+                    );
+                }
+            stbi_image_free(pixels);
+        }
+        std::filesystem::remove_all(directory); // Unique, test-owned temporary directory only.
     }
     if (!output.empty()) {
         std::ofstream raw(output.string() + ".rgba", std::ios::binary);

@@ -5,9 +5,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <atomic>
+#include <cctype>
 
 namespace Moer {
 namespace {
+std::atomic<uint64> g_gaussian_export_request_id{1};
 bool Same(const GaussianInstanceSnapshot& lhs, const GaussianInstanceSnapshot& rhs) {
     if (lhs.key != rhs.key || lhs.asset != rhs.asset || lhs.is_visible_in_game != rhs.is_visible_in_game ||
         lhs.is_visible_in_editor != rhs.is_visible_in_editor ||
@@ -128,6 +131,33 @@ bool Scene::SetGaussianViewSettings(const GaussianViewSettings& settings) {
 }
 bool Scene::HasGaussianSceneData() const {
     return IsReady() && (r().ctx().contains<ecs::CtxGaussianViewSettings>() || m_last_gaussian_snapshot || !r().view<const ecs::CGaussianInstance>().empty());
+}
+
+bool Scene::RequestGaussianImageExport(const std::filesystem::path& path, std::string& out_error) {
+    out_error.clear();
+    if (!HasGaussianSceneData()) {out_error="No Gaussian scene is loaded";return false;}
+    auto extension=path.extension().string();
+    std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+    if(extension!=".png") {out_error="PNG export requires a .png filename";return false;}
+    if(!r().ctx().contains<ecs::CtxGaussianImageExport>()) r().ctx().emplace<ecs::CtxGaussianImageExport>();
+    auto& state=r().ctx().get<ecs::CtxGaussianImageExport>();
+    if(state.status.is_busy) {out_error="A PNG export is already in progress";return false;}
+    const uint64 request_id=g_gaussian_export_request_id++;
+    state.status={request_id,true,false,"Waiting for render frame..."};
+    state.pending=GaussianExportRequest{path,request_id,GetGaussianViewSettings()};
+    return true;
+}
+std::optional<GaussianExportRequest> Scene::TakeGaussianImageExportRequest() {
+    if(!IsReady() || !r().ctx().contains<ecs::CtxGaussianImageExport>()) return {};
+    return std::exchange(r().ctx().get<ecs::CtxGaussianImageExport>().pending,std::nullopt);
+}
+GaussianExportStatus Scene::GetGaussianImageExportStatus() const {
+    return IsReady() && r().ctx().contains<ecs::CtxGaussianImageExport>() ? r().ctx().get<const ecs::CtxGaussianImageExport>().status : GaussianExportStatus{};
+}
+void Scene::ApplyGaussianImageExportStatus(const GaussianExportStatus& status) {
+    if(!IsReady() || !r().ctx().contains<ecs::CtxGaussianImageExport>()) return;
+    auto& target=r().ctx().get<ecs::CtxGaussianImageExport>().status;
+    if(status.request_id==target.request_id) target=status;
 }
 
 EGaussianSceneContent Scene::GetGaussianSceneContentForView(bool is_editor_view) const {

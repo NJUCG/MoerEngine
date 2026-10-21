@@ -274,14 +274,18 @@ bool LoadGaussianSceneFile(
         registry.ctx().emplace<ecs::CtxMegaBuffers>();
         auto& settings = registry.ctx().emplace<ecs::CtxGaussianViewSettings>().value;
         if (document.contains("view")) {
-            const auto& value     = document.at("view");
-            settings.background   = VectorValue(value.at("background"));
-            settings.exposure_ev  = Number(value.at("exposure_ev"));
-            settings.display_mode = static_cast<EGaussianDisplayMode>(value.at("display_mode").get<uint>());
-            settings.debug_view   = static_cast<EGaussianDebugView>(value.at("debug_view").get<uint>());
-            if (!value.at("tile_pair_capacity").is_number_integer())
-                throw std::runtime_error("Invalid pair capacity");
-            settings.tile_pair_capacity = value.at("tile_pair_capacity").get<uint>();
+            const auto& value          = document.at("view");
+            settings.background        = VectorValue(value.at("background"));
+            settings.exposure_ev       = Number(value.at("exposure_ev"));
+            const auto bounded_integer = [](const Json& number, uint64 maximum) -> uint {
+                if (!number.is_number_integer() || number.get<int64>() < 0 || number.get<uint64>() > maximum)
+                    throw std::runtime_error("Invalid Gaussian view integer");
+                return static_cast<uint>(number.get<uint64>());
+            };
+            settings.display_mode =
+                static_cast<EGaussianDisplayMode>(bounded_integer(value.at("display_mode"), 1));
+            settings.debug_view = static_cast<EGaussianDebugView>(bounded_integer(value.at("debug_view"), 2));
+            settings.tile_pair_capacity = bounded_integer(value.at("tile_pair_capacity"), 1u << 24);
             if (!IsValidGaussianViewSettings(settings))
                 throw std::runtime_error("Invalid Gaussian view settings");
         }

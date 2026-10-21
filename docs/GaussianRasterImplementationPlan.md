@@ -1,6 +1,6 @@
 # MoerEngine 光栅化高斯实施方案
 
-> 实施状态：P1 数据链路与 P2 独立标准高斯光栅路径已完成；详见同目录 `GaussianRasterProgress.md`。P0 Sponza 严格验收仍受上游自身不确定性影响（详细工具与报告仅本地保留）；P3 编辑器闭环、P4/P5 混合实现尚未完成。
+> 实施状态：P1/P2/P3 已完成，包括标准 PLY、独立高斯光栅、编辑器属性、场景文档和 PNG 闭环；详见 `GaussianRasterProgress.md` 与 `GaussianEditorGuide.md`。P0 Sponza 波动按用户决定暂搁置；P4/P5 论文转换与混合渲染尚未实现。
 
 日期：2026-10-20。依据本次需求收敛：只开发光栅化，纯高斯优先。本文替代早先方案中的双 Renderer 首期范围。本文件是实施设计，不代表功能已完成。
 

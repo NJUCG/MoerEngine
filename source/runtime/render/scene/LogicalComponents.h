@@ -11,6 +11,7 @@
 
 #include <entt/entity/entity.hpp>
 #include <string>
+#include <optional>
 
 /**
  * 这里存了所有ECS Component, Context的定义
@@ -29,6 +30,10 @@ struct CGaussianInstance {
 };
 struct CtxGaussianViewSettings {
     GaussianViewSettings value;
+};
+struct CtxGaussianImageExport {
+    std::optional<GaussianExportRequest> pending;
+    GaussianExportStatus status;
 };
 
 // MARK: Camera

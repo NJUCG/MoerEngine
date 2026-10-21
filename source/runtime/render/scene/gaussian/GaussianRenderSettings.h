@@ -1,6 +1,7 @@
 #pragma once
 #include "misc/Traits.h"
 #include <cmath>
+#include <filesystem>
 #include <string>
 namespace Moer {
 enum class EGaussianDisplayMode : uint {
@@ -29,10 +30,22 @@ inline bool IsValidGaussianViewSettings(const GaussianViewSettings& value) {
            static_cast<uint>(value.debug_view) <= static_cast<uint>(EGaussianDebugView::TileCoverage) &&
            value.tile_pair_capacity > 0 && value.tile_pair_capacity <= (1u << 24);
 }
+struct GaussianExportRequest {
+    std::filesystem::path path;
+    uint64                request_id = 0;
+    GaussianViewSettings  view_settings{};
+};
+struct GaussianExportStatus {
+    uint64      request_id    = 0;
+    bool        is_busy       = false;
+    bool        is_successful = false;
+    std::string message;
+};
 struct GaussianRasterStatus {
     bool   is_active             = false;
     bool   has_completed_counts  = false;
     bool   has_overflow          = false;
+    bool   has_work_overflow     = false;
     bool   has_gpu_time          = false;
     uint   unique_gaussian_count = 0;
     uint   instance_count        = 0;

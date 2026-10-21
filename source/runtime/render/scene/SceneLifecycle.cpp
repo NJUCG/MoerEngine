@@ -167,7 +167,7 @@ void Scene::LoadSceneFromFile(const std::filesystem::path& file_path) {
 
 bool Scene::SaveStateCache() const {
     if (m_logical_scene && !r().view<const ecs::CGaussianInstance>().empty()) {
-        LOG_WARNING("Gaussian scene persistence is not implemented yet; refusing to save a Mesh-only cache that would lose Gaussian instances.");
+        LOG_WARNING("Mesh State Cache cannot store Gaussian instances; use Save Gaussian Scene As (.moergs).");
         return false;
     }
     if (!m_logical_scene || !IsReady()) {

@@ -576,7 +576,23 @@ void BindGaussianApi(py::module_& module, SceneApiClass& scene_api_class) {
         .def_readwrite("display_mode",&GaussianViewSettings::display_mode)
         .def_readwrite("debug_view",&GaussianViewSettings::debug_view)
         .def_readwrite("tile_pair_capacity",&GaussianViewSettings::tile_pair_capacity);
+    py::class_<GaussianExportStatus>(module,"GaussianExportStatus")
+        .def_readonly("request_id",&GaussianExportStatus::request_id)
+        .def_readonly("is_busy",&GaussianExportStatus::is_busy)
+        .def_readonly("is_successful",&GaussianExportStatus::is_successful)
+        .def_readonly("message",&GaussianExportStatus::message);
     scene_api_class
+        .def("request_gaussian_image_export", [](MainThreadCommandQueue& queue, const std::string& path) {
+            return CallScene(queue, [path](Scene& scene) {
+                std::string error;
+                const std::filesystem::path output_path(std::u8string(reinterpret_cast<const char8_t*>(path.data()),path.size()));
+                if(!scene.RequestGaussianImageExport(output_path,error)) throw std::runtime_error(error);
+                return true;
+            });
+        })
+        .def("get_gaussian_image_export_status", [](MainThreadCommandQueue& queue) {
+            return CallScene(queue, [](Scene& scene) { return scene.GetGaussianImageExportStatus(); });
+        })
         .def("get_gaussian_view_settings", [](MainThreadCommandQueue& queue) {
             return CallScene(queue, [](Scene& scene) { return scene.GetGaussianViewSettings(); });
         })

@@ -4,6 +4,7 @@
 #include "misc/Traits.h"
 
 #include <entt/entity/entity.hpp>
+#include <string>
 
 namespace Moer {
 
@@ -37,6 +38,7 @@ public:
 private:
     entt::entity m_rotation_cache_entity = entt::null;
     float3       m_rotation_euler{};
+    std::string m_gaussian_edit_error;
 };
 
 } // namespace Moer
