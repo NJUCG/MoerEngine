@@ -15543,6 +15543,43 @@ void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
     );
 }
 
+void RunDepthTextureCopy() {
+    auto& device = RenderDevice::Get();
+    constexpr uint32 width = 4;
+    constexpr uint32 height = 4;
+    const auto texture_usage = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT |
+                               ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST;
+    TextureRef source = device.CreateTexture(
+        "depth_copy_source", Extent3D(width, height, 1), PF_D32_SFLOAT, texture_usage
+    );
+    TextureRef destination = device.CreateTexture(
+        "depth_copy_destination", Extent3D(width, height, 1), PF_D32_SFLOAT, texture_usage
+    );
+    BufferRef buffer = device.CreateBuffer<uint32>(
+        "depth_copy_readback", width * height,
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
+    );
+    std::array<uint32, width * height> expected{};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        // Distinct finite D32 values in [0, 1], compared bit-for-bit after copying.
+        expected[index] = 0x3f000000u + static_cast<uint32>(index) * 0x10000u;
+    }
+    CommandList commands(EQueueType::Graphics);
+    commands.CopyFrom(OwnedBytes(expected), source->GetView(), "DepthUpload");
+    commands.CopyFrom(source->GetView(), destination->GetView(), "DepthImageCopy");
+    commands.CopyFrom(destination->GetView(), buffer->GetView(), "DepthToBuffer");
+    ReadbackFuture future = commands.Readback(buffer->GetView(), "DepthCopyReadback");
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU
+    );
+    const auto values = future.Get().CopyAs<uint32>();
+    if (!values || values->size() != expected.size() ||
+        !std::equal(values->begin(), values->end(), expected.begin())) {
+        throw std::runtime_error("D32 buffer/image copy round trip did not preserve depth values");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=DepthTextureCopy path=buffer-image-image-buffer format=D32");
+}
+
 void RunOwningReadbackFuture() {
     auto& device = RenderDevice::Get();
     constexpr size_t buffer_element_count = 16;
@@ -16051,6 +16088,7 @@ int main(int argc, const char** argv) {
 
         if (readback_future_mode) {
             RunOwningReadbackFuture();
+            RunDepthTextureCopy();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();

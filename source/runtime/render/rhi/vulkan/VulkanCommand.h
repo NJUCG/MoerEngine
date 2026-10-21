@@ -142,26 +142,28 @@ public:
     // Transfer and clear commands.
     void
     CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
+    // Tightly packed copies of one mip/layer in a supported single-aspect format.
     void CopyBufferToTexture(
         VulkanBuffer*  _src,
         VulkanTexture* _dst,
-        uint64         _size,
+        uint64         _byte_size,
         uint64         _src_offset,
         uint3          _dst_offset,
-        uint3          _dst_extent,
+        uint3          _extent,
         uint32         _mip_level,
         uint32         _array_layer
     );
     void CopyTextureToBuffer(
         VulkanTexture* _src,
         VulkanBuffer*  _dst,
-        uint64         _size,
+        uint64         _byte_size,
         uint3          _src_offset,
         uint64         _dst_offset,
-        uint3          _src_extent,
+        uint3          _extent,
         uint32         _mip_level,
         uint32         _array_layer
     );
+    // Copies array layer zero only; the RHI image-copy command has no layer fields.
     void CopyTexture(
         VulkanTexture* _src,
         VulkanTexture* _dst,

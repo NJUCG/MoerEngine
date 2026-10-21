@@ -590,73 +590,79 @@ void VulkanCmdList::CopyBuffer(
     vkCmdCopyBuffer(command_buffer, _src->GetHandle(), _dst->GetHandle(), 1, &copy_region);
 }
 
+namespace {
+
+VkImageAspectFlags GetCopyAspect(const VulkanTexture& _texture) {
+    switch (GetPixelFormatInfo(_texture.GetFormat()).aspect) {
+        case EPixelFormatAspect::Color:
+            return VK_IMAGE_ASPECT_COLOR_BIT;
+        case EPixelFormatAspect::Depth:
+            return VK_IMAGE_ASPECT_DEPTH_BIT;
+        case EPixelFormatAspect::Stencil:
+            return VK_IMAGE_ASPECT_STENCIL_BIT;
+        default:
+            // The current copy interface cannot select a plane of a combined
+            // depth/stencil or multi-plane format. Do not silently choose one.
+            throw std::invalid_argument("Texture copy requires a supported single-aspect format");
+    }
+}
+
+VkBufferImageCopy MakeBufferImageCopy(
+    const VulkanBuffer&  _buffer,
+    const VulkanTexture& _texture,
+    uint64               _byte_size,
+    uint64               _buffer_offset,
+    uint3                _texture_offset,
+    uint3                _extent,
+    uint32               _mip_level,
+    uint32               _array_layer
+) {
+    const VkImageAspectFlags aspect = GetCopyAspect(_texture);
+    if (_mip_level >= _texture.GetNumMips() || _array_layer >= _texture.GetNumArray()) {
+        throw std::out_of_range("Texture copy subresource is out of range");
+    }
+    if (_texture.GetNumSamples() != 1 || _extent.x == 0 || _extent.y == 0 || _extent.z == 0) {
+        throw std::invalid_argument("Buffer/image copy requires a nonempty single-sampled region");
+    }
+    const uint64 expected_byte_size = GetSizeFromImageFormat(_texture.GetFormat(), _extent);
+    if (_byte_size != expected_byte_size) {
+        throw std::invalid_argument(std::format(
+            "Texture copy size mismatch: texture='{}', mip={}, layer={}, bytes={}, expected={}",
+            _texture.GetName(), _mip_level, _array_layer, _byte_size, expected_byte_size
+        ));
+    }
+    if (_buffer_offset > _buffer.GetByteSize() || _byte_size > _buffer.GetByteSize() - _buffer_offset) {
+        throw std::out_of_range("Texture copy exceeds the buffer range");
+    }
+    return VkBufferImageCopy{
+        .bufferOffset      = _buffer_offset,
+        .bufferRowLength   = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource =
+            {.aspectMask = aspect, .mipLevel = _mip_level, .baseArrayLayer = _array_layer, .layerCount = 1},
+        .imageOffset =
+            {static_cast<int32_t>(_texture_offset.x),
+             static_cast<int32_t>(_texture_offset.y),
+             static_cast<int32_t>(_texture_offset.z)},
+        .imageExtent = {_extent.x, _extent.y, _extent.z}
+    };
+}
+
+} // namespace
+
 void VulkanCmdList::CopyBufferToTexture(
     VulkanBuffer*  _src,
     VulkanTexture* _dst,
-    uint64         _size,
+    uint64         _byte_size,
     uint64         _src_offset,
     uint3          _dst_offset,
     uint3          _extent,
     uint32         _mip_level,
     uint32         _array_layer
 ) {
-    VkImageAspectFlags aspect =
-        _src->GetResourceType() == RRT_DEPTH ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    VkBufferImageCopy copy_region = {
-        .bufferOffset      = _src_offset,
-        .bufferRowLength   = 0,
-        .bufferImageHeight = 0,
-        .imageSubresource =
-            {.aspectMask = aspect, .mipLevel = _mip_level, .baseArrayLayer = _array_layer, .layerCount = 1},
-        .imageOffset =
-            {static_cast<int32_t>(_dst_offset.x),
-             static_cast<int32_t>(_dst_offset.y),
-             static_cast<int32_t>(_dst_offset.z)},
-        .imageExtent = {
-            static_cast<uint32_t>(_extent.x),
-            static_cast<uint32_t>(_extent.y),
-            static_cast<uint32_t>(_extent.z)
-        }
-    };
-
-    // _dst->GetExtent() 是整个texture的尺寸
-    // _extent 是这次mipmap的尺寸
-    const uint64 expected_size_exact    = GetSizeFromImageFormat(_dst->GetFormat(), _extent);
-    const uint64 legacy_texel_count_size = uint64(_extent.x) * uint64(_extent.y) * uint64(_extent.z);
-
-    if (_size != expected_size_exact) {
-        const uint3 texture_extent = _dst->GetExtent();
-        LOG_ERROR(
-            "[CopyBufferToTexture] Size mismatch. Texture='{}' Handle={:#x} Format={} Mip={} ArrayLayer={} "
-            "TextureExtent=({}, {}, {}) CopyOffset=({}, {}, {}) CopyExtent=({}, {}, {}) "
-            "IncomingSize={} ExactExpected={} LegacyTexelCount={} DstMipByteSize={} "
-            "DeltaToExact={} DeltaToLegacy={} LegacyMatch={}",
-            _dst->GetName(),
-            (uint64)_dst->GetHandle(),
-            uint32(_dst->GetFormat()),
-            _mip_level,
-            _array_layer,
-            texture_extent.x,
-            texture_extent.y,
-            texture_extent.z,
-            _dst_offset.x,
-            _dst_offset.y,
-            _dst_offset.z,
-            _extent.x,
-            _extent.y,
-            _extent.z,
-            _size,
-            expected_size_exact,
-            legacy_texel_count_size,
-            _dst->GetMipByteSize(_mip_level),
-            int64_t(_size) - int64_t(expected_size_exact),
-            int64_t(_size) - int64_t(legacy_texel_count_size),
-            _size == legacy_texel_count_size ? "true" : "false"
-        );
-    }
-
-    assert(_size == expected_size_exact && "Copy size does not match texture extent");
-
+    const VkBufferImageCopy copy_region = MakeBufferImageCopy(
+        *_src, *_dst, _byte_size, _src_offset, _dst_offset, _extent, _mip_level, _array_layer
+    );
     vkCmdCopyBufferToImage(
         command_buffer,
         _src->GetHandle(),
@@ -670,35 +676,16 @@ void VulkanCmdList::CopyBufferToTexture(
 void VulkanCmdList::CopyTextureToBuffer(
     VulkanTexture* _src,
     VulkanBuffer*  _dst,
-    uint64         _size,
+    uint64         _byte_size,
     uint3          _src_offset,
     uint64         _dst_offset,
     uint3          _extent,
     uint32         _mip_level,
     uint32         _array_layer
 ) {
-    VkImageAspectFlags aspect =
-        _src->GetResourceType() == RRT_DEPTH ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    VkBufferImageCopy copy_region = {
-        .bufferOffset      = _dst_offset,
-        .bufferRowLength   = 0,
-        .bufferImageHeight = 0,
-        .imageSubresource =
-            {.aspectMask = aspect,
-             .mipLevel = _mip_level,
-             .baseArrayLayer = _array_layer,
-             .layerCount = 1},
-        .imageOffset =
-            {static_cast<int32_t>(_src_offset.x),
-             static_cast<int32_t>(_src_offset.y),
-             static_cast<int32_t>(_src_offset.z)},
-        .imageExtent = {
-            static_cast<uint32_t>(_extent.x),
-            static_cast<uint32_t>(_extent.y),
-            static_cast<uint32_t>(_extent.z)
-        }
-    };
-
+    const VkBufferImageCopy copy_region = MakeBufferImageCopy(
+        *_dst, *_src, _byte_size, _dst_offset, _src_offset, _extent, _mip_level, _array_layer
+    );
     vkCmdCopyImageToBuffer(
         command_buffer,
         _src->GetHandle(),
@@ -728,9 +715,13 @@ void VulkanCmdList::CopyTexture(
             "vkCmdCopyImage requires GENERAL or transfer-optimal layouts"
         );
     }
+    const VkImageAspectFlags aspect = GetCopyAspect(*_src);
+    if (aspect != GetCopyAspect(*_dst)) {
+        throw std::invalid_argument("Image copy requires matching source and destination aspects");
+    }
     VkImageCopy copy_region = {
         .srcSubresource =
-            {.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+            {.aspectMask     = aspect,
              .mipLevel       = _src_mip_level,
              .baseArrayLayer = 0,
              .layerCount     = 1},
@@ -739,7 +730,7 @@ void VulkanCmdList::CopyTexture(
              static_cast<int32_t>(_src_offset.y),
              static_cast<int32_t>(_src_offset.z)},
         .dstSubresource =
-            {.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+            {.aspectMask     = aspect,
              .mipLevel       = _dst_mip_level,
              .baseArrayLayer = 0,
              .layerCount     = 1},

@@ -413,7 +413,7 @@ public:
         return size;
     }
     auto ByteSize() const {
-        return size[0] * size[1] * size[2];
+        return GetSizeFromImageFormat(format, size);
     }
     auto MipLevel() const {
         return mip_level;
@@ -482,7 +482,7 @@ public:
         return size;
     }
     auto ByteSize() const {
-        return size[0] * size[1] * size[2];
+        return GetSizeFromImageFormat(format, size);
     }
     auto MipLevel() const {
         return mip_level;
