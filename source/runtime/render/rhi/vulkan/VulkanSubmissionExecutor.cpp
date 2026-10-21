@@ -9,7 +9,7 @@
 #include "taskgraph/TaskGraph.h"
 #include "VulkanDevice.h"
 #include "VulkanQueue.h"
-#include "diagnostics/VulkanSubmissionDiagnostics.h"
+#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "VulkanTranslateWaveScheduler.h"
 
 #include <algorithm>
@@ -25,79 +25,18 @@
 namespace Moer::Render {
 namespace {
 
-std::atomic<const VulkanSourceSubmissionObserver*> g_source_submission_observer{nullptr};
-std::atomic<const VulkanSourceTranslationObserver*>
-    g_source_translation_observer{nullptr};
-std::atomic<const VulkanBatchPreflightRejectionObserver*>
-    g_batch_preflight_rejection_observer{nullptr};
-std::atomic<const VulkanSubmissionBoundaryObserver*>
-    g_submission_boundary_observer{nullptr};
-
-struct SubmissionBoundaryIdentity {
-    uint64                       batch_sequence{0};
-    uint32                       operation_index{0};
-    EQueueType                   queue{EQueueType::Ignore};
-    EVulkanSubmissionBoundaryKind kind{
-        EVulkanSubmissionBoundaryKind::SerialControl
-    };
-    uint32                       dependency_wait_count{0};
-};
-
-void NotifySubmissionBoundary(
-    const SubmissionBoundaryIdentity&    _identity,
-    EVulkanSubmissionBoundaryPhase       _phase,
-    const VulkanRuntimeSubmissionResult* _result = nullptr,
-    uint32 _present_receipt_resolution_attempts = 0
-) noexcept {
-    assert(
-        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
-        "submission boundary diagnostics must run on the Submission owner"
-    );
-    const VulkanSubmissionBoundaryObserver* observer =
-        g_submission_boundary_observer.load(std::memory_order_acquire);
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanSubmissionBoundaryEvent{
-            .batch_sequence       = _identity.batch_sequence,
-            .operation_index      = _identity.operation_index,
-            .queue                 = _identity.queue,
-            .kind                  = _identity.kind,
-            .phase                 = _phase,
-            .dependency_wait_count =
-                _identity.dependency_wait_count,
-            .thread_id             = Platform::GetCurrentThreadID(),
-            .thread_role           = GetCurrentRHIThreadRole(),
-            .outcome               =
-                _result != nullptr ?
-                    _result->outcome :
-                    VulkanOperationResult{},
-            .outcome_valid         = _result != nullptr,
-            .gpu_submitted =
-                _result != nullptr && _result->WasSubmitted(),
-            .recoverable_rejection =
-                _result != nullptr &&
-                _result->IsRecoverableRejection(),
-            .present_receipt_resolution_attempts =
-                _present_receipt_resolution_attempts,
-        }
-    );
-}
-
 template<typename SubmitCallable>
 VulkanRuntimeSubmissionResult ExecuteObservedSubmissionBoundary(
-    const SubmissionBoundaryIdentity& _identity,
+    const VulkanSubmissionBoundaryIdentity& _identity,
     SubmitCallable&&                 _submit,
     const PresentReceiptRef&         _present_receipt = {}
 ) noexcept {
-    NotifySubmissionBoundary(
+    NotifyVulkanSubmissionBoundary(
         _identity,
         EVulkanSubmissionBoundaryPhase::Dispatch
     );
     VulkanRuntimeSubmissionResult result = _submit();
-    NotifySubmissionBoundary(
+    NotifyVulkanSubmissionBoundary(
         _identity,
         EVulkanSubmissionBoundaryPhase::Terminal,
         &result,
@@ -106,114 +45,6 @@ VulkanRuntimeSubmissionResult ExecuteObservedSubmissionBoundary(
             0
     );
     return result;
-}
-
-void NotifySourceSubmitted(
-    uint64     _batch_sequence,
-    uint32     _source_index,
-    uint32     _original_source_index,
-    uint32     _source_segment_index,
-    uint32     _source_segment_count,
-    EQueueType _queue,
-    uint64     _async_queue_scope,
-    bool       _cross_native_predecessor_wait
-) noexcept {
-    assert(
-        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
-        "source submission diagnostics must run on the Submission owner"
-    );
-    const VulkanSourceSubmissionObserver* observer =
-        g_source_submission_observer.load(std::memory_order_acquire);
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanSourceSubmissionEvent{
-            .batch_sequence    = _batch_sequence,
-            .source_index      = _source_index,
-            .original_source_index         = _original_source_index,
-            .source_segment_index          = _source_segment_index,
-            .source_segment_count          = _source_segment_count,
-            .queue             = _queue,
-            .async_queue_scope = _async_queue_scope,
-            .cross_native_predecessor_wait = _cross_native_predecessor_wait,
-        }
-    );
-}
-
-void NotifySourceTranslation(
-    uint64                        _batch_sequence,
-    uint32                        _source_index,
-    uint32                        _original_source_index,
-    uint32                        _source_segment_index,
-    uint32                        _source_segment_count,
-    EQueueType                    _queue,
-    uint32                        _native_queue_id,
-    uint64                        _async_queue_scope,
-    EVulkanSourceTranslationPhase _phase,
-    bool                          _parallel_record_requested = false,
-    bool                          _parallel_record_planned = false,
-    bool                          _parallel_record_effective = false
-) noexcept {
-    assert(
-        GetCurrentRHIThreadRole() == ERHIThreadRole::Translate &&
-        "source translation diagnostics must run on a Translate owner"
-    );
-    const VulkanSourceTranslationObserver* observer =
-        g_source_translation_observer.load(
-            std::memory_order_acquire
-        );
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanSourceTranslationEvent{
-            .batch_sequence       = _batch_sequence,
-            .source_index         = _source_index,
-            .original_source_index = _original_source_index,
-            .source_segment_index = _source_segment_index,
-            .source_segment_count = _source_segment_count,
-            .queue                 = _queue,
-            .native_queue_id       = _native_queue_id,
-            .async_queue_scope     = _async_queue_scope,
-            .thread_id             = Platform::GetCurrentThreadID(),
-            .thread_role           = GetCurrentRHIThreadRole(),
-            .parallel_record_requested =
-                _parallel_record_requested,
-            .parallel_record_planned = _parallel_record_planned,
-            .parallel_record_effective =
-                _parallel_record_effective,
-            .phase                 = _phase,
-        }
-    );
-}
-
-void NotifyBatchPreflightRejected(
-    uint64 _batch_sequence,
-    bool   _executable_preflight
-) noexcept {
-    assert(
-        GetCurrentRHIThreadRole() == ERHIThreadRole::Translate &&
-        "batch preflight diagnostics must run on the Translate owner"
-    );
-    const VulkanBatchPreflightRejectionObserver* observer =
-        g_batch_preflight_rejection_observer.load(
-            std::memory_order_acquire
-        );
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanBatchPreflightRejectionEvent{
-            .batch_sequence       = _batch_sequence,
-            .thread_id            = Platform::GetCurrentThreadID(),
-            .thread_role          = GetCurrentRHIThreadRole(),
-            .executable_preflight = _executable_preflight,
-        }
-    );
 }
 
 GraphEventRef MakeCompletedEvent() {
@@ -1052,116 +883,6 @@ VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForT
         source_fence != nullptr && !source_fence->IsRejected(7) &&
         !source_fence->IsFailed();
     return result;
-}
-
-bool TryInstallVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* _observer) noexcept {
-    if (_observer == nullptr || _observer->callback == nullptr) {
-        return false;
-    }
-    const VulkanSourceSubmissionObserver* expected = nullptr;
-    return g_source_submission_observer.compare_exchange_strong(
-        expected, _observer, std::memory_order_release, std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* _observer) noexcept {
-    if (_observer == nullptr) {
-        return false;
-    }
-    const VulkanSourceSubmissionObserver* expected = _observer;
-    return g_source_submission_observer.compare_exchange_strong(
-        expected, nullptr, std::memory_order_acq_rel, std::memory_order_acquire
-    );
-}
-
-bool TryInstallVulkanSubmissionBoundaryObserver(
-    const VulkanSubmissionBoundaryObserver* _observer
-) noexcept {
-    if (_observer == nullptr || _observer->callback == nullptr) {
-        return false;
-    }
-    const VulkanSubmissionBoundaryObserver* expected = nullptr;
-    return g_submission_boundary_observer.compare_exchange_strong(
-        expected,
-        _observer,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanSubmissionBoundaryObserver(
-    const VulkanSubmissionBoundaryObserver* _observer
-) noexcept {
-    if (_observer == nullptr) {
-        return false;
-    }
-    const VulkanSubmissionBoundaryObserver* expected = _observer;
-    return g_submission_boundary_observer.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
-}
-
-bool TryInstallVulkanSourceTranslationObserver(
-    const VulkanSourceTranslationObserver* _observer
-) noexcept {
-    if (_observer == nullptr || _observer->callback == nullptr) {
-        return false;
-    }
-    const VulkanSourceTranslationObserver* expected = nullptr;
-    return g_source_translation_observer.compare_exchange_strong(
-        expected,
-        _observer,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanSourceTranslationObserver(
-    const VulkanSourceTranslationObserver* _observer
-) noexcept {
-    if (_observer == nullptr) {
-        return false;
-    }
-    const VulkanSourceTranslationObserver* expected = _observer;
-    return g_source_translation_observer.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
-}
-
-bool TryInstallVulkanBatchPreflightRejectionObserver(
-    const VulkanBatchPreflightRejectionObserver* _observer
-) noexcept {
-    if (_observer == nullptr || _observer->callback == nullptr) {
-        return false;
-    }
-    const VulkanBatchPreflightRejectionObserver* expected = nullptr;
-    return g_batch_preflight_rejection_observer.compare_exchange_strong(
-        expected,
-        _observer,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanBatchPreflightRejectionObserver(
-    const VulkanBatchPreflightRejectionObserver* _observer
-) noexcept {
-    if (_observer == nullptr) {
-        return false;
-    }
-    const VulkanBatchPreflightRejectionObserver* expected = _observer;
-    return g_batch_preflight_rejection_observer.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
 }
 
 VulkanSubmissionExecutor::VulkanSubmissionExecutor(uint32 _batch_window) :
@@ -2462,7 +2183,7 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
 
     if (submit_result.WasSubmitted()) {
         assert(submit_result.completion.has_value());
-        NotifySourceSubmitted(
+        NotifyVulkanSourceSubmitted(
             _batch->sequence,
             static_cast<uint32>(_source_index),
             slot.original_source_index,
@@ -2735,7 +2456,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
             preflight.source_index,
             preflight.command_index
         );
-        NotifyBatchPreflightRejected(_batch.sequence, false);
+        NotifyVulkanBatchPreflightRejected(_batch.sequence, false);
         // Validation runs before the ordinary admission decision so a later
         // malformed batch can be discovered while an earlier pipeline batch
         // is still owned by Submission. Commit that accepted prefix before
@@ -2772,7 +2493,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 executable_preflight.source_index,
                 executable_preflight.command_index
             );
-            NotifyBatchPreflightRejected(_batch.sequence, true);
+            NotifyVulkanBatchPreflightRejected(_batch.sequence, true);
             DrainPipelineBatches();
             LatchHardFailure(
                 StreamPosition{_batch.sequence, 0},
@@ -3320,7 +3041,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         slot.queue_type
                     ).native_queue_id;
                 slot.attempted = true;
-                NotifySourceTranslation(
+                NotifyVulkanSourceTranslation(
                     _batch.sequence,
                     static_cast<uint32>(slot.source_index),
                     metadata.original_source_index,
@@ -3354,7 +3075,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     parallel_record_planned   = sample.planned;
                     parallel_record_effective = sample.effective;
                 }
-                NotifySourceTranslation(
+                NotifyVulkanSourceTranslation(
                     _batch.sequence,
                     static_cast<uint32>(slot.source_index),
                     metadata.original_source_index,
@@ -3677,7 +3398,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                 );
                             packet->emplace<std::monostate>();
                             if (result.WasSubmitted()) {
-                                NotifySourceSubmitted(
+                                NotifyVulkanSourceSubmitted(
                                     batch_sequence,
                                     source_index,
                                     source_metadata.original_source_index,
@@ -3855,7 +3576,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         VulkanRuntimeSubmissionResult result =
                             serial_control ?
                                 ExecuteObservedSubmissionBoundary(
-                                    SubmissionBoundaryIdentity{
+                                    VulkanSubmissionBoundaryIdentity{
                                         .batch_sequence = batch_sequence,
                                         .operation_index = source_index,
                                         .queue = EQueueType::Copy,
@@ -3867,7 +3588,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                 ) :
                                 submit();
                         if (result.WasSubmitted()) {
-                            NotifySourceSubmitted(
+                            NotifyVulkanSourceSubmitted(
                                 batch_sequence,
                                 source_index,
                                 source_metadata.original_source_index,
@@ -4027,7 +3748,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         VulkanRuntimeSubmissionResult result =
                             serial_control ?
                                 ExecuteObservedSubmissionBoundary(
-                                    SubmissionBoundaryIdentity{
+                                    VulkanSubmissionBoundaryIdentity{
                                         .batch_sequence = batch_sequence,
                                         .operation_index = source_index,
                                         .queue = queue_type,
@@ -4039,7 +3760,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                 ) :
                                 submit();
                         if (result.WasSubmitted()) {
-                            NotifySourceSubmitted(
+                            NotifyVulkanSourceSubmitted(
                                 batch_sequence,
                                 source_index,
                                 source_metadata.original_source_index,
@@ -4167,7 +3888,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         bridge_dependency_wait_count
                     ]() mutable {
                         return ExecuteObservedSubmissionBoundary(
-                            SubmissionBoundaryIdentity{
+                            VulkanSubmissionBoundaryIdentity{
                                 .batch_sequence  = batch_sequence,
                                 .operation_index = operation_index,
                                 .queue            = EQueueType::Graphics,
@@ -4236,7 +3957,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
             ]() mutable {
                 const PresentReceiptRef receipt = present->receipt;
                 return ExecuteObservedSubmissionBoundary(
-                    SubmissionBoundaryIdentity{
+                    VulkanSubmissionBoundaryIdentity{
                         .batch_sequence  = batch_sequence,
                         .operation_index = operation_index,
                         .queue            = EQueueType::Graphics,

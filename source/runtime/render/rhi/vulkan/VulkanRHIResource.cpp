@@ -26,7 +26,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "diagnostics/VulkanSubmissionDiagnostics.h"
+#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "vulkan/vk_enum_string_helper.h"
 
 #include <algorithm>

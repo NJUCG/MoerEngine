@@ -10,7 +10,7 @@
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
-#include "diagnostics/VulkanSubmissionDiagnostics.h"
+#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "VulkanUtil.h"
 #include "VulkanVertexFormat.h"
 #include "plugin/VulkanCooperativeSupport.h"

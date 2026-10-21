@@ -9,7 +9,7 @@
 #include "VulkanParallelRecordWorkEstimator.h"
 #include "VulkanRHIResource.h"
 #include "diagnostics/VulkanSerialGolden.h"
-#include "diagnostics/VulkanSubmissionDiagnostics.h"
+#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
 #include "misc/STL.h"
@@ -51,22 +51,6 @@ ERHIHeartbeatDomain HeartbeatDomainForQueue(EQueueType _type) noexcept {
             return ERHIHeartbeatDomain::General;
     }
 }
-
-std::atomic<const VulkanNativeSubmissionObserver*>
-    g_native_submission_observer{nullptr};
-std::atomic<const VulkanSubmissionDependencyWaitObserver*>
-    g_submission_dependency_wait_observer{nullptr};
-std::atomic<const VulkanBackendSyncWaitObserver*>
-    g_backend_sync_wait_observer{nullptr};
-std::atomic<const VulkanQueueLocalSyncWaitObserver*>
-    g_queue_local_sync_wait_observer{nullptr};
-std::atomic<const VulkanDeviceIdleWaitObserver*> g_device_idle_wait_observer{nullptr};
-std::atomic<const VulkanScriptedQueryPreparationOverrideForTesting*>
-    g_scripted_query_preparation_override{nullptr};
-std::atomic<const VulkanScriptedTimestampValidBitsOverrideForTesting*>
-    g_scripted_timestamp_valid_bits_override{nullptr};
-std::atomic<const VulkanScriptedPresentOverrideForTesting*>
-    g_scripted_present_override{nullptr};
 
 struct VulkanPresentSourceContract {
     bool        valid{false};
@@ -213,371 +197,7 @@ void InvokePresentSourceRejectionCallbackForTesting(
     return {true, ""};
 }
 
-void NotifyNativeSubmission(
-    EQueueType                   _queue,
-    VkQueue                      _native_queue,
-    const VulkanOperationResult& _outcome,
-    bool                         _empty_submit
-) noexcept {
-    const VulkanNativeSubmissionObserver* observer =
-        g_native_submission_observer.load(std::memory_order_acquire);
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanNativeSubmissionEvent{
-            .queue               = _queue,
-            .native_queue_handle = reinterpret_cast<uint64>(_native_queue),
-            .thread_id           = Platform::GetCurrentThreadID(),
-            .thread_role         = GetCurrentRHIThreadRole(),
-            .outcome             = _outcome,
-            .empty_submit        = _empty_submit,
-        }
-    );
-}
-
-void NotifyQueueLocalSyncWait(
-    EQueueType _queue,
-    uint64     _target_retirement_serial,
-    size_t     _completion_group_count
-) noexcept {
-    const VulkanQueueLocalSyncWaitObserver* observer =
-        g_queue_local_sync_wait_observer.load(
-            std::memory_order_acquire
-        );
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanQueueLocalSyncWaitEvent{
-            .queue       = _queue,
-            .thread_id   = Platform::GetCurrentThreadID(),
-            .thread_role = GetCurrentRHIThreadRole(),
-            .target_retirement_serial =
-                _target_retirement_serial,
-            .completion_group_count = static_cast<uint32>(
-                std::min(
-                    _completion_group_count,
-                    static_cast<size_t>(
-                        std::numeric_limits<uint32>::max()
-                    )
-                )
-            ),
-        }
-    );
-}
-
 } // namespace
-
-void NotifyVulkanDeviceIdleWait(const VulkanOperationContext& _context) noexcept {
-    const VulkanDeviceIdleWaitObserver* observer =
-        g_device_idle_wait_observer.load(std::memory_order_acquire);
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanDeviceIdleWaitEvent{
-            .context     = _context,
-            .thread_id   = Platform::GetCurrentThreadID(),
-            .thread_role = GetCurrentRHIThreadRole(),
-        }
-    );
-}
-
-void NotifyVulkanSubmissionDependencyWaitBlocked(
-    EQueueType _queue,
-    uint32     _dependency_count
-) noexcept {
-    const VulkanSubmissionDependencyWaitObserver* observer =
-        g_submission_dependency_wait_observer.load(
-            std::memory_order_acquire
-        );
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanSubmissionDependencyWaitEvent{
-            .queue            = _queue,
-            .thread_id        = Platform::GetCurrentThreadID(),
-            .thread_role      = GetCurrentRHIThreadRole(),
-            .dependency_count = _dependency_count,
-        }
-    );
-}
-
-void NotifyVulkanBackendSyncWait() noexcept {
-    const VulkanBackendSyncWaitObserver* observer =
-        g_backend_sync_wait_observer.load(std::memory_order_acquire);
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanBackendSyncWaitEvent{
-            .thread_id   = Platform::GetCurrentThreadID(),
-            .thread_role = GetCurrentRHIThreadRole(),
-        }
-    );
-}
-
-bool TryInstallVulkanNativeSubmissionObserver(
-    const VulkanNativeSubmissionObserver* _observer
-) noexcept {
-    if (_observer == nullptr || _observer->callback == nullptr) {
-        return false;
-    }
-    const VulkanNativeSubmissionObserver* expected = nullptr;
-    return g_native_submission_observer.compare_exchange_strong(
-        expected,
-        _observer,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanNativeSubmissionObserver(
-    const VulkanNativeSubmissionObserver* _observer
-) noexcept {
-    if (_observer == nullptr) {
-        return false;
-    }
-    const VulkanNativeSubmissionObserver* expected = _observer;
-    return g_native_submission_observer.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
-}
-
-bool TryInstallVulkanScriptedQueryPreparationOverrideForTesting(
-    const VulkanScriptedQueryPreparationOverrideForTesting* _override
-) noexcept {
-    if (_override == nullptr || _override->callback == nullptr) {
-        return false;
-    }
-    const VulkanScriptedQueryPreparationOverrideForTesting* expected =
-        nullptr;
-    return g_scripted_query_preparation_override.compare_exchange_strong(
-        expected,
-        _override,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanScriptedQueryPreparationOverrideForTesting(
-    const VulkanScriptedQueryPreparationOverrideForTesting* _override
-) noexcept {
-    if (_override == nullptr) {
-        return false;
-    }
-    const VulkanScriptedQueryPreparationOverrideForTesting* expected =
-        _override;
-    return g_scripted_query_preparation_override.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
-}
-
-bool TryInstallVulkanScriptedTimestampValidBitsOverrideForTesting(
-    const VulkanScriptedTimestampValidBitsOverrideForTesting* _override
-) noexcept {
-    if (_override == nullptr || _override->callback == nullptr) {
-        return false;
-    }
-    const VulkanScriptedTimestampValidBitsOverrideForTesting* expected =
-        nullptr;
-    return g_scripted_timestamp_valid_bits_override.compare_exchange_strong(
-        expected,
-        _override,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanScriptedTimestampValidBitsOverrideForTesting(
-    const VulkanScriptedTimestampValidBitsOverrideForTesting* _override
-) noexcept {
-    if (_override == nullptr) {
-        return false;
-    }
-    const VulkanScriptedTimestampValidBitsOverrideForTesting* expected =
-        _override;
-    return g_scripted_timestamp_valid_bits_override.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
-}
-
-bool TryInstallVulkanScriptedPresentOverrideForTesting(
-    const VulkanScriptedPresentOverrideForTesting* _override
-) noexcept {
-    if (_override == nullptr || _override->callback == nullptr) {
-        return false;
-    }
-    const VulkanScriptedPresentOverrideForTesting* expected = nullptr;
-    return g_scripted_present_override.compare_exchange_strong(
-        expected,
-        _override,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanScriptedPresentOverrideForTesting(
-    const VulkanScriptedPresentOverrideForTesting* _override
-) noexcept {
-    if (_override == nullptr) {
-        return false;
-    }
-    const VulkanScriptedPresentOverrideForTesting* expected = _override;
-    return g_scripted_present_override.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
-}
-
-bool TryLatchVulkanDeviceFaultForTesting(VkResult _result) noexcept {
-    try {
-        auto* device = static_cast<VulkanDevice*>(
-            RenderDevice::Get().GetImpl()
-        );
-        if (device == nullptr) {
-            return false;
-        }
-        const VulkanOperationContext context{
-            .operation  = EVulkanFaultOperation::PresentSubmit,
-            .queue_type = EQueueType::Graphics,
-        };
-        return device->TryLatchFirstFault(
-                   context, _result, true, false, true
-               ) ||
-               device->IsFaulted();
-    } catch (...) {
-        return false;
-    }
-}
-
-bool TryInstallVulkanSubmissionDependencyWaitObserver(
-    const VulkanSubmissionDependencyWaitObserver* _observer
-) noexcept {
-    if (_observer == nullptr || _observer->callback == nullptr) {
-        return false;
-    }
-    const VulkanSubmissionDependencyWaitObserver* expected = nullptr;
-    return g_submission_dependency_wait_observer.compare_exchange_strong(
-        expected,
-        _observer,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanSubmissionDependencyWaitObserver(
-    const VulkanSubmissionDependencyWaitObserver* _observer
-) noexcept {
-    if (_observer == nullptr) {
-        return false;
-    }
-    const VulkanSubmissionDependencyWaitObserver* expected = _observer;
-    return g_submission_dependency_wait_observer.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
-}
-
-bool TryInstallVulkanBackendSyncWaitObserver(
-    const VulkanBackendSyncWaitObserver* _observer
-) noexcept {
-    if (_observer == nullptr || _observer->callback == nullptr) {
-        return false;
-    }
-    const VulkanBackendSyncWaitObserver* expected = nullptr;
-    return g_backend_sync_wait_observer.compare_exchange_strong(
-        expected,
-        _observer,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanBackendSyncWaitObserver(
-    const VulkanBackendSyncWaitObserver* _observer
-) noexcept {
-    if (_observer == nullptr) {
-        return false;
-    }
-    const VulkanBackendSyncWaitObserver* expected = _observer;
-    return g_backend_sync_wait_observer.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
-}
-
-bool TryInstallVulkanQueueLocalSyncWaitObserver(
-    const VulkanQueueLocalSyncWaitObserver* _observer
-) noexcept {
-    if (_observer == nullptr || _observer->callback == nullptr) {
-        return false;
-    }
-    const VulkanQueueLocalSyncWaitObserver* expected = nullptr;
-    return g_queue_local_sync_wait_observer.compare_exchange_strong(
-        expected,
-        _observer,
-        std::memory_order_release,
-        std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanQueueLocalSyncWaitObserver(
-    const VulkanQueueLocalSyncWaitObserver* _observer
-) noexcept {
-    if (_observer == nullptr) {
-        return false;
-    }
-    const VulkanQueueLocalSyncWaitObserver* expected = _observer;
-    return g_queue_local_sync_wait_observer.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire
-    );
-}
-
-bool TryInstallVulkanDeviceIdleWaitObserver(const VulkanDeviceIdleWaitObserver* _observer) noexcept {
-    if (_observer == nullptr || _observer->callback == nullptr) {
-        return false;
-    }
-    const VulkanDeviceIdleWaitObserver* expected = nullptr;
-    return g_device_idle_wait_observer.compare_exchange_strong(
-        expected, _observer, std::memory_order_release, std::memory_order_relaxed
-    );
-}
-
-bool RemoveVulkanDeviceIdleWaitObserver(const VulkanDeviceIdleWaitObserver* _observer) noexcept {
-    if (_observer == nullptr) {
-        return false;
-    }
-    const VulkanDeviceIdleWaitObserver* expected = _observer;
-    return g_device_idle_wait_observer.compare_exchange_strong(
-        expected, nullptr, std::memory_order_acq_rel, std::memory_order_acquire
-    );
-}
 
 #pragma region[ utils ]
 
@@ -3378,7 +2998,6 @@ public:
             throw StaleBindlessUpdateBatch{};
         }
 
-
         auto          array_data          = _cmd.StealArrayData();
         auto          array_indices_dat   = _cmd.StealArrayIndicesData();
         auto          texture_data        = _cmd.StealTextureData();
@@ -3887,7 +3506,7 @@ VulkanOperationResult VkNativeQueue::SubmitEmpty(
     context.queue      = queue;
     const VulkanOperationResult outcome =
         device.SubmitOnQueue(queue, submit_info, _fence, context);
-    NotifyNativeSubmission(type, queue, outcome, true);
+    NotifyVulkanNativeSubmission(type, queue, outcome, true);
     wait_infos.clear();
     signal_infos.clear();
     return outcome;
@@ -3957,7 +3576,7 @@ VulkanOperationResult VkNativeQueue::Submit(
     }
     const VulkanOperationResult outcome =
         device.SubmitOnQueue(queue, submit_info, _fence, context);
-    NotifyNativeSubmission(type, queue, outcome, false);
+    NotifyVulkanNativeSubmission(type, queue, outcome, false);
     wait_infos.clear();
     signal_infos.clear();
     return outcome;
@@ -5832,7 +5451,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
         }
         TextureRef                                     source_texture{_source.texture};
         const VulkanScriptedPresentOverrideForTesting* scripted_override =
-            g_scripted_present_override.load(std::memory_order_acquire);
+            GetVulkanScriptedPresentOverrideForTesting();
         const VulkanPresentSourceContract source_contract =
             ValidatePresentSourceContract(_source, _swapchain.Get());
         if (!source_contract.valid) {
@@ -8175,9 +7794,7 @@ void VkCommandQueue::ExecuteNow(
     if (timestamp_query_slot_count != 0) {
         const VulkanScriptedQueryPreparationOverrideForTesting*
             scripted_override =
-                g_scripted_query_preparation_override.load(
-                    std::memory_order_acquire
-                );
+                GetVulkanScriptedQueryPreparationOverrideForTesting();
         if (scripted_override != nullptr) {
             VkResult scripted_result = scripted_override->callback(
                 scripted_override->context,
@@ -8864,7 +8481,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         // Retain Copy inputs through the ordinary GPU completion callbacks.
         recorded.submit.callbacks.emplace_back([swapchain = std::move(_sc),
                                                 source    = std::move(_source_texture)] {});
-        const auto* scripted_override = g_scripted_present_override.load(std::memory_order_acquire);
+        const auto* scripted_override = GetVulkanScriptedPresentOverrideForTesting();
         const auto  source_contract   = ValidatePresentSourceContract(_view, sc);
         if (vk_device.IsFaulted()) {
             vk_device.RecordRejectedPresent();
@@ -10195,7 +9812,7 @@ void VkCommandQueue::CompleteAll(uint64 _timeline) {
                 completion_groups.emplace_back(std::move(group));
             }
         }
-        NotifyQueueLocalSyncWait(
+        NotifyVulkanQueueLocalSyncWait(
             queue.GetType(),
             target_retirement_serial,
             completion_groups.size()
@@ -10531,9 +10148,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
         if (timestamp_query_slot_count != 0) {
             const VulkanScriptedTimestampValidBitsOverrideForTesting*
                 scripted_override =
-                    g_scripted_timestamp_valid_bits_override.load(
-                        std::memory_order_acquire
-                    );
+                    GetVulkanScriptedTimestampValidBitsOverrideForTesting();
             if (scripted_override != nullptr) {
                 effective_timestamp_valid_bits = std::min(
                     effective_timestamp_valid_bits,
@@ -11359,7 +10974,7 @@ void VkCopyQueue::CompleteAll(uint64 _timeline) {
                 completion_groups.emplace_back(std::move(group));
             }
         }
-        NotifyQueueLocalSyncWait(
+        NotifyVulkanQueueLocalSyncWait(
             EQueueType::Copy,
             target_retirement_serial,
             completion_groups.size()
