@@ -1,4 +1,5 @@
 #pragma once
+#include "scene/gaussian/GaussianRenderSettings.h"
 
 #include "misc/STL.h"
 #include "misc/Traits.h"
@@ -146,6 +147,8 @@ struct ProbeVolumeConfig {
 };
 
 struct RasterConfig {
+    GaussianRasterStatus gaussian_status{};
+    bool should_frame_gaussians = false;
 
     // MARK: Geometry
 

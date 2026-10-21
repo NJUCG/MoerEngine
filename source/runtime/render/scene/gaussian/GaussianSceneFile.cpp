@@ -198,6 +198,16 @@ bool SaveGaussianSceneFile(
             }
             document["nodes"].push_back(std::move(item));
         }
+        const auto settings = registry.ctx().contains<ecs::CtxGaussianViewSettings>() ?
+                                  registry.ctx().get<const ecs::CtxGaussianViewSettings>().value :
+                                  GaussianViewSettings{};
+        document["view"]    = {
+            {"background", VectorValue(settings.background)},
+            {"exposure_ev", settings.exposure_ev},
+            {"display_mode", static_cast<uint>(settings.display_mode)},
+            {"debug_view", static_cast<uint>(settings.debug_view)},
+            {"tile_pair_capacity", settings.tile_pair_capacity}
+        };
         const auto text = document.dump(2);
         if (text.size() > k_max_document_bytes)
             throw std::runtime_error("Scene document is too large");
@@ -262,6 +272,19 @@ bool LoadGaussianSceneFile(
         ecs::LogicalScene staged;
         auto&             registry = staged.r();
         registry.ctx().emplace<ecs::CtxMegaBuffers>();
+        auto& settings = registry.ctx().emplace<ecs::CtxGaussianViewSettings>().value;
+        if (document.contains("view")) {
+            const auto& value     = document.at("view");
+            settings.background   = VectorValue(value.at("background"));
+            settings.exposure_ev  = Number(value.at("exposure_ev"));
+            settings.display_mode = static_cast<EGaussianDisplayMode>(value.at("display_mode").get<uint>());
+            settings.debug_view   = static_cast<EGaussianDebugView>(value.at("debug_view").get<uint>());
+            if (!value.at("tile_pair_capacity").is_number_integer())
+                throw std::runtime_error("Invalid pair capacity");
+            settings.tile_pair_capacity = value.at("tile_pair_capacity").get<uint>();
+            if (!IsValidGaussianViewSettings(settings))
+                throw std::runtime_error("Invalid Gaussian view settings");
+        }
         std::vector<entt::entity> entities;
         uint                      main_camera_count = 0, main_light_count = 0;
         for (const auto& item : document.at("nodes")) {

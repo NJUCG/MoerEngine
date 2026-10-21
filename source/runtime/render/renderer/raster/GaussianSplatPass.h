@@ -20,10 +20,15 @@ public:
         const Camera&           camera,
         uint2                   resolution,
         bool                    is_editor_view,
-        bool                    is_unsupported_mixed = false
+        bool                    is_unsupported_mixed = false,
+        GaussianViewSettings    view_settings        = {}
     );
-    const TextureRef& GetColor() const;
-    const TextureRef& GetTransmittance() const;
+    const TextureRef&    GetColor() const;
+    const TextureRef&    GetTransmittance() const;
+    GaussianRasterStatus GetStatus() const;
+    uint                 GetPairCapacity() const;
+    void                 SetPairCapacity(uint capacity);
+    BufferView           GetStatusBuffer() const;
 
 private:
     struct Impl;

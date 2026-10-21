@@ -21,7 +21,8 @@ public:
     DEFINE_SHADER_BUFFER(instances);
     DEFINE_SHADER_BUFFER(projected);
     DEFINE_SHADER_BUFFER(tile_counts);
-    DEFINE_SHADER_ARGS(param, camera, gaussians, instances, projected, tile_counts);
+    DEFINE_SHADER_BUFFER(status);
+    DEFINE_SHADER_ARGS(param, camera, gaussians, instances, projected, tile_counts, status);
 };
 class GaussianScanBlocksPipeline : public ComputePipeline {
 public:
@@ -144,6 +145,38 @@ struct GaussianSplatPass::Impl {
     TextureRef             m_color, m_transmittance, m_display;
     ReadbackFuture         m_status_readback;
     bool                   m_has_reported_overflow = false;
+    GaussianRasterStatus   m_telemetry{};
+    uint64                 m_readback_revision = 0;
+    uint2                  m_readback_resolution{};
+    QueryFuture            m_timing_future;
+    void                   Poll() {
+        if (m_status_readback.Valid() && m_status_readback.Status() != ReadbackStatus::Pending) {
+            const auto result = m_status_readback.Get();
+            const auto values = result.CopyAs<uint>();
+            if (values && values->size() == 4 && (*values)[2] == m_telemetry.work_count &&
+                m_readback_revision == m_telemetry.scene_revision && m_readback_resolution == m_resolution) {
+                m_telemetry.tile_pair_count      = (*values)[0];
+                m_telemetry.has_overflow         = (*values)[1] != 0;
+                m_telemetry.visible_count        = (*values)[3];
+                m_telemetry.has_completed_counts = true;
+                if (m_telemetry.has_overflow && !m_has_reported_overflow)
+                    LOG_ERROR(
+                        "[GaussianRaster] Tile-pair capacity exceeded (limit={}); invalid magenta frame",
+                        m_pair_capacity
+                    );
+                m_has_reported_overflow = m_telemetry.has_overflow;
+            }
+            m_status_readback = {};
+        }
+        if (m_timing_future.Valid() && m_timing_future.Status() != QueryStatus::Pending) {
+            const auto result = m_timing_future.Get();
+            if (const auto* timing = std::get_if<TimestampQueryResult>(&result.payload)) {
+                m_telemetry.gpu_ms       = timing->duration_ns / 1000000.0;
+                m_telemetry.has_gpu_time = result.status == QueryStatus::Ready;
+            }
+            m_timing_future = {};
+        }
+    }
     explicit Impl(ShaderManager& manager, GaussianRasterSettings settings) :
         m_pair_capacity(settings.tile_pair_capacity) {
         if (m_pair_capacity == 0 || m_pair_capacity > (1u << 24))
@@ -221,13 +254,36 @@ const TextureRef& GaussianSplatPass::GetColor() const {
 const TextureRef& GaussianSplatPass::GetTransmittance() const {
     return m_impl->m_transmittance;
 }
+GaussianRasterStatus GaussianSplatPass::GetStatus() const {
+    m_impl->Poll();
+    return m_impl->m_telemetry;
+}
+uint GaussianSplatPass::GetPairCapacity() const {
+    return m_impl->m_pair_capacity;
+}
+void GaussianSplatPass::SetPairCapacity(uint capacity) {
+    if (!capacity || capacity > (1u << 24))
+        throw std::invalid_argument("Invalid Gaussian pair capacity");
+    if (capacity == m_impl->m_pair_capacity)
+        return;
+    // Keep PSOs alive; previous submissions retain their own buffer owners until GPU completion.
+    m_impl->m_pair_capacity                  = capacity;
+    m_impl->m_status                         = nullptr;
+    m_impl->m_status_readback                = {};
+    m_impl->m_telemetry.has_completed_counts = false;
+    m_impl->m_telemetry.has_overflow         = false;
+}
+BufferView GaussianSplatPass::GetStatusBuffer() const {
+    return m_impl->m_status->GetView();
+}
 TextureRef GaussianSplatPass::Record(
     CommandList&            commands,
     const GaussianGpuScene* scene,
     const Camera&           camera,
     uint2                   resolution,
     bool                    is_editor_view,
-    bool                    is_unsupported_mixed
+    bool                    is_unsupported_mixed,
+    GaussianViewSettings    view_settings
 ) {
     auto& state = *m_impl;
     if (resolution.x == 0 || resolution.y == 0)
@@ -240,6 +296,18 @@ TextureRef GaussianSplatPass::Record(
                 work_count_64 += instance.range.y;
     const bool is_work_overflow = work_count_64 > k_max_work_count;
     const uint work_count       = is_work_overflow ? 0u : static_cast<uint>(work_count_64);
+    if (!IsValidGaussianViewSettings(view_settings))
+        throw std::invalid_argument("Invalid Gaussian view settings");
+    const uint64 revision = scene ? scene->GetRevision() : 0;
+    if (state.m_telemetry.scene_revision != revision || state.m_resolution != resolution)
+        state.m_telemetry.has_completed_counts = false;
+    state.m_telemetry.is_active             = true;
+    state.m_telemetry.scene_revision        = revision;
+    state.m_telemetry.unique_gaussian_count = scene ? scene->GetGaussianCount() : 0;
+    state.m_telemetry.instance_count        = scene ? scene->GetInstanceCount() : 0;
+    state.m_telemetry.work_count            = work_count;
+    state.m_telemetry.geometry_bytes = uint64(state.m_telemetry.unique_gaussian_count) * sizeof(GGaussian) +
+                                       uint64(state.m_telemetry.instance_count) * sizeof(GGaussianInstance);
     state.Resize(resolution, work_count);
     // Commands retain descriptor resources through translation. Keep owners explicitly until
     // GPU completion too: camera uploads, resize and instance replacement can overlap frames.
@@ -257,6 +325,10 @@ TextureRef GaussianSplatPass::Record(
         buffer_owners.push_back(level.prefix);
         buffer_owners.push_back(level.sums);
     }
+    state.m_telemetry.workspace_bytes = uint64(resolution.x) * resolution.y * 36u;
+    for (const auto& buffer : buffer_owners)
+        if (buffer)
+            state.m_telemetry.workspace_bytes += buffer->GetByteSize();
     if (scene) {
         buffer_owners.push_back(scene->GetGaussianBuffer());
         buffer_owners.push_back(scene->GetInstanceBuffer());
@@ -265,28 +337,47 @@ TextureRef GaussianSplatPass::Record(
                           color         = state.m_color,
                           transmittance = state.m_transmittance,
                           display       = state.m_display]() {});
-    if (state.m_status_readback.Valid() && state.m_status_readback.Status() != ReadbackStatus::Pending) {
-        const auto result   = state.m_status_readback.Get();
-        const auto overflow = result.ReadValue<uint>(sizeof(uint));
-        if (overflow && *overflow && !state.m_has_reported_overflow) {
-            LOG_ERROR(
-                "[GaussianRaster] Tile-pair capacity exceeded (limit={}); magenta frame is invalid",
-                state.m_pair_capacity
-            );
-            state.m_has_reported_overflow = true;
-        } else if (overflow && !*overflow)
-            state.m_has_reported_overflow = false;
-        state.m_status_readback = {};
+    state.Poll();
+    QueryToken timing_token;
+    if (!state.m_timing_future.Valid()) {
+        timing_token          = commands.BeginTimestampQuery("Gaussian Raster Total");
+        state.m_timing_future = timing_token.GetFuture();
     }
     commands.PushScopeWithTimeScope("Gaussian Raster");
     if (is_unsupported_mixed || is_work_overflow || work_count == 0) {
-        const bool is_invalid = is_unsupported_mixed || is_work_overflow;
+        const bool is_invalid                  = is_unsupported_mixed || is_work_overflow;
+        state.m_telemetry.has_overflow         = is_work_overflow;
+        state.m_telemetry.has_completed_counts = true;
+        state.m_telemetry.tile_pair_count = state.m_telemetry.visible_count = 0;
+        commands.ClearResource(state.m_status->GetView(), is_invalid ? 1u : 0u);
+        const auto decode = [](float value) {
+            return value <= .04045f ? value / 12.92f : std::pow((value + .055f) / 1.055f, 2.4f);
+        };
+        float3 background(
+            decode(view_settings.background.x),
+            decode(view_settings.background.y),
+            decode(view_settings.background.z)
+        );
+        if (view_settings.display_mode == EGaussianDisplayMode::Engine) {
+            const float exposure = std::exp2(view_settings.exposure_ev);
+            for (uint channel_id = 0; channel_id < 3; ++channel_id) {
+                float value            = background[channel_id] * exposure;
+                background[channel_id] = value / (1 + value);
+            }
+        }
+        if (view_settings.debug_view == EGaussianDebugView::Transmittance)
+            background = float3(1);
+        if (view_settings.debug_view == EGaussianDebugView::TileCoverage)
+            background = float3(0, 0, 1);
         commands.ClearResource(state.m_color->GetView(), is_invalid ? float4(1, 0, 1, 0) : float4(0));
         commands.ClearResource(state.m_transmittance->GetView(), float4(1));
         commands.ClearResource(
-            state.m_display->GetView(), is_invalid ? float4(1, 0, 1, 1) : float4(0, 0, 0, 1)
+            state.m_display->GetView(),
+            is_invalid ? float4(1, 0, 1, 1) : float4(background.x, background.y, background.z, 1)
         );
         commands.PopScopeWithTimeScope();
+        if (timing_token.Valid())
+            commands.EndTimestampQuery(timing_token);
         return state.m_display;
     }
     auto camera_data           = std::make_shared<GGaussianCamera>();
@@ -297,8 +388,13 @@ TextureRef GaussianSplatPass::Record(
     camera_data->viewport =
         uint4(resolution.x, resolution.y, (resolution.x + 15) / 16, (resolution.y + 15) / 16);
     camera_data->filter     = float4(0.3f, 1.f / 255.f, camera.GetNearClip(), camera.GetFarClip());
-    camera_data->background = float4(0);
-    auto camera_buffer      = RenderDevice::Get().CreateBuffer<byte>(
+    camera_data->background = float4(
+        view_settings.background.x,
+        view_settings.background.y,
+        view_settings.background.z,
+        view_settings.exposure_ev
+    );
+    auto camera_buffer = RenderDevice::Get().CreateBuffer<byte>(
         "Gaussian camera",
         sizeof(GGaussianCamera),
         EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST
@@ -310,6 +406,7 @@ TextureRef GaussianSplatPass::Record(
     commands.AddCallback([camera_data, camera_buffer]() {});
     GaussianDispatchParams param{};
     param.info = uint4(work_count, state.m_pair_capacity, camera_data->viewport.z, camera_data->viewport.w);
+    commands.ClearResource(state.m_status->GetView(), 0u);
     uint work_offset = 0;
     for (uint instance_id = 0; instance_id < scene->GetInstances().size(); ++instance_id) {
         const auto& instance = scene->GetInstances()[instance_id];
@@ -324,7 +421,8 @@ TextureRef GaussianSplatPass::Record(
                 scene->GetGaussianBuffer()->GetView(),
                 scene->GetInstanceBuffer()->GetView(),
                 state.m_projected->GetView(),
-                state.m_counts->GetView()
+                state.m_counts->GetView(),
+                state.m_status->GetView()
             )
             .Dispatch(uint3(Groups(instance.range.y), 1, 1), "Gaussian project");
         work_offset += instance.range.y;
@@ -410,6 +508,9 @@ TextureRef GaussianSplatPass::Record(
             state.m_ranges->GetView()
         )
         .Dispatch(uint3(Groups(state.m_pair_capacity), 1, 1), "Gaussian tile ranges");
+    param.job = uint4(
+        static_cast<uint>(view_settings.display_mode), static_cast<uint>(view_settings.debug_view), 0, 0
+    );
     commands
         .Compute(
             state.m_splat,
@@ -424,9 +525,14 @@ TextureRef GaussianSplatPass::Record(
             state.m_display->GetView()
         )
         .Dispatch(uint3(camera_data->viewport.z, camera_data->viewport.w, 1), "Gaussian splat");
-    if (!state.m_status_readback.Valid())
-        state.m_status_readback = commands.Readback(state.m_status->GetView(), "Gaussian pair status");
+    if (!state.m_status_readback.Valid()) {
+        state.m_status_readback     = commands.Readback(state.m_status->GetView(), "Gaussian pair status");
+        state.m_readback_revision   = revision;
+        state.m_readback_resolution = resolution;
+    }
     commands.PopScopeWithTimeScope();
+    if (timing_token.Valid())
+        commands.EndTimestampQuery(timing_token);
     return state.m_display;
 }
 } // namespace Moer::Render::Raster

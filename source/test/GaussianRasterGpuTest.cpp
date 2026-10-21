@@ -198,6 +198,73 @@ void Run(
         "Empty resized frame retained color"
     );
 }
+void RunViewSettings(ShaderManager& manager) {
+    GaussianGpuScene         scene;
+    auto                     snapshot = std::make_shared<GaussianSceneSnapshot>();
+    GaussianInstanceSnapshot instance;
+    instance.asset = Synthetic(1);
+    snapshot->instances.push_back(instance);
+    CommandList upload(EQueueType::Graphics);
+    scene.ApplyUpdate(snapshot, upload);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    Raster::GaussianSplatPass pass(manager, {.tile_pair_capacity = 129});
+    Camera                    camera;
+    camera.Initialize(float3(0), -90, 0, 60, 1, .01f, 100.f);
+    for (uint mode_id = 0; mode_id < 4; ++mode_id) {
+        GaussianViewSettings settings;
+        settings.background = float3(.2f, .3f, .4f);
+        if (mode_id == 1) {
+            settings.display_mode = EGaussianDisplayMode::Engine;
+            settings.exposure_ev  = 2;
+        }
+        if (mode_id == 2)
+            settings.debug_view = EGaussianDebugView::Transmittance;
+        if (mode_id == 3)
+            settings.debug_view = EGaussianDebugView::TileCoverage;
+        CommandList commands(EQueueType::Graphics);
+        const auto  display    = pass.Record(commands, &scene, camera, uint2(64, 64), false, false, settings);
+        auto        rgb_future = commands.Readback(pass.GetColor()->GetView(), "view raw");
+        auto        transmittance_future = commands.Readback(pass.GetTransmittance()->GetView(), "view T");
+        auto        display_future       = commands.Readback(display->GetView(), "view display");
+        RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        const auto rgb           = rgb_future.Get().CopyAs<float>();
+        const auto transmittance = transmittance_future.Get().CopyAs<float>();
+        const auto pixels        = display_future.Get().CopyAs<float>();
+        Require(rgb && transmittance && pixels, "Display setting readback failed");
+        if (mode_id < 3)
+            for (uint pixel_id = 0; pixel_id < 64 * 64; ++pixel_id)
+                for (uint channel_id = 0; channel_id < 3; ++channel_id) {
+                    double encoded = (*rgb)[pixel_id * 4 + channel_id] +
+                                     (*transmittance)[pixel_id] * settings.background[channel_id];
+                    if (mode_id == 0)
+                        encoded = std::clamp(encoded, 0., 1.);
+                    double expected =
+                        encoded <= .04045 ? encoded / 12.92 : std::pow((encoded + .055) / 1.055, 2.4);
+                    if (mode_id == 1)
+                        expected = expected * 4 / (1 + expected * 4);
+                    if (mode_id == 2)
+                        expected = (*transmittance)[pixel_id];
+                    Require(
+                        std::abs(expected - (*pixels)[pixel_id * 4 + channel_id]) < 0.00002,
+                        "Display setting pixel mismatch"
+                    );
+                }
+        if (mode_id == 3) {
+            Require((*pixels)[0] == 0 && (*pixels)[2] == 1, "Empty tile coverage mismatch");
+            Require(
+                std::abs((*pixels)[(32 + 32 * 64) * 4] - 1.f / 12.f) < 1e-6, "Covered tile density mismatch"
+            );
+        }
+        const auto status = pass.GetStatus();
+        Require(
+            status.has_completed_counts && !status.has_overflow && status.visible_count == 1 &&
+                status.tile_pair_count == 4,
+            "GPU telemetry count mismatch"
+        );
+    }
+    std::cout << "background, engine preview, debug views and GPU counters passed" << std::endl;
+}
+
 void RunInFlightResize(ShaderManager& manager) {
     GaussianGpuScene         scene;
     auto                     snapshot = std::make_shared<GaussianSceneSnapshot>();
@@ -212,6 +279,7 @@ void RunInFlightResize(ShaderManager& manager) {
     camera.Initialize(float3(0), -90, 0, 60, 1, .01f, 100.f);
     std::vector<ReadbackFuture> results;
     for (uint frame_id = 0; frame_id < 8; ++frame_id) {
+        pass.SetPairCapacity(frame_id % 2 ? 1024u : 4096u);
         CommandList commands(EQueueType::Graphics);
         pass.Record(commands, &scene, camera, uint2(64 + frame_id * 8, 64 + frame_id * 4), false);
         results.push_back(commands.Readback(pass.GetColor()->GetView(), "Gaussian in-flight resize"));
@@ -269,6 +337,7 @@ int main(int argc, char** argv) {
         Run(manager, Synthetic(600), 600);
         Run(manager, Synthetic(32), 32);
         RunInFlightResize(manager);
+        RunViewSettings(manager);
         Run(manager, Synthetic(2), 2, {}, true);
         Run(manager, Synthetic(600), 600, {}, false, true);
         if (argc > 2) {

@@ -122,3 +122,11 @@ P1/P2 已完成：标准 PLY 可沿独立光栅路径输出图像。原 Mesh 数
 - File 菜单增加 Save Gaussian Scene As；Open Scene 可重载文档。文档不通过旧 Mesh cache，包含 Mesh/纹理资源时明确拒绝保存；文档导入到已有 Scene 暂不支持，避免静默丢失组件。
 - 保存通过同目录临时文件完成后原子替换，限制 `.moergs` 扩展名；加载先在独立 LogicalScene 校验全部资产与数据，失败保留当前 Scene。恢复已保存相机时不执行 PLY 自动取景。
 - 验证：Editor / GPU 测试目标构建通过，CPU 契约覆盖共享资产/参数/相对引用/覆盖保存、坏版本、缺失资产、循环层级与负乘数。真实 Apple 的两个实例保存、重启加载成功，日志确认只上传一份几何；重存文档与原文档一致，未发现 Vulkan 验证错误。
+
+## P3.3：显示设置与非阻塞统计（2026-10-21）
+
+- Scene 持有并校验高斯背景、Reference/Engine 显示模式、EV、调试视图和 tile-pair 容量；`.moergs` 同步保存，新字段缺失时使用兼容默认值。
+- Reference 默认数学与 P2 一致；Engine preview 使用 sRGB 解码后的线性曝光及 Reinhard 映射，明确属于显示预览，不是高斯重光照。新增 T 和 tile 覆盖显示，以及 Frame Gaussian bounds。
+- GPU 异步统计投影有效数量、配对数/溢出、最近完成帧的耗时；显示独立几何及工作区的内存估算。MeshOnly 不创建这些 Pass、Query 或 Buffer。
+- 容量热切换复用 PSO，仅重建工作缓冲区；旧帧资源持有到 GPU 完成。修复了实机热切换发现的提前销毁 Pipeline 问题，并加入在途 resize + 容量变更测试。
+- GPU 测试覆盖背景、引擎显示、T、tile 热图、计数和非 256 倍数容量；默认真实 Apple 与 CPU 参考仍为 115.02 dB。实际编辑器连续切换 debug/预算/参考设置并正常退出，无 Vulkan 错误。CPU 文档参数往返测试通过。

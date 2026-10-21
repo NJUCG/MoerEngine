@@ -47,6 +47,7 @@ Scene::ImportSceneFromFileResult Scene::ImportGaussianPly(const std::filesystem:
 entt::entity Scene::CreateGaussianInstance(GaussianAssetRef asset, const EntityWithNodeCreateInfo& info) {
     if (!IsReady() || !asset)
         return entt::null;
+    if (!r().ctx().contains<ecs::CtxGaussianViewSettings>()) r().ctx().emplace<ecs::CtxGaussianViewSettings>();
     const auto entity = logical_scene().UCreateEntityWithNode(info);
     if (entity != entt::null)
         r().emplace<ecs::CGaussianInstance>(entity, std::move(asset), GaussianInstanceSettings{});
@@ -114,6 +115,19 @@ EGaussianSceneContent Scene::GetGaussianSceneContent() const {
 bool Scene::SaveGaussianDocument(const std::filesystem::path& path, std::string& out_error) const {
     if (!IsReady()) { out_error = "Scene is not ready"; return false; }
     return SaveGaussianSceneFile(path, *m_logical_scene, out_error);
+}
+
+GaussianViewSettings Scene::GetGaussianViewSettings() const {
+    return IsReady() && r().ctx().contains<ecs::CtxGaussianViewSettings>() ? r().ctx().get<const ecs::CtxGaussianViewSettings>().value : GaussianViewSettings{};
+}
+bool Scene::SetGaussianViewSettings(const GaussianViewSettings& settings) {
+    if (!IsReady() || !IsValidGaussianViewSettings(settings)) return false;
+    if (!r().ctx().contains<ecs::CtxGaussianViewSettings>()) r().ctx().emplace<ecs::CtxGaussianViewSettings>();
+    r().ctx().get<ecs::CtxGaussianViewSettings>().value = settings;
+    return true;
+}
+bool Scene::HasGaussianSceneData() const {
+    return IsReady() && (r().ctx().contains<ecs::CtxGaussianViewSettings>() || m_last_gaussian_snapshot || !r().view<const ecs::CGaussianInstance>().empty());
 }
 
 EGaussianSceneContent Scene::GetGaussianSceneContentForView(bool is_editor_view) const {

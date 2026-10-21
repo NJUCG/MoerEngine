@@ -126,6 +126,7 @@ bool LoaderInterface::LoadSceneFromFileCommon(
         registry.emplace<ecs::CTagRootNode>(root);
         registry.emplace<ecs::CNode>(root).name = file_path.stem().string();
         registry.ctx().emplace<ecs::CtxMegaBuffers>();
+        registry.ctx().emplace<ecs::CtxGaussianViewSettings>();
         EntityWithNodeCreateInfo info;
         info.name = file_path.stem().string();
         const auto entity = out_logical_scene.UCreateEntityWithNode(info);

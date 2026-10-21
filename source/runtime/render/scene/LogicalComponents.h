@@ -27,6 +27,9 @@ struct CGaussianInstance {
     GaussianAssetRef asset;
     GaussianInstanceSettings settings;
 };
+struct CtxGaussianViewSettings {
+    GaussianViewSettings value;
+};
 
 // MARK: Camera
 struct CTagMainCamera {};

@@ -566,7 +566,23 @@ void BindGaussianApi(py::module_& module, SceneApiClass& scene_api_class) {
         .def_readwrite("color_multiplier", &GaussianInstanceSettings::color_multiplier)
         .def_readwrite("opacity_multiplier", &GaussianInstanceSettings::opacity_multiplier)
         .def_readwrite("enabled", &GaussianInstanceSettings::is_enabled);
+    py::enum_<EGaussianDisplayMode>(module,"EGaussianDisplayMode")
+        .value("Reference",EGaussianDisplayMode::Reference).value("Engine",EGaussianDisplayMode::Engine);
+    py::enum_<EGaussianDebugView>(module,"EGaussianDebugView")
+        .value("Color",EGaussianDebugView::Color).value("Transmittance",EGaussianDebugView::Transmittance).value("TileCoverage",EGaussianDebugView::TileCoverage);
+    py::class_<GaussianViewSettings>(module,"GaussianViewSettings")
+        .def(py::init<>()).def_readwrite("background",&GaussianViewSettings::background)
+        .def_readwrite("exposure_ev",&GaussianViewSettings::exposure_ev)
+        .def_readwrite("display_mode",&GaussianViewSettings::display_mode)
+        .def_readwrite("debug_view",&GaussianViewSettings::debug_view)
+        .def_readwrite("tile_pair_capacity",&GaussianViewSettings::tile_pair_capacity);
     scene_api_class
+        .def("get_gaussian_view_settings", [](MainThreadCommandQueue& queue) {
+            return CallScene(queue, [](Scene& scene) { return scene.GetGaussianViewSettings(); });
+        })
+        .def("set_gaussian_view_settings", [](MainThreadCommandQueue& queue, const GaussianViewSettings& settings) {
+            return CallScene(queue, [settings](Scene& scene) { return scene.SetGaussianViewSettings(settings); });
+        })
         .def("save_gaussian_document", [](MainThreadCommandQueue& queue, const std::string& path) {
             return CallScene(queue, [path](Scene& scene) {
                 std::string error;

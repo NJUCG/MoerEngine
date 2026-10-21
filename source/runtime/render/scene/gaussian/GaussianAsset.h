@@ -3,6 +3,7 @@
 #include "RenderAPI.h"
 #include "misc/BoundingBox.h"
 #include "shaderheaders/shared/gaussian/GaussianParameters.h"
+#include "GaussianRenderSettings.h"
 
 #include <filesystem>
 #include <memory>

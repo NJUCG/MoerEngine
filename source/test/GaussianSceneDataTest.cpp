@@ -204,6 +204,16 @@ int main() {
         );
         Check(!scene.SaveStateCache(), "Mesh-only cache cannot silently drop Gaussian data");
         std::string document_error;
+        GaussianViewSettings view_settings;
+        view_settings.background = float3(.15f,.2f,.25f);
+        view_settings.display_mode = EGaussianDisplayMode::Engine;
+        view_settings.exposure_ev = 1.25f;
+        Check(scene.SetGaussianViewSettings(view_settings), "Gaussian display settings accepted");
+        auto invalid_view_settings = view_settings;
+        invalid_view_settings.tile_pair_capacity = 0;
+        Check(!scene.SetGaussianViewSettings(invalid_view_settings), "zero pair capacity rejected");
+        invalid_view_settings = view_settings; invalid_view_settings.background.x = std::numeric_limits<float>::infinity();
+        Check(!scene.SetGaussianViewSettings(invalid_view_settings), "nonfinite background rejected");
         const auto document_path = directory / "scene.moergs";
         Check(scene.SaveGaussianDocument(document_path, document_error), document_error.c_str());
         Check(scene.SaveGaussianDocument(document_path, document_error), "atomic replacement of existing document");
@@ -212,6 +222,7 @@ int main() {
         restored.PrepareUpdateBatch(false, false);
         const auto restored_snapshot = restored.GetGaussianSnapshot();
         Check(restored.IsReady() && restored_snapshot && restored_snapshot->instances.size() == 2, "document restores instances and hierarchy");
+        Check(Near(restored.GetGaussianViewSettings().background.x,.15f) && Near(restored.GetGaussianViewSettings().exposure_ev,1.25f), "document restores Gaussian display settings");
         if (restored_snapshot && restored_snapshot->instances.size() == 2) {
             const auto& instances = restored_snapshot->instances;
             Check(instances[0].asset == instances[1].asset, "document restores shared asset geometry");

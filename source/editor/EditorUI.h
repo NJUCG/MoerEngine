@@ -110,6 +110,7 @@ private:
     void ShowSceneView(Scene& scene);
     void ShowViewportWindow(const char* window_name, bool* p_open, EEditorViewportMode viewport_mode);
     void ShowConfig(Scene& scene);
+    void ShowGaussianSettings(Scene& scene);
     void ShowSceneEditing(Scene& scene);
     void ShowHierarchy(Scene& scene);
     void ShowInspector(Scene& scene);

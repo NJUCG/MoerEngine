@@ -222,6 +222,9 @@ public:
     bool DestroyGaussianInstance(entt::entity entity);
     entt::entity DuplicateGaussianInstance(entt::entity entity);
     bool SaveGaussianDocument(const std::filesystem::path& path, std::string& out_error) const;
+    GaussianViewSettings GetGaussianViewSettings() const;
+    bool SetGaussianViewSettings(const GaussianViewSettings& settings);
+    bool HasGaussianSceneData() const;
     EGaussianSceneContent GetGaussianSceneContent() const;
     EGaussianSceneContent GetGaussianSceneContentForView(bool is_editor_view) const;
     std::shared_ptr<const GaussianSceneSnapshot> GetGaussianSnapshot() const { return m_last_gaussian_snapshot; }

@@ -13,6 +13,23 @@ class EProceduralPrimitiveShape(Enum):
     Cube: EProceduralPrimitiveShape
     FacetedSphere: EProceduralPrimitiveShape
 
+class EGaussianDisplayMode(Enum):
+    Reference: EGaussianDisplayMode
+    Engine: EGaussianDisplayMode
+
+class EGaussianDebugView(Enum):
+    Color: EGaussianDebugView
+    Transmittance: EGaussianDebugView
+    TileCoverage: EGaussianDebugView
+
+class GaussianViewSettings:
+    background: float3
+    exposure_ev: float
+    display_mode: EGaussianDisplayMode
+    debug_view: EGaussianDebugView
+    tile_pair_capacity: int
+    def __init__(self) -> None: ...
+
 class float2:
     x: float
     y: float
@@ -169,6 +186,8 @@ Entity = int
 
 
 class SceneApi:
+    def get_gaussian_view_settings(self) -> GaussianViewSettings: ...
+    def set_gaussian_view_settings(self, settings: GaussianViewSettings) -> bool: ...
     def save_gaussian_document(self, path: str) -> bool: ...
     def duplicate_gaussian_instance(self, entity: Entity) -> Entity: ...
     def get_gaussian_scene_content(self) -> EGaussianSceneContent: ...

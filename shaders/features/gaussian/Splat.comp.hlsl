@@ -44,5 +44,16 @@ void main(uint3 group_id : SV_GroupID, uint3 local_id : SV_GroupThreadID) {
     transmittance_output[pixel] = transmittance;
     // Standard 3DGS is trained against display RGB. Decode for Moer's hardware-sRGB UI target;
     // raw output retains the reference RGB values and separate transmittance.
-    display_output[pixel] = float4(SRGBToLinear(saturate(color + transmittance * camera.background.xyz)), 1);
+    float3 composite = max(color + transmittance * camera.background.xyz, 0.0);
+    float3 display = SRGBToLinear(saturate(composite));
+    if (param.job.x == 1) {
+        float3 linear_color = SRGBToLinear(composite) * exp2(camera.background.w);
+        display = linear_color / (1 + linear_color);
+    }
+    if (param.job.y == 1) display = transmittance.xxx;
+    if (param.job.y == 2) {
+        float density = saturate(log2(1.0 + float(range.y - range.x)) / 12.0);
+        display = float3(density, density*density, 1-density);
+    }
+    display_output[pixel] = float4(display, 1);
 }

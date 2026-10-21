@@ -6,6 +6,7 @@
 [[vk::binding(2, 0)]] StructuredBuffer<Moer::GGaussianInstance> instances;
 [[vk::binding(3, 0)]] RWStructuredBuffer<Moer::GProjectedGaussian> projected;
 [[vk::binding(4, 0)]] RWStructuredBuffer<uint> tile_counts;
+[[vk::binding(5, 0)]] RWStructuredBuffer<uint4> status;
 
 [numthreads(256, 1, 1)]
 void main(uint3 thread_id : SV_DispatchThreadID) {
@@ -64,4 +65,5 @@ void main(uint3 thread_id : SV_DispatchThreadID) {
     output.tile_rect = rect;
     projected[work_id] = output;
     tile_counts[work_id] = (rect.z - rect.x) * (rect.w - rect.y);
+    InterlockedAdd(status[0].w, 1);
 }
