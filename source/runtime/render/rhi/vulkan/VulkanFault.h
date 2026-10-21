@@ -1,5 +1,6 @@
 #pragma once
 
+#include "RenderAPI.h"
 #include "VulkanCommon.h"
 #include "rhi/RHICommon.h"
 
@@ -7,12 +8,6 @@
 #include <string_view>
 
 namespace Moer::Render {
-
-enum class EVulkanFaultPublishState : uint8_t {
-    Healthy,
-    Publishing,
-    Faulted
-};
 
 enum class EVulkanFaultOperation : uint8_t {
     None,
@@ -49,18 +44,13 @@ struct VulkanOperationContext {
     uint64_t              work_serial{0};
 };
 
+// Operation classification only; accepted work and GPU completion are tracked separately.
 struct VulkanOperationResult {
     EVulkanOperationStatus status{EVulkanOperationStatus::Success};
     VkResult               result{VK_SUCCESS};
-    bool                   injected{false};
-    bool                   predrained{false};
 
     [[nodiscard]] bool Succeeded() const {
         return status == EVulkanOperationStatus::Success;
-    }
-
-    [[nodiscard]] bool WasSubmitted() const {
-        return Succeeded();
     }
 };
 
@@ -76,85 +66,8 @@ struct VulkanFaultRecord {
     bool                  predrained{false};
 };
 
-[[nodiscard]] inline std::string_view VulkanFaultOperationName(EVulkanFaultOperation _operation) {
-    switch (_operation) {
-        case EVulkanFaultOperation::QueueSubmit:
-            return "QueueSubmit";
-        case EVulkanFaultOperation::QueueSubmitEmpty:
-            return "QueueSubmitEmpty";
-        case EVulkanFaultOperation::PresentSubmit:
-            return "PresentSubmit";
-        case EVulkanFaultOperation::QueuePresent:
-            return "QueuePresent";
-        case EVulkanFaultOperation::AcquireNextImage:
-            return "AcquireNextImage";
-        case EVulkanFaultOperation::TimelineHostWait:
-            return "TimelineHostWait";
-        case EVulkanFaultOperation::CommandPoolReset:
-            return "CommandPoolReset";
-        case EVulkanFaultOperation::QueryPoolCreate:
-            return "QueryPoolCreate";
-        case EVulkanFaultOperation::QueryPoolResults:
-            return "QueryPoolResults";
-        case EVulkanFaultOperation::SwapchainSurfaceCreate:
-            return "SwapchainSurfaceCreate";
-        case EVulkanFaultOperation::SwapchainSurfaceQuery:
-            return "SwapchainSurfaceQuery";
-        case EVulkanFaultOperation::SwapchainCreate:
-            return "SwapchainCreate";
-        case EVulkanFaultOperation::SwapchainGetImages:
-            return "SwapchainGetImages";
-        case EVulkanFaultOperation::SwapchainSemaphoreCreate:
-            return "SwapchainSemaphoreCreate";
-        case EVulkanFaultOperation::DeviceWaitIdle:
-            return "DeviceWaitIdle";
-        default:
-            return "None";
-    }
-}
-
-[[nodiscard]] inline std::string_view VulkanQueueName(EQueueType _type) {
-    switch (_type) {
-        case EQueueType::Graphics:
-            return "Graphics";
-        case EQueueType::Compute:
-            return "Compute";
-        case EQueueType::Copy:
-            return "Copy";
-        default:
-            return "Ignore";
-    }
-}
-
-[[nodiscard]] inline std::string_view VulkanResultName(VkResult _result) {
-    switch (_result) {
-        case VK_SUCCESS:
-            return "VK_SUCCESS";
-        case VK_NOT_READY:
-            return "VK_NOT_READY";
-        case VK_TIMEOUT:
-            return "VK_TIMEOUT";
-        case VK_SUBOPTIMAL_KHR:
-            return "VK_SUBOPTIMAL_KHR";
-        case VK_ERROR_OUT_OF_DATE_KHR:
-            return "VK_ERROR_OUT_OF_DATE_KHR";
-        case VK_ERROR_SURFACE_LOST_KHR:
-            return "VK_ERROR_SURFACE_LOST_KHR";
-        case VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT:
-            return "VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT";
-        case VK_ERROR_OUT_OF_HOST_MEMORY:
-            return "VK_ERROR_OUT_OF_HOST_MEMORY";
-        case VK_ERROR_OUT_OF_DEVICE_MEMORY:
-            return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
-        case VK_ERROR_DEVICE_LOST:
-            return "VK_ERROR_DEVICE_LOST";
-        case VK_ERROR_VALIDATION_FAILED_EXT:
-            return "VK_ERROR_VALIDATION_FAILED_EXT";
-        case VK_ERROR_UNKNOWN:
-            return "VK_ERROR_UNKNOWN";
-        default:
-            return "VK_RESULT_UNKNOWN";
-    }
-}
+[[nodiscard]] RENDER_API std::string_view VulkanFaultOperationName(EVulkanFaultOperation _operation);
+[[nodiscard]] RENDER_API std::string_view VulkanQueueName(EQueueType _type);
+[[nodiscard]] RENDER_API std::string_view VulkanResultName(VkResult _result);
 
 } // namespace Moer::Render

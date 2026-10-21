@@ -1489,7 +1489,7 @@ VulkanOperationResult VulkanDevice::InjectPresentSubmitFault(
     if (!predrained && result != VK_ERROR_DEVICE_LOST) {
         EmergencyExitWithoutVulkanCleanup(_context, result);
     }
-    return {EVulkanOperationStatus::Faulted, result, true, predrained};
+    return {EVulkanOperationStatus::Faulted, result};
 }
 
 void VulkanDevice::RecordRejectedSubmit() {

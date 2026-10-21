@@ -367,6 +367,13 @@ private:
     void SetupDebugUtilsMessengerEXT();
 
     // Native synchronization and fault publication.
+    // Publishing closes admission before the first fault record is fully written.
+    enum class EVulkanFaultPublishState : uint8_t {
+        Healthy,
+        Publishing,
+        Faulted
+    };
+
     std::mutex& GetQueueHostMutex(VkQueue _queue);
     Array<std::mutex*> GetUniqueQueueHostMutexes();
     bool TryBeginFirstFault(VkResult _result);

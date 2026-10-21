@@ -4052,7 +4052,7 @@ void RunCrossQueueTopologyBatch() {
             event.thread_role != ERHIThreadRole::Submission ||
             event.thread_id != submission_thread_id ||
             event.thread_id == main_thread_id ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "Graphics/Compute/Copy native submit escaped the sole "
                 "Submission owner or changed source order"
@@ -4491,7 +4491,7 @@ void RunAsyncQueueParallelTranslateSmoke() {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "native G/G/C/Copy submit lost stable order or the "
                     "sole Submission owner"
@@ -4733,7 +4733,7 @@ void RunMultiSegmentSourceExecution() {
             const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
             if (event.queue != expected_queues[index] || event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id || event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error("multi-segment native submission escaped stable "
                                          "Graphics-to-Compute Submission ownership");
             }
@@ -4898,7 +4898,7 @@ void RunMultiSegmentCopyRoundTrip() {
         const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
         if (event.queue != expected_queues[index] || event.thread_role != ERHIThreadRole::Submission ||
             event.thread_id != submission_thread_id || event.thread_id == main_thread_id ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "multi-segment Copy native submits lost stable Submission order or ownership"
             );
@@ -5043,7 +5043,7 @@ void RunMultiSegmentRecoverableRejection() {
     const VulkanNativeSubmissionEvent& recovered_event = native_capture.Event(0);
     if (recovered_event.queue != EQueueType::Graphics ||
         recovered_event.thread_role != ERHIThreadRole::Submission ||
-        recovered_event.thread_id == main_thread_id || !recovered_event.outcome.WasSubmitted()) {
+        recovered_event.thread_id == main_thread_id || !recovered_event.outcome.Succeeded()) {
         throw std::runtime_error("multi-segment rejection recovery escaped Submission ownership");
     }
 
@@ -5183,7 +5183,7 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
     const VulkanNativeSubmissionEvent& native_event = native_capture.Event(0);
     if (native_event.queue != EQueueType::Graphics ||
         native_event.thread_role != ERHIThreadRole::Submission || native_event.thread_id == main_thread_id ||
-        !native_event.outcome.WasSubmitted()) {
+        !native_event.outcome.Succeeded()) {
         throw std::runtime_error("multi-segment hard-failure prefix escaped native Submission ownership");
     }
 
@@ -5988,8 +5988,8 @@ void RunRaytracingExportAcceptanceRejection() {
             readback_retry_submission.GetReadbackReceiptFence()->GetRefCount() !=
                 1 ||
             native_capture.Overflowed() || native_capture.Count() != 2 ||
-            !native_capture.Event(0).outcome.WasSubmitted() ||
-            !native_capture.Event(1).outcome.WasSubmitted()) {
+            !native_capture.Event(0).outcome.Succeeded() ||
+            !native_capture.Event(1).outcome.Succeeded()) {
             throw std::runtime_error(
                 "raytracing readback rejection reached native submit or "
                 "retained a terminal receipt"
@@ -6166,7 +6166,7 @@ void RunRaytracingExportAcceptanceRejection() {
             );
         }
         for (size_t index = 0; index < native_capture.Count(); ++index) {
-            if (!native_capture.Event(index).outcome.WasSubmitted()) {
+            if (!native_capture.Event(index).outcome.Succeeded()) {
                 throw std::runtime_error(
                     "raytracing export test observed a rejected native submit"
                 );
@@ -6539,7 +6539,7 @@ void RunRecoverableCopyDependencyRejection() {
         if (event.queue != EQueueType::Copy ||
             event.thread_role != ERHIThreadRole::Submission ||
             event.thread_id != submission_thread_id ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "accepted Copy recovery packets escaped the sole native "
                 "Submission owner"
@@ -7073,7 +7073,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "native submission escaped the sole Submission owner "
                     "or changed cross-batch source order"
@@ -7394,7 +7394,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             native_capture.Event(0).thread_role !=
                 ERHIThreadRole::Submission ||
             native_capture.Event(0).thread_id == main_thread_id ||
-            !native_capture.Event(0).outcome.WasSubmitted()) {
+            !native_capture.Event(0).outcome.Succeeded()) {
             throw std::runtime_error(
                 "malformed-ordering prefix escaped stable Submission "
                 "ownership"
@@ -7723,7 +7723,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
         if (native_event.queue != EQueueType::Copy ||
             native_event.thread_role != ERHIThreadRole::Submission ||
             native_event.thread_id == main_thread_id ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "recovered Copy batch 1 escaped stable Submission ownership"
             );
@@ -8066,7 +8066,7 @@ void RunBoundedPipelineShutdownCancellation() {
         if (native_event.queue != EQueueType::Copy ||
             native_event.thread_role != ERHIThreadRole::Submission ||
             native_event.thread_id == main_thread_id ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "pipeline shutdown drained batch 1 outside the Submission owner"
             );
@@ -8507,7 +8507,7 @@ void RunSerialControlPipelineBoundary() {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "SerialControl native submission order or owner changed"
                 );
@@ -10796,7 +10796,7 @@ void RunPresentPipelineBoundary() {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "Present boundary native submission order or owner changed"
                 );
@@ -11198,7 +11198,7 @@ void RunPresentRetryRecovery() {
                     }
                 ) ||
                 native_capture.Overflowed() || native_capture.Count() != index + 1 ||
-                !native_capture.Event(index).outcome.WasSubmitted()) {
+                !native_capture.Event(index).outcome.Succeeded()) {
                 throw std::runtime_error("recoverable Present poisoned later GPU completion/readback");
             }
         }
@@ -13119,7 +13119,7 @@ void RunTimestampQuerySuccessfulBatchPublication() {
             source_event.async_queue_scope != async_queue_scope ||
             native_event.queue != EQueueType::Graphics ||
             native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "successful timestamp batch escaped stable Submission ordering"
             );
@@ -13548,7 +13548,7 @@ void RunTimestampQueryCrossQueueBatchPublication() {
             source_event.async_queue_scope != async_queue_scope ||
             native_event.queue != expected_queues[index] ||
             native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "cross-queue timestamp batch lost stable submission ownership"
             );
@@ -13807,7 +13807,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
                 EQueueType::Graphics ||
             native_capture.Event(index).thread_role !=
                 ERHIThreadRole::Submission ||
-            !native_capture.Event(index).outcome.WasSubmitted()) {
+            !native_capture.Event(index).outcome.Succeeded()) {
             throw std::runtime_error(
                 "mixed timestamp batch lost materialized source identity"
             );
@@ -14066,7 +14066,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
             source_event.async_queue_scope != async_queue_scope ||
             native_event.queue != expected_queues[index] ||
             native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "query-only Copy payload lost stable source ownership"
             );
@@ -14378,7 +14378,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
             native_capture.Event(index);
         if (event.queue != EQueueType::Copy ||
             event.thread_role != ERHIThreadRole::Submission ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "Copy timestamp work did not retain native Submission ownership"
             );
@@ -14644,7 +14644,7 @@ void RunTimestampQueryPreparationRejection() {
         callback_errors.load(std::memory_order_acquire) != 0 ||
         native_capture.Overflowed() ||
         native_capture.Count() != 1 ||
-        !native_capture.Event(0).outcome.WasSubmitted() ||
+        !native_capture.Event(0).outcome.Succeeded() ||
         native_capture.Event(0).thread_role !=
             ERHIThreadRole::Submission) {
         throw std::runtime_error(
@@ -15102,7 +15102,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         native_capture.Event(0);
     if (native_event.queue != EQueueType::Graphics ||
         native_event.thread_role != ERHIThreadRole::Submission ||
-        !native_event.outcome.WasSubmitted()) {
+        !native_event.outcome.Succeeded()) {
         throw std::runtime_error(
             "mid-batch timestamp Query test did not submit exactly its prefix source"
         );

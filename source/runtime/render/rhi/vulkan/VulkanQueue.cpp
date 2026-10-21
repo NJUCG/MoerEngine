@@ -5648,7 +5648,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::SubmitRecordedForRuntime(
                     &runtime_dependency_waits_enabled,
                     true
                 );
-            if (split_profiling_frame && !submit_result.outcome.WasSubmitted()) {
+            if (split_profiling_frame && !submit_result.outcome.Succeeded()) {
                 ResetSplitProfilingCpuFrame();
             }
         } catch (const std::exception& error) {
@@ -5682,7 +5682,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::SubmitRecordedForRuntime(
         .outcome               = _recorded.retirement_outcome,
         .recoverable_rejection = _recorded.recoverable_rejection,
     };
-    if (_recorded.retirement_outcome.WasSubmitted()) {
+    if (_recorded.retirement_outcome.Succeeded()) {
         runtime_result.completion = WaitEvent{uint64(timeline), submitted_timeline};
     }
     if (_pre_completion != nullptr &&
@@ -5694,7 +5694,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::SubmitRecordedForRuntime(
     if (!_recorded.completion_committed) {
         CommitRuntimeSubmitCompletion(_recorded, _recorded.retirement_outcome);
     }
-    if (split_profiling_frame && !_recorded.retirement_outcome.WasSubmitted()) {
+    if (split_profiling_frame && !_recorded.retirement_outcome.Succeeded()) {
         ResetSplitProfilingCpuFrame();
     }
     return runtime_result;
@@ -6096,7 +6096,7 @@ VkCommandQueue::SubmitRecorded(
             // can throw. Once vkQueueSubmit2 accepts the packet, every later
             // exception must still retire it as GPU-submitted.
             _recorded.retirement_outcome = submit_outcome;
-            if (submit_outcome.WasSubmitted()) {
+            if (submit_outcome.Succeeded()) {
                 // Descriptor membership and texture readiness publish as one
                 // accepted transaction before any host fence is observable.
                 CommitAcceptedPresentationSourceStateTransaction(
@@ -6144,7 +6144,7 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
 ) noexcept {
     assert(!_recorded.completion_committed);
     try {
-        if (!_outcome.WasSubmitted()) {
+        if (!_outcome.Succeeded()) {
             _recorded.command_contexts.abandoned.reserve(
                 _recorded.command_contexts.abandoned.size() + _recorded.command_contexts.submitted.size()
             );
@@ -6195,8 +6195,8 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
             retirement_serial,
             _outcome,
             _recorded.context,
-            _outcome.WasSubmitted(),
-            _outcome.WasSubmitted(),
+            _outcome.Succeeded(),
+            _outcome.Succeeded(),
             std::move(_recorded.submit),
             std::move(_recorded.command_contexts),
             std::move(_recorded.descriptor_lease),
@@ -6837,7 +6837,7 @@ bool VkCommandQueue::TryExecuteParallel(
             profiler_storage.AdvanceFrame();
         } else if (emits_profiling_queries) {
             const bool submission_accepted =
-                _out_recorded != nullptr || submit_result.outcome.WasSubmitted();
+                _out_recorded != nullptr || submit_result.outcome.Succeeded();
             if (!submission_accepted) {
                 ResetSplitProfilingCpuFrame();
             } else {
@@ -8754,7 +8754,7 @@ void VkCommandQueue::ExecuteNow(
         );
         profiler_storage.AdvanceFrame();
     } else if (has_cmd && emits_profiling_queries) {
-        const bool submission_accepted = _out_recorded != nullptr || submit_result.outcome.WasSubmitted();
+        const bool submission_accepted = _out_recorded != nullptr || submit_result.outcome.Succeeded();
         if (!submission_accepted) {
             ResetSplitProfilingCpuFrame();
         } else {
@@ -8997,7 +8997,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 AccumulatePresentReceiptOutcome(
                     receipt_status, receipt_stage, final_outcome, EPresentStage::Submit
                 );
-                if (copy_result.outcome.WasSubmitted()) {
+                if (copy_result.outcome.Succeeded()) {
                     const auto result = sc->Present(queue.GetHandle(), idx, _timeline, _serial);
                     present_accepted  = result.accepted;
                     AccumulatePresentReceiptOutcome(
@@ -9035,7 +9035,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         recorded.retirement_outcome     = final_outcome;
         recorded.native_submit_resolved = true;
     }
-    const bool gpu_submitted = recorded.retirement_outcome.WasSubmitted();
+    const bool gpu_submitted = recorded.retirement_outcome.Succeeded();
     // A Present failure must never overwrite an accepted Copy's GPU outcome.
     CommitRuntimeSubmitCompletion(recorded, recorded.retirement_outcome);
     if (receipt_status == EPresentStatus::Unresolved) {
@@ -10852,7 +10852,7 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
                     _recorded.retirement_outcome =
                         queue.Submit(vk_command_context.GetCmdList(), _recorded.context);
                     _recorded.native_submit_resolved = true;
-                    if (_recorded.retirement_outcome.WasSubmitted()) {
+                    if (_recorded.retirement_outcome.Succeeded()) {
                         CommitAcceptedPresentationSourceStateTransaction(
                             *presentation_transaction
                         );
@@ -10894,7 +10894,7 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
         .outcome               = _recorded.retirement_outcome,
         .recoverable_rejection = _recorded.recoverable_rejection,
     };
-    if (_recorded.retirement_outcome.WasSubmitted()) {
+    if (_recorded.retirement_outcome.Succeeded()) {
         runtime_result.completion =
             WaitEvent{
                 uint64(timeline.Get()),
@@ -10967,7 +10967,7 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
 ) noexcept {
     assert(!_recorded.completion_committed);
     try {
-        if (!_outcome.WasSubmitted()) {
+        if (!_outcome.Succeeded()) {
             _recorded.command_contexts.abandoned.reserve(
                 _recorded.command_contexts.abandoned.size() + _recorded.command_contexts.submitted.size()
             );
@@ -11017,7 +11017,7 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
             retirement_serial,
             _outcome,
             _recorded.context,
-            _outcome.WasSubmitted(),
+            _outcome.Succeeded(),
             _recorded.logical_timeline != 0,
             std::move(_recorded.submit),
             std::move(_recorded.command_contexts),
