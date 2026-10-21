@@ -68,11 +68,8 @@ struct VulkanSerialGoldenTrace::Impl {
     uint64_t unresolved_command_mask{0};
     uint32_t unresolved_native_buffers{0};
     uint32_t unresolved_native_images{0};
-    SerialBarrierItem first_unresolved_buffer_barrier{};
-    bool has_unresolved_buffer_barrier{false};
-    bool     finished{false};
-    bool     priming{false};
-    SerialGoldenSummary finished_summary{};
+    std::optional<SerialBarrierItem> first_unresolved_buffer_barrier;
+    bool priming{false};
 
     StableSubmissionToken RegisterBuffer(Buffer* _buffer) {
         if (_buffer == nullptr) {
@@ -1289,18 +1286,9 @@ void VulkanSerialGoldenTrace::AddBarrier(const SerialBarrierItem& _item) {
 }
 
 void VulkanSerialGoldenTrace::RecordUnresolvedBufferBarrier(const SerialBarrierItem& _item) {
-    if (!impl->has_unresolved_buffer_barrier) {
+    if (!impl->first_unresolved_buffer_barrier) {
         impl->first_unresolved_buffer_barrier = _item;
-        impl->has_unresolved_buffer_barrier   = true;
     }
-}
-
-void VulkanSerialGoldenTrace::RecordDescriptorBind(
-    const PipelineHandle&                pipeline_handle,
-    const ArrayArguments&                arguments,
-    const VulkanPipelineBindingTemplate& binding_template
-) {
-    impl->RecordDescriptorBind(pipeline_handle, arguments, binding_template);
 }
 
 void VulkanSerialGoldenTrace::RecordDescriptorsForCommand(
@@ -1334,61 +1322,29 @@ void VulkanSerialGoldenTrace::RecordQueryEvent(
     );
 }
 
-void VulkanSerialGoldenTrace::MarkOpaque() {
-    ++impl->opaque_count;
-}
-
 void VulkanSerialGoldenTrace::MarkUnresolved() {
     ++impl->unresolved_count;
 }
 
-uint32_t VulkanSerialGoldenTrace::OpaqueCount() const {
-    return impl->opaque_count;
-}
-
-uint32_t VulkanSerialGoldenTrace::UnresolvedCount() const {
-    return impl->unresolved_count;
-}
-
-uint64_t VulkanSerialGoldenTrace::OpaqueCommandMask() const {
-    return impl->opaque_command_mask;
-}
-
-uint64_t VulkanSerialGoldenTrace::UnresolvedCommandMask() const {
-    return impl->unresolved_command_mask;
-}
-
-uint32_t VulkanSerialGoldenTrace::UnresolvedNativeBufferCount() const {
-    return impl->unresolved_native_buffers;
-}
-
-uint32_t VulkanSerialGoldenTrace::UnresolvedNativeImageCount() const {
-    return impl->unresolved_native_images;
-}
-
-const SerialBarrierItem& VulkanSerialGoldenTrace::FirstUnresolvedBufferBarrier() const {
-    return impl->first_unresolved_buffer_barrier;
-}
-
-bool VulkanSerialGoldenTrace::HasUnresolvedBufferBarrier() const {
-    return impl->has_unresolved_buffer_barrier;
-}
-
-SerialGoldenSummary VulkanSerialGoldenTrace::Finish() {
-    if (impl->finished) {
-        return impl->finished_summary;
-    }
+VulkanSerialGoldenResult VulkanSerialGoldenTrace::Finish() {
     const SerialCommandLayerSection commands = impl->command_builder.Finish();
     const SerialGoldenSection barriers       = impl->barrier_builder.Finish();
     const SerialGoldenSection descriptors    = impl->descriptor_builder.Finish();
     const SerialGoldenSection queries        = impl->query_builder.Finish();
-    impl->finished_summary = MakeSerialGoldenSummary(commands, barriers, descriptors, queries);
-    impl->finished_summary.complete = impl->finished_summary.complete && impl->tokens.Complete() &&
-                                      impl->opaque_count == 0 && impl->unresolved_count == 0;
-    impl->finished_summary.combined_digest =
-        CombineSerialGoldenDigests(impl->finished_summary);
-    impl->finished = true;
-    return impl->finished_summary;
+    SerialGoldenSummary summary = MakeSerialGoldenSummary(commands, barriers, descriptors, queries);
+    summary.complete = summary.complete && impl->tokens.Complete() &&
+                       impl->opaque_count == 0 && impl->unresolved_count == 0;
+    summary.combined_digest = CombineSerialGoldenDigests(summary);
+    return {
+        .summary                         = summary,
+        .unresolved_count                = impl->unresolved_count,
+        .opaque_count                    = impl->opaque_count,
+        .unresolved_command_mask         = impl->unresolved_command_mask,
+        .opaque_command_mask             = impl->opaque_command_mask,
+        .unresolved_native_buffers       = impl->unresolved_native_buffers,
+        .unresolved_native_images        = impl->unresolved_native_images,
+        .first_unresolved_buffer_barrier = impl->first_unresolved_buffer_barrier,
+    };
 }
 
 } // namespace Moer::Render

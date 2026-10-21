@@ -8667,22 +8667,7 @@ void VkCommandQueue::ExecuteNow(
             query_hash.Add(0);
             record_sample->query_digest = query_hash.Value();
         }
-        record_sample->serial_golden     = serial_golden->Finish();
-        record_sample->golden_unresolved = serial_golden->UnresolvedCount();
-        record_sample->golden_opaque     = serial_golden->OpaqueCount();
-        record_sample->golden_unresolved_command_mask =
-            serial_golden->UnresolvedCommandMask();
-        record_sample->golden_opaque_command_mask = serial_golden->OpaqueCommandMask();
-        record_sample->golden_unresolved_native_buffers =
-            serial_golden->UnresolvedNativeBufferCount();
-        record_sample->golden_unresolved_native_images =
-            serial_golden->UnresolvedNativeImageCount();
-        record_sample->golden_has_unresolved_buffer_barrier =
-            serial_golden->HasUnresolvedBufferBarrier();
-        if (record_sample->golden_has_unresolved_buffer_barrier) {
-            record_sample->golden_first_unresolved_buffer_barrier =
-                serial_golden->FirstUnresolvedBufferBarrier();
-        }
+        record_sample->serial_golden = serial_golden->Finish();
         RecordRhiRecordProfile(*record_sample);
     }
 
@@ -9266,28 +9251,30 @@ void VkCommandQueue::RecordRhiRecordProfile(const RhiRecordExecuteSample& _sampl
     totals.barrier_digests.insert(_sample.barrier_hash.Value());
     totals.descriptor_digests.insert(_sample.descriptor_digest);
     totals.query_digests.insert(_sample.query_digest);
-    if (_sample.serial_golden.complete) {
+    if (_sample.serial_golden.summary.complete) {
         ++totals.golden_complete;
     } else {
         ++totals.golden_incomplete;
     }
-    totals.golden_unresolved_total += _sample.golden_unresolved;
-    totals.golden_opaque_total += _sample.golden_opaque;
-    totals.golden_command_digests.insert(_sample.serial_golden.command_digest);
-    totals.golden_layer_digests.insert(_sample.serial_golden.layer_digest);
-    totals.golden_barrier_digests.insert(_sample.serial_golden.barrier_digest);
-    totals.golden_descriptor_digests.insert(_sample.serial_golden.descriptor_digest);
-    totals.golden_query_digests.insert(_sample.serial_golden.query_digest);
-    totals.golden_combined_digests.insert(_sample.serial_golden.combined_digest);
+    totals.golden_unresolved_total += _sample.serial_golden.unresolved_count;
+    totals.golden_opaque_total += _sample.serial_golden.opaque_count;
+    totals.golden_command_digests.insert(_sample.serial_golden.summary.command_digest);
+    totals.golden_layer_digests.insert(_sample.serial_golden.summary.layer_digest);
+    totals.golden_barrier_digests.insert(_sample.serial_golden.summary.barrier_digest);
+    totals.golden_descriptor_digests.insert(_sample.serial_golden.summary.descriptor_digest);
+    totals.golden_query_digests.insert(_sample.serial_golden.summary.query_digest);
+    totals.golden_combined_digests.insert(_sample.serial_golden.summary.combined_digest);
     StableRecordHash manifest_entry_hash;
     manifest_entry_hash.Add(_sample.topology.topology_digest);
-    manifest_entry_hash.Add(_sample.serial_golden.combined_digest);
-    manifest_entry_hash.Add(_sample.serial_golden.complete ? 1u : 0u);
+    manifest_entry_hash.Add(_sample.serial_golden.summary.combined_digest);
+    manifest_entry_hash.Add(_sample.serial_golden.summary.complete ? 1u : 0u);
     totals.golden_manifest_entries.insert(manifest_entry_hash.Value());
     const bool is_new_manifest_entry =
         profile.observed_golden_manifests.insert(manifest_entry_hash.Value()).second;
 
     if (is_new_manifest_entry) {
+        const SerialBarrierItem first_unresolved =
+            _sample.serial_golden.first_unresolved_buffer_barrier.value_or(SerialBarrierItem{});
         LOG_INFO(
             "[ThreadingProfile][RHIRecordGolden] queue=Graphics schema=1 "
             "identity=submission-alpha complete={} topology_digest={:016x} "
@@ -9300,46 +9287,32 @@ void VkCommandQueue::RecordRhiRecordProfile(const RhiRecordExecuteSample& _sampl
             "first_unresolved_buffer_dst_stage={:x} first_unresolved_buffer_src_access={:x} "
             "first_unresolved_buffer_dst_access={:x} first_unresolved_buffer_offset={} "
             "first_unresolved_buffer_size={}",
-            _sample.serial_golden.complete ? 1 : 0,
+            _sample.serial_golden.summary.complete ? 1 : 0,
             _sample.topology.topology_digest,
-            _sample.serial_golden.combined_digest,
-            _sample.serial_golden.command_digest,
-            _sample.serial_golden.layer_digest,
-            _sample.serial_golden.barrier_digest,
-            _sample.serial_golden.descriptor_digest,
-            _sample.serial_golden.query_digest,
-            _sample.serial_golden.command_count,
-            _sample.serial_golden.layer_count,
-            _sample.serial_golden.barrier_count,
-            _sample.serial_golden.descriptor_count,
-            _sample.serial_golden.query_count,
-            _sample.golden_unresolved,
-            _sample.golden_opaque,
-            _sample.golden_unresolved_command_mask,
-            _sample.golden_opaque_command_mask,
-            _sample.golden_unresolved_native_buffers,
-            _sample.golden_unresolved_native_images,
-            _sample.golden_has_unresolved_buffer_barrier
-                ? _sample.golden_first_unresolved_buffer_barrier.group_ordinal
-                : 0,
-            _sample.golden_has_unresolved_buffer_barrier
-                ? _sample.golden_first_unresolved_buffer_barrier.src_stage_mask
-                : 0,
-            _sample.golden_has_unresolved_buffer_barrier
-                ? _sample.golden_first_unresolved_buffer_barrier.dst_stage_mask
-                : 0,
-            _sample.golden_has_unresolved_buffer_barrier
-                ? _sample.golden_first_unresolved_buffer_barrier.src_access_mask
-                : 0,
-            _sample.golden_has_unresolved_buffer_barrier
-                ? _sample.golden_first_unresolved_buffer_barrier.dst_access_mask
-                : 0,
-            _sample.golden_has_unresolved_buffer_barrier
-                ? _sample.golden_first_unresolved_buffer_barrier.range_offset
-                : 0,
-            _sample.golden_has_unresolved_buffer_barrier
-                ? _sample.golden_first_unresolved_buffer_barrier.range_size
-                : 0
+            _sample.serial_golden.summary.combined_digest,
+            _sample.serial_golden.summary.command_digest,
+            _sample.serial_golden.summary.layer_digest,
+            _sample.serial_golden.summary.barrier_digest,
+            _sample.serial_golden.summary.descriptor_digest,
+            _sample.serial_golden.summary.query_digest,
+            _sample.serial_golden.summary.command_count,
+            _sample.serial_golden.summary.layer_count,
+            _sample.serial_golden.summary.barrier_count,
+            _sample.serial_golden.summary.descriptor_count,
+            _sample.serial_golden.summary.query_count,
+            _sample.serial_golden.unresolved_count,
+            _sample.serial_golden.opaque_count,
+            _sample.serial_golden.unresolved_command_mask,
+            _sample.serial_golden.opaque_command_mask,
+            _sample.serial_golden.unresolved_native_buffers,
+            _sample.serial_golden.unresolved_native_images,
+            first_unresolved.group_ordinal,
+            first_unresolved.src_stage_mask,
+            first_unresolved.dst_stage_mask,
+            first_unresolved.src_access_mask,
+            first_unresolved.dst_access_mask,
+            first_unresolved.range_offset,
+            first_unresolved.range_size
         );
     }
 

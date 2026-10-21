@@ -6,6 +6,7 @@
 #include "VulkanCommon.h"
 #include "VulkanDescriptor.h"
 #include "VulkanFault.h"
+#include "diagnostics/VulkanSerialGolden.h"
 // #include "VulkanDevice.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
@@ -581,15 +582,7 @@ private:
         uint32                   texture_barriers{0};
         uint32                   memory_barriers{0};
         uint32                   used_queries{0};
-        SerialGoldenSummary      serial_golden{};
-        uint32                   golden_unresolved{0};
-        uint32                   golden_opaque{0};
-        uint64                   golden_unresolved_command_mask{0};
-        uint64                   golden_opaque_command_mask{0};
-        uint32                   golden_unresolved_native_buffers{0};
-        uint32                   golden_unresolved_native_images{0};
-        bool                     golden_has_unresolved_buffer_barrier{false};
-        SerialBarrierItem        golden_first_unresolved_buffer_barrier{};
+        VulkanSerialGoldenResult serial_golden{};
     };
 
     struct RhiRecordWindowTotals {

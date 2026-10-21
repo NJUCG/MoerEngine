@@ -4,13 +4,22 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 namespace Moer::Render {
 
-struct ArrayArguments;
-class PipelineHandle;
-struct VulkanPipelineBindingTemplate;
+// One recording's summary and the reasons it could not be fully described.
+struct VulkanSerialGoldenResult {
+    SerialGoldenSummary summary{};
+    uint32_t unresolved_count{0};
+    uint32_t opaque_count{0};
+    uint64_t unresolved_command_mask{0};
+    uint64_t opaque_command_mask{0};
+    uint32_t unresolved_native_buffers{0};
+    uint32_t unresolved_native_images{0};
+    std::optional<SerialBarrierItem> first_unresolved_buffer_barrier;
+};
 
 // Profile-only diagnostics for comparing serial command recording across runs.
 // Native handles are lookup keys only and never enter a digest.
@@ -43,11 +52,6 @@ public:
     void AddBarrier(const SerialBarrierItem& _item);
     void RecordUnresolvedBufferBarrier(const SerialBarrierItem& _item);
 
-    void RecordDescriptorBind(
-        const PipelineHandle&                pipeline_handle,
-        const ArrayArguments&                arguments,
-        const VulkanPipelineBindingTemplate& binding_template
-    );
     // Called only from ExecuteNow's profile-on branch, after VisitCmd returned.
     // Replays the descriptor calls that the successful command just emitted.
     void RecordDescriptorsForCommand(
@@ -62,18 +66,9 @@ public:
         uint64_t         _pipeline_stage_mask
     );
 
-    void MarkOpaque();
     void MarkUnresolved();
-    uint32_t OpaqueCount() const;
-    uint32_t UnresolvedCount() const;
-    uint64_t OpaqueCommandMask() const;
-    uint64_t UnresolvedCommandMask() const;
-    uint32_t UnresolvedNativeBufferCount() const;
-    uint32_t UnresolvedNativeImageCount() const;
-    const SerialBarrierItem& FirstUnresolvedBufferBarrier() const;
-    bool HasUnresolvedBufferBarrier() const;
 
-    SerialGoldenSummary Finish();
+    [[nodiscard]] VulkanSerialGoldenResult Finish();
 
 private:
     struct Impl;
