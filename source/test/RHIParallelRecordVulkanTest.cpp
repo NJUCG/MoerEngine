@@ -15580,6 +15580,27 @@ void RunDepthTextureCopy() {
     LOG_INFO("[TESTCASE][PASS] name=DepthTextureCopy path=buffer-image-image-buffer format=D32");
 }
 
+void RunUndersizedTextureUploadRejection() {
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        "undersized_upload",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
+    );
+    // One byte short of the image, despite ample physical staging capacity.
+    // Native buffer bounds alone cannot detect the undersized upload slice.
+    Array<Moer::byte> data(4 * 4 * sizeof(uint32) - 1);
+    CommandList commands(EQueueType::Copy);
+    commands.CopyFrom(std::move(data), texture->GetView(), "UndersizedTextureUpload");
+    ReadbackFuture future = commands.Readback(texture->GetView(), "RejectedTextureUploadReadback");
+    RHIExecutor::Get().Submit(EQueueType::Copy, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    if (future.Get().status != ReadbackStatus::Error) {
+        throw std::runtime_error("undersized texture upload was accepted");
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    LOG_INFO("[TESTCASE][PASS] name=UndersizedTextureUploadRejection readback=error");
+}
+
 void RunOwningReadbackFuture() {
     auto& device = RenderDevice::Get();
     constexpr size_t buffer_element_count = 16;
@@ -16089,6 +16110,8 @@ int main(int argc, const char** argv) {
         if (readback_future_mode) {
             RunOwningReadbackFuture();
             RunDepthTextureCopy();
+            // Rejected recording latches the backend fault, so run this last.
+            RunUndersizedTextureUploadRejection();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();

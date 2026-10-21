@@ -39,6 +39,18 @@
 namespace Moer::Render {
 namespace {
 
+void ValidateTextureTransferDataSize(const VulkanTexture& _texture, uint3 _extent, uint64 _byte_size) {
+    const uint64 expected_byte_size = GetSizeFromImageFormat(_texture.GetFormat(), _extent);
+    if (_byte_size != expected_byte_size) {
+        throw std::invalid_argument(std::format(
+            "Texture transfer data size mismatch: texture='{}', bytes={}, expected={}",
+            _texture.GetName(),
+            _byte_size,
+            expected_byte_size
+        ));
+    }
+}
+
 ERHIHeartbeatDomain HeartbeatDomainForQueue(EQueueType _type) noexcept {
     switch (_type) {
         case EQueueType::Graphics:
@@ -1114,13 +1126,16 @@ struct VkCmdPreprocessor {
         );
     }
     void Visit(const UploadTextureCmd* _cmd) {
-        auto data_span  = _cmd->Data();
+        const auto data_span  = _cmd->Data();
+        auto*      vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
+        // The staging buffer can be larger than this upload's slice. Validate
+        // the supplied data before allocating or copying into that slice.
+        ValidateTextureTransferDataSize(*vk_texture, _cmd->Size(), data_span.size_bytes());
         auto tmp_buffer =
             temporary_buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
         device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
         _cmd->staging_buffer = tmp_buffer;
 
-        auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
         tracker.RecordState(
             vk_texture,
             VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -1207,10 +1222,11 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const CopyBackTextureCmd* _cmd) {
+        auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
+        ValidateTextureTransferDataSize(*vk_texture, _cmd->Size(), _cmd->ByteSize());
         auto tmp_buffer = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
-        auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
         tracker.RecordState(
             vk_texture,
             VK_ACCESS_2_TRANSFER_READ_BIT,
@@ -2161,7 +2177,6 @@ public:
         cmd_list.CopyBufferToTexture(
             reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
             texture,
-            _cmd.Data().size_bytes(),
             tmp_buffer.GetByteOffset(),
             _cmd.Offset(),
             _cmd.Size(),
@@ -2249,7 +2264,6 @@ public:
         cmd_list.CopyTextureToBuffer(
             src_texture,
             reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
-            _cmd.ByteSize(),
             _cmd.Offset(),
             tmp_buffer.GetByteOffset(),
             _cmd.Size(),
@@ -2324,7 +2338,6 @@ public:
         cmd_list.CopyBufferToTexture(
             src_buffer,
             dst_texture,
-            _cmd.ByteSize(),
             _cmd.SrcOffset(),
             _cmd.DstOffset(),
             _cmd.Size(),
@@ -2341,7 +2354,6 @@ public:
         cmd_list.CopyTextureToBuffer(
             src_texture,
             dst_buffer,
-            _cmd.ByteSize(),
             _cmd.SrcOffset(),
             _cmd.DstOffset(),
             _cmd.Size(),

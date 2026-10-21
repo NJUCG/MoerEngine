@@ -150,7 +150,6 @@ public:
     void CopyBufferToTexture(
         VulkanBuffer*  _src,
         VulkanTexture* _dst,
-        uint64         _byte_size,
         uint64         _src_offset,
         uint3          _dst_offset,
         uint3          _extent,
@@ -160,7 +159,6 @@ public:
     void CopyTextureToBuffer(
         VulkanTexture* _src,
         VulkanBuffer*  _dst,
-        uint64         _byte_size,
         uint3          _src_offset,
         uint64         _dst_offset,
         uint3          _extent,

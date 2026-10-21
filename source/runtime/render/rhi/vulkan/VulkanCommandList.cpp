@@ -629,7 +629,6 @@ VkImageAspectFlags GetCopyAspect(const VulkanTexture& _texture) {
 VkBufferImageCopy MakeBufferImageCopy(
     const VulkanBuffer&  _buffer,
     const VulkanTexture& _texture,
-    uint64               _byte_size,
     uint64               _buffer_offset,
     uint3                _texture_offset,
     uint3                _extent,
@@ -643,18 +642,8 @@ VkBufferImageCopy MakeBufferImageCopy(
     if (_texture.GetNumSamples() != 1 || _extent.x == 0 || _extent.y == 0 || _extent.z == 0) {
         throw std::invalid_argument("Buffer/image copy requires a nonempty single-sampled region");
     }
-    const uint64 expected_byte_size = GetSizeFromImageFormat(_texture.GetFormat(), _extent);
-    if (_byte_size != expected_byte_size) {
-        throw std::invalid_argument(std::format(
-            "Texture copy size mismatch: texture='{}', mip={}, layer={}, bytes={}, expected={}",
-            _texture.GetName(),
-            _mip_level,
-            _array_layer,
-            _byte_size,
-            expected_byte_size
-        ));
-    }
-    if (_buffer_offset > _buffer.GetByteSize() || _byte_size > _buffer.GetByteSize() - _buffer_offset) {
+    const uint64 byte_size = GetSizeFromImageFormat(_texture.GetFormat(), _extent);
+    if (_buffer_offset > _buffer.GetByteSize() || byte_size > _buffer.GetByteSize() - _buffer_offset) {
         throw std::out_of_range("Texture copy exceeds the buffer range");
     }
     return VkBufferImageCopy{
@@ -676,16 +665,14 @@ VkBufferImageCopy MakeBufferImageCopy(
 void VulkanCommandList::CopyBufferToTexture(
     VulkanBuffer*  _src,
     VulkanTexture* _dst,
-    uint64         _byte_size,
     uint64         _src_offset,
     uint3          _dst_offset,
     uint3          _extent,
     uint32         _mip_level,
     uint32         _array_layer
 ) {
-    const VkBufferImageCopy copy_region = MakeBufferImageCopy(
-        *_src, *_dst, _byte_size, _src_offset, _dst_offset, _extent, _mip_level, _array_layer
-    );
+    const VkBufferImageCopy copy_region =
+        MakeBufferImageCopy(*_src, *_dst, _src_offset, _dst_offset, _extent, _mip_level, _array_layer);
     vkCmdCopyBufferToImage(
         command_buffer,
         _src->GetHandle(),
@@ -699,16 +686,14 @@ void VulkanCommandList::CopyBufferToTexture(
 void VulkanCommandList::CopyTextureToBuffer(
     VulkanTexture* _src,
     VulkanBuffer*  _dst,
-    uint64         _byte_size,
     uint3          _src_offset,
     uint64         _dst_offset,
     uint3          _extent,
     uint32         _mip_level,
     uint32         _array_layer
 ) {
-    const VkBufferImageCopy copy_region = MakeBufferImageCopy(
-        *_dst, *_src, _byte_size, _dst_offset, _src_offset, _extent, _mip_level, _array_layer
-    );
+    const VkBufferImageCopy copy_region =
+        MakeBufferImageCopy(*_dst, *_src, _dst_offset, _src_offset, _extent, _mip_level, _array_layer);
     vkCmdCopyImageToBuffer(
         command_buffer,
         _src->GetHandle(),
