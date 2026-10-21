@@ -19,8 +19,9 @@ enum class ESceneFileDialogResult {
 
 inline ESceneFileDialogResult OpenSceneFileDialog(std::string& out_selected_path) {
     NFD::UniquePath                      selected_path = nullptr;
-    const std::array<nfdfilteritem_t, 5> filters       = {{
-        {"All Support Formats", "glb,gltf,fbx,obj,dae"},
+    const std::array<nfdfilteritem_t, 6> filters       = {{
+        {"All Support Formats", "glb,gltf,fbx,obj,dae,ply"},
+        {"Standard 3D Gaussian Splat", "ply"},
         {"glTF 2.0", "glb,gltf"},
         {"FBX", "fbx"},
         {"Wavefront", "obj"},

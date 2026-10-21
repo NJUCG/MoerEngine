@@ -177,6 +177,32 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         scene->SetNodeScale(selected_node, scale);
     }
 
+    const auto gaussian_asset = scene->GetGaussianAsset(selected_node);
+    if (gaussian_asset) {
+        ImGui::SeparatorText("Gaussian Splat");
+        ImGui::TextWrapped("Source: %s", gaussian_asset->source_path.string().c_str());
+        ImGui::Text("Gaussians: %zu | SH degree: %u", gaussian_asset->gaussians.size(), gaussian_asset->sh_degree);
+        ImGui::Text("Geometry buffer: %.2f MiB (shared)",
+            double(gaussian_asset->gaussians.size() * sizeof(Render::GGaussian)) / (1024.0 * 1024.0));
+        if (gaussian_asset->bounds.IsValid()) {
+            const auto& bounds = gaussian_asset->bounds;
+            ImGui::Text("Local min: %.3f, %.3f, %.3f", bounds.min.x, bounds.min.y, bounds.min.z);
+            ImGui::Text("Local max: %.3f, %.3f, %.3f", bounds.max.x, bounds.max.y, bounds.max.z);
+        }
+        auto settings = *scene->GetGaussianInstanceSettings(selected_node);
+        bool has_changed = ImGui::Checkbox("Enabled##gaussian", &settings.is_enabled);
+        has_changed |= ImGui::DragFloat("Opacity multiplier", &settings.opacity_multiplier, .01f, 0.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        has_changed |= ImGui::ColorEdit3("Color multiplier", &settings.color_multiplier.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+        if (has_changed && !scene->SetGaussianInstanceSettings(selected_node, settings))
+            ImGui::TextWrapped("Invalid values: multipliers must be finite and nonnegative.");
+        ImGui::TextDisabled("SH appearance is baked; scene lights do not relight it.");
+        if (ImGui::Button("Reset appearance")) scene->SetGaussianInstanceSettings(selected_node, {});
+        ImGui::SameLine();
+        if (ImGui::Button("Duplicate instance")) {
+            const auto duplicate_entity = scene->DuplicateGaussianInstance(selected_node);
+            if (duplicate_entity != entt::null) selected_node = duplicate_entity;
+        }
+    }
     ImGui::Separator();
 
     const Scene::NodeSubtreeStats subtree_stats = scene->GetNodeSubtreeStats(selected_node);
@@ -235,7 +261,8 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         ImGui::Separator();
 
         if (ImGui::Button("Delete", ImVec2(120.0f, 0.0f))) {
-            if (scene->DestroyNodeSubtree(selected_node)) {
+            const bool is_gaussian_leaf = scene->GetGaussianAsset(selected_node) && scene->GetNodeChildCount(selected_node) == 0;
+            if (is_gaussian_leaf ? scene->DestroyGaussianInstance(selected_node) : scene->DestroyNodeSubtree(selected_node)) {
                 selected_node           = entt::null;
                 m_rotation_cache_entity = entt::null;
             }

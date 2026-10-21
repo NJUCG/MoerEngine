@@ -220,6 +220,7 @@ public:
     std::optional<GaussianInstanceSettings> GetGaussianInstanceSettings(entt::entity entity) const;
     bool SetGaussianInstanceSettings(entt::entity entity, const GaussianInstanceSettings& settings);
     bool DestroyGaussianInstance(entt::entity entity);
+    entt::entity DuplicateGaussianInstance(entt::entity entity);
     EGaussianSceneContent GetGaussianSceneContent() const;
     EGaussianSceneContent GetGaussianSceneContentForView(bool is_editor_view) const;
     std::shared_ptr<const GaussianSceneSnapshot> GetGaussianSnapshot() const { return m_last_gaussian_snapshot; }

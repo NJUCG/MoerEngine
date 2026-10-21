@@ -84,6 +84,28 @@ bool Scene::DestroyGaussianInstance(entt::entity entity) {
     return logical_scene().UDestroyEntity(entity);
 }
 
+entt::entity Scene::DuplicateGaussianInstance(entt::entity entity) {
+    const auto asset = GetGaussianAsset(entity);
+    const auto local_transform = TryGetNodeLocalTransform(entity);
+    if (!asset || !local_transform)
+        return entt::null;
+    EntityWithNodeCreateInfo info;
+    info.parent_node_entt = r().get<ecs::CNode>(entity).parent_entt;
+    info.name = GetNodeDisplayName(entity) + " (copy)";
+    info.translation = local_transform->translation;
+    info.rotation = local_transform->rotation;
+    info.scale = local_transform->scale;
+    const auto visibility = GetNodeVisibility(entity);
+    const auto settings = *GetGaussianInstanceSettings(entity);
+    const auto duplicate_entity = CreateGaussianInstance(asset, info);
+    if (duplicate_entity != entt::null) {
+        SetGaussianInstanceSettings(duplicate_entity, settings);
+        SetNodeVisibleInGame(duplicate_entity, visibility.visible_in_game);
+        SetNodeVisibleInEditor(duplicate_entity, visibility.visible_in_editor);
+    }
+    return duplicate_entity;
+}
+
 EGaussianSceneContent Scene::GetGaussianSceneContent() const {
     return GetGaussianSceneContentForView(false);
 }

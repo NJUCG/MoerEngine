@@ -167,9 +167,10 @@ int main() {
             "new snapshot captures world translation"
         );
 
-        EntityWithNodeCreateInfo duplicate_info;
         const auto               duplicate_entt =
-            scene.CreateGaussianInstance(scene.GetGaussianAsset(entity), duplicate_info);
+            scene.DuplicateGaussianInstance(entity);
+        Check(duplicate_entt != entt::null && scene.GetGaussianAsset(duplicate_entt) == scene.GetGaussianAsset(entity), "duplicate shares immutable asset");
+        Check(Near(scene.TryGetNodeLocalTransform(duplicate_entt)->translation.x, 4), "duplicate preserves local transform");
         auto       duplicated = scene.PrepareUpdateBatch(false, false);
         const auto packed = Render::BuildGaussianGpuUpload(*duplicated.update_gpu_update->gaussian_update);
         Check(

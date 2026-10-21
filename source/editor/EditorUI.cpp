@@ -11,6 +11,9 @@
 #include "EditorUISettings.h"
 #include "EditorUIStyle.h"
 #include "scene/Scene.h"
+#include "scene/loader/GaussianPlyLoader.h"
+#include <chrono>
+#include <cctype>
 #include "scene_editing_ui/SceneFileDialog.h"
 #include "window/WindowContext.h"
 
@@ -291,6 +294,7 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
 #endif
 
 void EditorUI::TickUI(Scene& scene) {
+    PollGaussianImport(scene);
 
     ResetFrameState();
 
@@ -550,13 +554,42 @@ void EditorUI::ShowSceneEditing(Scene& scene) {
     m_scene_editing_ui.ShowWindow(&m_b_show_scene_editing, scene);
 }
 
+void EditorUI::PollGaussianImport(Scene& scene) {
+    if (!m_gaussian_import.valid() || m_gaussian_import.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        return;
+    try {
+        auto result = m_gaussian_import.get();
+        if (m_should_cancel_gaussian_import) {
+            m_last_file_action_status = "Gaussian import cancelled";
+        } else if (!scene.IsReady() || scene.GetSourceFilePath() != m_gaussian_import_scene_path) {
+            m_last_file_action_status = "Import cancelled: destination scene changed";
+        } else if (!result) {
+            m_last_file_action_status = "Import failed: " + result.error_message;
+        } else {
+            EntityWithNodeCreateInfo info;
+            info.name = result.asset->source_path.stem().string();
+            const auto entity = scene.CreateGaussianInstance(result.asset, info);
+            if (entity != entt::null) {
+                m_selected_node = entity;
+                m_last_file_action_status = "Imported " + std::to_string(result.asset->gaussians.size()) + " Gaussians";
+                if (scene.GetGaussianSceneContent() == EGaussianSceneContent::Mixed)
+                    m_last_file_action_status += "; mixed rendering is not implemented yet";
+            } else {
+                m_last_file_action_status = "Import failed: cannot create Gaussian instance";
+            }
+        }
+    } catch (const std::exception& error) {
+        m_last_file_action_status = std::string("Import failed: ") + error.what();
+    }
+}
+
 void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
     const std::string file_menu_label = BuildFileMenuLabel(m_config->scene_path);
     if (!ImGui::BeginMenu(file_menu_label.c_str())) {
         return;
     }
 
-    if (ImGui::MenuItem("Open Scene...", nullptr, false, !is_scene_loading)) {
+    if (ImGui::MenuItem("Open Scene...", nullptr, false, !is_scene_loading && !m_gaussian_import.valid())) {
         std::string selected_path;
         switch (OpenSceneFileDialog(selected_path)) {
             case ESceneFileDialogResult::Selected:
@@ -574,9 +607,17 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
         }
     }
 
-    if (ImGui::MenuItem("Import Into Current Scene...", nullptr, false, scene.IsReady())) {
+    if (ImGui::MenuItem("Import Into Current Scene...", nullptr, false, scene.IsReady() && !m_gaussian_import.valid())) {
         std::string selected_path;
         if (OpenSceneFileDialog(selected_path) == ESceneFileDialogResult::Selected) {
+            auto extension = std::filesystem::path(selected_path).extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (extension == ".ply") {
+                m_gaussian_import_scene_path = scene.GetSourceFilePath();
+                m_should_cancel_gaussian_import = false;
+                m_last_file_action_status = "Loading Gaussian PLY...";
+                m_gaussian_import = std::async(std::launch::async, [selected_path]() { return LoadGaussianPly(selected_path); });
+            } else {
             const Scene::ImportSceneFromFileResult result = scene.ImportSceneFromFileSync(selected_path);
             if (result) {
                 m_last_file_action_status =
@@ -584,6 +625,14 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
             } else {
                 m_last_file_action_status = "Import failed: " + result.error_message;
             }
+            }
+        }
+    }
+    if (m_gaussian_import.valid()) {
+        ImGui::TextDisabled("%s", m_last_file_action_status.c_str());
+        if (ImGui::MenuItem("Cancel Gaussian import", nullptr, false, !m_should_cancel_gaussian_import)) {
+            m_should_cancel_gaussian_import = true;
+            m_last_file_action_status = "Cancelling Gaussian import...";
         }
     }
 
@@ -596,7 +645,7 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
             }
         }
 
-        const bool can_restore_source_scene = scene.IsReady() && !scene.GetSourceFilePath().empty();
+        const bool can_restore_source_scene = scene.IsReady() && !scene.GetSourceFilePath().empty() && !m_gaussian_import.valid();
 
         if (ImGui::MenuItem("Load State Cache", nullptr, false, can_restore_source_scene)) {
             m_b_need_reload           = true;
@@ -650,7 +699,7 @@ void EditorUI::ShowHierarchy(Scene& scene) {
     }
 
     const auto draw_node = [&](auto& self, entt::entity entity) -> void {
-        const std::string           label        = scene.GetNodeDisplayName(entity);
+        const std::string           label        = (scene.GetGaussianAsset(entity) ? "[GS] " : "") + scene.GetNodeDisplayName(entity);
         const Scene::NodeVisibility visibility   = scene.GetNodeVisibility(entity);
         const bool                  selected     = (m_selected_node == entity);
         const bool                  has_children = scene.GetNodeChildCount(entity) > 0;

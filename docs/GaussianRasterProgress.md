@@ -107,3 +107,11 @@ P1/P2 已完成：标准 PLY 可沿独立光栅路径输出图像。原 Mesh 数
 运行 GPU 检查：在 `target/bin/Debug` 执行 `TestGaussianRasterGpu.exe [asset.ply capture.ppm]`。可选的真实资产对照脚本为 `source/test/gaussian/ReferenceGaussianPly.py`，依赖 NumPy/Pillow；未加入默认 CTest，避免要求无 GPU 的构建机运行 Vulkan 测试。
 
 下一步为 P3：编辑器导入/Inspector、属性交互、持久化、图像导出及统计/诊断面板。混合材质与论文转换路径保留在 P4/P5。
+
+## P3.1：高斯导入与 Inspector（2026-10-21）
+
+- 文件选择器增加标准 3DGS PLY。导入到当前场景时后台解析 PLY，主线程原子创建实例；提供加载状态和取消，失败不修改 Scene。
+- Hierarchy 使用 `[GS]` 标识；Inspector 复用原变换/可见性编辑，增加来源、SH 阶数、数量、局部 bounds、几何 Buffer 字节数（共享）、启用、颜色/opacity 乘数和重置。
+- 新增 Scene 实例复制 API，保留父节点、局部变换、可见性和外观，继续共享不可变资产。高斯叶节点使用独立删除路径。
+- 验证：Editor 构建与 GaussianSceneDataContract 通过；实际 Vulkan 编辑器持续运行，通过 Python API 复制真实 Apple、修改透明度/平移并删除，GPU revision 独立更新，日志未发现验证层错误。原生文件选择器交互不属于该自动化 API 冒烟验证。
+- 这是 P3 的第一个功能提交；独立场景保存、显示控制、PNG 与统计尚在后续工作中。

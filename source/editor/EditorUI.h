@@ -21,6 +21,8 @@
 
 #include <entt/entity/entity.hpp>
 #include <string>
+#include <future>
+#include "scene/gaussian/GaussianAsset.h"
 
 namespace Moer {
 
@@ -103,6 +105,7 @@ public: // Sub UI
 private:
     void ResetFrameState();
     void ShowFileMenu(Scene& scene, bool is_scene_loading);
+    void PollGaussianImport(Scene& scene);
     void ShowGameView();
     void ShowSceneView(Scene& scene);
     void ShowViewportWindow(const char* window_name, bool* p_open, EEditorViewportMode viewport_mode);
@@ -143,6 +146,9 @@ private:
     bool        m_b_need_reload               = false;
     bool        m_b_show_render_config_sub_ui = true; // 当前 renderer 的专属配置面板是否可见。
     std::string m_last_file_action_status;
+    std::future<GaussianLoadResult> m_gaussian_import;
+    std::filesystem::path m_gaussian_import_scene_path;
+    bool m_should_cancel_gaussian_import = false;
 
     // Hierarchy selection state
     entt::entity m_selected_node = entt::null;
