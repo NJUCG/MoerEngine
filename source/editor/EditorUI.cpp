@@ -4,6 +4,7 @@
 
 // Runtime
 #include "Engine.h"
+#include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "window/WindowInput.h"
 
@@ -652,8 +653,13 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
     }
 
     const auto export_status = scene.GetGaussianImageExportStatus();
-    if (ImGui::MenuItem("Export Gaussian PNG...", nullptr, false, scene.HasGaussianSceneData() &&
-            m_config->selected_render_method == ERenderMethod::Raster && !export_status.is_busy)) {
+    const auto gaussian_content = scene.GetGaussianSceneContentForView(
+        m_config->active_viewport_mode == EEditorViewportMode::Scene
+    );
+    const bool can_export_gaussians = scene.HasGaussianSceneData() &&
+        m_config->selected_render_method == ERenderMethod::Raster && !export_status.is_busy &&
+        (gaussian_content == EGaussianSceneContent::GaussianOnly || gaussian_content == EGaussianSceneContent::Empty);
+    if (ImGui::MenuItem("Export Gaussian PNG...", nullptr, false, can_export_gaussians)) {
         NFD::UniquePath selected_path;
         const nfdfilteritem_t filter{"PNG image", "png"};
         if (NFD::SaveDialog(selected_path, &filter, 1, nullptr, "gaussian.png") == NFD_OKAY) {
@@ -664,19 +670,28 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
                 "Gaussian PNG export requested (current viewport, no UI)" : "Export failed: " + error;
         }
     }
+    if (scene.HasGaussianSceneData() && gaussian_content == EGaussianSceneContent::Mixed)
+        ImGui::TextDisabled("PNG export is unavailable for mixed Mesh/Gaussian rendering.");
     if (!export_status.message.empty()) ImGui::TextWrapped("%s", export_status.message.c_str());
     if (ImGui::BeginMenu("Scene Cache")) {
-        if (ImGui::MenuItem("Save State Cache")) {
+        const bool can_restore_source_scene = scene.IsReady() && !scene.GetSourceFilePath().empty() && !m_gaussian_import.valid();
+        const bool is_cache_enabled = ConfigManager::GetInstance().GetConfig().engine.scene.enable_cache;
+        if (scene.HasGaussianSceneData()) {
+            ImGui::TextWrapped("Save Gaussian edits in .moca; reopen the original scene file to restore them.");
+            ImGui::Separator();
+        }
+        if (!is_cache_enabled)
+            ImGui::TextWrapped("Cache loading is disabled. Enable engine.scene.enable_cache in the startup configuration to restore saved edits.");
+        if (ImGui::MenuItem("Save State Cache", nullptr, false, can_restore_source_scene)) {
             if (scene.SaveStateCache()) {
-                m_last_file_action_status = "State cache saved";
+                m_last_file_action_status = is_cache_enabled ? "State cache saved" :
+                    "State cache saved; cache loading is disabled in the startup configuration.";
             } else {
                 m_last_file_action_status = "Save State failed. Check log.";
             }
         }
 
-        const bool can_restore_source_scene = scene.IsReady() && !scene.GetSourceFilePath().empty() && !m_gaussian_import.valid();
-
-        if (ImGui::MenuItem("Load State Cache", nullptr, false, can_restore_source_scene)) {
+        if (ImGui::MenuItem("Load State Cache", nullptr, false, can_restore_source_scene && is_cache_enabled)) {
             m_b_need_reload           = true;
             m_last_file_action_status = "Load Cache requested";
         }
@@ -1008,6 +1023,7 @@ void EditorUI::ShowGaussianSettings(Scene& scene) {
     if (content == EGaussianSceneContent::Mixed)
         ImGui::TextWrapped("Mixed Mesh/Gaussian rendering is not implemented yet. The magenta image is diagnostic.");
     ImGui::TextDisabled("Standard SH appearance; scene lights do not relight it.");
+    ImGui::TextWrapped("Save edits: File > Scene Cache > Save State Cache (.moca).");
     auto settings=scene.GetGaussianViewSettings();
     int display_mode=static_cast<int>(settings.display_mode);
     bool has_changed=ImGui::Combo("Display mode", &display_mode, "Reference RGB\0Engine preview\0");
@@ -1024,6 +1040,8 @@ void EditorUI::ShowGaussianSettings(Scene& scene) {
     settings.debug_view=static_cast<EGaussianDebugView>(debug_view);
     int pair_capacity=static_cast<int>(settings.tile_pair_capacity);
     has_changed |= ImGui::InputInt("Tile-pair capacity", &pair_capacity,65536,1048576);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Allocation budget: 1 to 16,777,216 pairs. Increase only if the pair count overflows; higher values use more GPU memory.");
     settings.tile_pair_capacity=static_cast<uint>(std::clamp(pair_capacity,1,1<<24));
     if(has_changed) scene.SetGaussianViewSettings(settings);
     if(ImGui::Button("Reset reference settings")) scene.SetGaussianViewSettings({});
