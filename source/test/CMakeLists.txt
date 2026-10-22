@@ -594,6 +594,19 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanDeviceFeaturesContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(VulkanDeviceFeaturesContract PROPERTIES TIMEOUT 60)
 
+# Descriptor storage bookkeeping is CPU-only and is exercised on Metal hosts too.
+find_package(Threads REQUIRED)
+set(test_target TestVulkanDescriptorBufferAllocator)
+add_executable(${test_target}
+    "VulkanDescriptorBufferAllocatorTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanDescriptorBufferAllocator.cpp"
+)
+target_include_directories(${test_target} PRIVATE "${moer_source_dir}/runtime/render")
+target_link_libraries(${test_target} PRIVATE Threads::Threads)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanDescriptorBufferAllocatorContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(VulkanDescriptorBufferAllocatorContract PROPERTIES TIMEOUT 30)
+
 # Vulkan integration seam for ordered multi-primary submission and the
 # recoverable worker-failure path. It is intentionally run explicitly because
 # it requires a Vulkan-capable machine; the CPU-only contracts above remain in
