@@ -18,6 +18,17 @@ GpuScene::PendingCommandList RenderScene::ApplyUpdate(
     assert(IsCurrentlyGameThread() || IsCurrentlyRenderThread());
     assert(update.HasWork());
 
+    auto gaussian_update = std::move(update.gaussian_update);
+    if (!update.HasMeshWork()) {
+        GpuScene::PendingCommandList pending;
+        if (setup_command_lists) setup_command_lists(pending, false);
+        if (gaussian_update) {
+            if (!m_gaussian_scene) m_gaussian_scene = MakeUnique<GaussianGpuScene>();
+            m_gaussian_scene->ApplyUpdate(std::move(gaussian_update), pending.gfx_queue_cmd_list);
+        }
+        return pending;
+    }
+
     LOG_INFO(
         "[Threading] RenderScene update executes on {} Thread; full_rebuild={}, lights={}, "
         "materials={}, meshes={}, raytracing_update={}.",
@@ -35,6 +46,7 @@ GpuScene::PendingCommandList RenderScene::ApplyUpdate(
         // scene resources that are about to be replaced.
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         RenderDevice::Get().WaitIdle();
+        if (!gaussian_update) m_gaussian_scene.reset();
         m_gpu_scene = MakeUnique<GpuScene>(m_bindless_array);
     }
 
@@ -42,7 +54,12 @@ GpuScene::PendingCommandList RenderScene::ApplyUpdate(
     m_gpu_scene->ApplyUpdate(
         std::move(update), setup_command_lists
     );
-    return m_gpu_scene->PopPendingCommandList();
+    auto pending = std::move(m_gpu_scene->PopPendingCommandList());
+    if (gaussian_update) {
+        if (!m_gaussian_scene) m_gaussian_scene = MakeUnique<GaussianGpuScene>();
+        m_gaussian_scene->ApplyUpdate(std::move(gaussian_update), pending.gfx_queue_cmd_list);
+    }
+    return pending;
 }
 
 const GpuScene::Res& RenderScene::gpu_scene_res() const {

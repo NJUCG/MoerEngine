@@ -26,12 +26,18 @@ struct RasterFramePacket {
     UiCompositionFrameData     ui_composition{};
     UiDrawFramePacket          ui_draw_frame{};
     SceneUpdateBatch           scene_updates{};
+    EGaussianSceneContent      gaussian_content = EGaussianSceneContent::Empty;
+    bool                       has_gaussian_assets = false;
+    GaussianViewSettings       gaussian_view_settings{};
+    std::optional<GaussianExportRequest> gaussian_export_request;
 };
 
 static_assert(std::is_move_constructible_v<RasterFramePacket>);
 static_assert(!std::is_copy_constructible_v<RasterFramePacket>);
 
 struct RasterFrameFeedback {
+    GaussianRasterStatus        gaussian_status{};
+    GaussianExportStatus        gaussian_export_status{};
     uint64_t                    frame_id = 0;
     PresentReceiptRef           main_present_receipt{};
     RasterConfig::CullingStats  culling_stats{};

@@ -213,7 +213,27 @@ public:
 
     ImportSceneFromFileResult ImportSceneFromFileSync(const std::filesystem::path& file_path);
 
+    // PLY import is atomic and does not modify Mesh assets or invalidate Mesh geometry.
+    ImportSceneFromFileResult ImportGaussianPly(const std::filesystem::path& file_path);
+    entt::entity CreateGaussianInstance(GaussianAssetRef asset, const EntityWithNodeCreateInfo& info = {});
+    GaussianAssetRef GetGaussianAsset(entt::entity entity) const;
+    std::optional<GaussianInstanceSettings> GetGaussianInstanceSettings(entt::entity entity) const;
+    bool SetGaussianInstanceSettings(entt::entity entity, const GaussianInstanceSettings& settings);
+    bool DestroyGaussianInstance(entt::entity entity);
+    entt::entity DuplicateGaussianInstance(entt::entity entity);
+    GaussianViewSettings GetGaussianViewSettings() const;
+    bool SetGaussianViewSettings(const GaussianViewSettings& settings);
+    bool HasGaussianSceneData() const;
+    bool RequestGaussianImageExport(const std::filesystem::path& path, std::string& out_error);
+    std::optional<GaussianExportRequest> TakeGaussianImageExportRequest();
+    GaussianExportStatus GetGaussianImageExportStatus() const;
+    void ApplyGaussianImageExportStatus(const GaussianExportStatus& status);
+    EGaussianSceneContent GetGaussianSceneContent() const;
+    EGaussianSceneContent GetGaussianSceneContentForView(bool is_editor_view) const;
+    std::shared_ptr<const GaussianSceneSnapshot> GetGaussianSnapshot() const { return m_last_gaussian_snapshot; }
+
     const std::filesystem::path& GetSourceFilePath() const;
+    bool WasLoadedFromStateCache() const { return m_was_loaded_from_state_cache; }
 
     /**
      * 重置所有场景数据
@@ -267,6 +287,7 @@ private:
     /////////////////////////////////
 
     TickState BuildPendingTickState() const;
+    std::shared_ptr<const GaussianSceneSnapshot> CaptureGaussianUpdate(bool should_force_update);
 
 public:
     ///////////////////////
@@ -456,7 +477,10 @@ private:
     SceneLoadInfoAsync    m_scene_load_info;
     TickState             m_last_tick_state;
     std::filesystem::path m_source_file_path;
+    bool                  m_was_loaded_from_state_cache = false;
     bool                  m_has_pending_gpu_scene_update = false;
+    std::shared_ptr<const GaussianSceneSnapshot> m_last_gaussian_snapshot;
+    uint64 m_gaussian_revision = 0;
 };
 
 struct SceneGeometryInstanceSnapshot {

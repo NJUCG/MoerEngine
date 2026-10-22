@@ -13,6 +13,29 @@ class EProceduralPrimitiveShape(Enum):
     Cube: EProceduralPrimitiveShape
     FacetedSphere: EProceduralPrimitiveShape
 
+class EGaussianDisplayMode(Enum):
+    Reference: EGaussianDisplayMode
+    Engine: EGaussianDisplayMode
+
+class EGaussianDebugView(Enum):
+    Color: EGaussianDebugView
+    Transmittance: EGaussianDebugView
+    TileCoverage: EGaussianDebugView
+
+class GaussianViewSettings:
+    background: float3
+    exposure_ev: float
+    display_mode: EGaussianDisplayMode
+    debug_view: EGaussianDebugView
+    tile_pair_capacity: int
+    def __init__(self) -> None: ...
+
+class GaussianExportStatus:
+    request_id: int
+    is_busy: bool
+    is_successful: bool
+    message: str
+
 class float2:
     x: float
     y: float
@@ -169,6 +192,16 @@ Entity = int
 
 
 class SceneApi:
+    def request_gaussian_image_export(self, path: str) -> bool: ...
+    def get_gaussian_image_export_status(self) -> GaussianExportStatus: ...
+    def get_gaussian_view_settings(self) -> GaussianViewSettings: ...
+    def set_gaussian_view_settings(self, settings: GaussianViewSettings) -> bool: ...
+    def save_state_cache(self) -> bool: ...
+    def duplicate_gaussian_instance(self, entity: Entity) -> Entity: ...
+    def get_gaussian_scene_content(self) -> EGaussianSceneContent: ...
+    def get_gaussian_instance_settings(self, entity: Entity) -> GaussianInstanceSettings | None: ...
+    def set_gaussian_instance_settings(self, entity: Entity, settings: GaussianInstanceSettings) -> bool: ...
+    def destroy_gaussian_instance(self, entity: Entity) -> bool: ...
     def get_source_file_path(self) -> str: ...
     def is_start_loading(self) -> bool: ...
     def is_ready(self) -> bool: ...
@@ -209,3 +242,18 @@ class SceneApi:
 
 
 def scene() -> SceneApi: ...
+
+
+class EGaussianSceneContent(Enum):
+    Empty: EGaussianSceneContent
+    MeshOnly: EGaussianSceneContent
+    GaussianOnly: EGaussianSceneContent
+    Mixed: EGaussianSceneContent
+
+
+class GaussianInstanceSettings:
+    color_multiplier: float3
+    opacity_multiplier: float
+    enabled: bool
+
+    def __init__(self) -> None: ...

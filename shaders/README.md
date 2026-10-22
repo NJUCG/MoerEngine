@@ -61,7 +61,7 @@ graph TD
 **路径**: `shaders/features/`
 独立于主渲染管线的功能模块，即插即用。
 
-*   `3dgs/`: 3D Gaussian Splatting 渲染器。
+*   高斯渲染将在 P2 按当前架构重新实现；废弃的旧版 `3dgs/` Shader 已删除。
 *   `ui/`: 用户界面渲染 (Imgui 等)。
 *   `debug/`: 调试工具 (Meshlet Debug, Cull Debug)。
 

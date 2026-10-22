@@ -6,10 +6,12 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "scene/camera/Camera.h"
+#include "scene/gaussian/GaussianAsset.h"
 #include "shaderheaders/shared/raster/SharedEnum.h"
 
 #include <entt/entity/entity.hpp>
 #include <string>
+#include <optional>
 
 /**
  * 这里存了所有ECS Component, Context的定义
@@ -21,6 +23,18 @@
  *   - 所有Context的类型名 均以Ctx开头
  */
 namespace Moer::ecs {
+
+struct CGaussianInstance {
+    GaussianAssetRef asset;
+    GaussianInstanceSettings settings;
+};
+struct CtxGaussianViewSettings {
+    GaussianViewSettings value;
+};
+struct CtxGaussianImageExport {
+    std::optional<GaussianExportRequest> pending;
+    GaussianExportStatus status;
+};
 
 // MARK: Camera
 struct CTagMainCamera {};

@@ -555,6 +555,70 @@ void BindSceneImportApi(SceneApiClass& scene_api_class) {
         );
 }
 
+void BindGaussianApi(py::module_& module, SceneApiClass& scene_api_class) {
+    py::enum_<EGaussianSceneContent>(module, "EGaussianSceneContent")
+        .value("Empty", EGaussianSceneContent::Empty)
+        .value("MeshOnly", EGaussianSceneContent::MeshOnly)
+        .value("GaussianOnly", EGaussianSceneContent::GaussianOnly)
+        .value("Mixed", EGaussianSceneContent::Mixed);
+    py::class_<GaussianInstanceSettings>(module, "GaussianInstanceSettings")
+        .def(py::init<>())
+        .def_readwrite("color_multiplier", &GaussianInstanceSettings::color_multiplier)
+        .def_readwrite("opacity_multiplier", &GaussianInstanceSettings::opacity_multiplier)
+        .def_readwrite("enabled", &GaussianInstanceSettings::is_enabled);
+    py::enum_<EGaussianDisplayMode>(module,"EGaussianDisplayMode")
+        .value("Reference",EGaussianDisplayMode::Reference).value("Engine",EGaussianDisplayMode::Engine);
+    py::enum_<EGaussianDebugView>(module,"EGaussianDebugView")
+        .value("Color",EGaussianDebugView::Color).value("Transmittance",EGaussianDebugView::Transmittance).value("TileCoverage",EGaussianDebugView::TileCoverage);
+    py::class_<GaussianViewSettings>(module,"GaussianViewSettings")
+        .def(py::init<>()).def_readwrite("background",&GaussianViewSettings::background)
+        .def_readwrite("exposure_ev",&GaussianViewSettings::exposure_ev)
+        .def_readwrite("display_mode",&GaussianViewSettings::display_mode)
+        .def_readwrite("debug_view",&GaussianViewSettings::debug_view)
+        .def_readwrite("tile_pair_capacity",&GaussianViewSettings::tile_pair_capacity);
+    py::class_<GaussianExportStatus>(module,"GaussianExportStatus")
+        .def_readonly("request_id",&GaussianExportStatus::request_id)
+        .def_readonly("is_busy",&GaussianExportStatus::is_busy)
+        .def_readonly("is_successful",&GaussianExportStatus::is_successful)
+        .def_readonly("message",&GaussianExportStatus::message);
+    scene_api_class
+        .def("request_gaussian_image_export", [](MainThreadCommandQueue& queue, const std::string& path) {
+            return CallScene(queue, [path](Scene& scene) {
+                std::string error;
+                const std::filesystem::path output_path(std::u8string(reinterpret_cast<const char8_t*>(path.data()),path.size()));
+                if(!scene.RequestGaussianImageExport(output_path,error)) throw std::runtime_error(error);
+                return true;
+            });
+        })
+        .def("get_gaussian_image_export_status", [](MainThreadCommandQueue& queue) {
+            return CallScene(queue, [](Scene& scene) { return scene.GetGaussianImageExportStatus(); });
+        })
+        .def("get_gaussian_view_settings", [](MainThreadCommandQueue& queue) {
+            return CallScene(queue, [](Scene& scene) { return scene.GetGaussianViewSettings(); });
+        })
+        .def("set_gaussian_view_settings", [](MainThreadCommandQueue& queue, const GaussianViewSettings& settings) {
+            return CallScene(queue, [settings](Scene& scene) { return scene.SetGaussianViewSettings(settings); });
+        })
+        .def("save_state_cache", [](MainThreadCommandQueue& queue) {
+            return CallScene(queue, [](Scene& scene) { return scene.SaveStateCache(); });
+        })
+        .def("duplicate_gaussian_instance", [](MainThreadCommandQueue& queue, entt::entity entity) {
+            return CallScene(queue, [entity](Scene& scene) { return scene.DuplicateGaussianInstance(entity); });
+        })
+        .def("get_gaussian_scene_content", [](MainThreadCommandQueue& queue) {
+            return CallScene(queue, [](Scene& scene) { return scene.GetGaussianSceneContent(); });
+        })
+        .def("get_gaussian_instance_settings", [](MainThreadCommandQueue& queue, entt::entity entity) {
+            return CallScene(queue, [entity](Scene& scene) { return scene.GetGaussianInstanceSettings(entity); });
+        })
+        .def("set_gaussian_instance_settings", [](MainThreadCommandQueue& queue, entt::entity entity, const GaussianInstanceSettings& settings) {
+            return CallScene(queue, [entity, settings](Scene& scene) { return scene.SetGaussianInstanceSettings(entity, settings); });
+        })
+        .def("destroy_gaussian_instance", [](MainThreadCommandQueue& queue, entt::entity entity) {
+            return CallScene(queue, [entity](Scene& scene) { return scene.DestroyGaussianInstance(entity); });
+        });
+}
+
 void BindScenePrimaryEntityQueryApi(SceneApiClass& scene_api_class) {
     scene_api_class
         .def(
@@ -763,6 +827,7 @@ void BindSceneApi(py::module_& module) {
 
     BindSceneInspectionApi(scene_api_class);
     BindSceneImportApi(scene_api_class);
+    BindGaussianApi(module, scene_api_class);
     BindScenePrimaryEntityQueryApi(scene_api_class);
     BindSceneCreationApi(scene_api_class);
     BindSceneUpdateApi(scene_api_class);

@@ -2,6 +2,7 @@
 
 #include "GpuScene.h"
 #include "RenderAPI.h"
+#include "gaussian/GaussianGpuScene.h"
 
 namespace Moer::Render {
 
@@ -28,10 +29,12 @@ public:
     }
 
     void RestoreDrawCommands(CommandList& cmd_list);
+    const GaussianGpuScene* GetGaussianGpuScene() const { return m_gaussian_scene.get(); }
 
 private:
     BindlessArrayRef    m_bindless_array;
     UniquePtr<GpuScene> m_gpu_scene;
+    UniquePtr<GaussianGpuScene> m_gaussian_scene;
 };
 
 } // namespace Moer::Render

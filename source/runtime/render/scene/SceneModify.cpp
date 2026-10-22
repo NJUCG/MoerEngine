@@ -67,6 +67,9 @@ static void MarkNodeVisibilityRenderSync(Scene& scene, entt::entity entity) {
         return;
     }
 
+    if (registry.all_of<ecs::CGaussianInstance>(entity) && registry.get<ecs::CNode>(entity).child_count == 0) {
+        return; // Visibility is captured in the independent Gaussian snapshot.
+    }
     MarkSceneMeshRebuild(scene);
 
     Array<entt::entity> subtree_entities;
@@ -480,6 +483,7 @@ bool Scene::DetachFromParent(entt::entity child_entt) {
 
 // 删除普通 entity 或 leaf EntityWithNode，复杂 render-side entity 暂不支持
 bool Scene::DestroyEntity(entt::entity entity) {
+    if (GetGaussianAsset(entity)) return DestroyGaussianInstance(entity);
     entt::entity old_parent_entt = entt::null;
     if (!logical_scene().UDestroyEntity(entity, &old_parent_entt)) {
         return false;
@@ -490,6 +494,7 @@ bool Scene::DestroyEntity(entt::entity entity) {
 }
 
 bool Scene::DestroyNodeSubtree(entt::entity entity) {
+    if (GetGaussianAsset(entity) && r().get<ecs::CNode>(entity).child_count == 0) return DestroyGaussianInstance(entity);
     auto& registry = r();
     if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
         LOG_ERROR(
@@ -625,6 +630,11 @@ void Scene::MarkDirty<ecs::CNode>(entt::entity entity) {
     auto& node     = registry.get<ecs::CNode>(entity);
 
     node.is_dirty = true;
+    // Gaussian leaf transforms are consumed by the independent snapshot, not Mesh/TLAS updates.
+    if (registry.all_of<ecs::CGaussianInstance>(entity) && node.child_count == 0 &&
+        !registry.any_of<ecs::CRenderable, ecs::CLight, ecs::CCamera>(entity)) {
+        return;
+    }
     registry.emplace_or_replace<ecs::CTagNeedUpdateTransform>(entity);
 
     if (registry.all_of<ecs::CLightDirectional>(entity)) {
