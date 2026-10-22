@@ -88,8 +88,7 @@ public:
     ~VulkanDevice() override;
 
     // Shared resource limits.
-    static constexpr uint bindless_sampler_count       = 256;
-    static constexpr uint command_allocator_slot_count = 3;
+    static constexpr uint bindless_sampler_count = 256;
 
     // RHI resource creation.
     TextureRef CreateTexture(std::string_view _name, const TextureInfo& _info) override;

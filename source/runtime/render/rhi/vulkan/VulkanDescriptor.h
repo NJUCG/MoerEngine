@@ -1,11 +1,10 @@
 #pragma once
 
 #include "VulkanCommon.h"
+#include "VulkanDescriptorBufferAllocator.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 
-#include <atomic>
-#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -18,22 +17,8 @@ class VulkanAccelerationStructure;
 class BufferView;
 struct TextureView;
 struct Sampler;
-enum class EQueueType : uint8;
 
-// Recorders share the allocation cursor; the submission owns slot retirement.
-struct VulkanDescriptorBufferLeaseState {
-    VulkanDescriptorBufferLeaseState(uint32 _slot_index, uint64 _begin_byte_offset, uint64 _end_byte_offset) :
-        slot_index(_slot_index),
-        begin_byte_offset(_begin_byte_offset),
-        end_byte_offset(_end_byte_offset),
-        next_byte_offset(_begin_byte_offset) {}
-
-    const uint32        slot_index;
-    const uint64        begin_byte_offset;
-    const uint64        end_byte_offset;
-    std::atomic<uint64> next_byte_offset;
-};
-
+// Recorders share allocation state; the completion batch owns retirement.
 struct VulkanDescriptorBufferLease {
     std::shared_ptr<VulkanDescriptorBufferLeaseState> state;
 
@@ -86,9 +71,9 @@ public:
     void
     CopyAccelerationStructureDescriptorToBuffer(uint64 _source_byte_offset, uint64 _destination_byte_offset);
 
-    // Acquisition waits for a free slot in this queue's partition. Flush makes
-    // writes visible; recycle only after GPU completion or discarded recording.
-    VulkanDescriptorBufferLease AcquireDescriptorBufferLease(EQueueType _queue_type);
+    // Creation reserves no storage. Flush after recorders join; recycle only
+    // after GPU completion or after all referencing commands are discarded.
+    VulkanDescriptorBufferLease CreateDescriptorBufferLease();
     void                        FlushDescriptorWrites(const VulkanDescriptorBufferLease& _lease);
     void                        RecycleDescriptorBufferLease(VulkanDescriptorBufferLease _lease);
 
@@ -98,20 +83,22 @@ public:
         const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease,
         uint64                                                   _byte_size
     );
-    uint64 GetDescriptorWriteOffset(const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease) const;
+    uint64 GetUsedDescriptorBytes(const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease) const;
+
+    VulkanDescriptorAllocationCheckpoint
+    CreateDescriptorCheckpoint(const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease) const;
 
     // All recorders using this lease must have joined and discarded their work
-    // before rolling the cursor back for serial fallback.
+    // before restoring allocation state for serial fallback.
     void RewindDescriptorWrites(
         const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease,
-        uint64                                                   _byte_offset
+        const VulkanDescriptorAllocationCheckpoint&              _checkpoint
     );
 
 private:
     void InitializeDescriptorCaches();
     void InitializeSamplerDescriptors();
     void CreateDescriptorBuffer();
-    void InitializeLeaseSlots();
     void MapDescriptorBuffer();
 
     // Call with cache_mutex held; views never escape the descriptor copy.
@@ -153,12 +140,8 @@ private:
     std::unique_ptr<VulkanBuffer> descriptor_buffer;
     uint8*                        mapped_descriptor_data{nullptr};
 
-    // Submission leases partition storage between graphics and compute.
-    Array<uint64>                                            lease_slot_byte_offsets;
-    Array<std::shared_ptr<VulkanDescriptorBufferLeaseState>> active_leases;
-    StaticArray<uint32, 2>                                   next_queue_slots{};
-    std::mutex                                               lease_mutex;
-    std::condition_variable                                  lease_available;
+    // Graphics and compute share free storage; completion owns each lease's lifetime.
+    VulkanDescriptorBufferAllocator descriptor_allocator;
 };
 
 } // namespace Moer::Render

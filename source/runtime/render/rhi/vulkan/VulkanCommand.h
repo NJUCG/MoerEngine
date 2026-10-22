@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanCommon.h"
+#include "VulkanDescriptorBufferAllocator.h"
 #include "VulkanRHIResource.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
@@ -16,7 +17,6 @@ namespace Moer::Render {
 
 class VulkanDevice;
 class VkNativeQueryPool;
-struct VulkanDescriptorBufferLeaseState;
 
 class VulkanCommandPool : public VulkanDeviceObject {
 public:

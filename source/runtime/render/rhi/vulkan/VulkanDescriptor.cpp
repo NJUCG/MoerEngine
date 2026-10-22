@@ -4,7 +4,6 @@
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
-#include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanUtil.h"
 
@@ -23,7 +22,16 @@ namespace {
 
 static constexpr std::string_view s_descriptor_buffer_name         = "VulkanDescriptorHeap::DescriptorBuffer";
 static constexpr uint32           s_descriptor_cache_slot_capacity = 10086;
-static constexpr uint32           s_descriptor_queue_count         = 2;
+static constexpr uint64           s_descriptor_buffer_capacity     = 6 * 1024 * 1024;
+static constexpr uint64           s_descriptor_block_size          = 64 * 1024;
+
+uint64 GetDescriptorBlockSize(const VulkanDevice& _device) {
+    const uint64 alignment = std::max<uint64>(
+        _device.GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment,
+        _device.GetCoreProperties().core_1_0.limits.nonCoherentAtomSize
+    );
+    return Moer::AlignUp(s_descriptor_block_size, alignment);
+}
 
 static uint GetBufferDescriptorSize(const VulkanDevice& _device, VkDescriptorType _type) {
     const auto& properties = _device.GetOptionalProperties().descriptor_buffer_properties;
@@ -118,12 +126,16 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
         )
     ),
     image_cache_slot_stride(std::max(sampled_image_descriptor_size, storage_image_descriptor_size)),
-    image_cache_base_byte_offset(sampler_descriptor_size * VulkanDevice::bindless_sampler_count) {
+    image_cache_base_byte_offset(sampler_descriptor_size * VulkanDevice::bindless_sampler_count),
+    descriptor_allocator(
+        s_descriptor_buffer_capacity,
+        GetDescriptorBlockSize(_device),
+        _device.GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment
+    ) {
 
     InitializeDescriptorCaches();
     InitializeSamplerDescriptors();
     CreateDescriptorBuffer();
-    InitializeLeaseSlots();
     // Map last: no potentially throwing initialization remains after success.
     MapDescriptorBuffer();
 }
@@ -163,13 +175,20 @@ void VulkanDescriptorHeap::CreateDescriptorBuffer() {
     VkBuffer           desc_buffer            = VK_NULL_HANDLE;
     VmaAllocation      desc_buffer_allocation = VK_NULL_HANDLE;
     VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    // Graphics and compute each retain their own in-flight slice budget. A
-    // shared three-slice pool can deadlock when one queue holds every slice
-    // while waiting on work that the other queue has not yet recorded.
-    buffer_ci.size  = s_descriptor_queue_count * s_queue_max_frame_in_flight * 1024 * 1024;
+    buffer_ci.size  = s_descriptor_buffer_capacity;
     buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+    const uint32_t queue_families[] = {
+        m_device->GetQueueFamilyIndex(EQueueType::Graphics),
+        m_device->GetQueueFamilyIndex(EQueueType::Compute)
+    };
+    if (queue_families[0] != queue_families[1]) {
+        buffer_ci.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        buffer_ci.queueFamilyIndexCount = 2;
+        buffer_ci.pQueueFamilyIndices   = queue_families;
+    }
 
 #if WITH_CUDA
     buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
@@ -200,23 +219,6 @@ void VulkanDescriptorHeap::CreateDescriptorBuffer() {
         s_descriptor_buffer_name, buffer_info, *m_device, desc_buffer, desc_buffer_allocation, false, true
     );
     desc_buffer_allocation = VK_NULL_HANDLE;
-}
-
-void VulkanDescriptorHeap::InitializeLeaseSlots() {
-    // Partition descriptor storage into aligned submission lease slots.
-    lease_slot_byte_offsets.resize(s_descriptor_queue_count * m_device->command_allocator_slot_count);
-
-    // Use descriptorBufferOffsetAlignment for ring buffer offset alignment
-    uint64 alignment =
-        m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
-
-    uint64 lease_slot_size =
-        (descriptor_buffer->GetByteSize() / lease_slot_byte_offsets.size() / alignment) * alignment;
-
-    for (uint32_t i = 0; i < lease_slot_byte_offsets.size(); ++i) {
-        lease_slot_byte_offsets[i] = Moer::AlignUp(lease_slot_size * i, alignment);
-    }
-    active_leases.resize(lease_slot_byte_offsets.size());
 }
 
 void VulkanDescriptorHeap::MapDescriptorBuffer() {
@@ -527,76 +529,31 @@ void VulkanDescriptorHeap::CopyAccelerationStructureDescriptorToBuffer(
     );
 }
 
-VulkanDescriptorBufferLease VulkanDescriptorHeap::AcquireDescriptorBufferLease(EQueueType _queue_type) {
-    assert(
-        (_queue_type == EQueueType::Graphics || _queue_type == EQueueType::Compute) &&
-        "copy queues do not own descriptor buffer leases"
-    );
-    const uint32                 queue_index = _queue_type == EQueueType::Graphics ? 0u : 1u;
-    const uint32                 slot_count  = m_device->command_allocator_slot_count;
-    const uint32                 first_slot  = queue_index * slot_count;
-    std::unique_lock<std::mutex> lock(lease_mutex);
-    lease_available.wait(lock, [&, this] {
-        return std::any_of(
-            active_leases.begin() + first_slot,
-            active_leases.begin() + first_slot + slot_count,
-            [](const auto& _lease) {
-                return _lease == nullptr;
-            }
-        );
-    });
-
-    for (uint32 attempt = 0; attempt < slot_count; ++attempt) {
-        const uint32 relative_slot = (next_queue_slots[queue_index] + attempt) % slot_count;
-        const uint32 slot          = first_slot + relative_slot;
-        if (active_leases[slot] != nullptr) {
-            continue;
-        }
-        const uint64 begin  = lease_slot_byte_offsets[slot];
-        const uint64 end    = slot + 1 < lease_slot_byte_offsets.size() ? lease_slot_byte_offsets[slot + 1] :
-                                                                          descriptor_buffer->GetByteSize();
-        auto         state  = std::make_shared<VulkanDescriptorBufferLeaseState>(slot, begin, end);
-        active_leases[slot] = state;
-        next_queue_slots[queue_index] = (relative_slot + 1) % slot_count;
-        return {std::move(state)};
-    }
-
-    assert(false && "descriptor lease predicate succeeded without a free slot");
-    return {};
+VulkanDescriptorBufferLease VulkanDescriptorHeap::CreateDescriptorBufferLease() {
+    return {descriptor_allocator.CreateLease()};
 }
 
 void VulkanDescriptorHeap::FlushDescriptorWrites(const VulkanDescriptorBufferLease& _lease) {
     assert(_lease.IsValid() && "descriptor buffer lease is invalid");
-    const uint64 byte_size =
-        _lease.state->next_byte_offset.load(std::memory_order_acquire) - _lease.state->begin_byte_offset;
-    if (byte_size == 0) {
-        return;
+    // Recorders have joined. Never flush across gaps owned by another batch:
+    // a non-coherent flush counts as a write to every touched memory atom.
+    for (const auto& range : descriptor_allocator.GetWrittenRanges(*_lease.state)) {
+        const VkResult result = vmaFlushAllocation(
+            m_device->GetVmaAllocator(),
+            descriptor_buffer->GetAllocation(),
+            range.byte_offset,
+            range.byte_size
+        );
+        if (result != VK_SUCCESS) {
+            throw std::runtime_error("failed to flush descriptor writes: " + std::to_string(result));
+        }
     }
-    vmaFlushAllocation(
-        m_device->GetVmaAllocator(),
-        descriptor_buffer->GetAllocation(),
-        _lease.state->begin_byte_offset,
-        byte_size
-    );
 }
 
 void VulkanDescriptorHeap::RecycleDescriptorBufferLease(VulkanDescriptorBufferLease _lease) {
-    if (!_lease.IsValid()) {
-        return;
+    if (_lease.IsValid()) {
+        descriptor_allocator.Release(*_lease.state);
     }
-    {
-        std::lock_guard<std::mutex> lock(lease_mutex);
-        const uint32                slot = _lease.state->slot_index;
-        assert(slot < active_leases.size() && "descriptor lease slot is invalid");
-        assert(
-            active_leases[slot] == _lease.state && "descriptor lease was recycled twice or after slot reuse"
-        );
-        active_leases[slot].reset();
-    }
-    // Graphics and compute wait on disjoint slot partitions but share this
-    // condition variable. notify_one could wake the wrong partition and leave
-    // the queue that actually gained a slot asleep indefinitely.
-    lease_available.notify_all();
 }
 
 std::optional<uint64> VulkanDescriptorHeap::ReserveDescriptorRange(
@@ -604,41 +561,32 @@ std::optional<uint64> VulkanDescriptorHeap::ReserveDescriptorRange(
     uint64                                                   _byte_size
 ) {
     assert(_lease != nullptr && "descriptor range reservation has no submission lease");
-    if (_lease == nullptr) {
+    if (!_lease || m_device->IsFaulted()) {
         return std::nullopt;
     }
-    uint64 begin = _lease->next_byte_offset.load(std::memory_order_acquire);
-    while (true) {
-        if (begin > _lease->end_byte_offset || _byte_size > _lease->end_byte_offset - begin) {
-            return std::nullopt;
-        }
-        const uint64 end = begin + _byte_size;
-        if (_lease->next_byte_offset.compare_exchange_weak(
-                begin, end, std::memory_order_acq_rel, std::memory_order_acquire
-            )) {
-            return begin;
-        }
-    }
+    return descriptor_allocator.ReserveRange(*_lease, _byte_size);
 }
 
-uint64 VulkanDescriptorHeap::GetDescriptorWriteOffset(
+uint64 VulkanDescriptorHeap::GetUsedDescriptorBytes(
     const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease
 ) const {
-    assert(_lease != nullptr && "descriptor offset query has no submission lease");
-    return _lease->next_byte_offset.load(std::memory_order_acquire);
+    assert(_lease != nullptr && "descriptor usage query has no submission lease");
+    return descriptor_allocator.GetUsage(*_lease).used_bytes;
+}
+
+VulkanDescriptorAllocationCheckpoint VulkanDescriptorHeap::CreateDescriptorCheckpoint(
+    const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease
+) const {
+    assert(_lease != nullptr && "descriptor checkpoint has no submission lease");
+    return descriptor_allocator.CreateCheckpoint(*_lease);
 }
 
 void VulkanDescriptorHeap::RewindDescriptorWrites(
     const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease,
-    uint64                                                   _byte_offset
+    const VulkanDescriptorAllocationCheckpoint&              _checkpoint
 ) {
     assert(_lease != nullptr && "descriptor rewind has no submission lease");
-    const uint64 current = _lease->next_byte_offset.load(std::memory_order_acquire);
-    assert(
-        _byte_offset >= _lease->begin_byte_offset && _byte_offset <= current &&
-        "descriptor rewind escaped the submission lease"
-    );
-    _lease->next_byte_offset.store(_byte_offset, std::memory_order_release);
+    descriptor_allocator.Rewind(*_lease, _checkpoint);
 }
 
 std::span<const byte> VulkanDescriptorHeap::GetCachedBufferDescriptor(uint64 _byte_offset) const {

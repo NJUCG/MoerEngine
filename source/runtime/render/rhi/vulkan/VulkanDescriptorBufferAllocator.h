@@ -72,4 +72,7 @@ private:
     std::mutex         free_ranges_mutex;
 };
 
+using VulkanDescriptorBufferLeaseState     = VulkanDescriptorBufferAllocator::LeaseState;
+using VulkanDescriptorAllocationCheckpoint = VulkanDescriptorBufferAllocator::Checkpoint;
+
 } // namespace Moer::Render

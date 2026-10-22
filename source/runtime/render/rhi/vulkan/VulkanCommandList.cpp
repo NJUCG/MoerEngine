@@ -405,7 +405,9 @@ void VulkanCmdList::BindShaderArguments(
         descriptor_buffer_lease, GetResourceDescriptorAllocationSize(binding_template)
     );
     if (!allocation_offset.has_value()) {
-        throw std::runtime_error("descriptor submission lease exhausted");
+        throw std::runtime_error(
+            "descriptor buffer allocation failed: capacity exhausted, fragmented, or device faulted"
+        );
     }
 
     // Pipeline metadata is shared and immutable. Only resolved addresses and

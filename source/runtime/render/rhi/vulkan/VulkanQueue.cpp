@@ -12,6 +12,7 @@
 #include "VulkanSubmissionDiagnostics.h"
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
+#include "misc/RAII.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
 #include "misc/Traits.h"
@@ -6564,7 +6565,14 @@ bool VkCommandQueue::TryExecuteParallel(
 
     VulkanDescriptorHeap& descriptor_heap = vk_device.GetGlobalDescriptorHeap();
     VulkanDescriptorBufferLease descriptor_lease =
-        descriptor_heap.AcquireDescriptorBufferLease(EQueueType::Graphics);
+        descriptor_heap.CreateDescriptorBufferLease();
+    auto release_unsubmitted_descriptors = OnScopeExit([&] {
+        // RunAndWait drains workers before returning. Once handed to Submission,
+        // this local lease is empty and Completion owns its retirement.
+        if (descriptor_lease.IsValid()) {
+            descriptor_heap.RecycleDescriptorBufferLease(std::move(descriptor_lease));
+        }
+    });
 
     auto              tracker_owner = AcquireCommandContext();
     auto& tracker       = tracker_owner->GetTracker();
@@ -6769,8 +6777,7 @@ bool VkCommandQueue::TryExecuteParallel(
         tracker.Reset();
         descriptor_heap.FlushDescriptorWrites(descriptor_lease);
         const uint64 descriptor_bytes =
-            descriptor_heap.GetDescriptorWriteOffset(descriptor_lease.state) -
-            descriptor_lease.state->begin_byte_offset;
+            descriptor_heap.GetUsedDescriptorBytes(descriptor_lease.state);
 
         Array<RHIResource*> deferred_releases = TakeDeferredReleases();
         const double profile_record_wall_ms = parallel_record_profile ?
@@ -7065,8 +7072,8 @@ bool VkCommandQueue::TryExecuteParallel(
 
             const uint32 wave_index = parallel_wave_count++;
             total_job_count += wave_jobs.size();
-            const uint64 worker_descriptor_begin =
-                descriptor_heap.GetDescriptorWriteOffset(descriptor_lease.state);
+            const auto worker_descriptor_checkpoint =
+                descriptor_heap.CreateDescriptorCheckpoint(descriptor_lease.state);
             ExternalJoinResult join_result = ExternalJoinResult::Failed;
             const auto worker_join_started = std::chrono::steady_clock::now();
             try {
@@ -7109,7 +7116,7 @@ bool VkCommandQueue::TryExecuteParallel(
             if (!wave_recorded) {
                 parallel_recorded = false;
                 descriptor_heap.RewindDescriptorWrites(
-                    descriptor_lease.state, worker_descriptor_begin
+                    descriptor_lease.state, worker_descriptor_checkpoint
                 );
             }
 
@@ -7440,8 +7447,8 @@ bool VkCommandQueue::TryExecuteParallel(
         }
         const uint32 wave_index = parallel_wave_count++;
         total_job_count += wave_jobs.size();
-        const uint64 worker_descriptor_begin =
-            descriptor_heap.GetDescriptorWriteOffset(descriptor_lease.state);
+        const auto worker_descriptor_checkpoint =
+            descriptor_heap.CreateDescriptorCheckpoint(descriptor_lease.state);
         ExternalJoinResult join_result = ExternalJoinResult::Failed;
         const auto worker_join_started = std::chrono::steady_clock::now();
         try {
@@ -7555,9 +7562,9 @@ bool VkCommandQueue::TryExecuteParallel(
             return false;
         }
         // The join contract drains all accepted jobs. No worker can still be
-        // writing when the submit-local descriptor cursor is rewound.
+        // writing when the submit-local descriptor allocations are rewound.
         descriptor_heap.RewindDescriptorWrites(
-            descriptor_lease.state, worker_descriptor_begin
+            descriptor_lease.state, worker_descriptor_checkpoint
         );
         for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
             ParallelLayerRuntime& runtime = runtime_layers[layer_index];
@@ -8268,7 +8275,14 @@ void VkCommandQueue::ExecuteNow(
     const auto& cmd_lists = reorderer.m_cmd_lists;
     bool        has_cmd   = !reorderer.m_cmd_lists.empty();
     std::optional<VulkanDescriptorBufferLease> descriptor_lease;
-    uint64      descriptor_begin_offset = 0;
+    uint64      descriptor_begin_bytes = 0;
+    auto release_unsubmitted_descriptors = OnScopeExit([&] {
+        if (descriptor_lease && descriptor_lease->IsValid()) {
+            vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(
+                std::move(*descriptor_lease)
+            );
+        }
+    });
 
     if (record_sample) {
         RecordTopologyBuilder topology_builder;
@@ -8321,7 +8335,7 @@ void VkCommandQueue::ExecuteNow(
         record_sample->memory_barriers += barriers.memory_count;
     };
 
-    //Set Descriptor buffer ringbuffer offset and start debug region
+    // Start batch-local recording and its debug region.
     double preprocess_time = 0.0;
     struct SerialNativeRecordFailure {
         std::string_view reason;
@@ -8412,15 +8426,15 @@ void VkCommandQueue::ExecuteNow(
         }
 
         if (queue.GetType() != EQueueType::Copy) {
-            // Present work advances the queue timeline without consuming descriptor storage.
-            // Keep ring reuse aligned with the execute-only in-flight limit.
+            // This creates batch-local bookkeeping only; descriptor storage is
+            // acquired lazily by BindShaderArguments while recording.
             descriptor_lease.emplace(
-                vk_device.GetGlobalDescriptorHeap().AcquireDescriptorBufferLease(queue.GetType())
+                vk_device.GetGlobalDescriptorHeap().CreateDescriptorBufferLease()
             );
             vk_command_context.GetCmdList().SetDescriptorBufferLease(descriptor_lease->state);
             if (record_sample) {
-                descriptor_begin_offset = vk_device.GetGlobalDescriptorHeap()
-                                              .GetDescriptorWriteOffset(descriptor_lease->state);
+                descriptor_begin_bytes = vk_device.GetGlobalDescriptorHeap()
+                                              .GetUsedDescriptorBytes(descriptor_lease->state);
             }
         }
 
@@ -8476,20 +8490,20 @@ void VkCommandQueue::ExecuteNow(
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 const auto* cmd = cmdnode->cmd;
                 const uint64 descriptor_before =
-                    vk_device.GetGlobalDescriptorHeap().GetDescriptorWriteOffset(
+                    vk_device.GetGlobalDescriptorHeap().GetUsedDescriptorBytes(
                         descriptor_lease->state
                     );
                 const auto  command_started = std::chrono::steady_clock::now();
                 visitor.VisitCmd(cmd);
                 const auto command_finished = std::chrono::steady_clock::now();
                 const uint64 descriptor_after =
-                    vk_device.GetGlobalDescriptorHeap().GetDescriptorWriteOffset(
+                    vk_device.GetGlobalDescriptorHeap().GetUsedDescriptorBytes(
                         descriptor_lease->state
                     );
                 assert(deferred_index < deferred_diagnostics.size());
                 deferred_diagnostics[deferred_index++] = {
                     .cmd              = cmd,
-                    .descriptor_begin = descriptor_before - descriptor_begin_offset,
+                    .descriptor_begin = descriptor_before - descriptor_begin_bytes,
                     .descriptor_bytes = descriptor_after - descriptor_before,
                     .command_ms       = RhiThreadProfileMilliseconds(
                         command_started, command_finished
@@ -8619,9 +8633,9 @@ void VkCommandQueue::ExecuteNow(
         if (queue.GetType() != EQueueType::Copy) {
             if (record_sample) {
                 record_sample->descriptor_bytes =
-                    vk_device.GetGlobalDescriptorHeap().GetDescriptorWriteOffset(
+                    vk_device.GetGlobalDescriptorHeap().GetUsedDescriptorBytes(
                         descriptor_lease->state
-                    ) - descriptor_begin_offset;
+                    ) - descriptor_begin_bytes;
             }
             vk_device.GetGlobalDescriptorHeap().FlushDescriptorWrites(*descriptor_lease);
         }
@@ -9973,9 +9987,13 @@ void VkCommandQueue::CompletionThreadMain() {
                     }
 
                     if (_batch.descriptor_lease.has_value()) {
-                        vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(
-                            std::move(*_batch.descriptor_lease)
-                        );
+                        // A failed completion wait does not prove the GPU stopped
+                        // reading. Keep those ranges unavailable until heap teardown.
+                        if (!_batch.gpu_submitted || batch_gpu_success) {
+                            vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(
+                                std::move(*_batch.descriptor_lease)
+                            );
+                        }
                         _batch.descriptor_lease.reset();
                     }
 
@@ -10146,8 +10164,10 @@ void VkCommandQueue::CompletionThreadMain() {
                         }
                     }
                 },
-                [this](VulkanDescriptorBufferLease& _lease) {
-                    vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(std::move(_lease));
+                [this, &batch_gpu_success, &batch_release_safe](VulkanDescriptorBufferLease& _lease) {
+                    if (batch_gpu_success || batch_release_safe) {
+                        vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(std::move(_lease));
+                    }
                 },
 
                 [&batch_gpu_success](VulkanCallbackBatch& _batch) {
@@ -11306,9 +11326,13 @@ void VkCopyQueue::ExecuteThread() {
                     }
 
                     if (_batch.descriptor_lease.has_value()) {
-                        device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(
-                            std::move(*_batch.descriptor_lease)
-                        );
+                        // A failed completion wait does not prove the GPU stopped
+                        // reading. Keep those ranges unavailable until heap teardown.
+                        if (!_batch.gpu_submitted || batch_gpu_success) {
+                            device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(
+                                std::move(*_batch.descriptor_lease)
+                            );
+                        }
                         _batch.descriptor_lease.reset();
                     }
 
