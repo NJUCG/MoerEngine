@@ -41,11 +41,14 @@ void Run(
     uint                         count,
     const std::filesystem::path& output                = {},
     bool                         should_test_instances = false,
-    bool                         should_test_overflow  = false
+    bool                         should_test_overflow  = false,
+    uint2                        resolution            = uint2(64, 64),
+    uint                         pair_count_limit      = 0
 ) {
-    const uint width = output.empty() ? 64 : 256, height = width;
+    const uint width = output.empty() ? resolution.x : 256;
+    const uint height = output.empty() ? resolution.y : 256;
     Camera     camera;
-    camera.Initialize(float3(0), -90, 0, 60, 1, 0.01f, 100.f);
+    camera.Initialize(float3(0), -90, 0, 60, float(width) / height, 0.01f, 100.f);
     if (!output.empty()) {
         const auto  bounds = asset->bounds;
         const auto  extent = bounds.max - bounds.min;
@@ -184,7 +187,7 @@ void Run(
         return;
     }
     struct ReferenceSplat {
-        double depth, x, y, scale, opacity;
+        double depth, x, y, scale_x, scale_y, scale_z, cos_angle, sin_angle, opacity;
         uint   gaussian_id;
     };
     std::vector<ReferenceSplat> order;
@@ -198,6 +201,10 @@ void Run(
                  matrix[0][3],
                  matrix[1][3],
                  gaussian.scale_opacity.x * scale,
+                 gaussian.scale_opacity.y * scale,
+                 gaussian.scale_opacity.z * scale,
+                 1. - 2. * gaussian.rotation.z * gaussian.rotation.z,
+                 2. * gaussian.rotation.w * gaussian.rotation.z,
                  gaussian.scale_opacity.w * item.settings.opacity_multiplier,
                  gaussian_id}
             );
@@ -211,12 +218,19 @@ void Run(
             double expected[3] = {}, remaining = 1;
             for (const auto& splat : order) {
                 const double depth = splat.depth, focal = height / (2 * std::tan(3.141592653589793 / 6));
-                const double factor = focal * focal * splat.scale * splat.scale / (depth * depth);
-                const double a      = factor * (1 + splat.x * splat.x / (depth * depth)) + .3;
-                const double b      = -factor * splat.x * splat.y / (depth * depth);
-                const double c      = factor * (1 + splat.y * splat.y / (depth * depth)) + .3;
-                const double dx     = double(x) - (31.5 + focal * splat.x / depth),
-                             dy     = double(y) - (31.5 - focal * splat.y / depth);
+                // Independent pinhole covariance for the tests' Z-axis rotations.
+                const double sx = splat.scale_x * splat.scale_x;
+                const double sy = splat.scale_y * splat.scale_y;
+                const double sz = splat.scale_z * splat.scale_z;
+                const double cs = splat.cos_angle, sn = splat.sin_angle;
+                const double factor = focal * focal / (depth * depth);
+                const double a = factor * (cs * cs * sx + sn * sn * sy +
+                    splat.x * splat.x * sz / (depth * depth)) + .3;
+                const double b = -factor * (cs * sn * (sx - sy) + splat.x * splat.y * sz / (depth * depth));
+                const double c = factor * (sn * sn * sx + cs * cs * sy +
+                    splat.y * splat.y * sz / (depth * depth)) + .3;
+                const double dx     = double(x) - (.5 * (width - 1) + focal * splat.x / depth),
+                             dy     = double(y) - (.5 * (height - 1) - focal * splat.y / depth);
                 const double alpha  = std::min(
                     .99,
                     splat.opacity *
@@ -237,6 +251,11 @@ void Run(
         }
     std::cout << "count=" << count << " max_error=" << max_error << std::endl;
     Require(max_error < 0.0002, "Gaussian pixels disagree with double precision CPU reference");
+    if (pair_count_limit != 0) {
+        const auto status = pass.GetStatus();
+        Require(status.has_completed_counts && status.tile_pair_count < pair_count_limit,
+            "Conservative culling did not reduce the rotated splat's tile rectangle");
+    }
     // Shrink to empty and reuse the same workspace: no previous tile/range contents may leak.
     CommandList empty_commands(EQueueType::Graphics);
     pass.Record(empty_commands, nullptr, camera, uint2(32, 48), false);
@@ -393,6 +412,20 @@ int main(int argc, char** argv) {
         Run(manager, Synthetic(2), 2);
         Run(manager, Synthetic(600), 600);
         Run(manager, Synthetic(32), 32);
+        // Partial edge tiles must keep out-of-bounds/finished lanes in batch barriers.
+        // A long, broad stack makes some pixels finish in the first batch while others
+        // still need later batches, including tiles with only one in-bounds pixel.
+        auto edge_asset = Synthetic(513);
+        for (auto& gaussian : edge_asset->gaussians)
+            gaussian.scale_opacity = float4(1.2f, 1.2f, 1.2f, .1f);
+        Run(manager, edge_asset, 513, {}, false, false, uint2(65, 49));
+        Run(manager, Synthetic(2), 2, {}, false, false, uint2(1, 1));
+        auto rotated_asset = Synthetic(1);
+        rotated_asset->gaussians[0].rotation = float4(0, 0, std::sin(.35f), std::cos(.35f));
+        for (float opacity : {.75f, .0039217f}) {
+            rotated_asset->gaussians[0].scale_opacity = float4(1.2f, .0001f, .01f, opacity);
+            Run(manager, rotated_asset, 1, {}, false, false, uint2(65, 49), 20);
+        }
         RunInFlightResize(manager);
         RunViewSettings(manager);
         Run(manager, Synthetic(2), 2, {}, true);

@@ -456,6 +456,8 @@ TextureRef GaussianSplatPass::Record(
     }
     commands.Compute(state.m_finalize, param, state.m_scan[0].prefix->GetView(), state.m_status->GetView())
         .Dispatch(uint3(1, 1, 1), "Gaussian finalize counts");
+    // Count and emit use identical pixel-center bounds on partially clipped tiles.
+    param.job = uint4(resolution.x, resolution.y, 0, 0);
     commands
         .Compute(
             state.m_emitpairs,

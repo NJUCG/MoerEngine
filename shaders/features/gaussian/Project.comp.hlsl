@@ -1,4 +1,5 @@
 #include "features/gaussian/GaussianMath.hlsli"
+#include "features/gaussian/GaussianTileCull.hlsli"
 
 [[vk::push_constant]] ConstantBuffer<Moer::GaussianDispatchParams> param;
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::GGaussianCamera> camera;
@@ -59,11 +60,18 @@ void main(uint3 thread_id : SV_DispatchThreadID) {
     float opacity = gaussian.scale_opacity.w * instance.color_opacity.w;
     if (opacity < camera.filter.y || any(rect.zw <= rect.xy)) return;
     Moer::GProjectedGaussian output;
-    output.center_depth = float4(center, depth, 0);
+    float cutoff_power = log(opacity) - log(camera.filter.y);
+    cutoff_power += 1e-4 * max(1.0, abs(cutoff_power));
+    output.center_depth = float4(center, depth, cutoff_power);
     output.conic_opacity = float4(c, -b, a, opacity) / float4(determinant_cov.xxx, 1);
     output.color = float4(GaussianSH(gaussian, direction, min(instance.range.z, 3u)) * instance.color_opacity.xyz, 0);
     output.tile_rect = rect;
     projected[work_id] = output;
-    tile_counts[work_id] = (rect.z - rect.x) * (rect.w - rect.y);
+    uint tile_count = 0;
+    for (uint tile_y = rect.y; tile_y < rect.w; ++tile_y)
+        for (uint tile_x = rect.x; tile_x < rect.z; ++tile_x)
+            if (GaussianTileMayContribute(center, output.conic_opacity.xyz, cutoff_power,
+                    uint2(tile_x, tile_y), camera.viewport.xy)) ++tile_count;
+    tile_counts[work_id] = tile_count;
     InterlockedAdd(status[0].w, 1);
 }

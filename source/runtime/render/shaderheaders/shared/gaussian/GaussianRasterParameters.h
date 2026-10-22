@@ -23,7 +23,7 @@ struct GGaussianCamera {
 };
 
 struct GProjectedGaussian {
-    float4 center_depth;  // pixel center xy, positive view depth, reserved
+    float4 center_depth;  // pixel center xy, positive view depth, conservative log-alpha cutoff
     float4 conic_opacity; // inverse covariance xx/xy/yy, activated opacity
     float4 color;
     uint4  tile_rect; // inclusive min xy, exclusive max xy

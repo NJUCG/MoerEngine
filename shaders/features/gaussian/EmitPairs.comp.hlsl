@@ -1,4 +1,5 @@
 #include "shared/gaussian/GaussianRasterParameters.h"
+#include "features/gaussian/GaussianTileCull.hlsli"
 [[vk::push_constant]] ConstantBuffer<Moer::GaussianDispatchParams> param;
 [[vk::binding(0, 0)]] StructuredBuffer<Moer::GProjectedGaussian> projected;
 [[vk::binding(1, 0)]] StructuredBuffer<uint> prefix;
@@ -12,5 +13,7 @@ void main(uint3 thread_id : SV_DispatchThreadID) {
     Moer::GProjectedGaussian gaussian = projected[value_id];
     for (uint tile_y = gaussian.tile_rect.y; tile_y < gaussian.tile_rect.w; ++tile_y)
         for (uint tile_x = gaussian.tile_rect.x; tile_x < gaussian.tile_rect.z; ++tile_x)
-            pairs[offset++] = uint4(tile_x + tile_y * param.info.z, asuint(gaussian.center_depth.z), value_id, 0);
+            if (GaussianTileMayContribute(gaussian.center_depth.xy, gaussian.conic_opacity.xyz,
+                    gaussian.center_depth.w, uint2(tile_x, tile_y), param.job.xy))
+                pairs[offset++] = uint4(tile_x + tile_y * param.info.z, asuint(gaussian.center_depth.z), value_id, 0);
 }
