@@ -14,7 +14,7 @@
 
 namespace Moer::Render {
 
-class VulkanCmdList;
+class VulkanCommandList;
 class VulkanDevice;
 struct QueryCmd;
 
@@ -73,7 +73,7 @@ public:
     // only before recording its first query boundary.
     void
     ConfigureTimestampCapabilityForRecording(uint32 _valid_bits, EVulkanTimestampQueryResetMode _reset_mode);
-    void RecordQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
+    void RecordQuery(VulkanCommandList& _cmd_list, const QueryCmd& _cmd);
 
     [[nodiscard]] bool HasQueries() const noexcept {
         return !timestamp_query_records.empty() || !occlusion_query_records.empty();
@@ -133,7 +133,7 @@ private:
     TimestampQueryRecord* FindTimestampQueryRecord(uint64 _token_id) noexcept;
     void                  EnsureTimestampQueryCapacity(size_t _required_count);
     uint32                AllocateTimestampQuerySlot();
-    void                  RecordTimestampQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
+    void                  RecordTimestampQuery(VulkanCommandList& _cmd_list, const QueryCmd& _cmd);
 
     [[nodiscard]] VkResult
     PrepareTimestampQueriesAfterGpuCompletion(const VulkanOperationContext& _context) noexcept;
@@ -149,7 +149,7 @@ private:
     OcclusionQueryRecord* FindOcclusionQueryRecord(uint64 _token_id) noexcept;
     void                  EnsureOcclusionQueryCapacity(size_t _required_count);
     uint32                AllocateOcclusionQuerySlot();
-    void                  RecordOcclusionQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
+    void                  RecordOcclusionQuery(VulkanCommandList& _cmd_list, const QueryCmd& _cmd);
 
     [[nodiscard]] VkResult
     PrepareOcclusionQueriesAfterGpuCompletion(const VulkanOperationContext& _context) noexcept;

@@ -5,11 +5,7 @@
 #ifndef VULKAN_DEBUG_H
 #define VULKAN_DEBUG_H
 
-#include "math/Base.h"
-
-#include "VulkanPlatform.h"
-
-#include <string>
+#include "VulkanCommon.h"
 
 namespace Moer { namespace RHI { namespace Vulkan {
 
@@ -27,20 +23,6 @@ struct Debug {
     static void SetupDebugUtilsMessengerEXT(VkInstance instance);
     static void DestroyDebugUtilsMessengerEXT(VkInstance instance);
     static void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& create_info);
-};
-
-struct DebugUtils {
-    static PFN_vkCmdBeginDebugUtilsLabelEXT  vkCmdBeginDebugUtilsLabelEXT;
-    static PFN_vkCmdEndDebugUtilsLabelEXT    vkCmdEndDebugUtilsLabelEXT;
-    static PFN_vkCmdInsertDebugUtilsLabelEXT vkCmdInsertDebugUtilsLabelEXT;
-    static PFN_vkSetDebugUtilsObjectNameEXT  vkSetDebugUtilsObjectNameEXT;
-
-    static void Setup(VkInstance instance);
-    static void CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color);
-    static void CmdInsertLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color);
-    static void CmdEndLabel(VkCommandBuffer cmd_buffer);
-    static void
-    SetObjectName(VkDevice device, uint64_t object, VkObjectType object_type, const std::string& name);
 };
 
 }}} // namespace Moer::RHI::Vulkan

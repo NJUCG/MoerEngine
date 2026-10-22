@@ -4,7 +4,7 @@
 
 #include "PixelFormat.h"
 
-#include "VulkanCommand.h"
+#include "VulkanCommandList.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
@@ -26,7 +26,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "VulkanSubmissionDiagnostics.h"
+#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "vulkan/vk_enum_string_helper.h"
 
 #include <algorithm>
@@ -985,6 +985,7 @@ void InitializeDescriptorBufferBindingTemplate(
     VulkanDevice&                  device,
     VulkanPipelineBindingTemplate& binding_template
 ) {
+    binding_template.resource_descriptor_allocation_size = 0;
     for (auto& [set_index, set_binding] : binding_template.set_bindings) {
         auto& descriptor_buffer = binding_template.descriptor_buffers[set_binding.buffer_index];
         std::visit(
@@ -995,6 +996,8 @@ void InitializeDescriptorBufferBindingTemplate(
                                           VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
 
                 if constexpr (std::is_same_v<ResourceBindings, VulkanResourceSetBindings>) {
+                    set_binding.byte_offset = binding_template.resource_descriptor_allocation_size;
+                    binding_template.resource_descriptor_allocation_size += resource_bindings.allocation_size;
                     descriptor_buffer.address =
                         device.GetGlobalDescriptorHeap().GetDescriptorBufferAddress();
                     descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
@@ -1005,7 +1008,7 @@ void InitializeDescriptorBufferBindingTemplate(
                         descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
                     }
                     if constexpr (ResourceBindings::descriptor_type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
-                        set_binding.initial_byte_offset = GetBindlessTextureDescriptorOffset(device);
+                        set_binding.byte_offset = GetBindlessTextureDescriptorOffset(device);
                     }
                 }
             },
@@ -3590,7 +3593,7 @@ void VulkanPipelineState::InitPipelineLayout(
 
 #pragma region synchronization
 
-    VulkanFence::VulkanFence(VulkanDevice& _device) : VulkanDeviceObject(&_device) {
+    VulkanTimeline::VulkanTimeline(VulkanDevice& _device) : VulkanDeviceObject(&_device) {
         VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
         VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
@@ -3619,7 +3622,7 @@ void VulkanPipelineState::InitPipelineLayout(
         VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &timeline));
     }
 
-    uint64 VulkanFence::GetValue() const {
+    uint64 VulkanTimeline::GetValue() const {
         // uint64_t value;
         // vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
         // // vkGetSemaphoreCounterValue(m_device->GetDevice(), m_fence.timeline, &value);
@@ -3628,7 +3631,7 @@ void VulkanPipelineState::InitPipelineLayout(
         return current_value;
     }
 
-    uint64 VulkanFence::GetDeviceValue() const {
+    uint64 VulkanTimeline::GetDeviceValue() const {
         uint64_t value;
         {
             std::unique_lock<std::mutex> lock(cv_m);
@@ -3644,7 +3647,7 @@ void VulkanPipelineState::InitPipelineLayout(
         return value;
     }
 
-    void VulkanFence::Wait(uint64_t _value) {
+    void VulkanTimeline::Wait(uint64_t _value) {
         std::unique_lock<std::mutex> _(cv_m);
         while (current_value < _value &&
                !rejected_values.contains(_value) &&
@@ -3661,7 +3664,7 @@ void VulkanPipelineState::InitPipelineLayout(
         }
     }
 
-    void VulkanFence::Reject(uint64_t _value) noexcept {
+    void VulkanTimeline::Reject(uint64_t _value) noexcept {
         {
             std::unique_lock<std::mutex> lock(cv_m);
             try {
@@ -3677,7 +3680,7 @@ void VulkanPipelineState::InitPipelineLayout(
         cv.notify_all();
     }
 
-    void VulkanFence::Notify(uint64_t _value) {
+    void VulkanTimeline::Notify(uint64_t _value) {
         {
             std::unique_lock<std::mutex> _(cv_m);
             current_value = std::max(current_value, _value);
@@ -3686,7 +3689,7 @@ void VulkanPipelineState::InitPipelineLayout(
         cv.notify_all();
     }
 
-    void VulkanFence::MarkSubmitted(uint64_t _value) {
+    void VulkanTimeline::MarkSubmitted(uint64_t _value) {
         {
             std::unique_lock<std::mutex> lock(cv_m);
             submitted_value = std::max(submitted_value, _value);
@@ -3694,7 +3697,7 @@ void VulkanPipelineState::InitPipelineLayout(
         cv.notify_all();
     }
 
-    bool VulkanFence::WaitSubmitted(
+    bool VulkanTimeline::WaitSubmitted(
         uint64_t _value,
         const std::atomic_bool* _continue_waiting,
         EQueueType              _waiting_queue,
@@ -3725,12 +3728,12 @@ void VulkanPipelineState::InitPipelineLayout(
                !m_device->IsFaulted();
     }
 
-    bool VulkanFence::IsRejected(uint64_t _value) const {
+    bool VulkanTimeline::IsRejected(uint64_t _value) const {
         std::unique_lock<std::mutex> lock(cv_m);
         return rejected_values.contains(_value);
     }
 
-    void VulkanFence::Sync(uint64_t _value) {
+    void VulkanTimeline::Sync(uint64_t _value) {
         std::unique_lock<std::mutex> _(cv_m);
         while (current_value < _value &&
                !rejected_values.contains(_value) &&
@@ -3747,7 +3750,7 @@ void VulkanPipelineState::InitPipelineLayout(
         }
     }
 
-    VkResult VulkanFence::HostWait(uint64_t _value, const VulkanOperationContext& _context) {
+    VkResult VulkanTimeline::HostWait(uint64_t _value, const VulkanOperationContext& _context) {
         VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
         info.semaphoreCount = 1;
         info.pValues        = &_value;
@@ -3790,7 +3793,7 @@ void VulkanPipelineState::InitPipelineLayout(
         return result;
     }
 
-    void VulkanFence::Fail(VkResult _result) {
+    void VulkanTimeline::Fail(VkResult _result) {
         {
             std::unique_lock<std::mutex> lock(cv_m);
             failed         = true;
@@ -3799,12 +3802,12 @@ void VulkanPipelineState::InitPipelineLayout(
         cv.notify_all();
     }
 
-    bool VulkanFence::IsFailed() const {
+    bool VulkanTimeline::IsFailed() const {
         std::unique_lock<std::mutex> lock(cv_m);
         return failed;
     }
 
-    void VulkanFence::SignalHost(uint64_t _value) {
+    void VulkanTimeline::SignalHost(uint64_t _value) {
         VkSemaphoreSignalInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
         info.semaphore = timeline;
         info.value     = _value;
@@ -3823,7 +3826,7 @@ void VulkanPipelineState::InitPipelineLayout(
         Notify(_value);
     }
 
-    VulkanFence::~VulkanFence() {
+    VulkanTimeline::~VulkanTimeline() {
         VK_CHECK_NULLPTR(timeline, "Timeline semaphore is null");
         vkDestroySemaphore(m_device->GetDevice(), timeline, VK_NULL_HANDLE);
     }

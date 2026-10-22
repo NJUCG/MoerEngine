@@ -1,9 +1,9 @@
 #pragma once
 
 #include "RenderAPI.h"
-#include "VulkanFault.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIThreadOwnership.h"
+#include "rhi/vulkan/VulkanFault.h"
 
 namespace Moer::Render {
 
@@ -337,8 +337,6 @@ TryInstallVulkanDeviceIdleWaitObserver(const VulkanDeviceIdleWaitObserver* _obse
 [[nodiscard]] RENDER_API bool RemoveVulkanDeviceIdleWaitObserver(const VulkanDeviceIdleWaitObserver* _observer
 ) noexcept;
 
-void NotifyVulkanDeviceIdleWait(const VulkanOperationContext& _context) noexcept;
-
 using VulkanScriptedQueryPreparationCallback =
     VkResult (*)(void*, EQueueType, uint64, uint32) noexcept;
 
@@ -443,13 +441,5 @@ RemoveVulkanScriptedPresentOverrideForTesting(
 // publishes a synthetic first Vulkan fault without issuing a native call.
 [[nodiscard]] RENDER_API bool
 TryLatchVulkanDeviceFaultForTesting(VkResult _result) noexcept;
-
-// Backend-internal notification points shared across Vulkan translation,
-// resource, and submission implementation units.
-void NotifyVulkanSubmissionDependencyWaitBlocked(
-    EQueueType _queue,
-    uint32     _dependency_count
-) noexcept;
-void NotifyVulkanBackendSyncWait() noexcept;
 
 } // namespace Moer::Render

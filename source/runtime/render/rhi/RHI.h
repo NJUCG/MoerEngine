@@ -18,9 +18,7 @@
 namespace Moer::Render {
 class CommandQueue;
 class CopyQueue;
-class IOInterface;
 class RenderDevice;
-using IOInterfaceRef = std::shared_ptr<IOInterface>;
 } // namespace Moer::Render
 
 #include "rhi/RHICommand.h"
@@ -244,9 +242,6 @@ public:
 
     RENDER_API void FlushDebugMessages() const;
     RENDER_API void WaitIdle();
-
-protected:
-    RENDER_API IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue);
 
 private:
     RENDER_API BufferRef CreateBuffer(

@@ -12,10 +12,9 @@
 #include "rhi/RHIThreadOwnership.h"
 #include "rhi/vulkan/VulkanCustomCommand.h"
 #include "rhi/vulkan/VulkanDevice.h"
-#include "rhi/vulkan/VulkanIOService.h"
 #include "rhi/vulkan/VulkanQueue.h"
 #include "rhi/vulkan/VulkanRHIResource.h"
-#include "rhi/vulkan/VulkanSubmissionDiagnostics.h"
+#include "rhi/vulkan/diagnostics/VulkanSubmissionDiagnostics.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
@@ -30,7 +29,6 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -4054,7 +4052,7 @@ void RunCrossQueueTopologyBatch() {
             event.thread_role != ERHIThreadRole::Submission ||
             event.thread_id != submission_thread_id ||
             event.thread_id == main_thread_id ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "Graphics/Compute/Copy native submit escaped the sole "
                 "Submission owner or changed source order"
@@ -4493,7 +4491,7 @@ void RunAsyncQueueParallelTranslateSmoke() {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "native G/G/C/Copy submit lost stable order or the "
                     "sole Submission owner"
@@ -4735,7 +4733,7 @@ void RunMultiSegmentSourceExecution() {
             const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
             if (event.queue != expected_queues[index] || event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id || event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error("multi-segment native submission escaped stable "
                                          "Graphics-to-Compute Submission ownership");
             }
@@ -4900,7 +4898,7 @@ void RunMultiSegmentCopyRoundTrip() {
         const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
         if (event.queue != expected_queues[index] || event.thread_role != ERHIThreadRole::Submission ||
             event.thread_id != submission_thread_id || event.thread_id == main_thread_id ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "multi-segment Copy native submits lost stable Submission order or ownership"
             );
@@ -5045,7 +5043,7 @@ void RunMultiSegmentRecoverableRejection() {
     const VulkanNativeSubmissionEvent& recovered_event = native_capture.Event(0);
     if (recovered_event.queue != EQueueType::Graphics ||
         recovered_event.thread_role != ERHIThreadRole::Submission ||
-        recovered_event.thread_id == main_thread_id || !recovered_event.outcome.WasSubmitted()) {
+        recovered_event.thread_id == main_thread_id || !recovered_event.outcome.Succeeded()) {
         throw std::runtime_error("multi-segment rejection recovery escaped Submission ownership");
     }
 
@@ -5185,7 +5183,7 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
     const VulkanNativeSubmissionEvent& native_event = native_capture.Event(0);
     if (native_event.queue != EQueueType::Graphics ||
         native_event.thread_role != ERHIThreadRole::Submission || native_event.thread_id == main_thread_id ||
-        !native_event.outcome.WasSubmitted()) {
+        !native_event.outcome.Succeeded()) {
         throw std::runtime_error("multi-segment hard-failure prefix escaped native Submission ownership");
     }
 
@@ -5990,8 +5988,8 @@ void RunRaytracingExportAcceptanceRejection() {
             readback_retry_submission.GetReadbackReceiptFence()->GetRefCount() !=
                 1 ||
             native_capture.Overflowed() || native_capture.Count() != 2 ||
-            !native_capture.Event(0).outcome.WasSubmitted() ||
-            !native_capture.Event(1).outcome.WasSubmitted()) {
+            !native_capture.Event(0).outcome.Succeeded() ||
+            !native_capture.Event(1).outcome.Succeeded()) {
             throw std::runtime_error(
                 "raytracing readback rejection reached native submit or "
                 "retained a terminal receipt"
@@ -6168,7 +6166,7 @@ void RunRaytracingExportAcceptanceRejection() {
             );
         }
         for (size_t index = 0; index < native_capture.Count(); ++index) {
-            if (!native_capture.Event(index).outcome.WasSubmitted()) {
+            if (!native_capture.Event(index).outcome.Succeeded()) {
                 throw std::runtime_error(
                     "raytracing export test observed a rejected native submit"
                 );
@@ -6541,7 +6539,7 @@ void RunRecoverableCopyDependencyRejection() {
         if (event.queue != EQueueType::Copy ||
             event.thread_role != ERHIThreadRole::Submission ||
             event.thread_id != submission_thread_id ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "accepted Copy recovery packets escaped the sole native "
                 "Submission owner"
@@ -6634,292 +6632,6 @@ void RunDirectCopyExecuteRejected() {
         "[TESTCASE][PASS] name=DirectCopyExecuteRejected "
         "runtime_claim=exclusive native_submit=0 callbacks=exactly_once "
         "signal=rejected replay=0"
-    );
-}
-
-void RunVulkanStorageUnifiedCopySubmission() {
-    auto& device        = RenderDevice::Get();
-    auto* vulkan_device = static_cast<VulkanDevice*>(device.GetImpl());
-    auto& copy_queue    = static_cast<VkCopyQueue&>(device.GetCopyQueue());
-
-    constexpr size_t                  element_count = 16;
-    constexpr size_t                  byte_size     = sizeof(uint32) * element_count;
-    std::array<uint32, element_count> first_values{};
-    std::array<uint32, element_count> expected{};
-    std::array<uint32, element_count> readback{};
-    for (uint32 index = 0; index < expected.size(); ++index) {
-        first_values[index] = 0x15A00000u + index * 19u + 3u;
-        expected[index]     = 0x15B00000u + index * 37u + 9u;
-    }
-
-    BufferRef destination = device.CreateBuffer<uint32>(
-        "phase15b_io_copy_destination",
-        element_count,
-        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
-    );
-    FenceRef                done = device.CreateFence();
-    NativeSubmissionCapture native_capture{};
-    {
-        ScopedNativeSubmissionObserver native_observer(native_capture);
-        VulkanStorage                  storage(*vulkan_device, copy_queue);
-
-        storage.Enqueue(first_values.data(), 0, ResourceCast(destination.Get()), 0, byte_size);
-        storage.EnqueueSignal(done, 1);
-        storage.Commit();
-        if (ResourceCast(done.Get())->HostWait(1) != VK_SUCCESS) {
-            throw std::runtime_error("first Vulkan storage Copy commit did not signal completion");
-        }
-        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-
-        // Snapshot a non-zero source offset before Commit. Modifying the
-        // caller's bytes must not change the independently owned next batch.
-        std::array<uint32, element_count + 2> second_source{};
-        std::copy(expected.begin(), expected.end(), second_source.begin() + 2);
-        storage.Enqueue(
-            second_source.data(), 2 * sizeof(uint32), ResourceCast(destination.Get()), 0, byte_size
-        );
-        second_source.fill(0);
-        storage.EnqueueSignal(done, 2);
-        storage.Commit();
-        if (ResourceCast(done.Get())->HostWait(2) != VK_SUCCESS) {
-            throw std::runtime_error("second Vulkan storage Copy commit did not signal completion");
-        }
-        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    }
-
-    if (native_capture.Overflowed() || native_capture.Count() != 2) {
-        throw std::runtime_error("Vulkan storage commits did not issue exactly two native submits");
-    }
-    const uint32 submission_thread_id = native_capture.Event(0).thread_id;
-    for (size_t index = 0; index < native_capture.Count(); ++index) {
-        const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
-        if (event.queue != EQueueType::Copy || event.thread_role != ERHIThreadRole::Submission ||
-            event.thread_id != submission_thread_id || event.thread_id == Platform::GetCurrentThreadID() ||
-            !event.outcome.WasSubmitted()) {
-            throw std::runtime_error("Vulkan storage Copy commit escaped the unified "
-                                     "Submission owner");
-        }
-    }
-    if (ResourceCast(done.Get())->IsRejected(1) || ResourceCast(done.Get())->IsRejected(2) ||
-        ResourceCast(done.Get())->IsFailed()) {
-        throw std::runtime_error("Vulkan storage Copy signals were terminalized incorrectly");
-    }
-
-    CommandList verify(EQueueType::Copy);
-    verify.CopyFrom(destination->GetView(), WritableBytes(readback), "Phase15BIOCopyReadback");
-    RHIExecutor::Get().Submit(EQueueType::Copy, verify.Submit(), ERHIExecSubmitFlags::FlushGPU);
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (readback != expected) {
-        throw std::runtime_error("Vulkan storage unified Copy submission readback mismatch");
-    }
-
-    LOG_INFO("[TESTCASE][PASS] name=VulkanStorageUnifiedCopySubmission "
-             "commits=2 signals=2 native_submit=2 native_owner=Submission "
-             "batch_reuse=verified readback=verified");
-}
-
-void RunVulkanIOOwnedRequests() {
-    auto&      device = RenderDevice::Get();
-    const auto path   = std::filesystem::temp_directory_path() /
-                      ("moer_io_owned_" + std::to_string(Platform::GetCurrentThreadID()) + ".bin");
-    struct RemoveFile {
-        std::filesystem::path path;
-        ~RemoveFile() {
-            std::error_code error;
-            std::filesystem::remove(path, error);
-        }
-    } cleanup{path};
-    std::array<uint32, 32> file_words{};
-    for (uint32 i = 0; i < file_words.size(); ++i) {
-        file_words[i] = 0x1a0a0d00u + i; // Text-mode reads must not alter these bytes.
-    }
-    {
-        std::ofstream file(path, std::ios::binary);
-        file.write(reinterpret_cast<const char*>(file_words.data()), sizeof(file_words));
-        if (!file)
-            throw std::runtime_error("cannot create IO regression input");
-    }
-    BufferRef buffer = device.CreateBuffer<uint32>(
-        "io_owned_buffer", 16, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
-    );
-    TextureRef texture = device.CreateTexture(
-        "io_owned_texture",
-        Extent3D(8, 8, 1),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST,
-        2,
-        2
-    );
-    std::array<uint32, 20> source{};
-    for (uint32 i = 0; i < source.size(); ++i)
-        source[i] = 0x12345600u + i;
-    std::array<uint32, 16> expected_buffer{};
-    std::copy_n(source.begin() + 4, 16, expected_buffer.begin());
-    auto expected_texture = expected_buffer;
-    std::copy_n(file_words.begin() + 3, 4, expected_buffer.begin() + 2);
-    expected_texture[5]  = file_words[4];
-    expected_texture[6]  = file_words[5];
-    expected_texture[9]  = file_words[6];
-    expected_texture[10] = file_words[7];
-    std::array<uint32, 4> cpu_readback{};
-    std::atomic_uint      callbacks{0};
-    {
-        auto              io = device.GetImpl()->CreateIOInterface(device.GetCopyQueue());
-        IOCommandList     commands;
-        const FileHandle  file = commands.ResolveFileHandle(path);
-        const RawDataDesc memory{std::span<uint8_t>(reinterpret_cast<uint8_t*>(source.data()), sizeof(source))
-        };
-        commands.cmds.push_back({memory, BufferViewDesc{uint64(buffer.Get()), 0, sizeof(expected_buffer)}, 16}
-        );
-        commands.cmds.push_back({FileDesc{file, 4, 32}, BufferViewDesc{uint64(buffer.Get()), 8, 16}, 8});
-        commands.cmds.push_back(
-            {memory,
-             TextureViewDesc{uint3(0), uint3(4, 4, 1), uint64(texture.Get()), PF_R8G8B8A8_UNORM, 1, 1, 1, 1},
-             16}
-        );
-        commands.cmds.push_back(
-            {FileDesc{file, 16, 16},
-             TextureViewDesc{
-                 uint3(1, 1, 0), uint3(2, 2, 1), uint64(texture.Get()), PF_R8G8B8A8_UNORM, 1, 1, 1, 1
-             }}
-        );
-        commands.CopyFrom(
-            FileDesc{file, 4, sizeof(cpu_readback)},
-            RawDataDesc{
-                std::span<uint8_t>(reinterpret_cast<uint8_t*>(cpu_readback.data()), sizeof(cpu_readback))
-            }
-        );
-        commands.AddCallback([&] {
-            ++callbacks;
-        });
-        const uint64 value = io->Execute(std::move(commands));
-        source.fill(0); // Execute must already own the source bytes and paths.
-        const WaitEvent dependency = io->GetWaitEvent(value);
-        auto* fence = reinterpret_cast<Fence*>(dependency.timeline_handle);
-        CommandList consumer(EQueueType::Copy);
-        consumer.AddCallback([] {});
-        CmdSubmit consumer_submit = consumer.Submit();
-        consumer_submit.Wait(dependency);
-        RHIExecutor::Get().Submit(EQueueType::Copy, std::move(consumer_submit));
-        RHIExecutor::Get().Sync();
-        if (fence->IsRejected(value))
-            throw std::runtime_error("valid IO batch was rejected");
-
-        IOCommandList short_read;
-        const auto    short_file = short_read.ResolveFileHandle(path);
-        short_read.cmds.push_back(
-            {FileDesc{short_file, sizeof(file_words) - 4, 16}, BufferViewDesc{uint64(buffer.Get()), 0, 16}}
-        );
-        short_read.AddCallback([&] {
-            ++callbacks;
-            throw std::runtime_error("expected IO callback failure");
-        });
-        short_read.AddCallback([&] {
-            ++callbacks;
-        });
-        const uint64 failed = io->Execute(std::move(short_read));
-        io->Sync(failed);
-        if (!fence->IsRejected(failed))
-            throw std::runtime_error("short IO read was reported successful");
-
-        IOCommandList missing;
-        std::string   missing_path = path.string() + ".missing";
-        missing.cmds.push_back(
-            {FileDesc{{missing_path.data(), missing_path.size()}, 0, 16},
-             BufferViewDesc{uint64(buffer.Get()), 0, 16}}
-        );
-        missing.AddCallback([&] {
-            ++callbacks;
-        });
-        const uint64 absent = io->Execute(std::move(missing));
-        io->Sync(absent);
-        if (!fence->IsRejected(absent))
-            throw std::runtime_error("missing IO file was reported successful");
-
-        IOCommandList callback_only;
-        callback_only.AddCallback([&] {
-            ++callbacks;
-        });
-        const uint64 recovered = io->Execute(std::move(callback_only));
-        io->Sync(recovered);
-        if (fence->IsRejected(recovered))
-            throw std::runtime_error("IO did not recover after a read failure");
-    } // Destruction drains callbacks as well as GPU work.
-    if (callbacks != 5 || !std::equal(cpu_readback.begin(), cpu_readback.end(), file_words.begin() + 1)) {
-        throw std::runtime_error("IO callback drain or binary CPU copy mismatch");
-    }
-    std::array<uint32, 16> buffer_readback{}, texture_readback{};
-    TextureView            view(texture.Get(), PF_R8G8B8A8_UNORM, 1, 1);
-    view.array_layer = 1;
-    view.num_array   = 1;
-    CommandList verify(EQueueType::Copy);
-    verify.CopyFrom(buffer->GetView(), WritableBytes(buffer_readback), "IOBufferReadback");
-    verify.CopyFrom(view, WritableBytes(texture_readback), "IOTextureReadback");
-    RHIExecutor::Get().Submit(EQueueType::Copy, verify.Submit());
-    RHIExecutor::Get().Sync();
-    if (buffer_readback != expected_buffer || texture_readback != expected_texture) {
-        throw std::runtime_error("IO buffer/texture ordering, offsets or source ownership mismatch");
-    }
-
-    // Cross the removed 64 MiB splitter and exercise an oversized exclusive
-    // batch without allocating a second GPU buffer or splitting its outcome.
-    Array<uint8_t> large(65ull * 1024 * 1024 + 4, uint8_t{0x5a});
-    {
-        std::ofstream file(path, std::ios::binary | std::ios::trunc);
-        file.write(reinterpret_cast<const char*>(large.data()), large.size());
-        if (!file)
-            throw std::runtime_error("cannot create large IO regression input");
-    }
-    std::fill(large.begin(), large.end(), 0);
-    {
-        auto          io = device.GetImpl()->CreateIOInterface(device.GetCopyQueue());
-        IOCommandList commands;
-        const auto    file = commands.ResolveFileHandle(path);
-        for (uint i = 0; i != 2; ++i) {
-            commands.CopyFrom(FileDesc{file, 0, large.size()}, RawDataDesc{large});
-        }
-        io->Sync(io->Execute(std::move(commands)));
-    }
-    if (!std::all_of(large.begin(), large.end(), [](uint8_t value) {
-            return value == 0x5a;
-        })) {
-        throw std::runtime_error("large IO request was truncated or overwritten");
-    }
-    LOG_INFO("[TESTCASE][PASS] name=VulkanIOOwnedRequests offsets=verified texture_mip_layer=verified "
-             "binary=verified callbacks=5 errors=2 large_batch=verified");
-}
-
-void RunVulkanIOReadUploadOverlap() {
-    using namespace std::chrono_literals;
-    auto&                 device = RenderDevice::Get();
-    std::binary_semaphore entered{0}, release{0};
-    std::atomic_bool      timed_out   = false;
-    VkResult              next_result = VK_TIMEOUT;
-    {
-        auto          io = device.GetImpl()->CreateIOInterface(device.GetCopyQueue());
-        IOCommandList first;
-        first.AddCallback([&] {
-            entered.release();
-            if (!release.try_acquire_for(10s))
-                timed_out = true;
-        });
-        io->Execute(std::move(first));
-        if (!entered.try_acquire_for(10s)) {
-            release.release();
-            throw std::runtime_error("IO Completion callback did not start");
-        }
-        IOCommandList next;
-        next.AddCallback([] {});
-        const uint64 value = io->Execute(std::move(next));
-        const auto   wait  = io->GetWaitEvent(value);
-        auto*        fence = ResourceCast(reinterpret_cast<Fence*>(wait.timeline_handle));
-        next_result        = fence->HostWait(value);
-        release.release();
-    }
-    if (timed_out || next_result != VK_SUCCESS) {
-        throw std::runtime_error("IO preparation still waits for each previous Completion callback");
-    }
-    LOG_INFO("[TESTCASE][PASS] name=VulkanIOReadUploadOverlap next_submit_before_previous_retirement=verified"
     );
 }
 
@@ -7361,7 +7073,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "native submission escaped the sole Submission owner "
                     "or changed cross-batch source order"
@@ -7682,7 +7394,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             native_capture.Event(0).thread_role !=
                 ERHIThreadRole::Submission ||
             native_capture.Event(0).thread_id == main_thread_id ||
-            !native_capture.Event(0).outcome.WasSubmitted()) {
+            !native_capture.Event(0).outcome.Succeeded()) {
             throw std::runtime_error(
                 "malformed-ordering prefix escaped stable Submission "
                 "ownership"
@@ -8011,7 +7723,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
         if (native_event.queue != EQueueType::Copy ||
             native_event.thread_role != ERHIThreadRole::Submission ||
             native_event.thread_id == main_thread_id ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "recovered Copy batch 1 escaped stable Submission ownership"
             );
@@ -8354,7 +8066,7 @@ void RunBoundedPipelineShutdownCancellation() {
         if (native_event.queue != EQueueType::Copy ||
             native_event.thread_role != ERHIThreadRole::Submission ||
             native_event.thread_id == main_thread_id ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "pipeline shutdown drained batch 1 outside the Submission owner"
             );
@@ -8795,7 +8507,7 @@ void RunSerialControlPipelineBoundary() {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "SerialControl native submission order or owner changed"
                 );
@@ -11084,7 +10796,7 @@ void RunPresentPipelineBoundary() {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "Present boundary native submission order or owner changed"
                 );
@@ -11486,7 +11198,7 @@ void RunPresentRetryRecovery() {
                     }
                 ) ||
                 native_capture.Overflowed() || native_capture.Count() != index + 1 ||
-                !native_capture.Event(index).outcome.WasSubmitted()) {
+                !native_capture.Event(index).outcome.Succeeded()) {
                 throw std::runtime_error("recoverable Present poisoned later GPU completion/readback");
             }
         }
@@ -13258,7 +12970,7 @@ void RunTimestampQuerySuccessfulBatchPublication() {
     second.EndTimestampQuery(second_query);
 
     auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(signals[_index].Get())
         );
         return fence != nullptr && signals[_index]->GetValue() >= 1 &&
@@ -13407,7 +13119,7 @@ void RunTimestampQuerySuccessfulBatchPublication() {
             source_event.async_queue_scope != async_queue_scope ||
             native_event.queue != EQueueType::Graphics ||
             native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "successful timestamp batch escaped stable Submission ordering"
             );
@@ -13488,7 +13200,7 @@ void RunTimestampQueryCrossQueueBatchPublication() {
     );
 
     auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(signals[_index].Get())
         );
         return fence != nullptr && signals[_index]->GetValue() >= 1 &&
@@ -13836,7 +13548,7 @@ void RunTimestampQueryCrossQueueBatchPublication() {
             source_event.async_queue_scope != async_queue_scope ||
             native_event.queue != expected_queues[index] ||
             native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "cross-queue timestamp batch lost stable submission ownership"
             );
@@ -13899,7 +13611,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     std::array<std::atomic<uint32>, 2> success_callbacks{};
 
     auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(signals[_index].Get())
         );
         return fence != nullptr && signals[_index]->GetValue() >= 1 &&
@@ -14095,7 +13807,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
                 EQueueType::Graphics ||
             native_capture.Event(index).thread_role !=
                 ERHIThreadRole::Submission ||
-            !native_capture.Event(index).outcome.WasSubmitted()) {
+            !native_capture.Event(index).outcome.Succeeded()) {
             throw std::runtime_error(
                 "mixed timestamp batch lost materialized source identity"
             );
@@ -14184,7 +13896,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     copy_submit.async_queue_scope = async_queue_scope;
 
     auto graphics_signal_succeeded = [&] {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(graphics_done.Get())
         );
         return fence != nullptr && graphics_done->GetValue() >= 1 &&
@@ -14354,7 +14066,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
             source_event.async_queue_scope != async_queue_scope ||
             native_event.queue != expected_queues[index] ||
             native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "query-only Copy payload lost stable source ownership"
             );
@@ -14436,7 +14148,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
         FenceRef            done = device.CreateFence();
 
         auto signal_succeeded = [&] {
-            auto* fence = static_cast<VulkanFence*>(
+            auto* fence = static_cast<VulkanTimeline*>(
                 ResourceCast(done.Get())
             );
             return fence != nullptr && done->GetValue() >= 1 &&
@@ -14666,7 +14378,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
             native_capture.Event(index);
         if (event.queue != EQueueType::Copy ||
             event.thread_role != ERHIThreadRole::Submission ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "Copy timestamp work did not retain native Submission ownership"
             );
@@ -14727,13 +14439,13 @@ void RunTimestampQueryPreparationRejection() {
     FenceRef rejected_done = device.CreateFence();
     FenceRef sibling_done  = device.CreateFence();
     FenceRef recovered_done = device.CreateFence();
-    auto* rejected_fence = static_cast<VulkanFence*>(
+    auto* rejected_fence = static_cast<VulkanTimeline*>(
         ResourceCast(rejected_done.Get())
     );
-    auto* sibling_fence = static_cast<VulkanFence*>(
+    auto* sibling_fence = static_cast<VulkanTimeline*>(
         ResourceCast(sibling_done.Get())
     );
-    auto* recovered_fence = static_cast<VulkanFence*>(
+    auto* recovered_fence = static_cast<VulkanTimeline*>(
         ResourceCast(recovered_done.Get())
     );
     if (rejected_fence == nullptr || sibling_fence == nullptr ||
@@ -14932,7 +14644,7 @@ void RunTimestampQueryPreparationRejection() {
         callback_errors.load(std::memory_order_acquire) != 0 ||
         native_capture.Overflowed() ||
         native_capture.Count() != 1 ||
-        !native_capture.Event(0).outcome.WasSubmitted() ||
+        !native_capture.Event(0).outcome.Succeeded() ||
         native_capture.Event(0).thread_role !=
             ERHIThreadRole::Submission) {
         throw std::runtime_error(
@@ -15254,7 +14966,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         const std::optional<QueryResult> suffix_result =
             suffix_future.TryGet();
         auto* prefix_fence =
-            static_cast<VulkanFence*>(ResourceCast(prefix_done.Get()));
+            static_cast<VulkanTimeline*>(ResourceCast(prefix_done.Get()));
         if (_result.status != QueryStatus::Ready ||
             GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
             prefix_fence == nullptr ||
@@ -15353,7 +15065,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     const GpuCompletionResult suffix_completion_result =
         suffix_completion.Get();
     auto* suffix_fence =
-        static_cast<VulkanFence*>(ResourceCast(suffix_done.Get()));
+        static_cast<VulkanTimeline*>(ResourceCast(suffix_done.Get()));
     if (prefix_result.status != QueryStatus::Ready ||
         suffix_result.status != QueryStatus::Error ||
         prefix_completion_result.status !=
@@ -15390,7 +15102,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         native_capture.Event(0);
     if (native_event.queue != EQueueType::Graphics ||
         native_event.thread_role != ERHIThreadRole::Submission ||
-        !native_event.outcome.WasSubmitted()) {
+        !native_event.outcome.Succeeded()) {
         throw std::runtime_error(
             "mid-batch timestamp Query test did not submit exactly its prefix source"
         );
@@ -15448,7 +15160,7 @@ void RunTimestampQuerySerialRecordFailure() {
 
     auto fence_failed =
         [](const FenceRef& _fence) {
-            auto* fence = static_cast<VulkanFence*>(
+            auto* fence = static_cast<VulkanTimeline*>(
                 ResourceCast(_fence.Get())
             );
             return fence != nullptr && fence->IsFailed() &&
@@ -15829,6 +15541,64 @@ void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
         view_count,
         view_mask
     );
+}
+
+void RunDepthTextureCopy() {
+    auto& device = RenderDevice::Get();
+    constexpr uint32 width = 4;
+    constexpr uint32 height = 4;
+    const auto texture_usage = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT |
+                               ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST;
+    TextureRef source = device.CreateTexture(
+        "depth_copy_source", Extent3D(width, height, 1), PF_D32_SFLOAT, texture_usage
+    );
+    TextureRef destination = device.CreateTexture(
+        "depth_copy_destination", Extent3D(width, height, 1), PF_D32_SFLOAT, texture_usage
+    );
+    BufferRef buffer = device.CreateBuffer<uint32>(
+        "depth_copy_readback", width * height,
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
+    );
+    std::array<uint32, width * height> expected{};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        // Distinct finite D32 values in [0, 1], compared bit-for-bit after copying.
+        expected[index] = 0x3f000000u + static_cast<uint32>(index) * 0x10000u;
+    }
+    CommandList commands(EQueueType::Graphics);
+    commands.CopyFrom(OwnedBytes(expected), source->GetView(), "DepthUpload");
+    commands.CopyFrom(source->GetView(), destination->GetView(), "DepthImageCopy");
+    commands.CopyFrom(destination->GetView(), buffer->GetView(), "DepthToBuffer");
+    ReadbackFuture future = commands.Readback(buffer->GetView(), "DepthCopyReadback");
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU
+    );
+    const auto values = future.Get().CopyAs<uint32>();
+    if (!values || values->size() != expected.size() ||
+        !std::equal(values->begin(), values->end(), expected.begin())) {
+        throw std::runtime_error("D32 buffer/image copy round trip did not preserve depth values");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=DepthTextureCopy path=buffer-image-image-buffer format=D32");
+}
+
+void RunUndersizedTextureUploadRejection() {
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        "undersized_upload",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
+    );
+    // One byte short of the image, despite ample physical staging capacity.
+    // Native buffer bounds alone cannot detect the undersized upload slice.
+    Array<Moer::byte> data(4 * 4 * sizeof(uint32) - 1);
+    CommandList commands(EQueueType::Copy);
+    commands.CopyFrom(std::move(data), texture->GetView(), "UndersizedTextureUpload");
+    ReadbackFuture future = commands.Readback(texture->GetView(), "RejectedTextureUploadReadback");
+    RHIExecutor::Get().Submit(EQueueType::Copy, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    if (future.Get().status != ReadbackStatus::Error) {
+        throw std::runtime_error("undersized texture upload was accepted");
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    LOG_INFO("[TESTCASE][PASS] name=UndersizedTextureUploadRejection readback=error");
 }
 
 void RunOwningReadbackFuture() {
@@ -16339,6 +16109,9 @@ int main(int argc, const char** argv) {
 
         if (readback_future_mode) {
             RunOwningReadbackFuture();
+            RunDepthTextureCopy();
+            // Rejected recording latches the backend fault, so run this last.
+            RunUndersizedTextureUploadRejection();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();
@@ -16500,9 +16273,6 @@ int main(int argc, const char** argv) {
         RunRecoverableCopyDependencyRejection();
         RunCrossQueueTopologyBatch();
         RunDirectCopyExecuteRejected();
-        RunVulkanStorageUnifiedCopySubmission();
-        RunVulkanIOOwnedRequests();
-        RunVulkanIOReadUploadOverlap();
         RunAsyncQueueParallelTranslateSmoke();
         RunMultiSegmentSourceExecution();
         RunMultiSegmentCopyRoundTrip();

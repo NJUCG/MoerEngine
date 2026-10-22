@@ -4,15 +4,15 @@
 
 #include "VulkanDevice.h"
 #include "PixelFormat.h"
-#include "VulkanCommand.h"
+#include "VulkanCommandList.h"
 #include "VulkanDebugCallback.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
-#include "VulkanSubmissionDiagnostics.h"
 #include "VulkanUtil.h"
 #include "VulkanVertexFormat.h"
+#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "plugin/VulkanCooperativeSupport.h"
 #include "plugin/VulkanNrdPlugin.h"
 #include "vulkanextension/VulkanExtension.h"
@@ -39,7 +39,6 @@
 // #include <vk_mem_alloc.h>
 #include "VulkanMemoryAllocator.h"
 
-#include "VulkanIOService.h"
 #include <algorithm>
 #include <array>
 #include <config.h>
@@ -1490,7 +1489,7 @@ VulkanOperationResult VulkanDevice::InjectPresentSubmitFault(
     if (!predrained && result != VK_ERROR_DEVICE_LOST) {
         EmergencyExitWithoutVulkanCleanup(_context, result);
     }
-    return {EVulkanOperationStatus::Faulted, result, true, predrained};
+    return {EVulkanOperationStatus::Faulted, result};
 }
 
 void VulkanDevice::RecordRejectedSubmit() {
@@ -2326,7 +2325,7 @@ BindlessArrayRef VulkanDevice::CreateBindlessArray(uint _max_size) {
 }
 
 FenceRef VulkanDevice::CreateFence() {
-    return FenceRef{MoerNew(VulkanFence)(*this)};
+    return FenceRef{MoerNew(VulkanTimeline)(*this)};
 }
 
 #pragma region[ raytracing ]
@@ -2345,10 +2344,6 @@ SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
     return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)};
 }
 
-IOInterfaceRef VulkanDevice::CreateIOInterface(CopyQueue& _copy_queue) {
-    VkCopyQueue* copy_queue_vk = static_cast<VkCopyQueue*>(&_copy_queue);
-    return MakeShared<VulkanIOInterface>(*this, *copy_queue_vk);
-}
 void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) {
     deferred_release_queue.Push(_object);
 }

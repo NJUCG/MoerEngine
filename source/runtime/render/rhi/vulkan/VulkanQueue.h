@@ -1,16 +1,16 @@
 #pragma once
 #include "PixelFormat.h"
-#include "VulkanCommand.h"
 #include "VulkanCommandContext.h"
+#include "VulkanCommandList.h"
 #include "VulkanCommandQueries.h"
 #include "VulkanCommon.h"
 #include "VulkanDescriptor.h"
 #include "VulkanFault.h"
+#include "diagnostics/VulkanSerialGolden.h"
 // #include "VulkanDevice.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIIO.h"
 #include "rhi/ExternalCpuJoinPool.h"
 #include "rhi/RHIParallelRecord.h"
 #include "rhi/RHIRecordDiagnostics.h"
@@ -38,27 +38,27 @@ public:
     ~VkNativeQueue();
 
     VulkanOperationResult Submit(
-        VulkanCmdList&               _cmdlist,
+        VulkanCommandList&            _cmdlist,
         const VulkanOperationContext& _context,
         VkFence                       _fence = VK_NULL_HANDLE
     );
     VulkanOperationResult Submit(
-        std::span<VulkanCmdList* const> _cmdlists,
-        const VulkanOperationContext&   _context,
-        VkFence                         _fence = VK_NULL_HANDLE
+        std::span<VulkanCommandList* const> _cmdlists,
+        const VulkanOperationContext&       _context,
+        VkFence                             _fence = VK_NULL_HANDLE
     );
     VulkanOperationResult SubmitEmpty(
         const VulkanOperationContext& _context,
         VkFence                       _fence = VK_NULL_HANDLE
     );
     void Wait(
-        VulkanFence*          _fence,
+        VulkanTimeline*          _fence,
         uint64                _timeline,
         VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
     );
     void Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     void Signal(
-        VulkanFence*          _fence,
+        VulkanTimeline*          _fence,
         uint64                _timeline,
         VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
     );
@@ -184,14 +184,14 @@ struct ProfilerStorage {
     }
 
     void BeginProfilerSession(
-        VulkanCmdList&           _cmd,
-        std::string_view         _name,
-        VkPipelineStageFlagBits  _stage = kBeginTimestampStage
+        VulkanCommandList&      _cmd,
+        std::string_view        _name,
+        VkPipelineStageFlagBits _stage = kBeginTimestampStage
     );
     void EndProfilerSession(
-        VulkanCmdList&           _cmd,
-        std::string_view         _name,
-        VkPipelineStageFlagBits  _stage = kEndTimestampStage
+        VulkanCommandList&      _cmd,
+        std::string_view        _name,
+        VkPipelineStageFlagBits _stage = kEndTimestampStage
     );
     QueryFrameDiagnostics GetCurrentFrameQueryDiagnostics() const;
 
@@ -417,7 +417,7 @@ public:
         VulkanCallbackBatch,
         VulkanDeferredReleaseBatch,
         VulkanCompletionMarker,
-        VulkanFence*,
+        VulkanTimeline*,
         SignalEvent,
         WaitEvent>;
 
@@ -582,15 +582,7 @@ private:
         uint32                   texture_barriers{0};
         uint32                   memory_barriers{0};
         uint32                   used_queries{0};
-        SerialGoldenSummary      serial_golden{};
-        uint32                   golden_unresolved{0};
-        uint32                   golden_opaque{0};
-        uint64                   golden_unresolved_command_mask{0};
-        uint64                   golden_opaque_command_mask{0};
-        uint32                   golden_unresolved_native_buffers{0};
-        uint32                   golden_unresolved_native_images{0};
-        bool                     golden_has_unresolved_buffer_barrier{false};
-        SerialBarrierItem        golden_first_unresolved_buffer_barrier{};
+        VulkanSerialGoldenResult serial_golden{};
     };
 
     struct RhiRecordWindowTotals {
@@ -726,7 +718,7 @@ private:
         VulkanOperationContext                  context;
         uint64                                  timeline{0};
         bool                                    has_commands{false};
-        Array<VulkanCmdList*>                   ordered_cmd_lists;
+        Array<VulkanCommandList*>                  ordered_cmd_lists;
         Array<VkSemaphoreSubmitInfo>             native_waits;
         Array<VkSemaphoreSubmitInfo>             native_signals;
         VulkanCommandContextBatch                command_contexts;
@@ -853,7 +845,7 @@ private:
     uint64                                             retirement_enqueued_serial{0};
     std::atomic<uint64>                                retirement_settled_serial{0};
     Array<VulkanBatchCompletionSettlement>             batch_completion_settlements{};
-    VulkanFence*                                       timeline = nullptr;
+    VulkanTimeline*                                       timeline = nullptr;
     std::mutex                                         event_mutex;
     bool                                               completion_worker_running{false};
     std::condition_variable_any                        queue_cv;
@@ -907,63 +899,24 @@ public:
     friend class VulkanSubmissionExecutor;
     VkCopyQueue(VulkanDevice& _device);
     ~VkCopyQueue();
-    using EventType = std::variant<
-        VulkanSubmissionEvent,
-        VulkanSubmitCompletionBatch,
-        UniquePtr<VulkanCommandContext>,
-        VulkanCallbackBatch,
-        VulkanCompletionMarker,
-        IOSignalEvt,
-        IOWaitEvt>;
-    struct IOEvent {
-        EventType event;
-        uint64    timeline;
-        bool      wake_thread;
-        uint64    retirement_serial;
-        template<typename Arg>
-            requires std::is_constructible_v<EventType, Arg&&>
-        IOEvent(Arg&& _event, uint64 _timeline, bool _wake_thread) :
-            event(std::forward<Arg>(_event)),
-            timeline(_timeline),
-            wake_thread(_wake_thread),
-            retirement_serial(0) {}
+    struct CompletionEvent {
+        VulkanSubmitCompletionBatch batch;
+        uint64                      timeline;
+        uint64                      retirement_serial;
 
-        template<typename Arg>
-            requires std::is_constructible_v<EventType, Arg&&>
-        IOEvent(
-            Arg&&  _event,
+        template<typename... Args>
+            requires std::is_constructible_v<VulkanSubmitCompletionBatch, Args&&...>
+        CompletionEvent(
             uint64 _timeline,
-            bool   _wake_thread,
-            uint64 _retirement_serial
-        ) :
-            event(std::forward<Arg>(_event)),
-            timeline(_timeline),
-            wake_thread(_wake_thread),
-            retirement_serial(_retirement_serial) {}
-
-        template<typename Event, typename... Args>
-            requires std::is_constructible_v<Event, Args&&...>
-        IOEvent(
-            std::in_place_type_t<Event>,
-            uint64 _timeline,
-            bool   _wake_thread,
             uint64 _retirement_serial,
             Args&&... _args
-        ) noexcept(std::is_nothrow_constructible_v<Event, Args&&...>) :
-            event(std::in_place_type<Event>, std::forward<Args>(_args)...),
+        ) noexcept(std::is_nothrow_constructible_v<VulkanSubmitCompletionBatch, Args&&...>) :
+            batch(std::forward<Args>(_args)...),
             timeline(_timeline),
-            wake_thread(_wake_thread),
             retirement_serial(_retirement_serial) {}
-
-        IOEvent(IOEvent&& _other) noexcept :
-            event(std::move(_other.event)),
-            timeline(_other.timeline),
-            wake_thread(_other.wake_thread),
-            retirement_serial(_other.retirement_serial) {}
     };
 
-    IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
-    IOWaitEvt Execute(CmdSubmit&& _submit) override;
+    WaitEvent Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;
 
@@ -976,43 +929,8 @@ public:
     virtual void CopyFrom(std::span<byte> _data, BufferView _dst) override {};
     virtual void CopyFrom(std::span<byte> _data, TextureView _dst) override {};
 
-    ///
-    void Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len);
-    void Enqueue(FileHandle _handle, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
-    void Enqueue(
-        FileHandle   _handle,
-        size_t       _file_offset,
-        void*        _tex_ptr,
-        EPixelFormat _format,
-        uint3        _offset,
-        uint3        _size,
-        uint         _mip_offset
-    );
-    void Enqueue(void const* _mem, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
-    void Enqueue(
-        void const*  _mem,
-        size_t       _file_offset,
-        void*        _tex_ptr,
-        EPixelFormat _format,
-        uint3        _offset,
-        uint3        _size,
-        uint         _mip_offset
-    );
-    void EnqueueSignal(FenceRef _fence, uint64_t _timeline);
-    void Execute();
-
+private:
     void ExecuteThread();
-    void Submit(IOQueueCommandList&& _cmd_list);
-    void SubmitSignal(FenceRef _fence, uint64_t _timeline);
-    void SubmitWait(FenceRef _fence, uint64_t _timeline);
-
-private:
-    void ExecuteIOThread(IOQueueCommandList&& _cmd_list, uint64_t _timeline);
-
-    void IOThreadLoop();
-    void RHIThreadLoop();
-
-private:
     void RejectForRuntime(
         CmdSubmit&& _submit,
         VkResult    _result,
@@ -1076,7 +994,7 @@ private:
     UniquePtr<VulkanCommandContext>                AcquireCommandContext();
     void                                      CompleteAll(uint64 _timeline);
     LockFreeQueueBase<VulkanCommandContext, false> command_contexts;
-    DEQueue<IOEvent>                          event_queue;
+    DEQueue<CompletionEvent>                      event_queue;
 
 private:
     enum class EExecutionOwnershipMode : uint8_t {
@@ -1091,7 +1009,7 @@ private:
     uint64                  retirement_enqueued_serial{0};
     std::atomic<uint64>     retirement_settled_serial{0};
     Array<VulkanBatchCompletionSettlement> batch_completion_settlements{};
-    VulkanFenceRef          timeline       = nullptr;
+    VulkanTimelineRef          timeline       = nullptr;
     std::mutex              event_mutex;
     std::atomic_bool        enabled{false};
     std::condition_variable_any queue_cv; // wake up execute thread from sleeping
@@ -1101,19 +1019,11 @@ private:
 
     std::atomic_bool dependency_waits_enabled{true};
 
-    //tmp
-    LockFreeQueueBase<IOCmd> commands;
-
     std::mutex                                     exec_mutex;
     RHITransferableOwnershipGate                   runtime_execution_gate;
     std::atomic<EExecutionOwnershipMode>           execution_ownership_mode{
         EExecutionOwnershipMode::Unclaimed
     };
-    Array<VkSemaphore>                             pending_semaphores;
-    Queue<std::pair<IOQueueCommandList&&, uint64>> io_thread_cmds;
-    std::mutex                                     io_mutex;
-    Queue<std::pair<CommandList&&, uint64>>        io_rhi_cmdlists;
-    std::mutex                                     rhi_mutex;
     Array<UniquePtr<VulkanCommandContext>>         command_context_quarantine;
 };
 } // namespace Moer::Render

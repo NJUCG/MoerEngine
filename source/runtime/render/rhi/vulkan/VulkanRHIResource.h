@@ -36,11 +36,11 @@ class VulkanPipelineResourceCache;
 //forward declaration
 class VulkanBuffer;
 class VulkanTexture;
-class VulkanFence;
+class VulkanTimeline;
 
-using VulkanBufferRef  = CountableRef<VulkanBuffer>;
-using VulkanTextureRef = CountableRef<VulkanTexture>;
-using VulkanFenceRef   = CountableRef<VulkanFence>;
+using VulkanBufferRef   = CountableRef<VulkanBuffer>;
+using VulkanTextureRef  = CountableRef<VulkanTexture>;
+using VulkanTimelineRef = CountableRef<VulkanTimeline>;
 
 class VulkanMemoryManager final {
 public:
@@ -358,12 +358,6 @@ struct VulkanDescriptorSetLayoutCreateInfo {
     bool                                            is_bindless = false;
 };
 
-// Resolved position for one descriptor-set binding command.
-struct DescriptorSetBufferBinding {
-    uint   set_index;
-    uint   buffer_index;
-    uint64 offset;
-};
 struct VulkanResourceBinding {
     uint             binding_index;
     uint             argument_index;
@@ -401,15 +395,20 @@ using VulkanSetResourceBindings = std::variant<
 
 struct VulkanDescriptorSetBinding {
     uint buffer_index = 0;
-    // Fixed bindless offset; ordinary sets resolve their offset when recording.
-    uint64                    initial_byte_offset = 0;
+    // Ordinary sets: relative to the draw's resource allocation.
+    // Bindless sets: absolute offset in the bound descriptor buffer.
+    uint64                    byte_offset = 0;
     VulkanSetResourceBindings resource_bindings;
 };
 
 struct VulkanPipelineBindingTemplate {
+    // Ordinary resources, bindless buffers, and bindless images/samplers.
+    static constexpr size_t descriptor_buffer_capacity = 3;
+
     UnorderedMap<uint, VulkanDescriptorSetBinding> set_bindings;
     VkPushConstantsInfoKHR                         push_constants_info{};
-    //descriptor buffer bind template
+    uint64                                         resource_descriptor_allocation_size = 0;
+    // Shared immutable metadata; bindless addresses are resolved per recording.
     Array<VkDescriptorBufferBindingInfoEXT> descriptor_buffers;
 };
 
@@ -520,7 +519,7 @@ public:
     }
 
     void CreatePipelineLayout(const std::optional<VkPushConstantRange>& push_constant_range);
-    VkPipelineBindPoint GetPipelineBindPoint() {
+    VkPipelineBindPoint GetPipelineBindPoint() const {
         switch (m_type) {
             case GFX:
                 return VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -1077,10 +1076,12 @@ private:
         return static_cast<VkType*>(_val);       \
     }
 
-class VulkanFence final : public Fence, VulkanDeviceObject {
+// RHI synchronization timeline backed by a VkSemaphore and host-side
+// submission/completion state.
+class VulkanTimeline final : public Fence, VulkanDeviceObject {
 public:
-    VulkanFence(VulkanDevice&);
-    virtual ~VulkanFence();
+    VulkanTimeline(VulkanDevice&);
+    virtual ~VulkanTimeline();
 
     uint64_t GetValue() const override;
 
@@ -1090,7 +1091,7 @@ public:
     void Reject(uint64_t _value) noexcept override;
     // can be called on any thread to block current thread
     void Sync(uint64);
-    // can be called on any thread to signal fence
+    // Publish observed completion to CPU waiters; does not signal the semaphore.
     void  Notify(uint64);
     void  MarkSubmitted(uint64_t _value) override;
     RENDER_API bool WaitSubmitted(
@@ -1107,10 +1108,7 @@ public:
     RENDER_API void Fail(VkResult _result);
     RENDER_API bool IsFailed() const;
     RENDER_API void SignalHost(uint64_t _value);
-    auto& GetFence() {
-        return timeline;
-    }
-    VkSemaphore GetUnderlyingHandle() {
+    VkSemaphore GetSemaphore() const noexcept {
         return timeline;
     }
 
@@ -1138,7 +1136,7 @@ public:
 #pragma region[ resource cast ]
 RESOURCE_CAST(Buffer, VulkanBuffer)
 RESOURCE_CAST(Texture, VulkanTexture)
-RESOURCE_CAST(Fence, VulkanFence)
+RESOURCE_CAST(Fence, VulkanTimeline)
 RESOURCE_CAST(Swapchain, VkSwapchain)
 
 RESOURCE_CAST(RaytracingGeometry, VulkanRaytracingGeometry)

@@ -108,8 +108,6 @@ public:
     RaytracingSceneRef CreateRaytracingScene() override;
     SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
-    IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;
-
     // RHI pipeline creation.
     PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
     PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders) override;
@@ -368,6 +366,13 @@ private:
     void SetupDebugUtilsMessengerEXT();
 
     // Native synchronization and fault publication.
+    // Publishing closes admission before the first fault record is fully written.
+    enum class EVulkanFaultPublishState : uint8_t {
+        Healthy,
+        Publishing,
+        Faulted
+    };
+
     std::mutex& GetQueueHostMutex(VkQueue _queue);
     Array<std::mutex*> GetUniqueQueueHostMutexes();
     bool TryBeginFirstFault(VkResult _result);

@@ -637,13 +637,7 @@ RHIQueueTopology D3D12Device::GetQueueTopology() const {
 CopyQueue& D3D12Device::GetCopyQueue() {
     // TODO: 在此处插入 return 语句
     struct DummyCopyQueue : CopyQueue {
-        IOWaitEvt Execute(IOSubmission&& _submit) {
-            return {};
-        }
-        virtual IOWaitEvt Execute(CmdSubmit&& _submit) {
-            return {};
-        }
-        virtual IOWaitEvt Execute(IOQueueSubmission&& _submit) {
+        WaitEvent Execute(CmdSubmit&& _submit) override {
             return {};
         }
         virtual void CopyFrom(BufferView _src, BufferView _dst) {};

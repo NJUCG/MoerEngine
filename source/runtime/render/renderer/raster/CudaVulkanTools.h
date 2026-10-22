@@ -64,8 +64,8 @@ public:
         return *dynamic_cast<VulkanTexture*>(texture.Get());
     }
 
-    static VulkanFence& getVulkanFence(FenceRef fence) {
-        return *dynamic_cast<VulkanFence*>(fence.Get());
+    static VulkanTimeline& getVulkanTimeline(FenceRef fence) {
+        return *dynamic_cast<VulkanTimeline*>(fence.Get());
     }
 
     static VkCommandQueue& getVulkanQueue(CommandQueue& queue) {
