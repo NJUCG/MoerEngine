@@ -1373,7 +1373,8 @@ struct VkCmdPreprocessor {
     static VkAccessFlagBits2 GetBufferAccess(VulkanShaderResourceState _flag) {
         switch (_flag.resource_type) {
             case SRT_CBV:
-                return VK_ACCESS_2_SHADER_READ_BIT;
+                // SHADER_READ excludes uniform-buffer reads.
+                return VK_ACCESS_2_UNIFORM_READ_BIT;
             case SRT_SRV:
                 return VK_ACCESS_2_SHADER_READ_BIT;
             case SRT_UAV:
