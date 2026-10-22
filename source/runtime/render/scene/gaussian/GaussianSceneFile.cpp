@@ -2,28 +2,16 @@
 #include "scene/LogicalScene.h"
 #include "scene/loader/GaussianPlyLoader.h"
 #include <algorithm>
-#include <atomic>
 #include <cctype>
-#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
-#if PLATFORM_WINDOWS
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <Windows.h>
-#endif
 namespace Moer {
 namespace {
 using Json                               = nlohmann::json;
 constexpr size_t    k_max_node_count     = 1000000;
 constexpr uint64    k_max_document_bytes = 64u * 1024u * 1024u;
-std::atomic<uint64> g_save_sequence{0};
 std::string         Utf8(const std::filesystem::path& path) {
     const auto value = path.generic_u8string();
     return {reinterpret_cast<const char*>(value.data()), value.size()};
@@ -44,9 +32,6 @@ float3 VectorValue(const Json& value) {
         throw std::runtime_error("Expected a 3-vector");
     return float3(Number(value[0]), Number(value[1]), Number(value[2]));
 }
-Json VectorValue(float3 value) {
-    return Json::array({value.x, value.y, value.z});
-}
 Quaternion Rotation(const Json& value) {
     if (!value.is_array() || value.size() != 4)
         throw std::runtime_error("Expected a wxyz quaternion");
@@ -57,17 +42,6 @@ Quaternion Rotation(const Json& value) {
     if (std::abs(length - 1.0) < 1e-5)
         return Quaternion(float(w), float(x), float(y), float(z));
     return Quaternion(float(w / length), float(x / length), float(y / length), float(z / length));
-}
-Json CameraData(const Camera& camera) {
-    return {
-        {"position", VectorValue(camera.GetPosition())},
-        {"yaw", camera.GetYaw()},
-        {"pitch", camera.GetPitch()},
-        {"fov", camera.GetFov()},
-        {"aspect", camera.GetAspectRatio()},
-        {"near", camera.GetNearClip()},
-        {"far", camera.GetFarClip()}
-    };
 }
 void ReadCamera(const Json& value, Camera& out_camera) {
     const float fov = Number(value.at("fov")), aspect = Number(value.at("aspect"));
@@ -94,153 +68,6 @@ void CheckDocument(const Json& document) {
         throw std::runtime_error("Invalid asset table");
 }
 } // namespace
-bool SaveGaussianSceneFile(
-    const std::filesystem::path& path,
-    const ecs::LogicalScene&     scene,
-    std::string&                 out_error
-) {
-    std::filesystem::path temporary_path;
-    out_error.clear();
-    try {
-        auto extension = path.extension().string();
-        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
-            return char(std::tolower(c));
-        });
-        if (extension != ".moergs")
-            throw std::runtime_error("Gaussian scenes must use the .moergs extension");
-        const auto& registry = scene.r();
-        if (!registry.view<const ecs::CRenderable>().empty() ||
-            !registry.view<const ecs::CPrimitive>().empty() || !registry.view<const ecs::CMesh>().empty() ||
-            !registry.view<const ecs::CTexture>().empty())
-            throw std::runtime_error(
-                "This document format supports Gaussian scenes only; Mesh/resources must not be discarded"
-            );
-        const auto roots = registry.view<const ecs::CTagRootNode, const ecs::CNode>();
-        if (roots.size_hint() != 1)
-            throw std::runtime_error("Expected one root node");
-        const auto                               root_entity = *roots.begin();
-        std::vector<entt::entity>                nodes{root_entity};
-        std::unordered_map<entt::entity, size_t> node_ids{{root_entity, 0}};
-        for (size_t node_id = 0; node_id < nodes.size(); ++node_id) {
-            auto child_entity = registry.get<ecs::CNode>(nodes[node_id]).first_child_entt;
-            while (child_entity != entt::null) {
-                if (nodes.size() >= k_max_node_count || !node_ids.emplace(child_entity, nodes.size()).second)
-                    throw std::runtime_error("Invalid/cyclic scene hierarchy");
-                nodes.push_back(child_entity);
-                child_entity = registry.get<ecs::CNode>(child_entity).next_sibling_entt;
-            }
-        }
-        if (nodes.size() != registry.view<const ecs::CNode>().size())
-            throw std::runtime_error("Detached nodes cannot be omitted");
-        Json document = {
-            {"format", "MoerGaussianScene"},
-            {"version", 1},
-            {"assets", Json::array()},
-            {"nodes", Json::array()}
-        };
-        std::unordered_map<const GaussianAsset*, size_t> asset_ids;
-        const auto directory = std::filesystem::absolute(path).parent_path();
-        for (const auto entity : nodes) {
-            const auto& node       = registry.get<ecs::CNode>(entity);
-            const auto* visibility = registry.try_get<ecs::CVisibility>(entity);
-            Json        item       = {
-                {"parent", entity == root_entity ? -1 : int64(node_ids.at(node.parent_entt))},
-                {"name", node.name},
-                {"translation", VectorValue(node.translation)},
-                {"scale", VectorValue(node.scale)},
-                {"rotation",
-                 Json::array(
-                     {node.rotation.vec.w, node.rotation.vec.x, node.rotation.vec.y, node.rotation.vec.z}
-                 )},
-                {"visible_game", !visibility || visibility->visible_in_game},
-                {"visible_editor", !visibility || visibility->visible_in_editor}
-            };
-            if (const auto* instance = registry.try_get<ecs::CGaussianInstance>(entity)) {
-                if (!instance->asset || instance->asset->source_path.empty() ||
-                    !std::filesystem::is_regular_file(instance->asset->source_path))
-                    throw std::runtime_error("Every Gaussian asset needs an existing source PLY");
-                auto [it, is_new] = asset_ids.emplace(instance->asset.get(), asset_ids.size());
-                if (is_new) {
-                    std::error_code error;
-                    auto source = std::filesystem::relative(instance->asset->source_path, directory, error);
-                    if (error || source.empty())
-                        source = instance->asset->source_path;
-                    document["assets"].push_back(Utf8(source));
-                }
-                item["gaussian"] = {
-                    {"asset", it->second},
-                    {"enabled", instance->settings.is_enabled},
-                    {"opacity", instance->settings.opacity_multiplier},
-                    {"color", VectorValue(instance->settings.color_multiplier)}
-                };
-            }
-            if (const auto* camera = registry.try_get<ecs::CCamera>(entity)) {
-                item["camera"]      = CameraData(camera->camera);
-                item["main_camera"] = registry.all_of<ecs::CTagMainCamera>(entity);
-            }
-            if (registry.all_of<ecs::CLight>(entity)) {
-                const auto write_light = [&](const auto& light, const char* kind) {
-                    item["light"] = {
-                        {"kind", kind},
-                        {"color", VectorValue(light.color)},
-                        {"intensity", light.intensity},
-                        {"main", registry.all_of<ecs::CTagMainLight>(entity)}
-                    };
-                };
-                if (const auto* light = registry.try_get<ecs::CLightDirectional>(entity))
-                    write_light(*light, "directional");
-                else if (const auto* light = registry.try_get<ecs::CLightPoint>(entity))
-                    write_light(*light, "point");
-                else if (const auto* light = registry.try_get<ecs::CLightAmbient>(entity))
-                    write_light(*light, "ambient");
-                else
-                    throw std::runtime_error("Unsupported light type in Gaussian document");
-            }
-            document["nodes"].push_back(std::move(item));
-        }
-        const auto settings = registry.ctx().contains<ecs::CtxGaussianViewSettings>() ?
-                                  registry.ctx().get<const ecs::CtxGaussianViewSettings>().value :
-                                  GaussianViewSettings{};
-        document["view"]    = {
-            {"background", VectorValue(settings.background)},
-            {"exposure_ev", settings.exposure_ev},
-            {"display_mode", static_cast<uint>(settings.display_mode)},
-            {"debug_view", static_cast<uint>(settings.debug_view)},
-            {"tile_pair_capacity", settings.tile_pair_capacity}
-        };
-        const auto text = document.dump(2);
-        if (text.size() > k_max_document_bytes)
-            throw std::runtime_error("Scene document is too large");
-        temporary_path = path;
-        temporary_path += ".tmp-" +
-                          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
-                          std::to_string(g_save_sequence++);
-        {
-            std::ofstream output(temporary_path, std::ios::binary | std::ios::trunc);
-            output.exceptions(std::ios::failbit | std::ios::badbit);
-            output.write(text.data(), text.size());
-            output.close();
-        }
-#if PLATFORM_WINDOWS
-        if (!::MoveFileExW(
-                temporary_path.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
-            ))
-            throw std::runtime_error(
-                "Cannot publish Gaussian scene file (Windows error " + std::to_string(::GetLastError()) + ")"
-            );
-#else
-        std::filesystem::rename(temporary_path, path);
-#endif
-        return true;
-    } catch (const std::exception& error) {
-        out_error = error.what();
-        if (!temporary_path.empty()) {
-            std::error_code ignored;
-            std::filesystem::remove(temporary_path, ignored);
-        }
-        return false;
-    }
-}
 bool LoadGaussianSceneFile(
     const std::filesystem::path& path,
     ecs::LogicalScene&           out_scene,

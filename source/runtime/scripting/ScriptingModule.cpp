@@ -599,12 +599,8 @@ void BindGaussianApi(py::module_& module, SceneApiClass& scene_api_class) {
         .def("set_gaussian_view_settings", [](MainThreadCommandQueue& queue, const GaussianViewSettings& settings) {
             return CallScene(queue, [settings](Scene& scene) { return scene.SetGaussianViewSettings(settings); });
         })
-        .def("save_gaussian_document", [](MainThreadCommandQueue& queue, const std::string& path) {
-            return CallScene(queue, [path](Scene& scene) {
-                std::string error;
-                if (!scene.SaveGaussianDocument(path, error)) throw std::runtime_error(error);
-                return true;
-            });
+        .def("save_state_cache", [](MainThreadCommandQueue& queue) {
+            return CallScene(queue, [](Scene& scene) { return scene.SaveStateCache(); });
         })
         .def("duplicate_gaussian_instance", [](MainThreadCommandQueue& queue, entt::entity entity) {
             return CallScene(queue, [entity](Scene& scene) { return scene.DuplicateGaussianInstance(entity); });

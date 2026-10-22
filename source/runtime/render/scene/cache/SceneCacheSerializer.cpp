@@ -1,10 +1,12 @@
 #include "scene/cache/SceneCacheSerializer.h"
+#include "scene/cache/GaussianCacheExtension.h"
 
 #include "log/LogSystem.h"
 #include "scene/LogicalScene.h"
 #include "scene/NodeNameUtils.h"
 
 #include <entt/entt.hpp>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <utility>
@@ -14,6 +16,7 @@ namespace Moer {
 namespace {
 
 constexpr uint32 k_logical_scene_payload_version = 5; // v5: parent_group_id in ClusterGroupInfo
+constexpr uint32 k_gaussian_scene_payload_version = 6; // v5 core followed by shared Gaussian data
 constexpr uint64 k_null_entity_id                = std::numeric_limits<uint64>::max();
 
 enum ESceneCacheComponentFlag : uint64 {
@@ -103,6 +106,7 @@ Array<entt::entity> CollectSerializableEntities(const entt::registry& registry) 
     CollectComponentEntities<ecs::CNode>(registry, entities, seen_entities);
     CollectNamedResourceEntities(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CRenderable>(registry, entities, seen_entities);
+    CollectComponentEntities<ecs::CGaussianInstance>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CMesh>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CPrimitive>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CMaterial>(registry, entities, seen_entities);
@@ -936,12 +940,21 @@ bool SceneCacheBinaryReader::ReadBytes(void* out_data, uint64 size) {
 }
 
 // 读取一个长度前缀字符串
+uint64 SceneCacheBinaryReader::RemainingBytes() {
+    if (!IsValid()) return 0;
+    const auto position = m_stream.tellg();
+    m_stream.seekg(0, std::ios::end);
+    const auto end = m_stream.tellg();
+    m_stream.seekg(position);
+    return position >= 0 && end >= position ? static_cast<uint64>(end - position) : 0;
+}
+
 bool SceneCacheBinaryReader::ReadString(std::string& out_value) {
     uint64 size = 0;
     if (!ReadPod(size)) {
         return false;
     }
-    if (size > static_cast<uint64>(std::numeric_limits<size_t>::max())) {
+    if (size > static_cast<uint64>(std::numeric_limits<size_t>::max()) || size > RemainingBytes()) {
         RecordError("Scene cache string is too large for this platform.");
         return false;
     }
@@ -966,10 +979,8 @@ bool SceneCacheSerializer::SaveLogicalScene(
     SceneCacheHeader             header,
     const ecs::LogicalScene&     logical_scene
 ) {
-    if (!logical_scene.r().view<const ecs::CGaussianInstance>().empty()) {
-        LOG_WARNING("Cannot serialize Gaussian instances with the Mesh-only cache format.");
-        return false;
-    }
+    const bool has_gaussians = logical_scene.r().ctx().contains<ecs::CtxGaussianViewSettings>() ||
+        !logical_scene.r().view<const ecs::CGaussianInstance>().empty();
     std::error_code             ec;
     const std::filesystem::path parent_path = cache_path.parent_path();
     if (!parent_path.empty()) {
@@ -1015,7 +1026,7 @@ bool SceneCacheSerializer::SaveLogicalScene(
     }
 
     const LogicalScenePayloadHeader payload_header{
-        .version          = k_logical_scene_payload_version,
+        .version          = has_gaussians ? k_gaussian_scene_payload_version : k_logical_scene_payload_version,
         .has_mega_buffers = registry.ctx().contains<ecs::CtxMegaBuffers>() ? 1u : 0u,
         .entity_count     = static_cast<uint64>(entities.size()),
         .reserved         = {},
@@ -1053,6 +1064,8 @@ bool SceneCacheSerializer::SaveLogicalScene(
         }
     }
 
+    if (has_gaussians && !WriteGaussianCacheExtension(writer, registry, entities)) return false;
+
     const uint64 payload_end = writer.Tell();
     if (!writer.IsValid()) {
         LOG_WARNING("Scene Cache save failed: path={}, reason={}", cache_path.string(), writer.GetError());
@@ -1085,6 +1098,10 @@ bool SceneCacheSerializer::LoadLogicalScene(
         LOG_WARNING("Scene Cache load failed: path={}, reason={}", cache_path.string(), reader.GetError());
         return false;
     }
+    const SceneCacheHeader expected_header;
+    if (std::memcmp(header.magic, expected_header.magic, sizeof(header.magic)) != 0 || header.format_version != 1 ||
+        header.header_size != sizeof(SceneCacheHeader) || header.payload_size != reader.RemainingBytes())
+        return false;
     if (out_header) {
         *out_header = header;
     }
@@ -1094,14 +1111,16 @@ bool SceneCacheSerializer::LoadLogicalScene(
         LOG_WARNING("Scene Cache load failed: path={}, reason={}", cache_path.string(), reader.GetError());
         return false;
     }
-    if (payload_header.version != k_logical_scene_payload_version) {
+    if (payload_header.version != k_logical_scene_payload_version &&
+        payload_header.version != k_gaussian_scene_payload_version) {
         LOG_WARNING(
             "Scene Cache load failed: path={}, reason=Scene cache logical scene payload version mismatch.",
             cache_path.string()
         );
         return false;
     }
-    if (payload_header.entity_count > static_cast<uint64>(std::numeric_limits<size_t>::max())) {
+    if (payload_header.entity_count > static_cast<uint64>(std::numeric_limits<size_t>::max()) ||
+        payload_header.entity_count > reader.RemainingBytes() / sizeof(SerializedEntityHeader)) {
         LOG_WARNING(
             "Scene Cache load failed: path={}, reason=Scene cache entity table is too large for this "
             "platform.",
@@ -1110,8 +1129,8 @@ bool SceneCacheSerializer::LoadLogicalScene(
         return false;
     }
 
-    logical_scene.r()        = entt::registry{};
-    entt::registry& registry = logical_scene.r();
+    // Publish only after the complete payload has been validated.
+    entt::registry registry;
 
     Array<entt::entity> local_id_to_entity;
     local_id_to_entity.resize(static_cast<size_t>(payload_header.entity_count));
@@ -1148,6 +1167,10 @@ bool SceneCacheSerializer::LoadLogicalScene(
         registry.ctx().emplace<ecs::CtxMegaBuffers>(std::move(mega_buffers));
     }
 
+    if (payload_header.version == k_gaussian_scene_payload_version &&
+        !ReadGaussianCacheExtension(reader, registry, local_id_to_entity)) return false;
+
+    logical_scene.r() = std::move(registry);
     logical_scene.SBuildPrimitiveHash();
     logical_scene.SBuildMeshHash();
     logical_scene.SBuildMeshAABB();

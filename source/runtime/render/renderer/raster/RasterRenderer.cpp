@@ -504,7 +504,8 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
             Camera main_camera = frame_packet.scene_updates.main_camera;
             auto source_extension = scene.GetSourceFilePath().extension().string();
             std::transform(source_extension.begin(), source_extension.end(), source_extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            const bool has_saved_gaussian_camera = source_extension == ".moergs";
+            const bool has_saved_gaussian_camera = source_extension == ".moergs" ||
+                (frame_packet.has_gaussian_assets && scene.WasLoadedFromStateCache());
             if (frame_packet.scene_updates.initial_gpu_update && has_saved_gaussian_camera) {
                 // The document camera is authoritative on load; match subsequent UI projection overrides.
                 camera_input.projection_override_enabled = false;

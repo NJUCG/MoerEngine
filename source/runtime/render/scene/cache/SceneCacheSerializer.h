@@ -130,6 +130,8 @@ public:
 
     // 读取一段原始字节
     bool ReadBytes(void* out_data, uint64 size);
+    // Bound new variable-length payloads before allocating memory.
+    uint64 RemainingBytes();
     // 读取一个长度前缀字符串
     bool ReadString(std::string& out_value);
 

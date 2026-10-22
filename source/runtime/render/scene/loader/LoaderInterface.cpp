@@ -103,49 +103,17 @@ bool LoaderInterface::LoadSceneFromFileCommon(
     ESceneLoadSource*       out_source
 ) {
     const std::filesystem::path& file_path = request.file_path;
-    auto gaussian_extension = file_path.extension().string();
-    std::transform(gaussian_extension.begin(), gaussian_extension.end(), gaussian_extension.begin(),
+    auto source_extension = file_path.extension().string();
+    std::transform(source_extension.begin(), source_extension.end(), source_extension.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (gaussian_extension == ".moergs") {
-        std::string error;
-        if (!LoadGaussianSceneFile(file_path, out_logical_scene, error)) {
-            LOG_WARNING("Gaussian scene load failed: {}", error);
-            return false;
-        }
-        if (out_source) *out_source = ESceneLoadSource::Parser;
-        return true;
-    }
-    if (gaussian_extension == ".ply") {
-        const auto loaded = LoadGaussianPly(file_path);
-        if (!loaded) {
-            LOG_WARNING("Gaussian PLY load failed: {}", loaded.error_message);
-            return false;
-        }
-        auto& registry = out_logical_scene.r();
-        const auto root = registry.create();
-        registry.emplace<ecs::CTagRootNode>(root);
-        registry.emplace<ecs::CNode>(root).name = file_path.stem().string();
-        registry.ctx().emplace<ecs::CtxMegaBuffers>();
-        registry.ctx().emplace<ecs::CtxGaussianViewSettings>();
-        EntityWithNodeCreateInfo info;
-        info.name = file_path.stem().string();
-        const auto entity = out_logical_scene.UCreateEntityWithNode(info);
-        registry.emplace<ecs::CGaussianInstance>(entity, loaded.asset, GaussianInstanceSettings{});
-        out_logical_scene.UCreateDefaultCamera();
-        out_logical_scene.UCreateDefaultLights();
-        out_logical_scene.Update();
-        // The Mesh cache format cannot serialize Gaussian assets yet; never silently drop them.
-        if (out_source) *out_source = ESceneLoadSource::Parser;
-        return true;
-    }
     if (out_source) {
         *out_source = ESceneLoadSource::None;
     }
 
-    auto ext = file_path.extension().string().substr(1); // ".gltf" -> "gltf"
+    auto ext = source_extension.empty() ? std::string{} : source_extension.substr(1);
     // auto ext = file_path.string().substr(_file_path.string().find_last_of(".") + 1);
 
-    if (scene_load_function_maps.contains(ext) == false) {
+    if (!scene_load_function_maps.contains(ext) && ext != "ply" && ext != "moergs") {
         LOG_ERROR(
             "Loading Logical Scene - Unsupported file format: path={}, ext={}",
             file_path.string(),
@@ -190,7 +158,39 @@ bool LoaderInterface::LoadSceneFromFileCommon(
     const auto parser_start = std::chrono::steady_clock::now();
 
     // Load data from original file using parser
-    bool result = scene_load_function_maps[ext](out_logical_scene, file_path);
+    const auto parse_source = [&]() -> bool {
+        if (source_extension == ".moergs") {
+            std::string error;
+            if (!LoadGaussianSceneFile(file_path, out_logical_scene, error)) {
+                LOG_WARNING("Gaussian scene load failed: {}", error);
+                return false;
+            }
+            return true;
+        }
+        if (source_extension == ".ply") {
+            const auto loaded = LoadGaussianPly(file_path);
+            if (!loaded) {
+                LOG_WARNING("Gaussian PLY load failed: {}", loaded.error_message);
+                return false;
+            }
+            auto& registry = out_logical_scene.r();
+            const auto root = registry.create();
+            registry.emplace<ecs::CTagRootNode>(root);
+            registry.emplace<ecs::CNode>(root).name = file_path.stem().string();
+            registry.ctx().emplace<ecs::CtxMegaBuffers>();
+            registry.ctx().emplace<ecs::CtxGaussianViewSettings>();
+            EntityWithNodeCreateInfo info;
+            info.name = file_path.stem().string();
+            const auto entity = out_logical_scene.UCreateEntityWithNode(info);
+            registry.emplace<ecs::CGaussianInstance>(entity, loaded.asset, GaussianInstanceSettings{});
+            out_logical_scene.UCreateDefaultCamera();
+            out_logical_scene.UCreateDefaultLights();
+            out_logical_scene.Update();
+            return true;
+        }
+        return scene_load_function_maps.at(ext)(out_logical_scene, file_path);
+    };
+    bool result = parse_source();
 
     if (!result) {
         LOG_ERROR("Loading Logical Scene - Failed to load scene from file: {}", file_path.string());

@@ -115,11 +115,6 @@ EGaussianSceneContent Scene::GetGaussianSceneContent() const {
     return GetGaussianSceneContentForView(false);
 }
 
-bool Scene::SaveGaussianDocument(const std::filesystem::path& path, std::string& out_error) const {
-    if (!IsReady()) { out_error = "Scene is not ready"; return false; }
-    return SaveGaussianSceneFile(path, *m_logical_scene, out_error);
-}
-
 GaussianViewSettings Scene::GetGaussianViewSettings() const {
     return IsReady() && r().ctx().contains<ecs::CtxGaussianViewSettings>() ? r().ctx().get<const ecs::CtxGaussianViewSettings>().value : GaussianViewSettings{};
 }

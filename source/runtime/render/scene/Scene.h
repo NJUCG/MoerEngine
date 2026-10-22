@@ -221,7 +221,6 @@ public:
     bool SetGaussianInstanceSettings(entt::entity entity, const GaussianInstanceSettings& settings);
     bool DestroyGaussianInstance(entt::entity entity);
     entt::entity DuplicateGaussianInstance(entt::entity entity);
-    bool SaveGaussianDocument(const std::filesystem::path& path, std::string& out_error) const;
     GaussianViewSettings GetGaussianViewSettings() const;
     bool SetGaussianViewSettings(const GaussianViewSettings& settings);
     bool HasGaussianSceneData() const;
@@ -234,6 +233,7 @@ public:
     std::shared_ptr<const GaussianSceneSnapshot> GetGaussianSnapshot() const { return m_last_gaussian_snapshot; }
 
     const std::filesystem::path& GetSourceFilePath() const;
+    bool WasLoadedFromStateCache() const { return m_was_loaded_from_state_cache; }
 
     /**
      * 重置所有场景数据
@@ -477,6 +477,7 @@ private:
     SceneLoadInfoAsync    m_scene_load_info;
     TickState             m_last_tick_state;
     std::filesystem::path m_source_file_path;
+    bool                  m_was_loaded_from_state_cache = false;
     bool                  m_has_pending_gpu_scene_update = false;
     std::shared_ptr<const GaussianSceneSnapshot> m_last_gaussian_snapshot;
     uint64 m_gaussian_revision = 0;

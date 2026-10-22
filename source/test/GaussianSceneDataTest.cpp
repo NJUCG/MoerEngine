@@ -1,15 +1,22 @@
 #include "scene/Scene.h"
+#include "config/ConfigManager.h"
+#include "scene/cache/SceneCache.h"
+#include "scene/cache/SceneCacheSerializer.h"
+#include "scene/loader/LoaderInterface.h"
+#include "scene/LogicalScene.h"
 #include "scene/gaussian/GaussianGpuScene.h"
 #include "scene/loader/GaussianPlyLoader.h"
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <cstring>
 
 using namespace Moer;
 
@@ -55,14 +62,112 @@ std::string Header(bool is_binary, int rest_coefficient_count = 0, int vertex_co
 void Write(const std::filesystem::path& path, const std::string& text) {
     std::ofstream(path, std::ios::binary) << text;
 }
+void CheckMoca(Scene& scene, const std::filesystem::path& directory) {
+    Check(scene.SaveStateCache(), "Gaussian state saves through existing cache API");
+    SceneCacheSourceIdentity identity;
+    Check(SceneCache::BuildSourceIdentity(scene.GetSourceFilePath(), identity), "cache source identity");
+    const auto path = SceneCache::GetCachePath(identity, ESceneCacheKind::State);
+    ecs::LogicalScene restored;
+    Check(SceneCacheSerializer::LoadLogicalScene(path, restored), "v6 cache loads");
+    const auto instances = restored.r().view<ecs::CGaussianInstance>();
+    Check(instances.size() == 2, "cache retains all Gaussian instances");
+    GaussianAssetRef shared_asset;
+    for (auto entity : instances) {
+        const auto& instance = instances.get<ecs::CGaussianInstance>(entity);
+        if (!shared_asset) shared_asset = instance.asset;
+        Check(instance.asset == shared_asset, "cache restores shared asset identity");
+    }
+    const auto original = scene.GetGaussianSnapshot()->instances[0].asset;
+    Check(shared_asset && shared_asset->sh_degree == original->sh_degree &&
+        shared_asset->gaussians.size() == original->gaussians.size() &&
+        std::memcmp(shared_asset->gaussians.data(), original->gaussians.data(),
+            original->gaussians.size() * sizeof(Render::GGaussian)) == 0,
+        "canonical Gaussian CPU data survives cache exactly");
+    Scene reopened;
+    reopened.LoadSceneFromFile(scene.GetSourceFilePath());
+    reopened.PrepareUpdateBatch(false, false);
+    Check(reopened.WasLoadedFromStateCache(), "PLY reload uses state cache instead of parser");
+    Check(Near(reopened.GetGaussianViewSettings().background.x, .15f) &&
+        Near(reopened.GetGaussianViewSettings().exposure_ev, 1.25f), "cache restores view settings");
+    const auto* hidden = reopened.GetGaussianSnapshot().get();
+    Check(hidden && hidden->instances.size() == 2 &&
+        std::count_if(hidden->instances.begin(), hidden->instances.end(), [](const auto& instance) {
+            return !instance.is_visible_in_game && Near(instance.settings.opacity_multiplier, .25f) &&
+                   Near(instance.world_transform.GetColumn(3).x, 4);
+        }) == 1, "cache restores visibility, opacity and transform");
+
+    // Include Mesh resources in the same v6 registry, including their buffer payload.
+    const auto mesh_entity = restored.r().create();
+    restored.r().emplace<ecs::CMesh>(mesh_entity);
+    restored.r().ctx().get<ecs::CtxMegaBuffers>().position.push_back(float3(1,2,3));
+    const auto mixed_path = directory / "mixed.moca";
+    Check(SceneCacheSerializer::SaveLogicalScene(mixed_path, {}, restored), "mixed registry saves");
+    ecs::LogicalScene mixed;
+    Check(SceneCacheSerializer::LoadLogicalScene(mixed_path, mixed) &&
+        mixed.r().view<ecs::CGaussianInstance>().size() == 2 && mixed.r().view<ecs::CMesh>().size() == 1 &&
+        mixed.r().ctx().get<ecs::CtxMegaBuffers>().position.size() == 1,
+        "v6 keeps Mesh resources and Gaussian assets together");
+
+    // Failure must not replace the caller's existing registry with a partial scene.
+    const auto corrupt_path = directory / "truncated.moca";
+    std::filesystem::copy_file(mixed_path, corrupt_path);
+    std::filesystem::resize_file(corrupt_path, std::filesystem::file_size(corrupt_path) - 1);
+    Check(!SceneCacheSerializer::LoadLogicalScene(corrupt_path, mixed) &&
+        mixed.r().view<ecs::CGaussianInstance>().size() == 2, "truncated cache preserves active registry");
+    std::filesystem::copy_file(mixed_path, corrupt_path, std::filesystem::copy_options::overwrite_existing);
+    {
+        std::fstream corrupt(corrupt_path, std::ios::binary | std::ios::in | std::ios::out);
+        corrupt.seekp(-4, std::ios::end);
+        const uint32 invalid_capacity = 0;
+        corrupt.write(reinterpret_cast<const char*>(&invalid_capacity), sizeof(invalid_capacity));
+    }
+    Check(!SceneCacheSerializer::LoadLogicalScene(corrupt_path, mixed) &&
+        mixed.r().view<ecs::CGaussianInstance>().size() == 2, "invalid v6 tail preserves active registry");
+
+    // An independent, fixed v5 layout: root node plus an empty Mesh resource.
+    // This deliberately does not use the production scene serializer to create the legacy fixture.
+    const auto legacy_path = directory / "legacy-v5.moca";
+    {
+        SceneCacheBinaryWriter writer(legacy_path);
+        SceneCacheHeader header;
+        writer.WritePod(header);
+        writer.WritePod(uint32(5)); writer.WritePod(uint32(0)); writer.WritePod(uint64(2));
+        for (int reserved_id = 0; reserved_id < 4; ++reserved_id) writer.WritePod(uint64(0));
+        writer.WritePod(uint64(0)); writer.WritePod(uint64((1u<<0) | (1u<<1) | (1u<<14)));
+        writer.WriteString("legacy-root");
+        for (int reference_id = 0; reference_id < 5; ++reference_id)
+            writer.WritePod(std::numeric_limits<uint64>::max());
+        writer.WritePod(uint32(0)); writer.WritePod(uint32(0));
+        const float3 translation(1,2,3), scale(1);
+        const Quaternion rotation;
+        writer.WriteBytes(&translation, sizeof(translation));
+        writer.WriteBytes(&rotation, sizeof(rotation)); writer.WriteBytes(&scale, sizeof(scale));
+        writer.WritePod(uint64(1)); writer.WritePod(uint64(1u<<12));
+        writer.WritePod(uint64(0)); writer.WritePod(uint32(0)); writer.WritePod(uint64(0));
+        header.payload_size = writer.Tell() - sizeof(header);
+        writer.Seek(0); writer.WritePod(header); Check(writer.Flush(), "legacy fixture writes");
+    }
+    ecs::LogicalScene legacy;
+    Check(SceneCacheSerializer::LoadLogicalScene(legacy_path, legacy) &&
+        legacy.r().view<ecs::CNode>().size() == 1 && legacy.r().view<ecs::CMesh>().size() == 1 &&
+        legacy.r().view<ecs::CGaussianInstance>().empty(), "pre-extension v5 Mesh cache remains readable");
+    const auto mesh_path = directory / "mesh-v5.moca";
+    Check(SceneCacheSerializer::SaveLogicalScene(mesh_path, {}, legacy), "Mesh-only cache still saves");
+    SceneCacheBinaryReader mesh_reader(mesh_path);
+    SceneCacheHeader mesh_header;
+    uint32 version = 0;
+    Check(mesh_reader.ReadPod(mesh_header) && mesh_reader.ReadPod(version) && version == 5,
+        "Mesh-only writer retains v5 format");
+}
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     const auto directory =
         std::filesystem::temp_directory_path() /
         ("moer-gaussian-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directory(directory);
     try {
+        ConfigManager::GetInstance().Init(std::filesystem::current_path());
         const auto        ascii_path = directory / "valid.ply";
         const std::string values     = "0 3 1 2 0.3 0 0 2 0.1 0 0 0 0 0.2 123";
         Write(ascii_path, Header(false, 9) + values + " 1 2 3 4 5 6 7 8 9\n");
@@ -202,7 +307,7 @@ int main() {
             scene.IsReady() && scene.GetGaussianAsset(entity) == retained_asset,
             "failed full PLY load also preserves the previous scene"
         );
-        Check(!scene.SaveStateCache(), "Mesh-only cache cannot silently drop Gaussian data");
+        Check(scene.SaveStateCache(), "unified state cache saves Gaussian data");
         std::string document_error;
         GaussianViewSettings view_settings;
         view_settings.background = float3(.15f,.2f,.25f);
@@ -214,9 +319,28 @@ int main() {
         Check(!scene.SetGaussianViewSettings(invalid_view_settings), "zero pair capacity rejected");
         invalid_view_settings = view_settings; invalid_view_settings.background.x = std::numeric_limits<float>::infinity();
         Check(!scene.SetGaussianViewSettings(invalid_view_settings), "nonfinite background rejected");
+        CheckMoca(scene, directory);
         const auto document_path = directory / "scene.moergs";
-        Check(scene.SaveGaussianDocument(document_path, document_error), document_error.c_str());
-        Check(scene.SaveGaussianDocument(document_path, document_error), "atomic replacement of existing document");
+        // Authored legacy fixture, independent of the removed .moergs writer.
+        nlohmann::json document = {
+            {"format", "MoerGaussianScene"}, {"version", 1},
+            {"assets", {ascii_path.filename().string()}}, {"nodes", nlohmann::json::array()}
+        };
+        for (int node_id = 0; node_id < 3; ++node_id) {
+            nlohmann::json node = {
+                {"parent", node_id == 0 ? -1 : 0}, {"name", "legacy-" + std::to_string(node_id)},
+                {"translation", node_id ? nlohmann::json{4,5,6} : nlohmann::json{0,0,0}},
+                {"scale", {1,1,1}}, {"rotation", {1,0,0,0}},
+                {"visible_game", node_id != 1}, {"visible_editor", true}
+            };
+            if (node_id) node["gaussian"] = {
+                {"asset", 0}, {"enabled", true}, {"opacity", node_id == 1 ? .25f : 1.f}, {"color", {1,1,1}}
+            };
+            document["nodes"].push_back(node);
+        }
+        document["view"] = {{"background", {.15f,.2f,.25f}}, {"exposure_ev", 1.25f},
+            {"display_mode", 1}, {"debug_view", 0}, {"tile_pair_capacity", 4194304}};
+        Write(document_path, document.dump());
         Scene restored;
         restored.LoadSceneFromFile(document_path);
         restored.PrepareUpdateBatch(false, false);
@@ -229,10 +353,6 @@ int main() {
             Check(Near(instances[0].world_transform.GetColumn(3).x, 4), "document restores transform");
             Check(!instances[0].is_visible_in_game && Near(instances[0].settings.opacity_multiplier, .25f), "document restores hidden instance settings");
         }
-        Check(!scene.SaveGaussianDocument(directory / "do-not-overwrite.ply", document_error), "document cannot overwrite a source PLY");
-        std::ifstream document_input(document_path);
-        nlohmann::json document; document_input >> document;
-        Check(document.at("assets").size() == 1 && std::filesystem::path(document["assets"][0].get<std::string>()).is_relative(), "portable relative source references");
         const auto corrupt_path = directory / "broken.moergs";
         const auto test_invalid_document = [&](nlohmann::json value, const char* message) {
             { std::ofstream output(corrupt_path); output << value; }
@@ -267,10 +387,11 @@ int main() {
             snapshot->instances[0].asset->gaussians.size() == 1,
             "asset lifetime extends through old frame snapshots"
         );
-        const auto empty_document=directory/"empty.moergs";
-        Check(scene.SaveGaussianDocument(empty_document,document_error),"empty Gaussian document can be saved");
-        Scene empty_restored;empty_restored.LoadSceneFromFile(empty_document);
-        Check(empty_restored.IsReady() && empty_restored.HasGaussianSceneData() && empty_restored.GetGaussianSceneContent()==EGaussianSceneContent::Empty,"empty document retains Gaussian routing metadata");
+        Check(scene.SaveStateCache(), "empty Gaussian state can be saved");
+        Scene empty_restored; empty_restored.LoadSceneFromFile(ascii_path);
+        Check(empty_restored.IsReady() && empty_restored.HasGaussianSceneData() &&
+            empty_restored.GetGaussianSceneContent()==EGaussianSceneContent::Empty,
+            "empty cache retains Gaussian routing metadata");
         Check(!scene.RequestGaussianImageExport(directory/"bad.ply",document_error),"PNG request rejects a PLY destination");
         Check(scene.RequestGaussianImageExport(directory/"image.png",document_error),"PNG request accepted");
         const auto pending_export=scene.TakeGaussianImageExportRequest();
@@ -287,8 +408,22 @@ int main() {
             !after.update_gpu_update || !after.update_gpu_update->HasWork(),
             "empty scene has no repeating Gaussian update"
         );
+        if (argc > 1) {
+            ecs::LogicalScene existing_mesh;
+            Check(SceneCacheSerializer::LoadLogicalScene(argv[1], existing_mesh) &&
+                !existing_mesh.r().view<ecs::CMesh>().empty(), "existing pre-change Mesh cache loads");
+            std::cout << "Existing Mesh cache loaded: " << existing_mesh.r().view<ecs::CMesh>().size()
+                      << " meshes\n";
+        }
     } catch (const std::exception& error) {
         Check(false, error.what());
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        if (entry.path().extension() != ".ply" && entry.path().extension() != ".moergs") continue;
+        SceneCacheSourceIdentity identity;
+        if (SceneCache::BuildSourceIdentity(entry.path(), identity))
+            for (auto kind : {ESceneCacheKind::Origin, ESceneCacheKind::State})
+                std::filesystem::remove(SceneCache::GetCachePath(identity, kind));
     }
     std::filesystem::remove_all(directory); // Test-owned unique directory only.
     std::cout << "Gaussian scene data failures: " << failure_count << '\n';
