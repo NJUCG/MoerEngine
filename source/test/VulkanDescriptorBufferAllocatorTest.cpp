@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <exception>
 #include <iostream>
 #include <limits>
@@ -217,6 +218,109 @@ void CheckRandomizedLifetimes() {
     );
     allocator.Release(*full);
 }
+
+void CheckConcurrentLeaseRetirement() {
+    constexpr size_t                          block_count  = 64;
+    constexpr uint64_t                        block_size   = 4096;
+    constexpr size_t                          worker_count = 8;
+    Allocator                                 allocator(block_count * block_size, block_size, 32);
+    std::array<std::atomic<int>, block_count> owners;
+    for (auto& owner : owners) {
+        owner.store(-1);
+    }
+    std::array<std::exception_ptr, worker_count> errors{};
+    std::vector<std::jthread>                    workers;
+    for (size_t worker = 0; worker < worker_count; ++worker) {
+        workers.emplace_back([&, worker] {
+            try {
+                for (size_t batch = 0; batch < 500; ++batch) {
+                    auto                lease      = allocator.CreateLease();
+                    const auto          checkpoint = allocator.CreateCheckpoint(*lease);
+                    std::vector<size_t> owned_blocks;
+                    for (size_t i = 0; i < 1 + batch % 4; ++i) {
+                        const auto offset = allocator.ReserveRange(*lease, block_size);
+                        Check(offset.has_value(), "concurrent leases exhausted sufficient storage");
+                        const size_t index    = *offset / block_size;
+                        int          expected = -1;
+                        Check(
+                            owners[index].compare_exchange_strong(expected, static_cast<int>(worker)),
+                            "another live lease's block was reused"
+                        );
+                        owned_blocks.push_back(index);
+                        std::this_thread::yield();
+                    }
+                    const auto ranges = allocator.GetWrittenRanges(*lease);
+                    Check(ranges.size() == owned_blocks.size(), "flush omitted an owned block");
+                    for (size_t i = 0; i < ranges.size(); ++i) {
+                        Check(
+                            ranges[i].byte_offset == owned_blocks[i] * block_size &&
+                                ranges[i].byte_size == block_size,
+                            "flush included another lease's storage"
+                        );
+                    }
+                    // Simulated completion/discard: clear the live-owner oracle
+                    // before returning storage, so a new owner may claim it.
+                    for (size_t index : owned_blocks) {
+                        Check(
+                            owners[index].exchange(-1) == static_cast<int>(worker),
+                            "live ownership changed before retirement"
+                        );
+                    }
+                    if (batch % 2 == 0) {
+                        allocator.Rewind(*lease, checkpoint);
+                    }
+                    allocator.Release(*lease);
+                }
+            } catch (...) {
+                errors[worker] = std::current_exception();
+            }
+        });
+    }
+    workers.clear();
+    for (const auto& error : errors) {
+        if (error) {
+            std::rethrow_exception(error);
+        }
+    }
+    auto full = allocator.CreateLease();
+    Check(
+        allocator.ReserveRange(*full, block_count * block_size) == 0, "concurrent retirement lost free space"
+    );
+    allocator.Release(*full);
+}
+
+void CheckAlignmentAndFailedAppend() {
+    CheckRejected([] {
+        Allocator invalid(1024, 256, 0);
+    });
+    CheckRejected([] {
+        Allocator invalid(1025, 256, 32);
+    });
+    CheckRejected([] {
+        Allocator invalid(1024, 256, 512);
+    });
+
+    // A memory atom may be larger than the usual block size. Separate leases
+    // must remain isolated even when descriptor alignment itself is smaller.
+    Allocator allocator(4 * 128 * KiB, 128 * KiB, 256);
+    auto      first  = allocator.CreateLease();
+    auto      second = allocator.CreateLease();
+    Check(allocator.ReserveRange(*first, 1) == 0, "first aligned allocation failed");
+    Check(allocator.ReserveRange(*second, 1) == 128 * KiB, "lease boundary split a memory atom");
+    Check(!allocator.ReserveRange(*first, 3 * 128 * KiB), "oversized append succeeded");
+    Check(
+        allocator.GetUsage(*first).used_bytes == 256 &&
+            allocator.GetUsage(*first).reserved_bytes == 128 * KiB,
+        "failed append changed existing block state"
+    );
+    Check(allocator.ReserveRange(*first, 1) == 256, "failed append lost the reusable tail");
+    Allocator other_allocator(4 * 128 * KiB, 128 * KiB, 256);
+    CheckRejected([&] {
+        other_allocator.ReserveRange(*first, 32);
+    });
+    allocator.Release(*first);
+    allocator.Release(*second);
+}
 } // namespace
 
 int main() {
@@ -226,6 +330,8 @@ int main() {
         CheckCheckpointAndWrittenRanges();
         CheckConcurrentRecording();
         CheckRandomizedLifetimes();
+        CheckConcurrentLeaseRetirement();
+        CheckAlignmentAndFailedAppend();
         std::cout << "Vulkan descriptor buffer allocator checks passed\n";
         return 0;
     } catch (const std::exception& error) {
