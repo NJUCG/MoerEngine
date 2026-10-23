@@ -10204,12 +10204,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
             command_context_ptr->EnsureQueryCapacity(
                 suppress_timestamp_queries ? 0 : timestamp_query_slot_count, 0
             );
-        } catch (const VulkanCallError& error) {
-        device.RecordRejectedSubmit();
-        device.TryLatchFirstFault(recorded->context, error.GetResult(), false);
-        recorded->retirement_outcome = {EVulkanOperationStatus::Faulted, error.GetResult()};
-        recorded->native_submit_resolved = true;
-    } catch (const std::exception& error) {
+        } catch (const std::exception& error) {
             try {
                 LOG_ERROR(
                     "[RHIExecutor][Vulkan] Copy query pool preparation "
@@ -10292,6 +10287,11 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
         VK_CHECK_RESULT(vk_cmd_list.End());
         vk_tracker.Reset();
         return recorded;
+    } catch (const VulkanCallError& error) {
+        device.RecordRejectedSubmit();
+        device.TryLatchFirstFault(recorded->context, error.GetResult(), false);
+        recorded->retirement_outcome = {EVulkanOperationStatus::Faulted, error.GetResult()};
+        recorded->native_submit_resolved = true;
     } catch (const std::exception& error) {
         try {
             LOG_ERROR(
