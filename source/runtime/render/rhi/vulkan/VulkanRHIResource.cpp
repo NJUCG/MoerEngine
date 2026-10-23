@@ -175,9 +175,8 @@ VulkanBufferDescriptorCacheSlots& VulkanBuffer::GetDescriptorCacheSlots(VkDescri
         case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
             return m_descriptor_cache_slots[3];
         default:
-            assert(false);
+            throw std::invalid_argument("unsupported buffer descriptor cache type");
     }
-    return m_descriptor_cache_slots[0];
 }
 
 void VulkanBuffer::Destroy() {
