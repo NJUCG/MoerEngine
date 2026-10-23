@@ -3175,12 +3175,6 @@ public:
             cmd_list.EndLabel();
         }
 
-        // command_context.AddOnComplete([bindless_array,
-        //                          free_slots(_cmd.StealFreeSlots()),
-        //                          free_buffers(_cmd.StealFreeBuffers()),
-        //                          free_textures(std::move(_cmd.StealFreeTextures()))]() {
-        //     bindless_array->OnFree(std::move(free_slots), std::move(free_textures), free_buffers);
-        // });
     }
 
     void Visit(const ScopeCmd& _cmd) {

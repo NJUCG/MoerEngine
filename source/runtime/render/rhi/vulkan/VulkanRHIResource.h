@@ -416,13 +416,9 @@ public:
     METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type);
     static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
 
-    static uint32_t METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device);
-    static uint32_t METoVkQueueFamilyIndex(ECommandListType _type, const VulkanDevice* _device);
-
     static VkFilter             METoVKMinMagFilterMode(ESamplerFilter _filter);
     static VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
     static VkSamplerAddressMode METoVKWrapMode(ESamplerAddressMode _address_mode);
-    static VkCompareOp          METoVKCompareOpSampler(ESamplerCompareFunction _compare_op);
 
     static VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
     static VkStencilOp METoVKStencilOp(EStencilOp _stencil_op);
@@ -440,10 +436,6 @@ public:
     static VkBuildAccelerationStructureModeKHR
     METoVKBuildAccelerationStructureMode(ERaytracingBuildMode _mode);
 };
-
-#pragma endregion
-
-#pragma region pipeline states definitions
 
 class VulkanDeviceObject {
 public:
@@ -527,13 +519,6 @@ protected:
     uint32_t                                  view_mask                 = 0;
 };
 
-#pragma endregion
-
-#pragma region global buffer definitions
-#pragma endregion
-
-#pragma region viewable resources definitions
-
 struct VulkanBufferDescriptorKey {
     uint64   byte_offset{0};
     uint64   byte_size{0};
@@ -611,7 +596,6 @@ public:
     }
 
 private:
-    friend class TempBufferAllocator;
     friend class VulkanDescriptorHeap;
 
     VulkanBufferDescriptorCacheSlots& GetDescriptorCacheSlots(VkDescriptorType _type);
@@ -664,13 +648,6 @@ public:
     inline VkImage GetHandle() const {
         return m_alloc.image;
     }
-    //for inner usage only
-    inline void SetAttachedImageInner(VkImage _image) {
-        m_alloc.image = _image;
-    }
-
-    static VkImageType       METoVKImageType(ETextureDimension _dim);
-    static VkImageUsageFlags METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
     [[nodiscard]] static VkImageLayout PreferredLayoutForUsage(
         ETextureUsageFlags _usage
     ) noexcept {
@@ -818,19 +795,11 @@ public:
     void PublishAcceptedPresentationSourceMembership(
         PresentationSourceMembershipSnapshot _membership
     ) noexcept;
-    void DeAllocateResource(uint64 _handle);
     void FinalizeUpdateCommand(
         const Array<BindlessArray::UpdateCmd>& _updates,
         bool                                    _gpu_update_succeeded
     );
     bool BeginUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates);
-
-    //call on frame end free
-    void OnFree(
-        const Array<uint>& _slots_freed,
-        const Array<uint>& _textures_freed,
-        const Array<uint>& _buffers_freed
-    );
 
     uint64 ArrayHandle() const override {
         return (uint64)bindless_index_buffer;
@@ -881,9 +850,6 @@ protected:
     Array<uint64>                 texture_slot_claim_tokens;
     Array<uint64>                 buffer_slot_claim_tokens;
     uint64                        next_update_command_token{0};
-    //frame resources
-    // Array<TextureUpdateInfo>     textures_allocated;
-    // Array<BufferUpdateInfo>      buffers_allocated;
     Array<UpdateCmd>             update_cmds;
     Array<std::pair<uint, uint>> array_indices_dat;
     Array<byte>                  array_dat;
@@ -909,15 +875,6 @@ protected:
         texture_view_ref_counts;
     Array<TextureSubresourceKeyT<VulkanTexture>>                           texture_view_infos;
 };
-
-#pragma endregion
-
-#pragma region[ raytracing ]
-static void GetBuildRaytracingGeometryInfo(
-    Array<VkAccelerationStructureGeometryKHR>&       _build_info,
-    Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
-    const RaytracingGeometryInfo&                    _info
-);
 
 class VulkanRaytracingScene;
 struct VulkanAccelerationStructure : public RaytracingTlas {
@@ -958,7 +915,6 @@ public:
     };
     uint64 blas_address;
 
-private:
 private:
     VkAccelerationStructureKHR acc;
     VulkanBufferRef            underlying_buffer;
@@ -1043,13 +999,6 @@ private:
     uint instance_offset        = 1;
 };
 
-#pragma endregion
-
-#pragma region shader param
-#pragma endregion
-
-#pragma region synchronization
-
 #define RESOURCE_CAST(RHIType, VkType)           \
     inline VkType* ResourceCast(RHIType* _val) { \
         return static_cast<VkType*>(_val);       \
@@ -1093,7 +1042,6 @@ public:
 
 private:
     uint64 current_value = 0;
-    // uint64 last_value    = 0;
     VkSemaphore             timeline;
     std::condition_variable cv;
     mutable std::mutex      cv_m;
@@ -1103,9 +1051,6 @@ private:
     VkResult                failure_result{VK_SUCCESS};
 };
 
-#pragma endregion
-
-#pragma region[ resource cast ]
 RESOURCE_CAST(Buffer, VulkanBuffer)
 RESOURCE_CAST(Texture, VulkanTexture)
 RESOURCE_CAST(Fence, VulkanTimeline)
@@ -1114,17 +1059,7 @@ RESOURCE_CAST(Swapchain, VkSwapchain)
 RESOURCE_CAST(RaytracingGeometry, VulkanRaytracingGeometry)
 RESOURCE_CAST(RaytracingScene, VulkanRaytracingScene)
 RESOURCE_CAST(RaytracingTlas, VulkanAccelerationStructure)
-#pragma endregion
 
-#pragma region acceleration structure definitions
-class VulkanRHIRayTracingAccelerationStructure {
-public:
-    static VkGeometryTypeKHR  METoVKGeometryTypeKHR(ERayTracingGeometryType _type);
-    static VkGeometryFlagsKHR METoGeometryFlagsKHR(ERayTracingGeometryFlags _flag);
-    static VkBuildAccelerationStructureFlagsKHR
-    METoVKBuildAccelerationStructureFlagsKHR(ERayTracingAccelerationStructureBuildFlags _me_flags);
-    static VkGeometryInstanceFlagsKHR METoVKGeometryInstanceFlagsKHR(ERayTracingInstanceFlags _me_flags);
-};
 } // namespace Moer::Render
 
 #endif //VULKAN_RHI_RESOURCE_H

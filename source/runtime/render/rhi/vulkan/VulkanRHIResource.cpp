@@ -43,7 +43,6 @@
 #include <chrono>
 #include <thread>
 
-#pragma region utils definition
 namespace Moer::Render {
 
 static constexpr std::string_view s_tlas_underlying_buffer_name = "VkRaytracing::TLASUnderlyingBuffer";
@@ -621,26 +620,6 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
     }
 
-    uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandQueueType _type, const VulkanDevice* _device) {
-        switch (_type) {
-            case ECommandQueueType::GRAPHICS: return _device->GetQueueFamilyIndices().graphics.value();
-            case ECommandQueueType::COMPUTE: return _device->GetQueueFamilyIndices().compute.value();
-            case ECommandQueueType::COPY: return _device->GetQueueFamilyIndices().transfer.value();
-            case ECommandQueueType::RAYTRACING: return _device->GetQueueFamilyIndices().raytracing.value();
-            default: return VK_QUEUE_FAMILY_IGNORED;
-        }
-    }
-
-    uint32_t VulkanEnumTranslator::METoVkQueueFamilyIndex(ECommandListType _type, const VulkanDevice* _device) {
-        switch (_type) {
-            case ECommandListType::GRAPHICS: return _device->GetQueueFamilyIndices().graphics.value();
-            case ECommandListType::COMPUTE: return _device->GetQueueFamilyIndices().compute.value();
-            case ECommandListType::COPY: return _device->GetQueueFamilyIndices().transfer.value();
-            case ECommandListType::RAY_TRACING: return _device->GetQueueFamilyIndices().raytracing.value();
-            default: return _device->GetQueueFamilyIndices().graphics.value();
-        }
-    }
-
     VkFilter VulkanEnumTranslator::METoVKMinMagFilterMode(ESamplerFilter _filter) { return VulkanEnumTranslator::METoVKImageFilter(_filter); }
 
     VkSamplerMipmapMode VulkanEnumTranslator::METoVKMipmapMode(ESamplerFilter _filter) {
@@ -667,8 +646,6 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 return VK_SAMPLER_ADDRESS_MODE_MAX_ENUM;
         }
     }
-
-#pragma endregion
 
     VkVertexInputRate VulkanEnumTranslator::METoVKVertexInputRate(EVertexInputRate _me_rate) {
         switch (_me_rate) {
@@ -760,12 +737,6 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
         assert(false && "unsupported build mode");
     }
-
-#pragma region shader definitions
-
-#pragma endregion
-
-#pragma region pipeline states definitions
 
     VulkanPipelineState::~VulkanPipelineState() {
         if (m_pipeline_layout) {
@@ -1048,21 +1019,13 @@ void VulkanPipelineState::InitPipelineLayout(
     binding_template->bindless_index_address   = bindless_index_address;
 }
 
-#pragma endregion
-
     VulkanDeviceObject::VulkanDeviceObject(VulkanDevice* _device) : m_device(_device) {}
-
-#pragma region global buffer definitions
-#pragma endregion
-
-#pragma region viewable resources definitions
 
     uint64 EncodeViewKey(uint _mip_level, uint _mip_cnt,uint _base_layer,uint _layer_cnt) {
         return ((uint64)_mip_level)
         | ((uint64)_mip_cnt << 16) 
         | ((uint64)_base_layer << 32) 
         | ((uint64)_layer_cnt << 48); }
-
 
     VkImageTiling GetVkImageTilling(VkImageCreateInfo _create_infos, VulkanDevice& _device){
         //query device property
@@ -2189,11 +2152,6 @@ void VulkanPipelineState::InitPipelineLayout(
         return false;
     }
 
-    void VulkanBindlessArray::DeAllocateResource(uint64 _res){
-        std::unique_lock<std::mutex> lk(mtx);
-        UntrackResource(_res);
-    }
-
     bool VulkanBindlessArray::BeginUpdateCommand(
         const Array<BindlessArray::UpdateCmd>& _updates
     ) {
@@ -2977,19 +2935,6 @@ void VulkanPipelineState::InitPipelineLayout(
         }
     }
     
-    struct CopyPair{
-        uint src_idx;
-        uint dst_idx;
-    };
-
-    void VulkanBindlessArray::OnFree(const Array<uint>& _slots_freed, const Array<uint>& _textures_freed, const Array<uint>& _buffers_freed) {
-        for (const uint& idx : _textures_freed) { free_texture_slots.Push(idx);
-         }
-        for (const uint& idx : _buffers_freed) { free_buffer_slots.Push(idx); }
-
-        for (const uint& idx : _slots_freed) { free_slots.Push(idx); }
-    }
-
     VulkanBindlessArray::~VulkanBindlessArray() {
         if (bindless_index_buffer) {
             MoerDelete(bindless_index_buffer);
@@ -3004,11 +2949,8 @@ void VulkanPipelineState::InitPipelineLayout(
             bindless_texture_descs = nullptr;
         }
     }
-#pragma endregion
 
-#pragma region [ raytracing ]
-
-    void GetBuildRaytracingGeometryInfo(
+    static void GetBuildRaytracingGeometryInfo(
         Array<VkAccelerationStructureGeometryKHR>& _build_info,
         Array<uint>& _primitive_counts,
         Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
@@ -3079,7 +3021,6 @@ void VulkanPipelineState::InitPipelineLayout(
             primitive_counts.data(), 
             &build_sizes_info);
 
-
         {
             BufferInfo buffer_info(
             build_sizes_info.accelerationStructureSize,
@@ -3109,7 +3050,6 @@ void VulkanPipelineState::InitPipelineLayout(
 
         }
 
-
         VkAccelerationStructureCreateInfoKHR create_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
         create_info.deviceAddress = 0;//for capture replay
         create_info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
@@ -3117,7 +3057,6 @@ void VulkanPipelineState::InitPipelineLayout(
         create_info.buffer = underlying_buffer->GetHandle();
         create_info.offset = 0;
         create_info.size = underlying_buffer->GetByteSize();
-
 
         VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &acc));
         VkAccelerationStructureDeviceAddressInfoKHR address_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
@@ -3159,10 +3098,8 @@ void VulkanPipelineState::InitPipelineLayout(
 
     VulkanRaytracingScene::VulkanRaytracingScene(VulkanDevice* _device) : VulkanDeviceObject(_device), RaytracingScene() {
 
-
         VkBuffer          current_handle = VK_NULL_HANDLE;
         VmaAllocation     alloc          = VK_NULL_HANDLE;
-
 
         // TLAS instance buffer must be 16-byte aligned (Vulkan spec requirement)
         // Add extra padding for alignment and use 256-byte alignment for AMD GPU compatibility
@@ -3303,7 +3240,6 @@ void VulkanPipelineState::InitPipelineLayout(
         }
 
         prev_modified_instance_ids.clear();
-
 
         // b_current_full_refit |= b_full_refit;
 
@@ -3457,7 +3393,6 @@ void VulkanPipelineState::InitPipelineLayout(
         build_info.scratchData.deviceAddress = 0;
         build_info.dstAccelerationStructure = VK_NULL_HANDLE;
 
-
         VkAccelerationStructureBuildSizesInfoKHR build_sizes_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
 
         uint instance_cnt = instances.size();
@@ -3545,13 +3480,6 @@ void VulkanPipelineState::InitPipelineLayout(
         }
         return false;
     }
-
-#pragma endregion
-
-#pragma region shader param
-#pragma endregion
-
-#pragma region synchronization
 
     VulkanTimeline::VulkanTimeline(VulkanDevice& _device) : VulkanDeviceObject(&_device) {
         VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
@@ -3808,75 +3736,6 @@ void VulkanPipelineState::InitPipelineLayout(
         //free descriptors
         for (auto& [key, desc] : m_descriptor_cache_slots) { m_device->GetGlobalDescriptorHeap().FreeImageDescriptorSlot(desc); }
     }
-
-#pragma endregion
-
-#pragma region    raytracing
-    VkGeometryTypeKHR VulkanRHIRayTracingAccelerationStructure::METoVKGeometryTypeKHR(ERayTracingGeometryType _type) {
-        switch (_type) {
-            case RTGT_TRIANGLES: return VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-            case RTGT_AABBS:
-                LOG_CRITICAL("GeometryType AABB is not supported now");
-                return VK_GEOMETRY_TYPE_AABBS_KHR;
-            default:
-                LOG_CRITICAL("Unsupported ERayTracingGeometryType: {}", static_cast<uint32_t>(_type));
-                return VK_GEOMETRY_TYPE_MAX_ENUM_KHR;
-        }
-    }
-
-    VkGeometryFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoGeometryFlagsKHR(ERayTracingGeometryFlags _me_flags) {
-        VkGeometryFlagsKHR vk_flags = 0;
-
-        auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingGeometryFlags _search_me_flags, VkGeometryFlagsKHR _added_if_found, VkGeometryFlagsKHR _added_if_not_found = 0) {
-            const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
-            vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
-        };
-        TranslateFlag(ERayTracingGeometryFlags::GEOMETRY_OPAQUE, VK_GEOMETRY_OPAQUE_BIT_KHR);
-        TranslateFlag(ERayTracingGeometryFlags::NO_DUPLICATE_ANY_HIT_INVOCATION, VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR);
-        return vk_flags;
-    }
-
-    VkBuildAccelerationStructureFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(ERayTracingAccelerationStructureBuildFlags _me_flags) {
-        VkBuildAccelerationStructureFlagsKHR vk_flags = 0;
-
-        auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingAccelerationStructureBuildFlags _search_me_flags, VkBuildAccelerationStructureFlagsKHR _added_if_found, VkBuildAccelerationStructureFlagsKHR _added_if_not_found = 0) {
-            const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
-            vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
-        };
-
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR);
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR);
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR);
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::ALLOW_UPDATE, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR);
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::MINIMIZE_MEMORY, VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR);
-
-        return vk_flags;
-    }
-
-    VkGeometryInstanceFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoVKGeometryInstanceFlagsKHR(ERayTracingInstanceFlags _me_flags) {
-        VkGeometryInstanceFlagsKHR vk_flags = 0;
-
-        auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingInstanceFlags _search_me_flags, VkGeometryInstanceFlagsKHR _added_if_found, VkGeometryInstanceFlagsKHR _added_if_not_found = 0) {
-            const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
-            vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
-        };
-
-        TranslateFlag(ERayTracingInstanceFlags::FORCE_OPAQUE, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR);
-        TranslateFlag(ERayTracingInstanceFlags::FORCE_NO_OPAQUE, VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR);
-        TranslateFlag(ERayTracingInstanceFlags::TRIANGLE_CULL_DISABLE, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR);
-        TranslateFlag(ERayTracingInstanceFlags::TRIANGLE_FRONT_COUNTERCLOCKWISE, VK_GEOMETRY_INSTANCE_TRIANGLE_FRONT_COUNTERCLOCKWISE_BIT_KHR);
-
-        return vk_flags;
-    }
-#pragma endregion
-
-#pragma region render query
-#pragma endregion
-
-#pragma region RDG resource creater
-#pragma endregion
-
-#pragma region [ destroy override ]
 
     void VulkanBuffer::Destroy() {
         if (b_deferred_delete) {
