@@ -31,7 +31,6 @@
 #include <variant>
 namespace Moer::Render {
 class VulkanDevice;
-class VulkanPipelineResourceCache;
 
 //forward declaration
 class VulkanBuffer;
@@ -317,38 +316,6 @@ static_assert(
 );
 static_assert(g_platform_pixel_formats[PF_ETC2_R8G8B8A8_UNORM_BLOCK].stride == 16);
 
-static uint64 EncodeReflectInfo(uint _set, uint _binding, uint _stage_flags) {
-    return uint64(_set << 16) | uint64(_binding) | (uint64(_stage_flags) << 32);
-}
-static uint64 EncodeReflectPushConstant(uint _offset, uint _size, uint _stage_flags) {
-    return uint64(_offset << 16) | uint64(_size) | (uint64(_stage_flags) << 32);
-}
-static auto DecodeReflectPushConstant(uint64 _val) {
-    return std::make_tuple(uint(_val >> 16) & 0xFFFF, uint(_val & 0xFFFF), uint(_val >> 32));
-}
-static auto DecodeReflectInfo(uint64 _val) {
-    return std::make_tuple(uint(_val >> 16) & 0xFFFF, uint(_val & 0xFFFF), uint(_val >> 32));
-}
-static uint64 EncodeBindlessInfo(
-    int   _texture_set,
-    int   _buffer_set,
-    uint  _stage_flags,
-    uint8 _has_texture,
-    uint8 _has_buffer
-) {
-    return uint64(_texture_set << 17) | uint64(_buffer_set << 2) | uint64(_has_texture << 1) |
-           uint64(_has_buffer) | (uint64(_stage_flags) << 32);
-}
-
-static auto DecodeBindlessInfo(uint64 _val) {
-    return std::make_tuple(
-        int(_val >> 17) & 0x7FFF,
-        int(_val >> 2) & 0x7FFF,
-        uint(_val >> 32),
-        uint8(_val >> 1) & 0x1,
-        uint8(_val) & 0x1
-    );
-}
 struct VulkanDescriptorBindingInfo {
     VkDescriptorSetLayoutBinding vk_binding{};
     int                          argument_index = 0;
@@ -1137,13 +1104,6 @@ private:
 };
 
 #pragma endregion
-
-#pragma region[ pipeline cache ]
-class VulkanPipelineCache : public VulkanDeviceObject {
-public:
-    VulkanPipelineCache(VulkanDevice* _device);
-    ~VulkanPipelineCache();
-};
 
 #pragma region[ resource cast ]
 RESOURCE_CAST(Buffer, VulkanBuffer)

@@ -8,7 +8,6 @@
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
-#include "VulkanPipelineResourceCache.h"
 #include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanSwapChain.h"

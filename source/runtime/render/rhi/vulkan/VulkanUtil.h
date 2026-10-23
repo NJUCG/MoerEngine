@@ -40,7 +40,6 @@ struct SwapChainSupportQueryResult {
 SwapChainSupportQueryResult
 QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32_t _present_queue_family);
 
-uint32_t MemCrc32(const void* data, size_t data_size);
 }}}} // namespace Moer::RHI::Vulkan::Util
 
 #endif // !VULKAN_UTIL_H

@@ -2,8 +2,6 @@
 // Created by 74535 on 2023/10/1.
 //
 
-#include "misc/Crc32.h"
-
 #include "VulkanPlatform.h"
 #include "VulkanUtil.h"
 
@@ -114,7 +112,4 @@ QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32_t _pr
     return query_result;
 }
 
-uint32_t MemCrc32(const void* data, size_t data_size) {
-    return crc32_8bytes(data, data_size);
-}
 }}}} // namespace Moer::RHI::Vulkan::Util
