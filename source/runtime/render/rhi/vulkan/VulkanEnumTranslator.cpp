@@ -262,8 +262,8 @@ static_assert(g_platform_pixel_formats[PF_ETC2_R8G8B8A8_UNORM_BLOCK].stride == 1
 
 } // namespace
 
-const VulkanPixelFormatInfo& VulkanEnumTranslator::GetPixelFormatInfo(EPixelFormat _format) {
-    return g_platform_pixel_formats[static_cast<uint>(_format)];
+const VulkanPixelFormatInfo& VulkanEnumTranslator::GetPixelFormatInfo(EPixelFormat format) {
+    return g_platform_pixel_formats[static_cast<uint>(format)];
 }
 
 VkIndexType VulkanEnumTranslator::METoVKIndexType(EIndexElementType _type) {

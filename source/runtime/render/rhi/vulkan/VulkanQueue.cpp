@@ -921,17 +921,17 @@ struct VkCmdPreprocessor {
             }
         }
         tracker.RecordState(
-            vk_bindless_array->bindless_texture_descs,
+            vk_bindless_array->GetTextureSamplerDescriptorBuffer(),
             VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT,
             _pipeline_stages
         );
         tracker.RecordState(
-            vk_bindless_array->bindless_buffer_descs,
+            vk_bindless_array->GetBufferDescriptorBuffer(),
             VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT,
             _pipeline_stages
         );
         tracker.RecordState(
-            vk_bindless_array->bindless_index_buffer, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages
+            vk_bindless_array->GetIndexBuffer(), VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages
         );
     }
 
@@ -1963,14 +1963,14 @@ struct VkCmdPreprocessor {
 
         VulkanBindlessArray* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
         tracker.RecordState(
-            vk_bindless_array->bindless_index_buffer,
+            vk_bindless_array->GetIndexBuffer(),
             VK_ACCESS_2_SHADER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
         );
 
         if (_cmd->HasBufferUpdates()) {
             tracker.RecordState(
-                vk_bindless_array->bindless_buffer_descs,
+                vk_bindless_array->GetBufferDescriptorBuffer(),
                 VK_ACCESS_2_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
             );
@@ -1978,7 +1978,7 @@ struct VkCmdPreprocessor {
 
         if (_cmd->HasTextureUpdates()) {
             tracker.RecordState(
-                vk_bindless_array->bindless_texture_descs,
+                vk_bindless_array->GetTextureSamplerDescriptorBuffer(),
                 VK_ACCESS_2_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
             );
@@ -3128,7 +3128,7 @@ public:
                         arg,
                         array_indices_buf,
                         array_staging,
-                        bindless_array->bindless_index_buffer->GetView()
+                        bindless_array->GetIndexBuffer()->GetView()
                     )
                 );
                 cmd_list.Dispatch((array_indices_dat.size() + 63) / 64, 1, 1);
@@ -3147,7 +3147,7 @@ public:
                         arg,
                         texture_indices_buf,
                         texture_desc_staging,
-                        bindless_array->bindless_texture_descs->GetView(
+                        bindless_array->GetTextureSamplerDescriptorBuffer()->GetView(
                             bindless_array->texture_offset_in_buffer
                         )
                     )
@@ -3168,7 +3168,7 @@ public:
                         arg,
                         buffer_indices_buf,
                         buffer_desc_staging,
-                        bindless_array->bindless_buffer_descs->GetView(
+                        bindless_array->GetBufferDescriptorBuffer()->GetView(
                             bindless_array->buffer_descriptors_byte_offset
                         )
                     )

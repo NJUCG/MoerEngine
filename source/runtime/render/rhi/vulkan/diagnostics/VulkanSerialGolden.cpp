@@ -158,14 +158,14 @@ struct VulkanSerialGoldenTrace::Impl {
         try {
             bindless->Lock();
             locked = true;
-            if (bindless->bindless_index_buffer == nullptr ||
-                bindless->bindless_buffer_descs == nullptr ||
-                bindless->bindless_texture_descs == nullptr) {
+            if (bindless->GetIndexBuffer() == nullptr ||
+                bindless->GetBufferDescriptorBuffer() == nullptr ||
+                bindless->GetTextureSamplerDescriptorBuffer() == nullptr) {
                 expansion_complete = false;
             } else {
-                RegisterBuffer(bindless->bindless_index_buffer);
-                RegisterBuffer(bindless->bindless_buffer_descs);
-                RegisterBuffer(bindless->bindless_texture_descs);
+                RegisterBuffer(bindless->GetIndexBuffer());
+                RegisterBuffer(bindless->GetBufferDescriptorBuffer());
+                RegisterBuffer(bindless->GetTextureSamplerDescriptorBuffer());
             }
             for (const VulkanBindlessArray::Handle& handle : bindless->handles) {
                 if (handle.Ptr() == 0) {
@@ -1088,7 +1088,7 @@ struct VulkanSerialGoldenTrace::Impl {
                 invalid_layout_value, invalid_layout_value, 0,
                 std::numeric_limits<uint32_t>::max() - 2u,
                 binding.argument_index, 1,
-                bindless ? RegisterBuffer(bindless->bindless_index_buffer) : StableSubmissionToken::Null(),
+                bindless ? RegisterBuffer(bindless->GetIndexBuffer()) : StableSubmissionToken::Null(),
                 binding.byte_offset, sizeof(VkDeviceAddress), bytes
             );
         }

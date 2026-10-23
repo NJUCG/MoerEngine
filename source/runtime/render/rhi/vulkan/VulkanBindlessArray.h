@@ -78,7 +78,18 @@ public:
     bool BeginUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates);
 
     uint64 ArrayHandle() const override {
-        return (uint64)bindless_index_buffer;
+        return reinterpret_cast<uint64>(m_index_buffer.get());
+    }
+
+    // Borrowed storage; the array owns it through completion of its updates.
+    VulkanBuffer* GetIndexBuffer() const {
+        return m_index_buffer.get();
+    }
+    VulkanBuffer* GetBufferDescriptorBuffer() const {
+        return m_buffer_descriptors.get();
+    }
+    VulkanBuffer* GetTextureSamplerDescriptorBuffer() const {
+        return m_texture_sampler_descriptors.get();
     }
 
     void Lock() {
@@ -92,16 +103,31 @@ public:
     }
 
 public:
-    // Plain uint index table, read by device address from push constants.
-    VulkanBuffer* bindless_index_buffer;
-    // Descriptor storage bound through vkCmdBindDescriptorBuffersEXT.
-    VulkanBuffer* bindless_buffer_descs;
-    VulkanBuffer* bindless_texture_descs;
     uint64        texture_offset_in_buffer;
-    uint64        buffer_descriptors_byte_offset;
+    uint64        buffer_descriptors_byte_offset = 0;
     Array<Handle> handles;
 
 private:
+    // Plain uint index table, read by device address from push constants.
+    std::unique_ptr<VulkanBuffer> m_index_buffer;
+    // Descriptor storage bound through vkCmdBindDescriptorBuffersEXT.
+    std::unique_ptr<VulkanBuffer> m_buffer_descriptors;
+    std::unique_ptr<VulkanBuffer> m_texture_sampler_descriptors;
+
+    struct UpdateCompletionPlan;
+    // Caller holds mtx. Plans borrow command data and never outlive that call.
+    UpdateCompletionPlan
+    BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool gpu_update_succeeded) const;
+    UpdateCompletionPlan BuildDiscardPlan(const Array<UpdateCmd>& updates) const;
+    void                 ValidateReferenceDecrements(const UpdateCompletionPlan& plan) const;
+    void                 ApplyCompletionPlan(const UpdateCompletionPlan& plan, uint64 command_token);
+    void                 ApplySlotClaims(
+                        const UnorderedSet<uint>& array_slots,
+                        const UnorderedSet<uint>& texture_slots,
+                        const UnorderedSet<uint>& buffer_slots,
+                        uint64                    command_token
+                    );
+
     std::mutex mtx;
     void       TrackResource(RHIResource* _resource);
     void       UntrackResource(uint64 _handle);

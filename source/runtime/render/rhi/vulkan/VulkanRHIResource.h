@@ -185,12 +185,12 @@ private:
 
     void        Destroy() override;
     VkImageView GetOrCreateView(
-        UnorderedMap<uint64, VkImageView>& _cache,
-        VkImageViewType                    _view_type,
-        uint                               _mip_level,
-        uint                               _mip_count,
-        uint                               _base_layer,
-        uint                               _layer_count
+        UnorderedMap<uint64, VkImageView>& cache,
+        VkImageViewType                    view_type,
+        uint                               mip_level,
+        uint                               mip_count,
+        uint                               base_layer,
+        uint                               layer_count
     );
     struct TextureAlloc {
         VkImage       image;

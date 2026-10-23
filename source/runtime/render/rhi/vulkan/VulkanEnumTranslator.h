@@ -13,7 +13,7 @@ struct VulkanPixelFormatInfo {
 
 class VulkanEnumTranslator final {
 public:
-    static const VulkanPixelFormatInfo& GetPixelFormatInfo(EPixelFormat _format);
+    static const VulkanPixelFormatInfo& GetPixelFormatInfo(EPixelFormat format);
     static VkIndexType                  METoVKIndexType(EIndexElementType _type);
     static VkFormat                     METoVKFormat(EPixelFormat _format);
     static VkImageCreateFlags           METoVKImageCreateFlags(ETextureDimension _dim);

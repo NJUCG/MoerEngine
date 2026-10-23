@@ -335,9 +335,9 @@ void WriteShaderArgumentDescriptors(
                         std::get<BindlessArrayRef>(_arguments[resource_bindings.argument_index]);
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
                     if constexpr (DescriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
-                        descriptor_buffer.address = bindless_array->bindless_buffer_descs->DeviceAddress();
+                        descriptor_buffer.address = bindless_array->GetBufferDescriptorBuffer()->DeviceAddress();
                     } else {
-                        descriptor_buffer.address = bindless_array->bindless_texture_descs->DeviceAddress();
+                        descriptor_buffer.address = bindless_array->GetTextureSamplerDescriptorBuffer()->DeviceAddress();
                     }
                 },
                 [&](const VulkanResourceSetBindings& resource_bindings) {
@@ -419,7 +419,7 @@ void PushBindlessIndexAddress(
         throw std::invalid_argument("Cannot bind a null bindless index table");
     }
     const auto*           bindless = static_cast<const VulkanBindlessArray*>(array.Get());
-    const VkDeviceAddress address = bindless->bindless_index_buffer->DeviceAddress();
+    const VkDeviceAddress address = bindless->GetIndexBuffer()->DeviceAddress();
     const auto&           constants = binding_template.push_constants_info;
     vkCmdPushConstants(
         command_buffer, constants.layout, constants.stageFlags,

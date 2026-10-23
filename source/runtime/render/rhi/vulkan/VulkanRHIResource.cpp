@@ -3,11 +3,11 @@
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanEnumTranslator.h"
-#include "VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 #include "misc/MMemory.h"
 
 #include <algorithm>
+#include <format>
 #include <limits>
 #include <stdexcept>
 
@@ -15,8 +15,8 @@ namespace Moer::Render {
 
 namespace {
 
-VmaAllocationCreateFlags GetBufferAllocationFlags(EBufferUsageFlags _flags) {
-    if ((_flags & EBufferUsageFlags::CPU_VISIBLE) == EBufferUsageFlags::CPU_VISIBLE)
+VmaAllocationCreateFlags GetBufferAllocationFlags(EBufferUsageFlags flags) {
+    if ((flags & EBufferUsageFlags::CPU_VISIBLE) == EBufferUsageFlags::CPU_VISIBLE)
         return VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
     return 0;
 }
@@ -26,19 +26,19 @@ uint64 EncodeViewKey(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _lay
            ((uint64)_layer_cnt << 48);
 }
 
-VkImageTiling SelectImageTiling(const VkImageCreateInfo& _create_infos, VulkanDevice& _device) {
+VkImageTiling SelectImageTiling(const VkImageCreateInfo& create_infos, VulkanDevice& device) {
     //query device property
     VkImageFormatProperties2 properties2{};
     properties2.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
     VkPhysicalDeviceImageFormatInfo2 format_info{};
     format_info.sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
-    format_info.format = _create_infos.format;
-    format_info.type   = _create_infos.imageType;
-    format_info.tiling = _create_infos.tiling;
-    format_info.usage  = _create_infos.usage;
-    format_info.flags  = _create_infos.flags;
+    format_info.format = create_infos.format;
+    format_info.type   = create_infos.imageType;
+    format_info.tiling = create_infos.tiling;
+    format_info.usage  = create_infos.usage;
+    format_info.flags  = create_infos.flags;
     properties2.pNext  = VK_NULL_HANDLE;
-    VkResult result = vkGetPhysicalDeviceImageFormatProperties2(_device.GetGpu(), &format_info, &properties2);
+    VkResult result = vkGetPhysicalDeviceImageFormatProperties2(device.GetGpu(), &format_info, &properties2);
     if (result != VK_SUCCESS) {
         return VK_IMAGE_TILING_LINEAR;
     }
@@ -206,7 +206,7 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, Vk
             _info.extent.y,
             _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown"
         );
-        assert(false && "Texture extent cannot be zero");
+        throw std::invalid_argument("Vulkan texture extent cannot be zero");
     }
 
     VkImageCreateInfo image_create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -249,12 +249,14 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, Vk
             _info.array_size,
             int(result)
         );
-        VK_CHECK_RESULT(result);
+        throw std::runtime_error(std::format("failed to create Vulkan texture (VkResult {})", int(result)));
     }
-    if (!_info.debug_name.has_value()) {
-        SetName("UserTexture");
-    } else {
-        SetName(_info.debug_name->c_str());
+    try {
+        SetName(_info.debug_name.value_or("UserTexture"));
+    } catch (...) {
+        vmaDestroyImage(allocator, m_alloc.image, m_alloc.alloc);
+        m_alloc = {};
+        throw;
     }
 }
 
@@ -277,23 +279,23 @@ VulkanTexture::GetAttachmentView(uint _mip_level, uint _mip_cnt, uint _base_laye
 }
 
 VkImageView VulkanTexture::GetOrCreateView(
-    UnorderedMap<uint64, VkImageView>& _cache,
-    VkImageViewType                    _view_type,
-    uint                               _mip_level,
-    uint                               _mip_count,
-    uint                               _base_layer,
-    uint                               _layer_count
+    UnorderedMap<uint64, VkImageView>& cache,
+    VkImageViewType                    view_type,
+    uint                               mip_level,
+    uint                               mip_count,
+    uint                               base_layer,
+    uint                               layer_count
 ) {
     std::lock_guard<std::mutex> lock(m_views_mutex);
-    const uint64                key = EncodeViewKey(_mip_level, _mip_count, _base_layer, _layer_count);
-    const auto                  it  = _cache.find(key);
-    if (it != _cache.end()) {
+    const uint64                key = EncodeViewKey(mip_level, mip_count, base_layer, layer_count);
+    const auto                  it  = cache.find(key);
+    if (it != cache.end()) {
         return it->second;
     }
 
     VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     view_info.image      = m_alloc.image;
-    view_info.viewType   = _view_type;
+    view_info.viewType   = view_type;
     view_info.format     = VulkanEnumTranslator::METoVKFormat(GetFormat());
     view_info.components = {
         VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -303,15 +305,25 @@ VkImageView VulkanTexture::GetOrCreateView(
     };
     view_info.subresourceRange = {
         VulkanEnumTranslator::METoVKImageAspectFlags(GetAspectFlags()),
-        _mip_level,
-        _mip_count,
-        _base_layer,
-        _layer_count
+        mip_level,
+        mip_count,
+        base_layer,
+        layer_count
     };
 
-    VkImageView view = VK_NULL_HANDLE;
-    VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &view_info, nullptr, &view));
-    _cache.emplace(key, view);
+    VkImageView    view   = VK_NULL_HANDLE;
+    const VkResult result = vkCreateImageView(m_device->GetDevice(), &view_info, nullptr, &view);
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error(
+            std::format("failed to create Vulkan image view (VkResult {})", int(result))
+        );
+    }
+    try {
+        cache.emplace(key, view);
+    } catch (...) {
+        vkDestroyImageView(m_device->GetDevice(), view, nullptr);
+        throw;
+    }
     return view;
 }
 

@@ -19,8 +19,8 @@
 
 namespace Moer::Render {
 
-uint64 GetBindlessTextureDescriptorOffset(const VulkanDevice& _device) {
-    const auto& properties = _device.GetOptionalProperties().descriptor_buffer_properties;
+uint64 GetBindlessTextureDescriptorOffset(const VulkanDevice& device) {
+    const auto& properties = device.GetOptionalProperties().descriptor_buffer_properties;
     const uint64 sampler_bytes =
         static_cast<uint64>(properties.samplerDescriptorSize) * VulkanDevice::bindless_sampler_count;
     return Moer::AlignUp(sampler_bytes, properties.descriptorBufferOffsetAlignment);
