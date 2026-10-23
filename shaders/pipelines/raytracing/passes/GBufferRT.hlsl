@@ -19,7 +19,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 
 #include <pipelines/raytracing/inline/RaytracingCommon.hlsli>
 
-[[vk::push_constant]] ConstantBuffer<Moer::GBufferPassParams> param;
+DEFINE_SHADER_CONSTANT(Moer::GBufferPassParams, param)
 
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::GBufferConstants> gbuffer_constants;
 
@@ -57,7 +57,7 @@ bool ProcessAnyHit(
 ) {
 
     Moer::GeometryRecord geom =
-        Moer::GetGeometryRecordFrom(param, instance_id, geom_id, prim_id, barycentrics, Moer::EGA_UV, b_backface);
+        Moer::GetGeometryRecordFrom(moer_constants.param, instance_id, geom_id, prim_id, barycentrics, Moer::EGA_UV, b_backface);
 
     Moer::MaterialSample mat_sample =
         Moer::SampleGeometryMaterial(geom, 0.f, 0.f, 0.f, Moer::EMA_BaseColor | Moer::EMA_Transmission);
@@ -149,7 +149,7 @@ float3 UintHashToColor(uint _idx) {
 
     if (payload.instance_id != ~0u) {
         Moer::GeometryRecord geom = Moer::GetGeometryRecordFrom(
-            param,
+            moer_constants.param,
             payload.instance_id,
             payload.geom_id,
             payload.prim_id,

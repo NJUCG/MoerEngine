@@ -3,6 +3,7 @@
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/test/ShaderConstants.h"
+#include "shaderheaders/shared/raster/lighting_pass/Constants.h"
 
 #include <cstring>
 #include <filesystem>
@@ -17,6 +18,38 @@ using namespace Moer::Render;
 
 namespace {
 
+class BindlessConstants : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(BindlessConstants);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT(uint, index);
+    DEFINE_SHADER_CONSTANT(float, scale);
+    DEFINE_SHADER_ARGS(bdls, index, scale);
+};
+
+class BindlessSingleConstant : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(BindlessSingleConstant);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT(uint, index);
+    DEFINE_SHADER_ARGS(bdls, index);
+};
+
+class BindlessOnly : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(BindlessOnly);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls);
+};
+
+class LightingConstants : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(LightingConstants);
+    DEFINE_SHADER_BUFFER(lighting_data);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANTS(LIGHTING_PASS_CONSTANTS);
+    DEFINE_SHADER_ARGS(lighting_data, bdls, param, extra_ambient_intensity);
+};
 class MixedConstants : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(MixedConstants);
@@ -229,6 +262,114 @@ void CheckReflection(EShaderPlatform platform) {
     Require(!(input == shifted), "Layout version did not affect cache identity");
 }
 
+ShaderCompilerOutput CompileBindlessTest(
+    const PipelineArgumentMetadata& metadata, EShaderPlatform platform,
+    EShaderType stage, const char* entry, bool single = false, bool address_only = false,
+    const char* source = "test/ShaderBindlessAddress.hlsl"
+) {
+    ShaderCompilerInput input{};
+    input.target_info = {stage, platform};
+    input.entry_point = entry;
+    input.relative_source_file_path = source;
+    input.shader_name = entry;
+    input.environment.SetDefine("MOER_PC_BYTE_SIZE", metadata.GetConstantByteSize());
+    input.environment.SetDefine("MOER_TEST_SINGLE_CONSTANT", uint(single));
+    input.environment.SetDefine("MOER_TEST_ADDRESS_ONLY", uint(address_only));
+    for (const auto& layout : metadata.GetConstantLayouts()) {
+        const auto name = metadata.GetArguments()[layout.argument_index].name;
+        input.environment.SetDefine("MOER_PC_OFFSET_" + std::string(name), layout.byte_offset);
+    }
+    auto output = ShaderCompiler::Compile(std::move(input));
+    for (const auto& error : output.errors) std::cerr << error << '\n';
+    Require(output.b_succeeded, "Bindless address shader failed to compile");
+    return output;
+}
+
+void CheckBindlessAddress(EShaderPlatform platform) {
+    const bool vulkan = platform == SP_VULKAN_SM6;
+    const auto check = [&](const PipelineArgumentMetadata& metadata, bool single, bool address_only) {
+        auto output = CompileBindlessTest(metadata, platform, ST_COMPUTE, "ComputeMain", single, address_only);
+        const auto* bindings = output.parameter_map.reflect_map.at(std::string(ReflectParamInfo::bdls_name))
+            .GetSpirvReflection().TryGetBindlessArray();
+        Require(bindings && bindings->buffer && bindings->image && bindings->sampler,
+                "Bindless descriptor arrays disappeared");
+        Require(bindings->buffer->binding == (vulkan ? 0 : 1), "Wrong buffer descriptor binding");
+        Require(bindings->array.has_value() == !vulkan, "Vulkan retained the index-table descriptor");
+        Require(bindings->index_table_address.has_value() == vulkan, "Wrong index-table access mechanism");
+        const uint user_size = metadata.GetConstantByteSize();
+        const uint total_size = ((user_size + 7u) & ~7u) + 8u;
+        PipelineShaderInfo info{
+            .shaders = {{.name = "bindless", .shader_type = ST_COMPUTE, .shader_param_map = &output.parameter_map}},
+            .argument_metadata = metadata
+        };
+        Require(ValidatePipelineConstants(info, total_size) == user_size, "Address leaked into user upload");
+        if (!vulkan) return;
+        Require(bindings->index_table_address->offset == total_size - 8 &&
+                bindings->index_table_address->size == 8, "Address alignment or size is wrong");
+        RequireRejected([&] { ValidatePipelineConstants(info, total_size - 1); });
+        auto wrong = output.parameter_map;
+        auto& address = std::get<ReflectParamInfo::BindlessArray>(
+            wrong.reflect_map.at(std::string(ReflectParamInfo::bdls_name)).GetSpirvReflection().data
+        ).index_table_address.value();
+        info.shaders.push_back({.name = "wrong-stage", .shader_type = ST_FRAGMENT, .shader_param_map = &wrong});
+        address.offset += 8;
+        RequireRejected([&] { ValidatePipelineConstants(info, 256); });
+        address.offset -= 8;
+        address.size = 4;
+        RequireRejected([&] { ValidatePipelineConstants(info, 256); });
+        info.shaders.pop_back();
+        info.argument_metadata = NoConstants::GetArgumentMetadata();
+        RequireRejected([&] { ValidatePipelineConstants(info, 256); });
+    };
+    check(BindlessOnly::GetArgumentMetadata(), false, true);
+    check(BindlessSingleConstant::GetArgumentMetadata(), true, false);
+    check(BindlessConstants::GetArgumentMetadata(), false, false);
+
+    const auto metadata = BindlessConstants::GetArgumentMetadata();
+    auto vs = CompileBindlessTest(metadata, platform, ST_VERTEX, "VertexMain");
+    auto ps = CompileBindlessTest(metadata, platform, ST_FRAGMENT, "PixelMain");
+    PipelineShaderInfo graphics{
+        .shaders = {{.name = "vs", .shader_type = ST_VERTEX, .shader_param_map = &vs.parameter_map},
+                    {.name = "ps", .shader_type = ST_FRAGMENT, .shader_param_map = &ps.parameter_map}},
+        .argument_metadata = metadata
+    };
+    Require(ValidatePipelineConstants(graphics, 16) == 8, "Graphics address layout disagrees across stages");
+    auto unused = CompileBindlessTest(metadata, platform, ST_COMPUTE, "NoBindlessMain");
+    graphics.shaders = {{.name = "unused", .shader_type = ST_COMPUTE, .shader_param_map = &unused.parameter_map}};
+    Require(ValidatePipelineConstants(graphics, 8) == 8, "Unused address consumed push constant capacity");
+    if (vulkan) {
+        const auto only_metadata = BindlessOnly::GetArgumentMetadata();
+        auto index_only = CompileBindlessTest(only_metadata, platform, ST_COMPUTE, "IndexOnlyMain", false, true);
+        const auto& bindings = *index_only.parameter_map.reflect_map.at(std::string(ReflectParamInfo::bdls_name))
+            .GetSpirvReflection().TryGetBindlessArray();
+        // DXC preserves declared interfaces; unused tables may remain in reflection.
+        const auto inactive = [](const std::optional<ReflectParamInfo::Bindless>& binding) {
+            return !binding || !binding->custom_flag.active;
+        };
+        Require(bindings.index_table_address && bindings.index_table_address->custom_flag.active &&
+                !bindings.array && inactive(bindings.buffer) && inactive(bindings.image) &&
+                inactive(bindings.sampler) && inactive(bindings.acceleration_structure),
+                "Index-only reads activate descriptor tables");
+        PipelineShaderInfo info{
+            .shaders = {{.name = "index-only", .shader_type = ST_COMPUTE, .shader_param_map = &index_only.parameter_map}},
+            .argument_metadata = only_metadata
+        };
+        Require(ValidatePipelineConstants(info, 8) == 0, "Address-only upload requires user constant data");
+    }
+
+    auto lighting_metadata = LightingConstants::GetArgumentMetadata();
+    auto lighting = CompileBindlessTest(
+        lighting_metadata, platform, ST_FRAGMENT, "main", false, false,
+        "pipelines/raster/deferred/lighting/RasterLightingPass.frag.hlsl"
+    );
+    PipelineShaderInfo lighting_info{
+        .shaders = {{.name = "lighting", .shader_type = ST_FRAGMENT, .shader_param_map = &lighting.parameter_map}},
+        .argument_metadata = lighting_metadata
+    };
+    Require(ValidatePipelineConstants(lighting_info, 128) == lighting_metadata.GetConstantByteSize(),
+            "Lighting pipeline's user constants changed");
+}
+
 } // namespace
 
 int main() {
@@ -238,8 +379,10 @@ int main() {
         CheckPacking();
         CheckMetadataOwnership();
         CheckReflection(SP_VULKAN_SM6);
+        CheckBindlessAddress(SP_VULKAN_SM6);
 #if defined(__APPLE__)
         CheckReflection(SP_METAL_MSL);
+        CheckBindlessAddress(SP_METAL_MSL);
 #endif
         std::cout << "Shader constant packing, reflection and validation: success\n";
     } catch (const std::exception& error) {

@@ -34,6 +34,8 @@
 [[vk::binding(12, DI_BINDING_SLOT)]] Buffer<float2>  neighbor_offset_buf;
 
 BINDLESS_BINDINGS(3, 2, 4, 5)
+
+DEFINE_SHADER_BINDLESS_CONSTANTS()
 #include <materials/Material.hlsli>
 #include <pipelines/raytracing/lighting/common/PolymorphicLight.hlsli>
 

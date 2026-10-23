@@ -802,6 +802,25 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 constant.size = constant.padded_size = size;
                 constant.offset = offset;
                 constant.custom_flag.active = active;
+                if (argument_name == ReflectParamInfo::bindless_index_address_name) {
+                    if (!active) {
+                        return;
+                    }
+                    auto [entry, inserted] = reflect_map.try_emplace(
+                        std::string(ReflectParamInfo::bdls_name),
+                        ReflectParamInfo{ReflectParamInfo::SpirvParameterReflection{
+                            stage_bits, ReflectParamInfo::BindlessArray{}
+                        }}
+                    );
+                    auto& bindings = std::get<ReflectParamInfo::BindlessArray>(
+                        entry->second.GetSpirvReflection().data
+                    );
+                    if (bindings.index_table_address) {
+                        throw std::invalid_argument("Duplicate bindless index-table address");
+                    }
+                    bindings.index_table_address = constant;
+                    return;
+                }
                 if (!reflect_map
                          .try_emplace(
                              argument_name,
@@ -899,6 +918,17 @@ void DXCompiler::Impl::ReflectDXIL(
                 D3D12_SHADER_BUFFER_DESC desc{};
                 DX_CHECK_HRESULT(cb->GetDesc(&desc));
                 param_info.byte_size = desc.Size;
+                if (name == ReflectParamInfo::constants_name && desc.Variables == 1) {
+                    // A single logical constant keeps its argument name even
+                    // when declared through the shared push-constant wrapper.
+                    auto* type = cb->GetVariableByIndex(0)->GetType();
+                    D3D12_SHADER_TYPE_DESC type_desc{};
+                    DX_CHECK_HRESULT(type->GetDesc(&type_desc));
+                    if (type_desc.Members != 1) {
+                        throw std::invalid_argument("D3D12 does not support multiple logical constants");
+                    }
+                    name = type->GetMemberTypeName(0);
+                }
                 assert(shaderInputBindDesc.BindCount == 1); // ? array of constant buffer
             } break;
             case D3D_SIT_TEXTURE: {

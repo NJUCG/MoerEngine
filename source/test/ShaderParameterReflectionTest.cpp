@@ -152,9 +152,17 @@ void CheckSerialization() {
     bindings.array                  = ReflectParamInfo::Bindless{2, 3, 4, 5, 6, 7, {.active = 1}};
     bindings.image                  = ReflectParamInfo::Bindless{8, 9, 10, 11, 12, 13, {.active = 0}};
     bindings.acceleration_structure = ReflectParamInfo::Bindless{14, 15, 16, 17, 18, 19, {.active = 1}};
+    bindings.index_table_address = ReflectParamInfo::Constant{
+        .offset = 24, .size = 8, .padded_size = 8, .custom_flag = {.active = 1}
+    };
     const auto  table_bytes         = Serialize(table);
     const auto  restored_table      = Deserialize(table_bytes);
     const auto& b                   = *restored_table.GetSpirvReflection().TryGetBindlessArray();
+    Require(
+        b.index_table_address && b.index_table_address->offset == 24 &&
+            b.index_table_address->size == 8 && b.index_table_address->custom_flag.active,
+        "Bindless cache lost the index-table address"
+    );
     Require(
         restored_table.GetSpirvReflection().stage_bits == 23 && b.array && b.image &&
             b.acceleration_structure && !b.buffer && !b.sampler,

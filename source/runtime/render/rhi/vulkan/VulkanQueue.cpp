@@ -925,7 +925,7 @@ struct VkCmdPreprocessor {
             _pipeline_stages
         );
         tracker.RecordState(
-            vk_bindless_array->bindless_array_buffer, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages
+            vk_bindless_array->bindless_index_buffer, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages
         );
     }
 
@@ -1958,7 +1958,7 @@ struct VkCmdPreprocessor {
 
         VulkanBindlessArray* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
         tracker.RecordState(
-            vk_bindless_array->bindless_array_buffer,
+            vk_bindless_array->bindless_index_buffer,
             VK_ACCESS_2_SHADER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
         );
@@ -3126,7 +3126,7 @@ public:
                         arg,
                         array_indices_buf,
                         array_staging,
-                        bindless_array->bindless_array_buffer->GetView()
+                        bindless_array->bindless_index_buffer->GetView()
                     )
                 );
                 cmd_list.Dispatch((array_indices_dat.size() + 63) / 64, 1, 1);
@@ -3167,7 +3167,7 @@ public:
                         buffer_indices_buf,
                         buffer_desc_staging,
                         bindless_array->bindless_buffer_descs->GetView(
-                            bindless_array->buffers_offset_in_set
+                            bindless_array->buffer_descriptors_byte_offset
                         )
                     )
                 );

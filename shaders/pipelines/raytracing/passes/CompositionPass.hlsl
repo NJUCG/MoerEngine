@@ -3,6 +3,7 @@
 #include <core/common/Common.hlsl>
 
 BINDLESS_BINDINGS(3, 2, 4, 5);
+DEFINE_SHADER_BINDLESS_CONSTANTS()
 
 #include <materials/Material.hlsli>
 

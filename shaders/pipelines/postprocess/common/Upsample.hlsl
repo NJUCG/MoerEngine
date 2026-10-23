@@ -5,8 +5,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "shared/raster/ShaderParameters.h"
 
-[[vk::push_constant]]
-ConstantBuffer<Moer::UpsamplePipelineBindlessParam> param;
+DEFINE_SHADER_CONSTANT(Moer::UpsamplePipelineBindlessParam, param)
 
 
 #define UPSAMPLE_DEPTH_MODE 0
@@ -147,24 +146,24 @@ float3 DepthGuidedUpsample(TextureHandle lowTex, TextureHandle highDepth, float2
 
 float4 main(float2 uv : TEXCOORD0) : SV_TARGET
 {
-    //TextureHandle lowTex = TextureHandle(param.input_image);
+    //TextureHandle lowTex = TextureHandle(moer_constants.param.input_image);
 
-    float3 color = TextureHandle(param.input_image).Sample2D<float4>(uv).rgb;
-    float3 precolor = TextureHandle(param.input_image).Sample2D<float4>(uv).rgb;
+    float3 color = TextureHandle(moer_constants.param.input_image).Sample2D<float4>(uv).rgb;
+    float3 precolor = TextureHandle(moer_constants.param.input_image).Sample2D<float4>(uv).rgb;
     //printf("color before upsample: %f, %f, %f, %f, %f\n", uv.x, uv.y, color.r, color.g, color.b);
     //printf("uv: %f, %f\n", uv.x * 540, uv.y * 960);
 
-    if (param.upsample_mode == 0)
-        color = BilinearUpsample(uv, 540, 1080, param.input_image);
-        //color = DepthGuidedUpsample(lowTex, TextureHandle(param.high_res_depth), uv, param.inv_high_res);
-    else if(param.upsample_mode == 1)
-        color = BilinearUpsample_1(uv, param.inSize, param.outSize, param.input_image);
+    if (moer_constants.param.upsample_mode == 0)
+        color = BilinearUpsample(uv, 540, 1080, moer_constants.param.input_image);
+        //color = DepthGuidedUpsample(lowTex, TextureHandle(moer_constants.param.high_res_depth), uv, moer_constants.param.inv_high_res);
+    else if(moer_constants.param.upsample_mode == 1)
+        color = BilinearUpsample_1(uv, moer_constants.param.inSize, moer_constants.param.outSize, moer_constants.param.input_image);
 
     // 锐化控制（可选）
-    //color = pow(color, param.sharpness);
+    //color = pow(color, moer_constants.param.sharpness);
     if(precolor.r != color.r || precolor.g != color.g || precolor.b != color.b)
     {
-        printf("NaN detected at uv: %f, %f, precolor: %f, %f, %f, color: %f, %f, %f mode:%d\n", uv.x, uv.y, precolor.r, precolor.g, precolor.b, color.r, color.g, color.b, param.upsample_mode);
+        printf("NaN detected at uv: %f, %f, precolor: %f, %f, %f, color: %f, %f, %f mode:%d\n", uv.x, uv.y, precolor.r, precolor.g, precolor.b, color.r, color.g, color.b, moer_constants.param.upsample_mode);
     }
     //printf("color after upsample: %f, %f, %f, %f, %f\n", uv.x, uv.y, color.r, color.g, color.b);
 

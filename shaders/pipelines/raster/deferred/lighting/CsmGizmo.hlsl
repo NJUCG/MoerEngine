@@ -3,7 +3,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "shared/raster/ShaderParameters.h"
 
-[[vk::push_constant]] ConstantBuffer<Moer::CsmGizmoParam> param;
+DEFINE_SHADER_CONSTANT(Moer::CsmGizmoParam, param)
 
 struct CsmGizmoVSOutput {
     float4                     position : SV_POSITION;
@@ -180,8 +180,8 @@ CsmGizmoVSOutput CsmGizmoLineVS(float3 edge_start, float3 edge_end, float4 color
     const float endpoint_t = (quad_vertex == 0u || quad_vertex == 1u || quad_vertex == 4u) ? 0.0 : 1.0;
     const float side_sign = (quad_vertex == 0u || quad_vertex == 2u || quad_vertex == 3u) ? -1.0 : 1.0;
 
-    float4 start_clip = mul(param.world2clip, float4(edge_start, 1.0));
-    float4 end_clip = mul(param.world2clip, float4(edge_end, 1.0));
+    float4 start_clip = mul(moer_constants.param.world2clip, float4(edge_start, 1.0));
+    float4 end_clip = mul(moer_constants.param.world2clip, float4(edge_end, 1.0));
     if (!CsmGizmoClipToMinW(start_clip, end_clip)) {
         return CsmGizmoHiddenLineVS();
     }
@@ -194,7 +194,7 @@ CsmGizmoVSOutput CsmGizmoLineVS(float3 edge_start, float3 edge_end, float4 color
 
     const float2 edge_dir = CsmGizmoSafeNormalize2(end_ndc - start_ndc, float2(1.0, 0.0));
     const float2 side = float2(-edge_dir.y, edge_dir.x);
-    const float thickness = clamp(param.camera_position_thickness.w, 0.0005, 0.014);
+    const float thickness = clamp(moer_constants.param.camera_position_thickness.w, 0.0005, 0.014);
 
     const float4 base_clip = lerp(start_clip, end_clip, endpoint_t);
     const float2 base_ndc = lerp(start_ndc, end_ndc, endpoint_t);
@@ -233,14 +233,14 @@ CsmGizmoVSOutput CsmGizmoSphereVS(Moer::CsmGizmoCascadeData cascade_data, uint v
 }
 
 CsmGizmoVSOutput CsmGizmoVS(uint vertex_id : SV_VertexID, uint cascade_index : SV_InstanceID) {
-    const uint cascade_count = max(param.csm_config.y, 1u);
+    const uint cascade_count = max(moer_constants.param.csm_config.y, 1u);
     const uint safe_cascade_index = min(cascade_index, cascade_count - 1u);
-    ArrayBuffer cascade_buffer = ArrayBuffer(param.csm_config.x);
+    ArrayBuffer cascade_buffer = ArrayBuffer(moer_constants.param.csm_config.x);
     Moer::CsmGizmoCascadeData cascade_data =
         cascade_buffer.Load<Moer::CsmGizmoCascadeData>(safe_cascade_index);
 
     const bool draw_frustums =
-        (param.csm_config.z & Moer::RASTER_CSM_GIZMO_DRAW_SPLIT_FRUSTUM) != 0u;
+        (moer_constants.param.csm_config.z & Moer::RASTER_CSM_GIZMO_DRAW_SPLIT_FRUSTUM) != 0u;
     const uint frustum_vertex_count = draw_frustums ? CSM_GIZMO_FRUSTUM_VERTEX_COUNT : 0u;
     if (vertex_id < frustum_vertex_count) {
         return CsmGizmoFrustumVS(cascade_data, vertex_id);

@@ -1554,6 +1554,8 @@ namespace {
 struct VulkanPipelineBindingInfo {
     UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo> descriptor_set_layouts;
     VkPushConstantRange                                     push_constant_range{};
+    uint                                                    user_constant_byte_size = 0;
+    std::optional<VulkanBindlessIndexAddressBinding>          bindless_index_address;
     Array<VulkanArgumentInfo>                               argument_infos;
     uint64                                                  active_argument_bits = 0;
 };
@@ -1697,21 +1699,35 @@ void AccumulateBindlessBindings(
     VulkanPipelineBindingInfo&             out_binding_info
 ) {
     out_binding_info.argument_infos[argument_index].stages |= ToVulkanPipelineStageFlags(shader_stage);
-    // The bindless resource tables are paired with the indirect handle table.
-    if (!resources.array) {
-        return;
+    if (resources.array) {
+        throw std::invalid_argument("Vulkan bindless shaders must read the index table by device address");
+    }
+    if (resources.index_table_address && resources.index_table_address->custom_flag.active) {
+        const auto& address = *resources.index_table_address;
+        if (address.size != sizeof(VkDeviceAddress) || address.offset % alignof(VkDeviceAddress) != 0) {
+            throw std::invalid_argument("Invalid Vulkan bindless index-table address layout");
+        }
+        if (out_binding_info.bindless_index_address &&
+            (out_binding_info.bindless_index_address->argument_index != argument_index ||
+             out_binding_info.bindless_index_address->byte_offset != address.offset)) {
+            throw std::invalid_argument("Shader stages disagree on the bindless index-table address");
+        }
+        out_binding_info.bindless_index_address = {argument_index, address.offset};
+        out_binding_info.push_constant_range.stageFlags |= shader_stage;
+        MarkShaderArgumentActive(argument_index, true, out_binding_info);
     }
 
     constexpr uint k_resource_descriptor_count = 5000;
     constexpr uint k_sampler_descriptor_count  = 256;
-    const auto&    indirect_table              = *resources.array;
-    assert(indirect_table.binding == 0 && "Indirect Binding Slot Must be 0.");
 
     const auto add_table_binding = [&](const ReflectParamInfo::Bindless& table,
                                        uint                              set_index,
                                        uint                              binding_index,
                                        VkDescriptorType                  descriptor_type,
                                        uint                              descriptor_count) {
+        if (table.binding != binding_index) {
+            throw std::invalid_argument("Vulkan bindless descriptor arrays must use binding 0");
+        }
         MergeDescriptorBinding(
             set_index,
             argument_index,
@@ -1725,13 +1741,11 @@ void AccumulateBindlessBindings(
         MarkShaderArgumentActive(argument_index, table.custom_flag.active, out_binding_info);
     };
 
-    add_table_binding(indirect_table, indirect_table.set, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);
     if (resources.buffer) {
-        // Buffer descriptors share the indirect table's set at binding 1.
         add_table_binding(
             *resources.buffer,
-            indirect_table.set,
-            1,
+            resources.buffer->set,
+            0,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             k_resource_descriptor_count
         );
@@ -1811,15 +1825,23 @@ void AccumulateShaderPipelineBindings(
 
 VulkanPipelineBindingInfo BuildVulkanPipelineBindingInfo(
     std::span<const SingleShaderInfo* const> shaders,
-    std::span<const PipelineArgumentInfo>    arguments
+    const PipelineShaderInfo&               shader_info,
+    uint                                    max_push_constant_size
 ) {
     VulkanPipelineBindingInfo binding_info;
+    const auto arguments = shader_info.argument_metadata.GetArguments();
+    binding_info.user_constant_byte_size = ValidatePipelineConstants(shader_info, max_push_constant_size);
     binding_info.argument_infos.resize(arguments.size());
     for (const auto* shader : shaders) {
         const auto shader_stage = static_cast<VkShaderStageFlagBits>(
             VulkanEnumTranslator::METoVKShaderStageFlags(shader->shader_type)
         );
         AccumulateShaderPipelineBindings(*shader, arguments, shader_stage, binding_info);
+    }
+    binding_info.push_constant_range.size = binding_info.user_constant_byte_size;
+    if (binding_info.bindless_index_address) {
+        binding_info.push_constant_range.size =
+            binding_info.bindless_index_address->byte_offset + sizeof(VkDeviceAddress);
     }
     return binding_info;
 }
@@ -1865,7 +1887,8 @@ void FillMissingDescriptorBindings(UnorderedMap<uint, VulkanDescriptorSetLayoutC
 void InitializeVulkanPipelineLayout(VulkanPipelineState& pipeline, VulkanPipelineBindingInfo& binding_info) {
     FillMissingDescriptorBindings(binding_info.descriptor_set_layouts);
     pipeline.InitPipelineLayout(
-        std::move(binding_info.descriptor_set_layouts), binding_info.push_constant_range
+        std::move(binding_info.descriptor_set_layouts), binding_info.push_constant_range,
+        binding_info.user_constant_byte_size, binding_info.bindless_index_address
     );
 }
 
@@ -2180,9 +2203,6 @@ void InitializeGraphicsPipelineCreateData(
 
 PipelineHandle
 VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
-    const uint constant_byte_size = ValidatePipelineConstants(
-        _shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize
-    );
     if (!ValidateGraphicsPipelineCreateInfo(*this, m_device_info, _create_info, _shader_info)) {
         return {};
     }
@@ -2190,8 +2210,9 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     const Array<const SingleShaderInfo*> ordered_shaders =
         GetGraphicsShadersInStageOrder(_shader_info.shaders);
     VulkanPipelineBindingInfo binding_info =
-        BuildVulkanPipelineBindingInfo(ordered_shaders, _shader_info.argument_metadata.GetArguments());
-    binding_info.push_constant_range.size = constant_byte_size;
+        BuildVulkanPipelineBindingInfo(
+            ordered_shaders, _shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize
+        );
 
     UniquePtr<VulkanPipelineState> vk_pso = MakeUnique<VulkanPipelineState>(
         this, VulkanPipelineState::GFX, binding_info.active_argument_bits
@@ -2219,8 +2240,6 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
 }
 
 PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
-    const uint constant_byte_size = ValidatePipelineConstants(
-        shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize);
     if (const std::string_view error = ValidateComputeShaderStages(shader_info.shaders); !error.empty()) {
         LOG_ERROR("Cannot create Vulkan compute pipeline: {}", error);
         return {};
@@ -2228,8 +2247,9 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
     const SingleShaderInfo* shader = &shader_info.shaders.front();
     const std::span<const SingleShaderInfo* const> stages(&shader, 1);
     VulkanPipelineBindingInfo binding_info =
-        BuildVulkanPipelineBindingInfo(stages, shader_info.argument_metadata.GetArguments());
-    binding_info.push_constant_range.size = constant_byte_size;
+        BuildVulkanPipelineBindingInfo(
+            stages, shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize
+        );
     VulkanPipelineState* vk_pso =
         MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute, binding_info.active_argument_bits);
     Array<VkPipelineShaderStageCreateInfo> shader_stages = CreateVulkanShaderStages(m_device, stages);

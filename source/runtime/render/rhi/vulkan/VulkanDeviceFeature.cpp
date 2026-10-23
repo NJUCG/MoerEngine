@@ -224,6 +224,8 @@ VulkanDeviceFeatures VulkanDeviceFeatures::BuildRequiredFeatures(uint32_t _api_v
     required_features.core_1_0.samplerAnisotropy = VK_TRUE;
     required_features.core_1_0.sampleRateShading = VK_TRUE;
     required_features.core_1_0.depthClamp        = VK_TRUE;
+    // HLSL computes bindless index-table addresses with uint64_t arithmetic.
+    required_features.core_1_0.shaderInt64       = VK_TRUE;
     // 1.2 features
     if (_api_version >= VK_API_VERSION_1_2) {
 

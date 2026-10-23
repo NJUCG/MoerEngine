@@ -52,9 +52,9 @@ static constexpr std::string_view s_blas_underlying_buffer_name = "VkRaytracing:
 static constexpr std::string_view s_blas_scratch_buffer_name    = "VkRaytracing::BLASScratchBuffer";
 static constexpr std::string_view s_tlas_scratch_buffer_name    = "VkRaytracing::TLASScratchBuffer";
 static constexpr std::string_view s_tlas_instance_buffer_name   = "VkRaytracing::TLASInstanceBuffer";
-static constexpr std::string_view s_bdls_array_name             = "VkBindless::BindlessArrayBuffer";
-static constexpr std::string_view s_bdls_array_buffer_name      = "VkBindless::BindlessBuffuerBuffer";
-static constexpr std::string_view s_bdls_array_image_name       = "VkBindless::BindlessImageBuffer";
+static constexpr std::string_view s_bindless_index_buffer_name             = "VkBindless::IndexTable";
+static constexpr std::string_view s_bindless_buffer_descriptors_name      = "VkBindless::BufferDescriptors";
+static constexpr std::string_view s_bindless_texture_descriptors_name       = "VkBindless::TextureAndSamplerDescriptors";
 
 static uint64 GetBindlessTextureDescriptorOffset(const VulkanDevice& _device) {
     const auto& properties = _device.GetOptionalProperties().descriptor_buffer_properties;
@@ -939,10 +939,6 @@ Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
         VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
         VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
-    constexpr VkDescriptorBindingFlags bindless_buffer_set_binding_flags[] = {
-        0,                            // binding 0: indirect handle table.
-        bindless_array_binding_flags, // binding 1: buffer descriptor array.
-    };
 
     for (const auto& [set_index, layout_info] : set_layout_infos) {
         // FillMissingDescriptorBindings has made the binding indices contiguous.
@@ -962,11 +958,8 @@ Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO
         };
         if (layout_info.is_bindless) {
-            const auto descriptor_type       = layout_info.bindings.at(0).vk_binding.descriptorType;
-            const bool is_buffer             = descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            binding_flags_info.bindingCount  = is_buffer && layout_info.bindings.contains(1) ? 2 : 1;
-            binding_flags_info.pBindingFlags =
-                is_buffer ? bindless_buffer_set_binding_flags : &bindless_array_binding_flags;
+            binding_flags_info.bindingCount  = 1;
+            binding_flags_info.pBindingFlags = &bindless_array_binding_flags;
             layout_create_info.pNext         = &binding_flags_info;
         }
 
@@ -1039,7 +1032,9 @@ void InitializePushConstantBindingTemplate(
 
 void VulkanPipelineState::InitPipelineLayout(
     UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
-    std::optional<VkPushConstantRange>                        push_constant_range
+    std::optional<VkPushConstantRange>                        push_constant_range,
+    uint                                                     user_constant_byte_size,
+    std::optional<VulkanBindlessIndexAddressBinding>          bindless_index_address
 ) {
     binding_template = MakeUnique<VulkanPipelineBindingTemplate>();
 
@@ -1050,6 +1045,8 @@ void VulkanPipelineState::InitPipelineLayout(
 
     InitializeDescriptorBufferBindingTemplate(*m_device, *binding_template);
     InitializePushConstantBindingTemplate(m_pipeline_layout, push_constant_range, *binding_template);
+    binding_template->push_constants_info.size = user_constant_byte_size;
+    binding_template->bindless_index_address   = bindless_index_address;
 }
 
 #pragma endregion
@@ -1387,36 +1384,27 @@ void VulkanPipelineState::InitPipelineLayout(
         const uint sampled_image_descriptor_size =
             g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
 
-        const VkDescriptorBindingFlags flags[2] = {
-            0,
+        const VkDescriptorBindingFlags flags =
             VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
                 VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-                VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT
-        };
+                VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
         VkDescriptorSetLayoutBindingFlagsCreateInfoEXT binding_flags{};
         binding_flags.sType         =
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT;
-        binding_flags.bindingCount  = 2;
-        binding_flags.pBindingFlags = flags;
+        binding_flags.bindingCount  = 1;
+        binding_flags.pBindingFlags = &flags;
 
-        std::array<VkDescriptorSetLayoutBinding, 2> buffer_bindings{};
-        VkDescriptorSetLayoutBinding& array_binding = buffer_bindings[0];
-        array_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        array_binding.binding         = 0;
-        array_binding.descriptorCount = 1;
-        array_binding.stageFlags      = VK_SHADER_STAGE_ALL;
-
-        VkDescriptorSetLayoutBinding& buffer_binding = buffer_bindings[1];
+        VkDescriptorSetLayoutBinding buffer_binding{};
         buffer_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        buffer_binding.binding         = 1;
+        buffer_binding.binding         = 0;
         buffer_binding.descriptorCount = _max_size;
         buffer_binding.stageFlags      = VK_SHADER_STAGE_ALL;
 
         VkDescriptorSetLayoutCreateInfo buffer_desc_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
         };
-        buffer_desc_info.bindingCount = static_cast<uint32>(buffer_bindings.size());
-        buffer_desc_info.pBindings    = buffer_bindings.data();
+        buffer_desc_info.bindingCount = 1;
+        buffer_desc_info.pBindings    = &buffer_binding;
         buffer_desc_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
         buffer_desc_info.pNext = &binding_flags;
 
@@ -1429,12 +1417,12 @@ void VulkanPipelineState::InitPipelineLayout(
             m_device->GetDevice(), buffer_desc_layout, &bindless_buffer_descriptor_bytes
         );
         vkGetDescriptorSetLayoutBindingOffsetEXT(
-            m_device->GetDevice(), buffer_desc_layout, 1, &buffers_offset_in_set
+            m_device->GetDevice(), buffer_desc_layout, 0, &buffer_descriptors_byte_offset
         );
         vkDestroyDescriptorSetLayout(m_device->GetDevice(), buffer_desc_layout, VK_NULL_HANDLE);
 
         const uint64 required_buffer_descriptor_bytes =
-            buffers_offset_in_set +
+            buffer_descriptors_byte_offset +
             static_cast<uint64>(_max_size) * storage_buffer_descriptor_size;
         if (bindless_buffer_descriptor_bytes < required_buffer_descriptor_bytes) {
             throw std::runtime_error("bindless buffer descriptor layout is smaller than its bindings");
@@ -1468,7 +1456,7 @@ void VulkanPipelineState::InitPipelineLayout(
         alloc_ci.flags                    = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-        bindless_array_buffer = MoerNew(VulkanBuffer)(s_bdls_array_name,buffer_info, *m_device, current_handle, alloc, false, true);
+        bindless_index_buffer = MoerNew(VulkanBuffer)(s_bindless_index_buffer_name,buffer_info, *m_device, current_handle, alloc, false, true);
         
         buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         buffer_ci.size  = bindless_buffer_descriptor_bytes;
@@ -1479,7 +1467,7 @@ void VulkanPipelineState::InitPipelineLayout(
         buffer_info.size   = bindless_buffer_descriptor_bytes;
         buffer_info.stride = 1;
 
-        bindless_buffer_descs = MoerNew(VulkanBuffer)(s_bdls_array_buffer_name, buffer_info, *m_device, current_handle, alloc, false, true);
+        bindless_buffer_descs = MoerNew(VulkanBuffer)(s_bindless_buffer_descriptors_name, buffer_info, *m_device, current_handle, alloc, false, true);
 
         buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                           VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
@@ -1493,7 +1481,7 @@ void VulkanPipelineState::InitPipelineLayout(
 
         buffer_info.size   = bindless_texture_descriptor_bytes;
         buffer_info.stride = 1;
-        bindless_texture_descs = MoerNew(VulkanBuffer)(s_bdls_array_image_name, buffer_info, *m_device, current_handle, alloc, false, true);
+        bindless_texture_descs = MoerNew(VulkanBuffer)(s_bindless_texture_descriptors_name, buffer_info, *m_device, current_handle, alloc, false, true);
 
         CommandList cmd_list{};
         //fill sampler data to descriptor buffer
@@ -1516,31 +1504,6 @@ void VulkanPipelineState::InitPipelineLayout(
             // vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
             // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, VulkanDevice::bindless_sampler_count * sampler_stride);
             cmd_list.CopyFrom(std::span<byte>(data_array.data(), data_array.size()), bindless_texture_descs->GetView(0, data_array.size()));
-            RHIExecutor::Get().Submit(
-                EQueueType::Graphics, cmd_list.Submit(), ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-        }
-        VkDescriptorGetInfoEXT descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
-        VkDescriptorAddressInfoEXT address_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
-        address_info.address = bindless_array_buffer->DeviceAddress();
-        address_info.range = bindless_array_buffer->GetByteSize();
-        descriptor_info.data.pStorageBuffer = &address_info;
-        descriptor_info.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        {
-            Array<byte> buffer_data(storage_buffer_descriptor_size);
-
-            // byte* mapped_data;
-            // vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_data);
-            vkGetDescriptorEXT(
-                m_device->GetDevice(),
-                &descriptor_info,
-                storage_buffer_descriptor_size,
-                buffer_data.data());
-            // std::memcpy(mapped_data, buffer_data.data(), buffer_data.size());
-            // vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
-            // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), 0, m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
-            cmd_list.CopyFrom(std::span<byte>(buffer_data.data(), buffer_data.size()), bindless_buffer_descs->GetView(0, buffer_data.size()));
             RHIExecutor::Get().Submit(
                 EQueueType::Graphics, cmd_list.Submit(), ERHIExecSubmitFlags::FlushGPU
             );
@@ -1719,13 +1682,11 @@ void VulkanPipelineState::InitPipelineLayout(
             texture_cnt = 0;
             buffer_cnt = 0;
 
-            // Buffer binding 1 is addressed through a view that starts at the
+            // Buffer binding 0 is addressed through a view that starts at the
             // implementation-provided byte offset. Slots therefore remain
             // relative to that binding and never truncate byte padding into a
             // descriptor index.
-            //in gpu:
-            // bindless_array_buffer: [binding 0, offset 0]
-            // bindless_buffer_descs: [binding 1, offset $sizeofhandle)]
+            // The index table stores uint handles; the separate buffer stores descriptors.
             for(const UpdateCmd& cmd : update_cmds){
                 std::visit(
                     [&](auto&& _cmd){
@@ -3031,9 +2992,9 @@ void VulkanPipelineState::InitPipelineLayout(
     }
 
     VulkanBindlessArray::~VulkanBindlessArray() {
-        if (bindless_array_buffer) {
-            MoerDelete(bindless_array_buffer);
-            bindless_array_buffer = nullptr;
+        if (bindless_index_buffer) {
+            MoerDelete(bindless_index_buffer);
+            bindless_index_buffer = nullptr;
         }
         if (bindless_buffer_descs) {
             MoerDelete(bindless_buffer_descs);

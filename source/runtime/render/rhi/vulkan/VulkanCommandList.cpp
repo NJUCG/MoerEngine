@@ -401,6 +401,28 @@ void PushShaderConstants(
     );
 }
 
+void PushBindlessIndexAddress(
+    VkCommandBuffer                      command_buffer,
+    const VulkanPipelineBindingTemplate& binding_template,
+    const ArrayArguments&                arguments
+) {
+    if (!binding_template.bindless_index_address) {
+        return;
+    }
+    const auto&             binding = *binding_template.bindless_index_address;
+    const BindlessArrayRef& array = std::get<BindlessArrayRef>(arguments[binding.argument_index]);
+    if (!array) {
+        throw std::invalid_argument("Cannot bind a null bindless index table");
+    }
+    const auto*           bindless = static_cast<const VulkanBindlessArray*>(array.Get());
+    const VkDeviceAddress address = bindless->bindless_index_buffer->DeviceAddress();
+    const auto&           constants = binding_template.push_constants_info;
+    vkCmdPushConstants(
+        command_buffer, constants.layout, constants.stageFlags,
+        binding.byte_offset, sizeof(address), &address
+    );
+}
+
 } // namespace
 
 void VulkanCommandList::BindShaderArguments(
@@ -439,6 +461,7 @@ void VulkanCommandList::BindShaderArguments(
     );
     BindDescriptorBufferSets(command_buffer, *pipeline, descriptor_buffers, *allocation_offset);
     PushShaderConstants(command_buffer, binding_template.push_constants_info, _arguments.constants);
+    PushBindlessIndexAddress(command_buffer, binding_template, _arguments);
 }
 
 // Vertex input and dynamic state.

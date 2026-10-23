@@ -39,6 +39,11 @@ void WriteBindlessArray(OutputStream& stream, const ReflectParamInfo::BindlessAr
         stream << value.set << value.binding << value.count << value.desc_type << value.resource_type
                << value.stage_bits << uint(value.custom_flag.active);
     }
+    stream << uint8_t(bindings.index_table_address.has_value());
+    if (bindings.index_table_address) {
+        const auto& address = *bindings.index_table_address;
+        stream << address.offset << address.size << address.padded_size << uint(address.custom_flag.active);
+    }
 }
 
 ReflectParamInfo::BindlessArray ReadBindlessArray(InputStream& stream) {
@@ -62,6 +67,17 @@ ReflectParamInfo::BindlessArray ReadBindlessArray(InputStream& stream) {
             value.stage_bits;
         value.custom_flag = ReadActiveFlag(stream);
         *binding          = value;
+    }
+    uint8_t address_present = 0;
+    stream >> address_present;
+    if (address_present > 1) {
+        throw std::invalid_argument("Invalid bindless address presence flag");
+    }
+    if (address_present) {
+        ReflectParamInfo::Constant address{};
+        stream >> address.offset >> address.size >> address.padded_size;
+        address.custom_flag = ReadActiveFlag(stream);
+        bindings.index_table_address = address;
     }
     return bindings;
 }

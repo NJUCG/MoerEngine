@@ -461,6 +461,7 @@ void CheckRequiredFeatures() {
     auto        required = VulkanDeviceFeatures::BuildRequiredFeatures(VK_API_VERSION_1_3);
     const auto& base     = required.GetCore10Features();
     Check(base.samplerAnisotropy && base.sampleRateShading && base.depthClamp, "base requirements changed");
+    Check(base.shaderInt64, "Bindless address arithmetic requires shaderInt64");
     Check(
         base.sparseBinding == VK_FALSE && base.sparseResidencyBuffer == VK_FALSE,
         "unused sparse feature became required"

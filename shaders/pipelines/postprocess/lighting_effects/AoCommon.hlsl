@@ -13,15 +13,15 @@ float2 GetCameraMotionVector(float2 uv) {
     // param.depth_tex
 
     // MARK: Lighting Data
-    ArrayBuffer                  camera_mv_data = ArrayBuffer(param.camera_mv_data_handle);
+    ArrayBuffer                  camera_mv_data = ArrayBuffer(moer_constants.param.camera_mv_data_handle);
     Moer::CameraMotionVectorData camera_mv      = camera_mv_data.Load<Moer::CameraMotionVectorData>(0);
 
-    float depth = TextureHandle(param.depth_tex).SampleLevel<float>(uv);
+    float depth = TextureHandle(moer_constants.param.depth_tex).SampleLevel<float>(uv);
     if (depth < Epsilon) {
         return float2(0.0, 0.0);
     }
 
-    float3 world_pos_vec3 = WorldPosFromDepth(depth, uv, param.clip2world);
+    float3 world_pos_vec3 = WorldPosFromDepth(depth, uv, moer_constants.param.clip2world);
     float4 world_pos      = float4(world_pos_vec3, 1.0);
 
     float4 clip_pos      = mul(camera_mv.world2clip, world_pos);

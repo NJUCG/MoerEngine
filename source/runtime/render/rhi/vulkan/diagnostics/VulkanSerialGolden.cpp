@@ -155,12 +155,12 @@ struct VulkanSerialGoldenTrace::Impl {
         try {
             bindless->Lock();
             locked = true;
-            if (bindless->bindless_array_buffer == nullptr ||
+            if (bindless->bindless_index_buffer == nullptr ||
                 bindless->bindless_buffer_descs == nullptr ||
                 bindless->bindless_texture_descs == nullptr) {
                 expansion_complete = false;
             } else {
-                RegisterBuffer(bindless->bindless_array_buffer);
+                RegisterBuffer(bindless->bindless_index_buffer);
                 RegisterBuffer(bindless->bindless_buffer_descs);
                 RegisterBuffer(bindless->bindless_texture_descs);
             }
@@ -1073,6 +1073,22 @@ struct VulkanSerialGoldenTrace::Impl {
             );
         }
 
+        if (binding_template.bindless_index_address) {
+            const auto& binding = *binding_template.bindless_index_address;
+            const auto& array = std::get<BindlessArrayRef>(arguments.args.at(binding.argument_index));
+            const auto* bindless = static_cast<VulkanBindlessArray*>(array.Get());
+            Array<uint8_t> bytes = DescriptorPrefix(pipeline_token);
+            AppendLe(bytes, binding_template.push_constants_info.stageFlags);
+            // Compare stable resource identity, never process-specific GPU addresses.
+            descriptor_builder.Add(
+                descriptor_invocation, pipeline_bind_point,
+                invalid_layout_value, invalid_layout_value, 0,
+                std::numeric_limits<uint32_t>::max() - 2u,
+                binding.argument_index, 1,
+                bindless ? RegisterBuffer(bindless->bindless_index_buffer) : StableSubmissionToken::Null(),
+                binding.byte_offset, sizeof(VkDeviceAddress), bytes
+            );
+        }
         if (binding_template.push_constants_info.size > 0) {
             Array<uint8_t> bytes = DescriptorPrefix(pipeline_token);
             AppendLe(bytes, binding_template.push_constants_info.stageFlags);

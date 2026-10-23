@@ -3,15 +3,15 @@
 #include <core/common/Bindless.hlsl>
 #include <shared/utils/ShaderParameters.h>
 
-[[vk::push_constant]] ConstantBuffer<Moer::ShowTextureParams> param;
+DEFINE_SHADER_CONSTANT(Moer::ShowTextureParams, param)
 [[vk::binding(0, 0)]] Texture2D src_tex : register(t0);
 
 BINDLESS_BINDINGS(1, 2, 3, 4)
 
 void GetDimensions(uint mip_level, out uint2 dimensions) {
   uint mip_count;
-  if (param.use_bindless != 0) {
-    TextureHandle texture = TextureHandle(param.bdls_handle);
+  if (moer_constants.param.use_bindless != 0) {
+    TextureHandle texture = TextureHandle(moer_constants.param.bdls_handle);
     Texture2D texture2d = texture.GetTexture2D();
     texture2d.GetDimensions(mip_level, dimensions.x, dimensions.y, mip_count);
   } else {
@@ -21,8 +21,8 @@ void GetDimensions(uint mip_level, out uint2 dimensions) {
 }
 
 float4 LoadTexture(int2 coord, uint mip_level) {
-  if (param.use_bindless != 0) {
-    TextureHandle texture = TextureHandle(param.bdls_handle);
+  if (moer_constants.param.use_bindless != 0) {
+    TextureHandle texture = TextureHandle(moer_constants.param.bdls_handle);
     Texture2D texture2d = texture.GetTexture2D();
     return texture2d.Load(int3(coord, int(mip_level)));
   }
@@ -47,7 +47,7 @@ void main(in float4 pos
   uint2 dimensions;
 
   GetDimensions(0, dimensions);
-  float2 dst_dim = float2(param.dst_dim);
+  float2 dst_dim = float2(moer_constants.param.dst_dim);
   float2 src_dim = float2(dimensions);
 
   // preserve src texture ratio
@@ -74,6 +74,6 @@ void main(in float4 pos
 
   float2 sample_uv = (pos.xy - rect.xy) / (rect.zw - rect.xy);
 
-  float4 color = SampleTexture(sample_uv, param.mip_level);
+  float4 color = SampleTexture(sample_uv, moer_constants.param.mip_level);
   target = color;
 }

@@ -6,7 +6,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "pipelines/RasterCommon.hlsli"
 #include "shared/raster/ShaderParameters.h"
 
-[[vk::push_constant]] ConstantBuffer<Moer::SmaaSharedPipelineBindlessParam> param;
+DEFINE_SHADER_CONSTANT(Moer::SmaaSharedPipelineBindlessParam, param)
 
 // 2. extracting bindless sampler & textures
 
@@ -15,7 +15,7 @@ SamplerState SMAAGetSampler(uint sampler_idx) {
 }
 
 Texture2D SMAAGetTexture2D(uint handle_idx) {
-    uint tex_handle = g__array_114514_bdls[NonUniformResourceIndex(handle_idx)];
+    uint tex_handle = MOER_LOAD_BINDLESS_INDEX(handle_idx);
     uint tex_idx = tex_handle >> 8;
     Texture2D tex = Texture2D(gTexture2Dfloat4__114514_bdls[NonUniformResourceIndex(tex_idx)]);
     return tex;
@@ -27,7 +27,7 @@ Texture2D SMAAGetTexture2D(uint handle_idx) {
 #define SMAA_AA_MODE_T2x 4
 
 // #define SMAA_RT_METRICS float4(1.0 / 1280.0, 1.0 / 720.0, 1280.0, 720.0)
-#define SMAA_RT_METRICS param.rt_metrics
+#define SMAA_RT_METRICS moer_constants.param.rt_metrics
 #define SMAA_PRESET_HIGH
 #define SMAA_CUSTOM_SL
 
@@ -38,8 +38,8 @@ Texture2D SMAAGetTexture2D(uint handle_idx) {
 // 4. smaa porting functions (custom shading language for bindless rhi)
 
 #if defined(SMAA_CUSTOM_SL)
-#define PointSampler gsampler__114514_bdls[NonUniformResourceIndex(param.point_sampler)]
-#define LinearSampler gsampler__114514_bdls[NonUniformResourceIndex(param.linear_sampler)]
+#define PointSampler gsampler__114514_bdls[NonUniformResourceIndex(moer_constants.param.point_sampler)]
+#define LinearSampler gsampler__114514_bdls[NonUniformResourceIndex(moer_constants.param.linear_sampler)]
 #define SMAATexture2D(tex) Texture2D tex
 #define SMAATexturePass2D(tex) tex
 #define SMAASampleLevelZero(tex, coord) tex.SampleLevel(LinearSampler, coord, 0)
@@ -132,10 +132,10 @@ SMAAResolveVS_Output SMAAResolveVS_Wrapper(uint VertexIndex : SV_VertexID) {
 
 // according to SMAARepo: Demo/DX10/Shaders/Simple.fx
 float2 SMAAGetVelocity(float2 uv) {
-    float depth = SMAAGetTexture2D(param.depth_tex).Sample(LinearSampler, uv).r;
-    float4 c_pos = float4(WorldPosFromDepth(depth, uv, param.clip2world), 1.0);
+    float depth = SMAAGetTexture2D(moer_constants.param.depth_tex).Sample(LinearSampler, uv).r;
+    float4 c_pos = float4(WorldPosFromDepth(depth, uv, moer_constants.param.clip2world), 1.0);
 
-    float4 p_pos = mul(param.clip2prev_clip, float4(c_pos.xyz, 1.0));
+    float4 p_pos = mul(moer_constants.param.clip2prev_clip, float4(c_pos.xyz, 1.0));
     float2 c_pos2 = (c_pos.xy / c_pos.w) * float2(0.5, -0.5);
     float2 p_pos2 = (p_pos.xy / p_pos.w) * float2(0.5, -0.5);
     
@@ -147,9 +147,9 @@ float4 SMAALumaEdgeDetectionPS_Wrapper(SMAAEdgeDetectionVS_Output input) : SV_TA
         SMAALumaEdgeDetectionPS(
             input.UV,
             input.offset,
-            SMAAGetTexture2D(param.color_tex)
+            SMAAGetTexture2D(moer_constants.param.color_tex)
         ), (
-            param.aa_mode == SMAA_AA_MODE_T2x && SMAA_REPROJECTION
+            moer_constants.param.aa_mode == SMAA_AA_MODE_T2x && SMAA_REPROJECTION
             ? SMAAGetVelocity(input.UV)
             : float2(0, 0)
         )
@@ -161,9 +161,9 @@ float4 SMAAColorEdgeDetectionPS_Wrapper(SMAAEdgeDetectionVS_Output input) : SV_T
         SMAAColorEdgeDetectionPS(
             input.UV,
             input.offset,
-            SMAAGetTexture2D(param.color_tex)
+            SMAAGetTexture2D(moer_constants.param.color_tex)
         ), (
-            param.aa_mode == SMAA_AA_MODE_T2x && SMAA_REPROJECTION
+            moer_constants.param.aa_mode == SMAA_AA_MODE_T2x && SMAA_REPROJECTION
             ? SMAAGetVelocity(input.UV)
             : float2(0, 0)
         )
@@ -175,9 +175,9 @@ float4 SMAADepthEdgeDetectionPS_Wrapper(SMAAEdgeDetectionVS_Output input) : SV_T
         SMAADepthEdgeDetectionPS(
             input.UV,
             input.offset,
-            SMAAGetTexture2D(param.depth_tex)
+            SMAAGetTexture2D(moer_constants.param.depth_tex)
         ), (
-            param.aa_mode == SMAA_AA_MODE_T2x && SMAA_REPROJECTION
+            moer_constants.param.aa_mode == SMAA_AA_MODE_T2x && SMAA_REPROJECTION
             ? SMAAGetVelocity(input.UV)
             : float2(0, 0)
         )
@@ -189,11 +189,11 @@ float4 SMAABlendingWeightCalculationPS_Wrapper(SMAABlendingWeightCalculationVS_O
         input.UV,
         input.pixcoord,
         input.offset,
-        SMAAGetTexture2D(param.edges_tex),
-        SMAAGetTexture2D(param.area_tex),
-        SMAAGetTexture2D(param.search_tex),
-        param.aa_mode != SMAA_AA_MODE_T2x ? float4(0, 0, 0, 0) :
-                   param.frame_index == 0 ? float4(1, 1, 1, 0) :
+        SMAAGetTexture2D(moer_constants.param.edges_tex),
+        SMAAGetTexture2D(moer_constants.param.area_tex),
+        SMAAGetTexture2D(moer_constants.param.search_tex),
+        moer_constants.param.aa_mode != SMAA_AA_MODE_T2x ? float4(0, 0, 0, 0) :
+                   moer_constants.param.frame_index == 0 ? float4(1, 1, 1, 0) :
                                             float4(2, 2, 2, 0)
     );
 }
@@ -203,16 +203,16 @@ float4 SMAANeighborhoodBlendingPS_Wrapper(SMAANeighborhoodBlendingVS_Output inpu
         return SMAANeighborhoodBlendingPS(
             input.UV,
             input.offset,
-            SMAAGetTexture2D(param.color_tex),
-            SMAAGetTexture2D(param.blend_tex),
-            SMAAGetTexture2D(param.edges_tex)
+            SMAAGetTexture2D(moer_constants.param.color_tex),
+            SMAAGetTexture2D(moer_constants.param.blend_tex),
+            SMAAGetTexture2D(moer_constants.param.edges_tex)
         );
     #else
         return SMAANeighborhoodBlendingPS(
             input.UV,
             input.offset,
-            SMAAGetTexture2D(param.color_tex),
-            SMAAGetTexture2D(param.blend_tex)
+            SMAAGetTexture2D(moer_constants.param.color_tex),
+            SMAAGetTexture2D(moer_constants.param.blend_tex)
         );
     #endif
 }
@@ -221,15 +221,15 @@ float4 SMAAResolvePS_Wrapper(SMAAResolveVS_Output input) : SV_TARGET {
     #if SMAA_REPROJECTION
         return SMAAResolvePS(
             input.UV,
-            SMAAGetTexture2D(param.current_color_tex),
-            SMAAGetTexture2D(param.previous_color_tex),
-            SMAAGetTexture2D(param.edges_tex)
+            SMAAGetTexture2D(moer_constants.param.current_color_tex),
+            SMAAGetTexture2D(moer_constants.param.previous_color_tex),
+            SMAAGetTexture2D(moer_constants.param.edges_tex)
         );
     #else
         return SMAAResolvePS(
             input.UV,
-            SMAAGetTexture2D(param.current_color_tex),
-            SMAAGetTexture2D(param.previous_color_tex)
+            SMAAGetTexture2D(moer_constants.param.current_color_tex),
+            SMAAGetTexture2D(moer_constants.param.previous_color_tex)
         );
     #endif
 }

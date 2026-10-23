@@ -17,7 +17,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "pipelines/raster/deferred/geometry/GeometryPassCommon.hlsli"
 
-[[vk::push_constant]] ConstantBuffer<Moer::GeometryPassBindlessParam> param;
+DEFINE_SHADER_CONSTANT(Moer::GeometryPassBindlessParam, param)
 
 #if POINT_SHADOW_MULTIVIEW
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::PointShadowViewMatrices> point_shadow_view_matrices;
@@ -55,12 +55,12 @@ struct VsContext {
 
         // 1. GInstance
         uint scene_instance_id = instance_id;
-        if (param.use_visible_instance_id_remap != 0) {
-            ArrayBuffer visible_instance_id_buf = ArrayBuffer(param.visible_instance_id_buf_hdl);
+        if (moer_constants.param.use_visible_instance_id_remap != 0) {
+            ArrayBuffer visible_instance_id_buf = ArrayBuffer(moer_constants.param.visible_instance_id_buf_hdl);
             scene_instance_id                   = visible_instance_id_buf.Load<uint>(instance_id);
         }
 
-        ArrayBuffer     instance_buf = ArrayBuffer(param.instance_buf_hdl);
+        ArrayBuffer     instance_buf = ArrayBuffer(moer_constants.param.instance_buf_hdl);
         Moer::GInstance instance     = instance_buf.Load<Moer::GInstance>(scene_instance_id);
         primitive_id                 = instance.primitive_id; // primitive_id == draw_id
         model2world                  = instance.world_transform;
@@ -70,7 +70,7 @@ struct VsContext {
 #endif
 
         // 2. GPrimitive
-        ArrayBuffer primitive_buf = ArrayBuffer(param.primitive_buf_hdl);
+        ArrayBuffer primitive_buf = ArrayBuffer(moer_constants.param.primitive_buf_hdl);
         primitive                 = primitive_buf.Load<Moer::GPrimitive>(primitive_id);
 
         // 3. Read from MegaBuffers
@@ -78,11 +78,11 @@ struct VsContext {
         // position
         float3 vertex_pos = float3(0, 0, 0);
         if (primitive.attribute_mask & Moer::GPrimitiveEAttributeMask::Position) {
-            ArrayBuffer position_buf = ArrayBuffer(param.position_buf_hdl);
+            ArrayBuffer position_buf = ArrayBuffer(moer_constants.param.position_buf_hdl);
             vertex_pos               = position_buf.Load<float3>(primitive.position_start_idx + vertex_id);
         }
         float3 world_pos = mul(model2world, float4(vertex_pos, 1.0)).xyz;
-        float4x4 world2clip = param.world2clip;
+        float4x4 world2clip = moer_constants.param.world2clip;
 #if POINT_SHADOW_MULTIVIEW
         world2clip = point_shadow_view_matrices.world2clip[min(_view_id, 5u)];
 #endif
@@ -93,7 +93,7 @@ struct VsContext {
         // normal
         out_normal = float3(0, 0, 1);
         if (primitive.attribute_mask & Moer::GPrimitiveEAttributeMask::PackedNormal) {
-            ArrayBuffer packed_normal_buf = ArrayBuffer(param.packed_normal_buf_hdl);
+            ArrayBuffer packed_normal_buf = ArrayBuffer(moer_constants.param.packed_normal_buf_hdl);
             uint packed_normal = packed_normal_buf.Load<uint>(primitive.packed_normal_start_idx + vertex_id);
             out_normal         = Moer::Unpack_Normal(packed_normal);
         }
@@ -102,7 +102,7 @@ struct VsContext {
         // tangent
         out_tangent = float3(0, 0, 0);
         if (primitive.attribute_mask & Moer::GPrimitiveEAttributeMask::PackedTangent) {
-            ArrayBuffer packed_tangent_buf = ArrayBuffer(param.packed_tangent_buf_hdl);
+            ArrayBuffer packed_tangent_buf = ArrayBuffer(moer_constants.param.packed_tangent_buf_hdl);
             uint        packed_tangent =
                 packed_tangent_buf.Load<uint>(primitive.packed_tangent_start_idx + vertex_id);
             out_tangent = Moer::Unpack_Normal(packed_tangent);
@@ -120,7 +120,7 @@ struct VsContext {
         // texcoord0
         out_texcoord0 = float2(0, 0);
         if (primitive.attribute_mask & Moer::GPrimitiveEAttributeMask::Texcoord0) {
-            ArrayBuffer texcoord0_buf = ArrayBuffer(param.texcoord0_buf_hdl);
+            ArrayBuffer texcoord0_buf = ArrayBuffer(moer_constants.param.texcoord0_buf_hdl);
             out_texcoord0             = texcoord0_buf.Load<float2>(primitive.texcoord0_start_idx + vertex_id);
         }
 

@@ -15,7 +15,7 @@ struct PS_INPUT {
 
 PS_INPUT main(VS_INPUT input, uint id : SV_INSTANCEID) {
   PS_INPUT output;
-  output.pos = mul(param.mvp, float4(input.pos.xy, 0.f, 1.f));
+  output.pos = mul(moer_constants.param.mvp, float4(input.pos.xy, 0.f, 1.f));
   output.col = input.col;
   output.uv = input.uv;
   output.id = id;

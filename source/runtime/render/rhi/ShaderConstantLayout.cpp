@@ -80,6 +80,35 @@ bool ValidateShaderConstantUsage(
     return uses_constants;
 }
 
+void ValidateBindlessIndexAddress(
+    const PipelineArgumentMetadata& cpp_metadata,
+    const ShaderParametersInfoMap&  shader_parameters,
+    uint                            max_constant_byte_size
+) {
+    for (const auto& [name, parameter] : shader_parameters.reflect_map) {
+        const auto* bindless = parameter.GetSpirvReflection().TryGetBindlessArray();
+        if (!bindless || !bindless->index_table_address ||
+            !bindless->index_table_address->custom_flag.active) {
+            continue;
+        }
+        const auto&  address         = *bindless->index_table_address;
+        const uint64 expected_offset = (uint64(cpp_metadata.GetConstantByteSize()) + 7) & ~uint64(7);
+        if (address.offset != expected_offset || address.size != sizeof(uint64)) {
+            throw std::invalid_argument("Bindless index-table address disagrees with the constant layout");
+        }
+        uint bindless_arguments = 0;
+        for (const auto& argument : cpp_metadata.GetArguments()) {
+            bindless_arguments += argument.cpp_info.type == SDA_BindlessArray;
+        }
+        if (bindless_arguments != 1) {
+            throw std::invalid_argument("An active bindless index address requires exactly one bindless argument");
+        }
+        if (expected_offset + sizeof(uint64) > max_constant_byte_size) {
+            throw std::invalid_argument("User constants and bindless address exceed the device limit");
+        }
+    }
+}
+
 } // namespace
 
 uint ValidatePipelineConstants(const PipelineShaderInfo& pipeline_shader_info, uint max_constant_byte_size) {
@@ -90,6 +119,7 @@ uint ValidatePipelineConstants(const PipelineShaderInfo& pipeline_shader_info, u
             continue;
         }
         const auto& shader_parameters = *shader.shader_param_map;
+        ValidateBindlessIndexAddress(cpp_metadata, shader_parameters, max_constant_byte_size);
         ValidateConstantBindingTypes(cpp_metadata, shader_parameters);
         if (ValidateShaderConstantUsage(cpp_metadata, shader_parameters, shader.name)) {
             pipeline_uses_constants = true;

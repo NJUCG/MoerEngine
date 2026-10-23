@@ -1356,6 +1356,7 @@ struct ReflectParamInfo {
     };
     static constexpr std::string_view bdls_name = "bdls_114514";
     static constexpr std::string_view constants_name = "moer_constants";
+    static constexpr std::string_view bindless_index_address_name = "moer_bindless_index_address";
     struct Bindless {
         uint        set;
         uint        binding;
@@ -1366,6 +1367,9 @@ struct ReflectParamInfo {
         CustomFlags custom_flag;
     };
     struct BindlessArray {
+        // Vulkan: address of the plain index table in push constants.
+        std::optional<Constant> index_table_address;
+        // Metal/DXIL: the index table is still a descriptor-backed resource.
         std::optional<Bindless> array;
         std::optional<Bindless> buffer;
         std::optional<Bindless> image;

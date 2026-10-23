@@ -6,7 +6,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "core/math/Math.hlsli"
 
-[[vk::push_constant]] ConstantBuffer<Moer::RtaoPipelineBindlessParam> param;
+DEFINE_SHADER_CONSTANT(Moer::RtaoPipelineBindlessParam, param)
 
 [[vk::binding(0, 0)]] RWTexture2D<float>              rw_ao_only;
 [[vk::binding(1, 0)]] RWTexture2D<float2>             rw_camera_mv;
@@ -69,18 +69,18 @@ bool CastVisibilityRay(
 }
 
 [numthreads(8, 8, 1)] void main(uint2 pixel_pos : SV_DispatchThreadID) {
-    if (pixel_pos.x >= uint(param.resolution.x) || pixel_pos.y >= uint(param.resolution.y))
+    if (pixel_pos.x >= uint(moer_constants.param.resolution.x) || pixel_pos.y >= uint(moer_constants.param.resolution.y))
         return;
 
     // Reference: shaders/hwrt/GBufferUtils.hlsli: SetupPrimaryRay()
 
-    float2 uv = (float2(pixel_pos) + 0.5) * param.inv_resolution;
+    float2 uv = (float2(pixel_pos) + 0.5) * moer_constants.param.inv_resolution;
 
     // Snap UV to the full-res depth texel center so that WorldPosFromDepth
     // reconstructs along the same view ray the depth was measured on.
-    float2 snapped_uv = (floor(uv * param.depth_tex_resolution) + 0.5) / param.depth_tex_resolution;
+    float2 snapped_uv = (floor(uv * moer_constants.param.depth_tex_resolution) + 0.5) / moer_constants.param.depth_tex_resolution;
 
-    float3 frag_normal = TextureHandle(param.normal_tex).SampleLevel<float3>(snapped_uv);
+    float3 frag_normal = TextureHandle(moer_constants.param.normal_tex).SampleLevel<float3>(snapped_uv);
 
     if (abs(frag_normal.x) < Epsilon && abs(frag_normal.y) < Epsilon && abs(frag_normal.z) < Epsilon) {
         rw_ao_only[pixel_pos]   = 1.f;
@@ -89,19 +89,19 @@ bool CastVisibilityRay(
     }
     frag_normal = Raster::UnpackNormal(frag_normal);
 
-    float  depth         = TextureHandle(param.depth_tex).SampleLevel<float>(snapped_uv);
-    float3 frag_position = WorldPosFromDepth(depth, snapped_uv, param.clip2world);
+    float  depth         = TextureHandle(moer_constants.param.depth_tex).SampleLevel<float>(snapped_uv);
+    float3 frag_position = WorldPosFromDepth(depth, snapped_uv, moer_constants.param.clip2world);
 
     // Blue noise base value — spatially coherent across neighboring pixels
-    float2 noise_uv        = uv * param.resolution / 256.0;
-    float2 blue_noise_base = TextureHandle(param.noise_tex).SampleLevel<float2>(noise_uv);
+    float2 noise_uv        = uv * moer_constants.param.resolution / 256.0;
+    float2 blue_noise_base = TextureHandle(moer_constants.param.noise_tex).SampleLevel<float2>(noise_uv);
 
     // Raytraced AO
     float total_ray_contrib   = 0.0;
     float visible_ray_contrib = 0.0;
-    for (uint i = 0; i < param.spp; i++) {
+    for (uint i = 0; i < moer_constants.param.spp; i++) {
         // Cranley-Patterson rotation with R2 quasi-random sequence for temporal + per-sample variation
-        float2 rand_value = frac(blue_noise_base + R2_ALPHA * float(param.frame_idx * param.spp + i));
+        float2 rand_value = frac(blue_noise_base + R2_ALPHA * float(moer_constants.param.frame_idx * moer_constants.param.spp + i));
 #if RTAO_COSINE_WEIGHTED
         float4 rand_vec = SampleCosineHemisphere(rand_value);
 #else
@@ -111,11 +111,11 @@ bool CastVisibilityRay(
         float  ray_weight = max(dot(frag_normal, direction), 0.05f) / max(/* pdf */ rand_vec.w, 0.05f);
 
         bool is_miss = CastVisibilityRay(
-            frag_position + frag_normal * 0.01, direction, 0.f, param.ray_trace_distance, tlas
+            frag_position + frag_normal * 0.01, direction, 0.f, moer_constants.param.ray_trace_distance, tlas
         );
 
         total_ray_contrib += ray_weight;
-        visible_ray_contrib += ray_weight * (is_miss ? 1.0 : (1.0 - param.intensity));
+        visible_ray_contrib += ray_weight * (is_miss ? 1.0 : (1.0 - moer_constants.param.intensity));
     }
 
     float ao = visible_ray_contrib / total_ray_contrib;

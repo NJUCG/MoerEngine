@@ -9,7 +9,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "pipelines/RasterCommon.hlsli"
 #include "shared/raster/ShaderParameters.h"
 
-[[vk::push_constant]] ConstantBuffer<Moer::AoPipelineBindlessParam> param;
+DEFINE_SHADER_CONSTANT(Moer::AoPipelineBindlessParam, param)
 
 // 定义了AoOutput、CameraMotionVector等函�?
 #include "pipelines/postprocess/lighting_effects/AoCommon.hlsl"
@@ -25,26 +25,26 @@ float2 hash22(float2 pixel, uint sample_idx) {
 
 // reference: games202 & https://www.shadertoy.com/view/Ms33WB
 float ssao_games202(float2 uv) {
-    float3 normal   = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
-    float3 position = WorldPosFromDepthTexture(param.depth_tex, uv, param.clip2world);
+    float3 normal   = Raster::UnpackNormal(TextureHandle(moer_constants.param.normal_tex).Sample2D<float3>(uv));
+    float3 position = WorldPosFromDepthTexture(moer_constants.param.depth_tex, uv, moer_constants.param.clip2world);
 
     float  ao    = 0.0;
-    float2 tmp1  = param.ssao_radius * param.inv_resolution;
-    float2 pixel = floor(uv / param.inv_resolution); // 整数像素坐标
+    float2 tmp1  = moer_constants.param.ssao_radius * moer_constants.param.inv_resolution;
+    float2 pixel = floor(uv / moer_constants.param.inv_resolution); // 整数像素坐标
 
-    for (uint i = 0; i < param.ssao_sample_count; i++) {
+    for (uint i = 0; i < moer_constants.param.ssao_sample_count; i++) {
         float2 offset = hash22(pixel, i) * 2.0 - 1.0;
         float3 sample_position =
-            WorldPosFromDepthTexture(param.depth_tex, uv + offset * tmp1, param.clip2world);
+            WorldPosFromDepthTexture(moer_constants.param.depth_tex, uv + offset * tmp1, moer_constants.param.clip2world);
 
         float3 vec      = sample_position - position;
         float3 len      = length(vec);
         float3 norm_vec = vec / len;
 
         ao += max(0.0, dot(normal, norm_vec) - 0.05) *
-              smoothstep(param.ssao_max_distance, param.ssao_max_distance * 0.5, len);
+              smoothstep(moer_constants.param.ssao_max_distance, moer_constants.param.ssao_max_distance * 0.5, len);
     }
-    ao = clamp(1.0 - ao / param.ssao_sample_count * param.ssao_intensity, 0.0, 1.0);
+    ao = clamp(1.0 - ao / moer_constants.param.ssao_sample_count * moer_constants.param.ssao_intensity, 0.0, 1.0);
 
     return ao;
 }
@@ -56,7 +56,7 @@ float get_ao(float2 uv) {
 AoOutput main(float2 uv : TEXCOORD0) {
     AoOutput output;
 
-    if (param.ao_mode == Moer::EAoMode::SSAO || param.ao_mode == Moer::EAoMode::SSAO_AO_ONLY) {
+    if (moer_constants.param.ao_mode == Moer::EAoMode::SSAO || moer_constants.param.ao_mode == Moer::EAoMode::SSAO_AO_ONLY) {
         output.ambient_only = get_ao(uv);
     } else {
         output.ambient_only = 1.0;

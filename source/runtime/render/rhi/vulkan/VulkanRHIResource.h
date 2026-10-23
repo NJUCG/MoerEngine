@@ -401,12 +401,20 @@ struct VulkanDescriptorSetBinding {
     VulkanSetResourceBindings resource_bindings;
 };
 
+struct VulkanBindlessIndexAddressBinding {
+    uint argument_index;
+    uint byte_offset;
+};
+
 struct VulkanPipelineBindingTemplate {
     // Ordinary resources, bindless buffers, and bindless images/samplers.
     static constexpr size_t descriptor_buffer_capacity = 3;
 
     UnorderedMap<uint, VulkanDescriptorSetBinding> set_bindings;
+    // Native upload metadata for user bytes; stage visibility covers the whole block.
     VkPushConstantsInfoKHR                         push_constants_info{};
+    // The user upload excludes this backend-owned 64-bit address.
+    std::optional<VulkanBindlessIndexAddressBinding> bindless_index_address;
     uint64                                         resource_descriptor_allocation_size = 0;
     // Shared immutable metadata; bindless addresses are resolved per recording.
     Array<VkDescriptorBufferBindingInfoEXT> descriptor_buffers;
@@ -533,7 +541,9 @@ public:
     }
     void InitPipelineLayout(
         UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
-        std::optional<VkPushConstantRange> push_constant_range = std::nullopt
+        std::optional<VkPushConstantRange> push_constant_range,
+        uint user_constant_byte_size,
+        std::optional<VulkanBindlessIndexAddressBinding> bindless_index_address
     );
 
 public:
@@ -856,7 +866,7 @@ public:
     );
 
     uint64 ArrayHandle() const override {
-        return (uint64)bindless_array_buffer;
+        return (uint64)bindless_index_buffer;
     }
 
     void Lock() {
@@ -870,11 +880,13 @@ public:
     }
 
 public:
-    VulkanBuffer* bindless_array_buffer;
+    // Plain uint index table, read by device address from push constants.
+    VulkanBuffer* bindless_index_buffer;
+    // Descriptor storage bound through vkCmdBindDescriptorBuffersEXT.
     VulkanBuffer* bindless_buffer_descs;
     VulkanBuffer* bindless_texture_descs;
     uint64        texture_offset_in_buffer;
-    uint64        buffers_offset_in_set;
+    uint64        buffer_descriptors_byte_offset;
     Array<Handle> handles;
 
 private:

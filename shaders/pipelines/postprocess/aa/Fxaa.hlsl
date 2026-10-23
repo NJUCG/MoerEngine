@@ -12,23 +12,23 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 static const float fxaa_contrast_threshold = 0.025;
 static const uint  fxaa_search_limit       = 8;
 
-[[vk::push_constant]] ConstantBuffer<Moer::FxaaPipelineBindlessParam> param;
+DEFINE_SHADER_CONSTANT(Moer::FxaaPipelineBindlessParam, param)
 
 float get_luminance(float2 uv) {
-    return TextureHandle(param.input_image).Sample2D<float4>(uv).a;
+    return TextureHandle(moer_constants.param.input_image).Sample2D<float4>(uv).a;
 }
 
 float3 get_color(float2 uv) {
-    return TextureHandle(param.input_image).Sample2D<float4>(uv).rgb;
+    return TextureHandle(moer_constants.param.input_image).Sample2D<float4>(uv).rgb;
 }
 
 float3 fxaa(float2 uv, float3 color, float M) {
 
     // 1. check contrast
-    float S = get_luminance(uv + float2(0.0, -param.inv_resolution.y));
-    float N = get_luminance(uv + float2(0.0, param.inv_resolution.y));
-    float W = get_luminance(uv + float2(-param.inv_resolution.x, 0.0));
-    float E = get_luminance(uv + float2(param.inv_resolution.x, 0.0));
+    float S = get_luminance(uv + float2(0.0, -moer_constants.param.inv_resolution.y));
+    float N = get_luminance(uv + float2(0.0, moer_constants.param.inv_resolution.y));
+    float W = get_luminance(uv + float2(-moer_constants.param.inv_resolution.x, 0.0));
+    float E = get_luminance(uv + float2(moer_constants.param.inv_resolution.x, 0.0));
 
     float max_luminance = max(M, max(S, max(N, max(W, E))));
     float min_luminance = min(M, min(S, min(N, min(W, E))));
@@ -38,10 +38,10 @@ float3 fxaa(float2 uv, float3 color, float M) {
         return color;
 
     // 2. get luminance
-    float NE = get_luminance(uv + param.inv_resolution);
-    float NW = get_luminance(uv + float2(-param.inv_resolution.x, param.inv_resolution.y));
-    float SW = get_luminance(uv - param.inv_resolution);
-    float SE = get_luminance(uv + float2(param.inv_resolution.x, -param.inv_resolution.y));
+    float NE = get_luminance(uv + moer_constants.param.inv_resolution);
+    float NW = get_luminance(uv + float2(-moer_constants.param.inv_resolution.x, moer_constants.param.inv_resolution.y));
+    float SW = get_luminance(uv - moer_constants.param.inv_resolution);
+    float SE = get_luminance(uv + float2(moer_constants.param.inv_resolution.x, -moer_constants.param.inv_resolution.y));
 
     float blend = abs((2.0 * (N + E + S + W) + NE + NW + SE + SW) / 12.0 - M) / contrast;
     blend       = smoothstep(0.0, 1.0, blend);
@@ -56,23 +56,23 @@ float3 fxaa(float2 uv, float3 color, float M) {
     float2 pixel_step;
     if (is_edge_horizontal) {
         if (abs(N - M) > abs(S - M)) {
-            pixel_step = float2(0.0, param.inv_resolution.y);
+            pixel_step = float2(0.0, moer_constants.param.inv_resolution.y);
         } else {
-            pixel_step = float2(0.0, -param.inv_resolution.y);
+            pixel_step = float2(0.0, -moer_constants.param.inv_resolution.y);
         }
     } else {
         if (abs(E - M) > abs(W - M)) {
-            pixel_step = float2(param.inv_resolution.x, 0.0);
+            pixel_step = float2(moer_constants.param.inv_resolution.x, 0.0);
         } else {
-            pixel_step = float2(-param.inv_resolution.x, 0.0);
+            pixel_step = float2(-moer_constants.param.inv_resolution.x, 0.0);
         }
     }
 
     // 4. blend
-    if (param.fxaa_mode == Moer::EAaMode::FXAA_SIMPLIFIED) {
+    if (moer_constants.param.fxaa_mode == Moer::EAaMode::FXAA_SIMPLIFIED) {
         return get_color(uv + pixel_step * blend);
     }
-    // assert param.fxaa_mode == 2
+    // assert moer_constants.param.fxaa_mode == 2
     // Important: the following code may has some bugs, so the default fxaa_mode is 1
 
     float positive = abs((is_edge_horizontal ? N : E) - M);
@@ -88,7 +88,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
 
     float2 uv_in_edge = uv + pixel_step * 0.5;
     float2 edge_step =
-        is_edge_horizontal ? float2(param.inv_resolution.x, 0.0) : float2(0.0, param.inv_resolution.y);
+        is_edge_horizontal ? float2(moer_constants.param.inv_resolution.x, 0.0) : float2(0.0, moer_constants.param.inv_resolution.y);
 
     float edge_luminance     = (M + opposite_luminance) * 0.5;
     float gradient_threshold = edge_luminance * 0.25;
@@ -137,11 +137,11 @@ float3 fxaa(float2 uv, float3 color, float M) {
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
-    float4 input_image = TextureHandle(param.input_image).Sample2D<float4>(in_uv);
+    float4 input_image = TextureHandle(moer_constants.param.input_image).Sample2D<float4>(in_uv);
     float3 color       = input_image.rgb;
     float  M           = input_image.a; // luminance
 
-    if (param.fxaa_mode == Moer::EAaMode::FXAA_SIMPLIFIED || param.fxaa_mode == Moer::EAaMode::FXAA_QUALITY) {
+    if (moer_constants.param.fxaa_mode == Moer::EAaMode::FXAA_SIMPLIFIED || moer_constants.param.fxaa_mode == Moer::EAaMode::FXAA_QUALITY) {
         color = fxaa(in_uv, color, M);
     }
 
