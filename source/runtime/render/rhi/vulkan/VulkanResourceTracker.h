@@ -1,13 +1,16 @@
 #ifndef MOER_VK_RESOURCE_TRACKER_H
 #define MOER_VK_RESOURCE_TRACKER_H
-#include "VulkanPlatform.h"
-#include "VulkanRHIResource.h"
-#include "misc/Crc32.h"
+
+#include "VulkanCommon.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+
 namespace Moer::Render {
+class VulkanBuffer;
+class VulkanTexture;
+class VulkanCommandList;
 class VulkanSerialGoldenTrace;
 struct SerialQueueFamilyMap;
 
@@ -31,7 +34,7 @@ struct VulkanResolvedBarrierBatch {
                memory_barriers.empty();
     }
 
-    void Record(class VulkanCommandList& _cmd_list) const;
+    void Record(VulkanCommandList& _cmd_list) const;
 };
 
 template<typename TTexture>
@@ -100,58 +103,13 @@ template<typename TTexture>
            TextureSubresourceRangesOverlap(lhs.subresource, rhs.subresource);
 }
 
-class VkTracker {
-private:
-    struct BufferRange {
-        uint64 min;
-        uint64 max;
-    };
-    struct BufferState {
-        VkAccessFlagBits2        src_access;
-        VkPipelineStageFlagBits2 src_stage;
-        VkAccessFlagBits2        dst_access;
-        VkPipelineStageFlagBits2 dst_stage;
-        uint32_t                 src_queue_family;
-        uint32_t                 dst_queue_family;
-    };
-    struct TextureState {
-        VkAccessFlagBits2        src_access;
-        VkImageLayout            src_layout;
-        VkPipelineStageFlagBits2 src_stage;
-        VkAccessFlagBits2        dst_access;
-        VkImageLayout            dst_layout;
-        VkPipelineStageFlagBits2 dst_stage;
-        uint32_t                 src_queue_family;
-        uint32_t                 dst_queue_family;
-    };
-
+// Coordinator-owned state for one submission. ResolveBarriers advances tracked
+// accesses; Reset discards that submission's state when its context is reused.
+class VulkanResourceTracker {
 public:
-    VkTracker(EQueueType _queue = EQueueType::Graphics) : queue_type(_queue) {
-        switch (_queue) {
+    explicit VulkanResourceTracker(EQueueType _queue = EQueueType::Graphics);
 
-            case EQueueType::Graphics: {
-                first_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-                last_stage  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                break;
-            }
-            case EQueueType::Compute: {
-                first_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-                last_stage  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                break;
-            }
-            case EQueueType::Copy: {
-                first_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-                last_stage  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                break;
-            }
-            case EQueueType::Ignore:
-            case EQueueType::Num: {
-                assert(false && "Invalid queue type for vk tracker");
-            }
-        }
-    };
-    ~VkTracker() = default;
-
+    // Queue-family ownership handoff for legacy resource declarations.
     void QueueTransferReleaseResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue);
     void QueueTransferReleaseResource(
         VulkanTexture* _texture,
@@ -162,66 +120,67 @@ public:
     );
 
     void QueueTransferAcquireResource(
-        VulkanBuffer*            _buffer,
-        uint                     _src_queue,
-        uint                     _dst_queue,
-        VkAccessFlagBits2        _dst_access,
-        VkPipelineStageFlagBits2 _dst_stage
+        VulkanBuffer*         _buffer,
+        uint                  _src_queue,
+        uint                  _dst_queue,
+        VkAccessFlags2        _dst_access,
+        VkPipelineStageFlags2 _dst_stage
     );
     void QueueTransferAcquireResource(
-        VulkanTexture*           _texture,
-        uint                     _src_queue,
-        uint                     _dst_queue,
-        VkImageLayout            _src_layout,
-        VkImageLayout            _dst_layout,
-        VkAccessFlagBits2        _dst_access,
-        VkPipelineStageFlagBits2 _dst_stage
+        VulkanTexture*        _texture,
+        uint                  _src_queue,
+        uint                  _dst_queue,
+        VkImageLayout         _src_layout,
+        VkImageLayout         _dst_layout,
+        VkAccessFlags2        _dst_access,
+        VkPipelineStageFlags2 _dst_stage
+    );
+
+    // Accumulate requested accesses until the next ResolveBarriers call.
+    void RecordState(
+        VulkanBuffer*         _buffer,
+        VkAccessFlags2        _access,
+        VkPipelineStageFlags2 _stage,
+        uint32_t              _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+        uint32_t              _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
+    );
+
+    // An external command has already established this state. Update existing
+    // records only; this does not generate a barrier or introduce new records.
+    void AdoptExternalState(VulkanBuffer* _buffer, VkAccessFlags2 _access, VkPipelineStageFlags2 _stage);
+    void AdoptExternalState(
+        VulkanTexture*        _texture,
+        VkAccessFlags2        _access,
+        VkImageLayout         _layout,
+        VkPipelineStageFlags2 _stage
     );
 
     void RecordState(
-        VulkanBuffer*            _buffer,
-        VkAccessFlagBits2        _access,
-        VkPipelineStageFlagBits2 _stage,
-        uint32_t                 _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
-        uint32_t                 _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
-    );
-
-    void FlushSrcState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage);
-    void FlushSrcState(
-        VulkanTexture*           _texture,
-        VkAccessFlagBits2        _access,
-        VkImageLayout            _layout,
-        VkPipelineStageFlagBits2 _stage
-    );
-
-    void RecordState(
-        VulkanBuffer* _texture,
+        VulkanBuffer* _buffer,
         std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&&,
         uint32_t _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
         uint32_t _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
     );
 
     void RecordState(
-        VulkanTexture*           _texture,
-        VkAccessFlagBits2        _access,
-        VkImageLayout            _layout,
-        VkPipelineStageFlagBits2 _stage,
-        uint8_t                  _mip_level        = 0,
-        uint8_t                  _mip_count        = 1,
-        uint8_t                  _array_layer      = 0,
-        uint8_t                  _array_count      = 1,
-        uint32_t                 _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
-        uint32_t                 _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
+        VulkanTexture*        _texture,
+        VkAccessFlags2        _access,
+        VkImageLayout         _layout,
+        VkPipelineStageFlags2 _stage,
+        uint8_t               _mip_level        = 0,
+        uint8_t               _mip_count        = 1,
+        uint8_t               _array_layer      = 0,
+        uint8_t               _array_count      = 1,
+        uint32_t              _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+        uint32_t              _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
     );
 
-    void
-    RegisterFlushBuffer(const BufferView& _view, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage);
     void RegisterFlushBufferRange(
-        const BufferView&        _view,
-        VkAccessFlagBits2        _access,
-        VkPipelineStageFlagBits2 _stage,
-        VkAccessFlagBits2        _src_access = VK_ACCESS_2_NONE,
-        VkPipelineStageFlagBits2 _src_stage  = VK_PIPELINE_STAGE_2_NONE
+        const BufferView&     _view,
+        VkAccessFlags2        _access,
+        VkPipelineStageFlags2 _stage,
+        VkAccessFlags2        _src_access = VK_ACCESS_2_NONE,
+        VkPipelineStageFlags2 _src_stage  = VK_PIPELINE_STAGE_2_NONE
     );
     void RecordState(
         VulkanTexture* _texture,
@@ -264,17 +223,14 @@ public:
         VkImageLayout         _dst_layout
     );
 
-    void SetPassType(EPassType _type) {
-        pass_type = _type;
-    }
-
+    // Current write/layout-transition candidates used by bindless preprocessing.
     const UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>&
-    GetWritedStateTextures() const {
-        return writed_state_textures;
+    GetWriteStateTextures() const {
+        return write_state_textures;
     }
 
-    const Set<VulkanBuffer*>& GetWritedStateBuffers() const {
-        return writed_state_buffers;
+    const Set<VulkanBuffer*>& GetWriteStateBuffers() const {
+        return write_state_buffers;
     }
 
     void ResolveBarriers();
@@ -287,11 +243,11 @@ public:
         const SerialQueueFamilyMap& _queue_family_map
     ) const;
 
-    void DispatchBarriers(class VulkanCommandList& _cmd_list);
+    void DispatchBarriers(VulkanCommandList& _cmd_list);
     void RestoreState();
     void Reset();
 
-    //automic state transition
+    // Convert legacy RHI access declarations without recording a transition.
     auto ReadBuffer(VulkanBuffer*, EBufferState, EPassType _type = EPassType::Graphics)
         -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;
     auto WriteBuffer(VulkanBuffer*, EBufferState, EPassType _type = EPassType::Graphics)
@@ -318,17 +274,40 @@ public:
         bool          _is_depth
     ) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
 
-    void EmplaceWriteBLAS(uint64 _blas_buf);
-    bool ContainsWriteBLAS(uint64 _blas_buf);
+    void MarkBlasWritten(uint64 _geometry_handle);
 
-    const Set<uint64>& GetWriteBLASStates() const {
-        return write_blas_states;
+    const Set<uint64>& GetWrittenBlasHandles() const {
+        return written_blas_handles;
     }
 
-    void MarkWriteable(const TextureSubresourceKeyT<VulkanTexture>& _key, bool _writeable = true);
-    void MarkWriteable(VulkanBuffer* _buffer, bool _writeable = true);
-
 private:
+    struct BufferRange {
+        uint64 begin;
+        uint64 end;
+    };
+    // src is the resolved state; dst accumulates the next unresolved access.
+    struct BufferState {
+        VkAccessFlags2        src_access;
+        VkPipelineStageFlags2 src_stage;
+        VkAccessFlags2        dst_access;
+        VkPipelineStageFlags2 dst_stage;
+        uint32_t              src_queue_family;
+        uint32_t              dst_queue_family;
+    };
+    struct TextureState {
+        VkAccessFlags2        src_access;
+        VkImageLayout         src_layout;
+        VkPipelineStageFlags2 src_stage;
+        VkAccessFlags2        dst_access;
+        VkImageLayout         dst_layout;
+        VkPipelineStageFlags2 dst_stage;
+        uint32_t              src_queue_family;
+        uint32_t              dst_queue_family;
+    };
+
+    void SetWriteState(const TextureSubresourceKeyT<VulkanTexture>& _key, bool _is_write);
+    void SetWriteState(VulkanBuffer* _buffer, bool _is_write);
+
     TextureSubresourceKeyT<VulkanTexture> MakeTextureStateKey(
         VulkanTexture* _texture,
         uint8          _mip_level,
@@ -336,15 +315,14 @@ private:
         uint8          _array_layer,
         uint8          _array_count
     ) const;
-    EPassType             pass_type;
-    EQueueType            queue_type  = EQueueType::Graphics;
-    VkPipelineStageFlags2 last_stage  = 0;
-    VkPipelineStageFlags2 first_stage = 0;
+    EQueueType queue_type;
 
+    // Materialized barriers awaiting recording or transfer to a barrier batch.
     Array<VkBufferMemoryBarrier2> buffer_barriers;
     Array<VkImageMemoryBarrier2>  texture_barriers;
     Array<VkMemoryBarrier2>       memory_barriers;
 
+    // Resolved/pending resource states and resources leaving this queue.
     UnorderedMap<VulkanBuffer*, BufferState> buffer_states;
     UnorderedMap<
         TextureSubresourceKeyT<VulkanTexture>,
@@ -354,17 +332,21 @@ private:
     Set<VulkanTexture*> exported_textures;
     Set<VulkanBuffer*>  exported_buffers;
 
+    // Entries requiring resolution before the next command group.
     Set<VulkanBuffer*> pending_buffers;
     UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
         pending_textures;
 
-    Set<uint64> write_blas_states;
+    // Bindless and acceleration-structure dependency candidates.
+    Set<uint64> written_blas_handles;
     UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
-                       writed_state_textures;
-    Set<VulkanBuffer*> writed_state_buffers;
+                       write_state_textures;
+    Set<VulkanBuffer*> write_state_buffers;
 
+    // Internal buffer ranges; state survives range flushing until Reset.
     UnorderedMap<VulkanBuffer*, BufferState> flush_buffer_states;
     UnorderedMap<VulkanBuffer*, BufferRange> flush_buffer_ranges;
+    // Guards against incompatible inferred accesses after explicit barriers.
     Set<VulkanBuffer*>                       explicit_partial_buffers;
     Set<VulkanTexture*>                      explicit_partial_aspect_textures;
     Array<BufferByteRangeT<VulkanBuffer>> explicit_released_buffer_ranges;

@@ -790,7 +790,7 @@ public:
 
 #pragma region[ preprocessor ]
 struct VkCmdPreprocessor {
-    VkTracker&                      tracker;
+    VulkanResourceTracker&          tracker;
     FunctionTable                   m_funcs;
     VulkanTemporaryBufferAllocator& temporary_buffer_allocator;
     VulkanDevice&                   device;
@@ -803,7 +803,7 @@ struct VkCmdPreprocessor {
 
     VkCmdPreprocessor(
         VulkanDevice&                   _device,
-        VkTracker&                      _tracker,
+        VulkanResourceTracker&          _tracker,
         VulkanTemporaryBufferAllocator& _temporary_buffer_allocator,
         FunctionTable                   _funcs,
         const TCachedArgArray&          _cached_args,
@@ -875,7 +875,7 @@ struct VkCmdPreprocessor {
             // RHI coordinator preprocesses this packet. Observe both maps from
             // one stable snapshot; worker recorders never access them.
             auto bindless_lock = vk_bindless_array->AcquireLock();
-            for (const auto& key : tracker.GetWritedStateTextures()) {
+            for (const auto& key : tracker.GetWriteStateTextures()) {
                 if (vk_bindless_array->IsTextureViewAllocated(
                         uint64(key.texture),
                         key.mip_level,
@@ -887,7 +887,7 @@ struct VkCmdPreprocessor {
                     to_read_textures.push_back(key);
                 }
             }
-            for (const auto& buffer : tracker.GetWritedStateBuffers()) {
+            for (const auto& buffer : tracker.GetWriteStateBuffers()) {
                 if (vk_bindless_array->IsResourceAllocated(uint64(buffer)) &&
                     !writed_buffer_resources.contains(uint64(buffer))) {
                     to_read_buffers.push_back(buffer);
@@ -1317,7 +1317,7 @@ struct VkCmdPreprocessor {
                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
             );
 
-            tracker.EmplaceWriteBLAS(uint64(vk_geo));
+            tracker.MarkBlasWritten(uint64(vk_geo));
         }
 
         for (auto& vtx : _cmd->VtxBuffers()) {
@@ -1371,7 +1371,7 @@ struct VkCmdPreprocessor {
              VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
         );
 
-        for (const uint64& handle : tracker.GetWriteBLASStates()) {
+        for (const uint64& handle : tracker.GetWrittenBlasHandles()) {
             if (_cmd->HasGeometry(handle)) {
                 VulkanRaytracingGeometry* vk_geo = reinterpret_cast<VulkanRaytracingGeometry*>(handle);
 
@@ -2040,7 +2040,7 @@ class VkCmdVisitor : VulkanDeviceObject {
     } state = EState::Common;
     VulkanCommandList&     cmd_list;
     VulkanCommandContext&  command_context;
-    VkTracker&             tracker;
+    VulkanResourceTracker& tracker;
     const TCachedArgArray& cached_args;
     ProfilerStorage*       profiler = nullptr;
     bool                   query_profiling_enabled = false;
@@ -2068,7 +2068,7 @@ public:
     VkCmdVisitor(
         VulkanDevice&          _device,
         VulkanCommandContext&  _command_context,
-        VkTracker&             _tracker,
+        VulkanResourceTracker& _tracker,
         VulkanCommandList&     _cmd_list,
         const TCachedArgArray& _cached_args,
         ProfilerStorage*       _profiler                   = nullptr,
@@ -2199,7 +2199,6 @@ public:
         VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
         auto          tmp_buffer = _cmd.staging_buffer;
 
-        // tracker.RegisterFlushBuffer(tmp_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         // tracker.DispatchBarriers(cmd_list);
         cmd_list.CopyBuffer(
             src_buffer,
@@ -2211,7 +2210,6 @@ public:
 
         // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
 
-        // tracker.RegisterFlushBuffer(VulkanBuffer *_buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage)
         if (_cmd.HasOwningReadback()) {
             const ReadbackToken readback = _cmd.OwningReadback();
             const uint64 logical_size = _cmd.ByteSize();
@@ -2260,7 +2258,6 @@ public:
         VulkanTexture* src_texture = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
         auto           tmp_buffer  = _cmd.staging_buffer;
 
-        // tracker.RegisterFlushBuffer(tmp_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         // tracker.DispatchBarriers(cmd_list);
         cmd_list.CopyTextureToBuffer(
             src_texture,
@@ -3336,7 +3333,7 @@ public:
             dependency.pBufferMemoryBarriers    = &barrier;
 
             vkCmdPipelineBarrier2(cmd_list.GetHandle(), &dependency);
-            tracker.FlushSrcState(
+            tracker.AdoptExternalState(
                 instance_buffer,
                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
@@ -8535,7 +8532,6 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 VK_CHECK_RESULT(vk_cmd_list.Begin());
                 const std::string present_label = std::format("Present: {}", vk_src_tex->GetName());
                 vk_cmd_list.BeginLabel(present_label, {0.0f, 0.85f, 0.95f, 1.0f});
-                vk_tracker.SetPassType(EPassType::Graphics);
                 // PRESENTATION_SOURCE is a producer-side terminal
                 // contract. The active graph exports GENERAL with
                 // TRANSFER_READ visibility, while legacy recording

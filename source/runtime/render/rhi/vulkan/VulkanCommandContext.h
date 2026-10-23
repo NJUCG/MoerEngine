@@ -36,7 +36,7 @@ public:
     [[nodiscard]] bool HasSecondaryCommandList() const noexcept {
         return secondary_cmd_list.has_value();
     }
-    VkTracker& GetTracker() {
+    VulkanResourceTracker& GetTracker() {
         return tracker;
     }
     void AddOnComplete(std::function<void()>&& _func) {
@@ -85,7 +85,7 @@ private:
 
     // Release command buffers before the pool, callbacks and tracker.
     EQueueType                                queue_type{EQueueType::Ignore};
-    VkTracker                                 tracker;
+    VulkanResourceTracker                     tracker;
     Array<std::function<void()>>              on_complete;
     VulkanCommandPool                         command_pool;
     VulkanCommandList                         cmd_list;

@@ -446,7 +446,7 @@ public:
 
         // Old UserPool-based NRD leaves REBLUR motion in GENERAL. Restore the
         // graph-declared Sampled state with a real native barrier; changing
-        // only VkTracker would make the next explicit RDG barrier name the
+        // only VulkanResourceTracker would make the next explicit RDG barrier name the
         // wrong oldLayout.
         if (IsReblurDenoiser(denoiser)) {
             const TextureRef& motion = frame->GetResource(
@@ -496,7 +496,7 @@ public:
             vkCmdPipelineBarrier2(_context.cmd_list, &dependency);
         }
 
-        auto* vk_tracker = static_cast<VkTracker*>(_context.user_data);
+        auto* vk_tracker = static_cast<VulkanResourceTracker*>(_context.user_data);
         for (uint8 index = 0;
              index < NRDInterface::resource_slot_count;
              ++index) {
@@ -508,18 +508,17 @@ public:
             }
             auto* vk_texture = ResourceCast(texture);
             if (slot < NRDInterface::EResourceSlot::OUT_DIFFUSE) {
-                vk_tracker->FlushSrcState(
+                vk_tracker->AdoptExternalState(
                     vk_texture,
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                 );
             } else {
-                vk_tracker->FlushSrcState(
+                vk_tracker->AdoptExternalState(
                     vk_texture,
                     static_cast<VkAccessFlagBits2>(
-                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
                     ),
                     VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT

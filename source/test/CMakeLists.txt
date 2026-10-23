@@ -329,7 +329,7 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHICmdReordererContract COMMAND $<TARGET_FILE:${test_target}>)
 
-# The barrier contract calls VkTracker methods implemented only by the Vulkan
+# The barrier contract calls VulkanResourceTracker methods implemented only by the Vulkan
 # backend, which is excluded from the Render library on macOS.
 if (NOT APPLE)
     set(test_target TestRHIExplicitBarrier)

@@ -1,5 +1,6 @@
 #include "rhi/RHIImpl.h"
 #include "rhi/vulkan/RHICmdReorderer.h"
+#include "rhi/vulkan/VulkanRHIResource.h"
 #include "rhi/vulkan/VulkanResourceTracker.h"
 
 #include <array>
@@ -86,11 +87,8 @@ void ExpectInvalidArgument(TCallable&& _callable, const char* _message) {
 }
 
 void LegacyVulkanStateMappingIsStageCompatible() {
-    const auto compute_srv = VkTracker::ResolveTextureState(
-        ETextureState::SHADER_RESOURCE,
-        EPassType::Compute,
-        false,
-        false
+    const auto compute_srv = VulkanResourceTracker::ResolveTextureState(
+        ETextureState::SHADER_RESOURCE, EPassType::Compute, false, false
     );
     Expect(
         std::get<0>(compute_srv) == VK_ACCESS_2_SHADER_READ_BIT &&
@@ -101,11 +99,8 @@ void LegacyVulkanStateMappingIsStageCompatible() {
         "compute SRV texture mapping is not shader-stage compatible"
     );
 
-    const auto raytracing_sampled = VkTracker::ResolveTextureState(
-        ETextureState::SAMPLE,
-        EPassType::Raytracing,
-        false,
-        false
+    const auto raytracing_sampled = VulkanResourceTracker::ResolveTextureState(
+        ETextureState::SAMPLE, EPassType::Raytracing, false, false
     );
     Expect(
         std::get<0>(raytracing_sampled) ==
@@ -115,11 +110,8 @@ void LegacyVulkanStateMappingIsStageCompatible() {
         "raytracing sampled texture mapping lost its shader stage"
     );
 
-    const auto graphics_srv = VkTracker::ResolveTextureState(
-        ETextureState::SHADER_RESOURCE,
-        EPassType::Graphics,
-        false,
-        false
+    const auto graphics_srv = VulkanResourceTracker::ResolveTextureState(
+        ETextureState::SHADER_RESOURCE, EPassType::Graphics, false, false
     );
     Expect(
         std::get<2>(graphics_srv) ==
@@ -128,13 +120,9 @@ void LegacyVulkanStateMappingIsStageCompatible() {
         "graphics SRV texture mapping must cover vertex and fragment shaders"
     );
 
-    const auto graphics_render_target_read =
-        VkTracker::ResolveTextureState(
-            ETextureState::RENDER_TARGET,
-            EPassType::Graphics,
-            false,
-            false
-        );
+    const auto graphics_render_target_read = VulkanResourceTracker::ResolveTextureState(
+        ETextureState::RENDER_TARGET, EPassType::Graphics, false, false
+    );
     Expect(
         std::get<0>(graphics_render_target_read) ==
                 VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT &&
@@ -145,18 +133,10 @@ void LegacyVulkanStateMappingIsStageCompatible() {
         "graphics render-target read mapping lost queue-transfer compatibility"
     );
 
-    const auto copy_src = VkTracker::ResolveTextureState(
-        ETextureState::TRANSFER,
-        EPassType::Copy,
-        false,
-        false
-    );
-    const auto copy_dst = VkTracker::ResolveTextureState(
-        ETextureState::TRANSFER,
-        EPassType::Copy,
-        true,
-        false
-    );
+    const auto copy_src =
+        VulkanResourceTracker::ResolveTextureState(ETextureState::TRANSFER, EPassType::Copy, false, false);
+    const auto copy_dst =
+        VulkanResourceTracker::ResolveTextureState(ETextureState::TRANSFER, EPassType::Copy, true, false);
     Expect(
         std::get<0>(copy_src) == VK_ACCESS_2_TRANSFER_READ_BIT &&
             std::get<1>(copy_src) == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
@@ -167,11 +147,8 @@ void LegacyVulkanStateMappingIsStageCompatible() {
         "copy texture mapping is not transfer-stage compatible"
     );
 
-    const auto depth_read = VkTracker::ResolveTextureState(
-        ETextureState::DEPTH_STENCIL,
-        EPassType::Graphics,
-        false,
-        true
+    const auto depth_read = VulkanResourceTracker::ResolveTextureState(
+        ETextureState::DEPTH_STENCIL, EPassType::Graphics, false, true
     );
     Expect(
         std::get<0>(depth_read) ==
@@ -184,11 +161,8 @@ void LegacyVulkanStateMappingIsStageCompatible() {
         "depth read mapping is not attachment-stage compatible"
     );
 
-    const auto compute_uav = VkTracker::ResolveTextureState(
-        ETextureState::UNORDERED_ACCESS,
-        EPassType::Compute,
-        true,
-        false
+    const auto compute_uav = VulkanResourceTracker::ResolveTextureState(
+        ETextureState::UNORDERED_ACCESS, EPassType::Compute, true, false
     );
     Expect(
         std::get<0>(compute_uav) ==
@@ -200,21 +174,13 @@ void LegacyVulkanStateMappingIsStageCompatible() {
         "compute UAV texture mapping is not shader-stage compatible"
     );
 
-    const auto copy_buffer_src = VkTracker::ResolveBufferState(
-        EBufferState::TRANSFER,
-        EPassType::Copy,
-        false
+    const auto copy_buffer_src =
+        VulkanResourceTracker::ResolveBufferState(EBufferState::TRANSFER, EPassType::Copy, false);
+    const auto raytracing_buffer_srv = VulkanResourceTracker::ResolveBufferState(
+        EBufferState::SHADER_RESOURCE, EPassType::Raytracing, false
     );
-    const auto raytracing_buffer_srv = VkTracker::ResolveBufferState(
-        EBufferState::SHADER_RESOURCE,
-        EPassType::Raytracing,
-        false
-    );
-    const auto graphics_buffer_srv = VkTracker::ResolveBufferState(
-        EBufferState::SHADER_RESOURCE,
-        EPassType::Graphics,
-        false
-    );
+    const auto graphics_buffer_srv =
+        VulkanResourceTracker::ResolveBufferState(EBufferState::SHADER_RESOURCE, EPassType::Graphics, false);
     Expect(
         std::get<0>(copy_buffer_src) == VK_ACCESS_2_TRANSFER_READ_BIT &&
             std::get<1>(copy_buffer_src) ==
@@ -231,74 +197,54 @@ void LegacyVulkanStateMappingIsStageCompatible() {
 
     ExpectInvalidArgument(
         [] {
-            (void)VkTracker::ResolveTextureState(
-                ETextureState::SHADER_RESOURCE,
-                EPassType::Copy,
-                false,
-                false
+            (void)VulkanResourceTracker::ResolveTextureState(
+                ETextureState::SHADER_RESOURCE, EPassType::Copy, false, false
             );
         },
         "copy pass accepted a shader-resource texture"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VkTracker::ResolveTextureState(
-                ETextureState::RENDER_TARGET,
-                EPassType::Compute,
-                true,
-                false
+            (void)VulkanResourceTracker::ResolveTextureState(
+                ETextureState::RENDER_TARGET, EPassType::Compute, true, false
             );
         },
         "compute pass accepted a render-target attachment"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VkTracker::ResolveTextureState(
-                ETextureState::SAMPLE,
-                EPassType::Graphics,
-                true,
-                false
+            (void)VulkanResourceTracker::ResolveTextureState(
+                ETextureState::SAMPLE, EPassType::Graphics, true, false
             );
         },
         "write path accepted a sampled texture"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VkTracker::ResolveBufferState(
-                EBufferState::SHADER_RESOURCE,
-                EPassType::Copy,
-                false
+            (void)VulkanResourceTracker::ResolveBufferState(
+                EBufferState::SHADER_RESOURCE, EPassType::Copy, false
             );
         },
         "copy pass accepted a shader-resource buffer"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VkTracker::ResolveBufferState(
-                EBufferState::VERTEX,
-                EPassType::Graphics,
-                true
-            );
+            (void)VulkanResourceTracker::ResolveBufferState(EBufferState::VERTEX, EPassType::Graphics, true);
         },
         "write path accepted a vertex buffer"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VkTracker::ResolveTextureState(
-                ETextureState::TRANSFER,
-                static_cast<EPassType>(99),
-                false,
-                false
+            (void)VulkanResourceTracker::ResolveTextureState(
+                ETextureState::TRANSFER, static_cast<EPassType>(99), false, false
             );
         },
         "texture mapping accepted an unknown pass type"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VkTracker::ResolveBufferState(
-                static_cast<EBufferState>(99),
-                EPassType::Graphics,
-                false
+            (void)VulkanResourceTracker::ResolveBufferState(
+                static_cast<EBufferState>(99), EPassType::Graphics, false
             );
         },
         "buffer mapping accepted an unknown state"
