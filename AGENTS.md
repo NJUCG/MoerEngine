@@ -67,8 +67,12 @@ source/
         RHICommon.h              #   Enums (EBufferUsageFlags, EPixelFormat, etc.)
         RHICommand.h             #   Command list / draw dispatching
         vulkan/                  #   Vulkan backend
-          VulkanDevice.cpp/h     #     Pipeline creation, descriptor set layout, reflection
-          VulkanQueue.cpp/h      #     Command submission, draw/dispatch recording
+          VulkanDevice.cpp/h     #     Device setup, capabilities and resource entry points
+          VulkanPipelineCreation.cpp # Shader reflection, native pipeline construction
+          VulkanQueue.cpp/h      #     Graphics queue and shared command recording
+          VulkanNativeQueue.cpp  #     Native queue submits, waits/signals and labels
+          VulkanCopyQueue.cpp    #     Copy queue submission and completion
+          VulkanQueueProfiler.cpp #    GPU timestamps and CPU recording profiles
           VulkanRHIResource.cpp/h #    Buffer/Texture ownership and view caches
           VulkanEnumTranslator.cpp/h # RHI-to-Vulkan enum and pixel-format mapping
           VulkanPipeline.cpp/h   #     Pipeline layout and binding metadata

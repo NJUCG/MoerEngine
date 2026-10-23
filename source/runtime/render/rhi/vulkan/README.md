@@ -1,5 +1,35 @@
 # Vulkan RHI
 
+## Source responsibilities
+
+| Source | Responsibility |
+|---|---|
+| `VulkanDevice.cpp` | Device initialization, capabilities, fault handling and resource entry points. |
+| `VulkanPipelineCreation.cpp` | Shader binding reflection and graphics/compute pipeline construction; implements the existing device entry points. |
+| `VulkanPipeline.cpp` | Pipeline-owned layouts and binding metadata. |
+| `VulkanRaytracingResource.cpp` | BLAS/TLAS storage, stable scene instance slots and generation of instance updates. |
+| `VulkanNativeQueue.cpp` | Native queue submission and semaphore/label operations. |
+| `VulkanQueue.cpp` | Graphics queue execution and shared command preprocessing/recording. |
+| `VulkanCopyQueue.cpp` | Copy queue handoff, submission and completion. |
+| `VulkanQueueProfiler.cpp` | Timestamp collection and CPU recording profiles. |
+| `VulkanSurfaceSupport.cpp` | Swapchain surface support queries. |
+
+The queue split preserves the existing queue, recorded-submit and completion
+owners. `VulkanQueueInternal.h` only declares operations shared by the queue
+implementations; it introduces no additional runtime owner. Reordering and
+explicit resource-state scheduling are unchanged.
+
+Creation calls requiring `VK_SUCCESS` use a check that throws in every build
+configuration. Partial pipeline construction releases shader modules, layouts
+and the pipeline object on failure. Expected runtime statuses still follow the
+existing retry/recreate/fault classification. External-memory creation chains
+are local values whose lifetime covers the native allocation call.
+
+Scene instance IDs name stable array slots. Free/reuse updates that same slot;
+native instance bytes are generated for each prepared update instead of kept
+in a second persistent CPU array. Prepared commands retain their native input
+resources through the existing submission lifetime.
+
 ## Descriptor storage and binding
 
 The native RHI binding path uses `VK_EXT_descriptor_buffer`. It does not
@@ -46,6 +76,8 @@ alone does not authorize reuse of GPU storage.
 `VulkanHeaderContract` checks the shared Vulkan header contract, and
 `VulkanDescriptorBufferAllocatorContract` exercises allocation, concurrent
 recording, rollback, and retirement without requiring a Vulkan GPU.
+`VulkanFailureContract` verifies failure propagation with assertions disabled;
+`VulkanRaytracingInstanceContract` covers growth, slot reuse and invalid frees.
 
 The macOS Render target currently excludes the Vulkan backend. A successful
 macOS engine build or CPU contract test does not validate Vulkan GPU execution.
