@@ -2,6 +2,11 @@
 // Created by 74535 on 2023/10/2.
 //
 
+#include "VulkanEnumTranslator.h"
+#include "VulkanPipeline.h"
+#include "VulkanBindlessArray.h"
+#include "VulkanRaytracingResource.h"
+#include "VulkanTimeline.h"
 #include "VulkanDevice.h"
 #include "PixelFormat.h"
 #include "VulkanCommandList.h"
@@ -10,6 +15,7 @@
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
+#include "VulkanSwapChain.h"
 #include "VulkanUtil.h"
 #include "VulkanVertexFormat.h"
 #include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"

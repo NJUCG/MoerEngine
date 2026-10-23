@@ -1,3 +1,7 @@
+#include "VulkanEnumTranslator.h"
+#include "VulkanPipeline.h"
+#include "VulkanBindlessArray.h"
+#include "VulkanRaytracingResource.h"
 #include "VulkanCommandList.h"
 
 #include "misc/STL.h"
@@ -306,7 +310,7 @@ void WriteResourceSetDescriptors(
             continue;
         }
         const VkFormat buffer_format =
-            g_platform_pixel_formats[_pipeline.GetArgumentInfo(argument_index).texel_format].format;
+            VulkanEnumTranslator::METoVKFormat(_pipeline.GetArgumentInfo(argument_index).texel_format);
         WriteResourceBindingDescriptors(
             _heap, binding, _arguments[argument_index], buffer_format, _set_byte_offset + binding.byte_offset
         );

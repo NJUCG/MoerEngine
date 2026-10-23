@@ -9,6 +9,7 @@
 #error "This header requires WITH_CUDA=1"
 #endif
 
+#include "rhi/vulkan/VulkanTimeline.h"
 #include "log/LogSystem.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"

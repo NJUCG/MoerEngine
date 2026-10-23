@@ -1,3 +1,8 @@
+#include "VulkanEnumTranslator.h"
+#include "VulkanPipeline.h"
+#include "VulkanBindlessArray.h"
+#include "VulkanRaytracingResource.h"
+#include "VulkanTimeline.h"
 #include "VulkanQueue.h"
 #include "PixelFormat.h"
 #include "RHICmdReorderer.h"
@@ -8,6 +13,7 @@
 #include "VulkanMacroUtils.h"
 #include "VulkanParallelRecordWorkEstimator.h"
 #include "VulkanRHIResource.h"
+#include "VulkanSwapChain.h"
 #include "diagnostics/VulkanSerialGolden.h"
 #include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "log/LogSystem.h"
@@ -116,10 +122,8 @@ void InvokePresentSourceRejectionCallbackForTesting(
         return false;
     }
 
-    const FormatInfo& source =
-        g_platform_pixel_formats[source_index];
-    const FormatInfo& destination =
-        g_platform_pixel_formats[destination_index];
+    const VulkanPixelFormatInfo& source = VulkanEnumTranslator::GetPixelFormatInfo(_source);
+    const VulkanPixelFormatInfo& destination = VulkanEnumTranslator::GetPixelFormatInfo(_destination);
     return source.format != VK_FORMAT_UNDEFINED &&
            destination.format != VK_FORMAT_UNDEFINED &&
            source.stride != 0 &&

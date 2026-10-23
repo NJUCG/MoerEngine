@@ -1,3 +1,4 @@
+#include "rhi/vulkan/VulkanTimeline.h"
 #include "Core.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"

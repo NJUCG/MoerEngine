@@ -61,6 +61,9 @@ private:
 
     bool native_surface_recreate_pending_ = false;
 };
+inline VkSwapchain* ResourceCast(Swapchain* resource) {
+    return static_cast<VkSwapchain*>(resource);
+}
 } // namespace Moer::Render
 
 #endif // VULKAN_SWAP_CHAIN_H

@@ -1,3 +1,6 @@
+#include "rhi/vulkan/VulkanPipeline.h"
+#include "rhi/vulkan/VulkanBindlessArray.h"
+#include "rhi/vulkan/VulkanRaytracingResource.h"
 #include "VulkanSerialGolden.h"
 
 #include "rhi/RHIImpl.h"

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "VulkanRaytracingResource.h"
 #include "VulkanCommon.h"
 #include "VulkanDescriptorBufferAllocator.h"
 #include "misc/STL.h"
@@ -17,6 +18,9 @@ class VulkanAccelerationStructure;
 class BufferView;
 struct TextureView;
 struct Sampler;
+
+// Byte offset of the image table after the shared sampler table.
+uint64 GetBindlessTextureDescriptorOffset(const VulkanDevice& _device);
 
 // Non-owning location in the CPU cache. The resource must outlive every copy.
 struct VulkanCachedDescriptor {

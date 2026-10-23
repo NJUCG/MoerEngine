@@ -1,3 +1,4 @@
+#include "VulkanEnumTranslator.h"
 #include "VulkanResourceTracker.h"
 #include "VulkanCommandList.h"
 #include "diagnostics/VulkanSerialGolden.h"

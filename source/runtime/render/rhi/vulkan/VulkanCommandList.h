@@ -2,7 +2,7 @@
 
 #include "VulkanCommon.h"
 #include "VulkanDescriptorBufferAllocator.h"
-#include "VulkanRHIResource.h"
+#include "VulkanDeviceObject.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHIResource.h"
@@ -15,6 +15,9 @@
 namespace Moer::Render {
 
 class VulkanDevice;
+class VulkanBuffer;
+class VulkanTexture;
+struct ArrayArguments;
 class VkNativeQueryPool;
 
 class VulkanCommandPool : public VulkanDeviceObject {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanCommandList.h"
+#include "VulkanDeviceObject.h"
 #include "VulkanCommandQueries.h"
 #include "VulkanResourceTracker.h"
 #include "VulkanTemporaryBufferAllocator.h"

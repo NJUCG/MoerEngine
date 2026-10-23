@@ -69,8 +69,13 @@ source/
         vulkan/                  #   Vulkan backend
           VulkanDevice.cpp/h     #     Pipeline creation, descriptor set layout, reflection
           VulkanQueue.cpp/h      #     Command submission, draw/dispatch recording
-          VulkanRHIResource.cpp/h #    Buffer/Texture creation, enum translation
-          VulkanDescriptor.cpp/h #    Descriptor pool & set management
+          VulkanRHIResource.cpp/h #    Buffer/Texture ownership and view caches
+          VulkanEnumTranslator.cpp/h # RHI-to-Vulkan enum and pixel-format mapping
+          VulkanPipeline.cpp/h   #     Pipeline layout and binding metadata
+          VulkanBindlessArray.cpp/h #   Bindless updates and slot retirement
+          VulkanRaytracingResource.cpp/h # BLAS/TLAS resources and scene updates
+          VulkanTimeline.cpp/h   #     GPU semaphore and host completion state
+          VulkanDescriptor.cpp/h #    Descriptor byte cache and GPU descriptor storage
         d3d12/                   #   D3D12 backend (partial)
       shader/
         ShaderPipeline.h         # ★ Pipeline class macros (DEFINE_SHADER_CONSTANT, etc.)

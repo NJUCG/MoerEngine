@@ -1,3 +1,4 @@
+#include "rhi/vulkan/VulkanEnumTranslator.h"
 #include "VulkanNrdPlugin.h"
 
 #if WITH_NRD

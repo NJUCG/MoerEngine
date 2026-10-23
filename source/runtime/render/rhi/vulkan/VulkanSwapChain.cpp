@@ -1,3 +1,4 @@
+#include "VulkanEnumTranslator.h"
 #include "VulkanSwapChain.h"
 
 #include "PixelFormat.h"

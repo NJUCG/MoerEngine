@@ -1,3 +1,5 @@
+#include "VulkanEnumTranslator.h"
+#include "VulkanRaytracingResource.h"
 #include "VulkanDescriptor.h"
 
 #include "VulkanDevice.h"
@@ -16,6 +18,14 @@
 #include <string_view>
 
 namespace Moer::Render {
+
+uint64 GetBindlessTextureDescriptorOffset(const VulkanDevice& _device) {
+    const auto& properties = _device.GetOptionalProperties().descriptor_buffer_properties;
+    const uint64 sampler_bytes =
+        static_cast<uint64>(properties.samplerDescriptorSize) * VulkanDevice::bindless_sampler_count;
+    return Moer::AlignUp(sampler_bytes, properties.descriptorBufferOffsetAlignment);
+}
+
 namespace {
 
 static constexpr std::string_view s_descriptor_buffer_name         = "VulkanDescriptorHeap::DescriptorBuffer";

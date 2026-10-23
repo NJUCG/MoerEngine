@@ -1,45 +1,14 @@
-//
-// Created by 74535 on 2023/10/12.
-//
+#pragma once
 
-#ifndef VULKAN_RHI_RESOURCE_H
-#define VULKAN_RHI_RESOURCE_H
-
-#include "PixelFormat.h"
-#include "misc/CountableRef.h"
-#include "misc/LockFree.h"
-#include "misc/STL.h"
-#include "misc/Traits.h"
-#include "rhi/RHICommand.h"
-#include "rhi/RHICommon.h"
+#include "VulkanCommon.h"
+#include "VulkanDeviceObject.h"
+#include "VulkanMemoryAllocator.h"
 #include "rhi/RHIResource.h"
 
-#include "VulkanFault.h"
-#include "VulkanPipelineArgument.h"
-#include "VulkanPlatform.h"
-#include "VulkanSwapChain.h"
-#include "VulkanTypeDefs.h"
 #include <atomic>
-#include <cstddef>
-#include <memory>
 #include <mutex>
 
-// #include <vk_mem_alloc.h>
-#include "VulkanMemoryAllocator.h"
-
-#include <condition_variable>
-#include <variant>
 namespace Moer::Render {
-class VulkanDevice;
-
-//forward declaration
-class VulkanBuffer;
-class VulkanTexture;
-class VulkanTimeline;
-
-using VulkanBufferRef   = CountableRef<VulkanBuffer>;
-using VulkanTextureRef  = CountableRef<VulkanTexture>;
-using VulkanTimelineRef = CountableRef<VulkanTimeline>;
 
 class VulkanMemoryManager final {
 public:
@@ -50,474 +19,6 @@ public:
     static VmaAllocationCreateFlags MEGenerateVmaMemoryFlags(EBufferUsageFlags _flags);
     static VmaMemoryUsage           MEGenerateVmaMemoryUsage();
 };
-struct FormatInfo {
-    uint     stride; // Bytes per texel for linear formats, per block for compressed formats.
-    VkFormat format;
-};
-inline constexpr FormatInfo g_platform_pixel_formats[static_cast<uint>(PF_Num)]{
-    {0, VK_FORMAT_UNDEFINED},
-    {1, VK_FORMAT_R4G4_UNORM_PACK8},
-    {2, VK_FORMAT_R4G4B4A4_UNORM_PACK16},
-    {2, VK_FORMAT_B4G4R4A4_UNORM_PACK16},
-    {2, VK_FORMAT_R5G6B5_UNORM_PACK16},
-    {2, VK_FORMAT_B5G6R5_UNORM_PACK16},
-    {2, VK_FORMAT_R5G5B5A1_UNORM_PACK16},
-    {2, VK_FORMAT_B5G5R5A1_UNORM_PACK16},
-    {2, VK_FORMAT_A1R5G5B5_UNORM_PACK16},
-    {1, VK_FORMAT_R8_UNORM},
-    {1, VK_FORMAT_R8_SNORM},
-    {1, VK_FORMAT_R8_USCALED},
-    {1, VK_FORMAT_R8_SSCALED},
-    {1, VK_FORMAT_R8_UINT},
-    {1, VK_FORMAT_R8_SINT},
-    {1, VK_FORMAT_R8_SRGB},
-    {2, VK_FORMAT_R8G8_UNORM},
-    {2, VK_FORMAT_R8G8_SNORM},
-    {2, VK_FORMAT_R8G8_USCALED},
-    {2, VK_FORMAT_R8G8_SSCALED},
-    {2, VK_FORMAT_R8G8_UINT},
-    {2, VK_FORMAT_R8G8_SINT},
-    {2, VK_FORMAT_R8G8_SRGB},
-    {3, VK_FORMAT_R8G8B8_UNORM},
-    {3, VK_FORMAT_R8G8B8_SNORM},
-    {3, VK_FORMAT_R8G8B8_USCALED},
-    {3, VK_FORMAT_R8G8B8_SSCALED},
-    {3, VK_FORMAT_R8G8B8_UINT},
-    {3, VK_FORMAT_R8G8B8_SINT},
-    {3, VK_FORMAT_R8G8B8_SRGB},
-    {3, VK_FORMAT_B8G8R8_UNORM},
-    {3, VK_FORMAT_B8G8R8_SNORM},
-    {3, VK_FORMAT_B8G8R8_USCALED},
-    {3, VK_FORMAT_B8G8R8_SSCALED},
-    {3, VK_FORMAT_B8G8R8_UINT},
-    {3, VK_FORMAT_B8G8R8_SINT},
-    {3, VK_FORMAT_B8G8R8_SRGB},
-    {4, VK_FORMAT_R8G8B8A8_UNORM},
-    {4, VK_FORMAT_R8G8B8A8_SNORM},
-    {4, VK_FORMAT_R8G8B8A8_USCALED},
-    {4, VK_FORMAT_R8G8B8A8_SSCALED},
-    {4, VK_FORMAT_R8G8B8A8_UINT},
-    {4, VK_FORMAT_R8G8B8A8_SINT},
-    {4, VK_FORMAT_R8G8B8A8_SRGB},
-    {4, VK_FORMAT_B8G8R8A8_UNORM},
-    {4, VK_FORMAT_B8G8R8A8_SNORM},
-    {4, VK_FORMAT_B8G8R8A8_USCALED},
-    {4, VK_FORMAT_B8G8R8A8_SSCALED},
-    {4, VK_FORMAT_B8G8R8A8_UINT},
-    {4, VK_FORMAT_B8G8R8A8_SINT},
-    {4, VK_FORMAT_B8G8R8A8_SRGB},
-    {4, VK_FORMAT_A8B8G8R8_UNORM_PACK32},
-    {4, VK_FORMAT_A8B8G8R8_SNORM_PACK32},
-    {4, VK_FORMAT_A8B8G8R8_USCALED_PACK32},
-    {4, VK_FORMAT_A8B8G8R8_SSCALED_PACK32},
-    {4, VK_FORMAT_A8B8G8R8_UINT_PACK32},
-    {4, VK_FORMAT_A8B8G8R8_SINT_PACK32},
-    {4, VK_FORMAT_A8B8G8R8_SRGB_PACK32},
-    {4, VK_FORMAT_A2R10G10B10_UNORM_PACK32},
-    {4, VK_FORMAT_A2R10G10B10_SNORM_PACK32},
-    {4, VK_FORMAT_A2R10G10B10_USCALED_PACK32},
-    {4, VK_FORMAT_A2R10G10B10_SSCALED_PACK32},
-    {4, VK_FORMAT_A2R10G10B10_UINT_PACK32},
-    {4, VK_FORMAT_A2R10G10B10_SINT_PACK32},
-    {4, VK_FORMAT_A2B10G10R10_UNORM_PACK32},
-    {4, VK_FORMAT_A2B10G10R10_SNORM_PACK32},
-    {4, VK_FORMAT_A2B10G10R10_USCALED_PACK32},
-    {4, VK_FORMAT_A2B10G10R10_SSCALED_PACK32},
-    {4, VK_FORMAT_A2B10G10R10_UINT_PACK32},
-    {4, VK_FORMAT_A2B10G10R10_SINT_PACK32},
-    {2, VK_FORMAT_R16_UNORM},
-    {2, VK_FORMAT_R16_SNORM},
-    {2, VK_FORMAT_R16_USCALED},
-    {2, VK_FORMAT_R16_SSCALED},
-    {2, VK_FORMAT_R16_UINT},
-    {2, VK_FORMAT_R16_SINT},
-    {2, VK_FORMAT_R16_SFLOAT},
-    {4, VK_FORMAT_R16G16_UNORM},
-    {4, VK_FORMAT_R16G16_SNORM},
-    {4, VK_FORMAT_R16G16_USCALED},
-    {4, VK_FORMAT_R16G16_SSCALED},
-    {4, VK_FORMAT_R16G16_UINT},
-    {4, VK_FORMAT_R16G16_SINT},
-    {4, VK_FORMAT_R16G16_SFLOAT},
-    {6, VK_FORMAT_R16G16B16_UNORM},
-    {6, VK_FORMAT_R16G16B16_SNORM},
-    {6, VK_FORMAT_R16G16B16_USCALED},
-    {6, VK_FORMAT_R16G16B16_SSCALED},
-    {6, VK_FORMAT_R16G16B16_UINT},
-    {6, VK_FORMAT_R16G16B16_SINT},
-    {6, VK_FORMAT_R16G16B16_SFLOAT},
-    {8, VK_FORMAT_R16G16B16A16_UNORM},
-    {8, VK_FORMAT_R16G16B16A16_SNORM},
-    {8, VK_FORMAT_R16G16B16A16_USCALED},
-    {8, VK_FORMAT_R16G16B16A16_SSCALED},
-    {8, VK_FORMAT_R16G16B16A16_UINT},
-    {8, VK_FORMAT_R16G16B16A16_SINT},
-    {8, VK_FORMAT_R16G16B16A16_SFLOAT},
-    {4, VK_FORMAT_R32_UINT},
-    {4, VK_FORMAT_R32_SINT},
-    {4, VK_FORMAT_R32_SFLOAT},
-    {8, VK_FORMAT_R32G32_UINT},
-    {8, VK_FORMAT_R32G32_SINT},
-    {8, VK_FORMAT_R32G32_SFLOAT},
-    {12, VK_FORMAT_R32G32B32_UINT},
-    {12, VK_FORMAT_R32G32B32_SINT},
-    {12, VK_FORMAT_R32G32B32_SFLOAT},
-    {16, VK_FORMAT_R32G32B32A32_UINT},
-    {16, VK_FORMAT_R32G32B32A32_SINT},
-    {16, VK_FORMAT_R32G32B32A32_SFLOAT},
-    {8, VK_FORMAT_R64_UINT},
-    {8, VK_FORMAT_R64_SINT},
-    {8, VK_FORMAT_R64_SFLOAT},
-    {16, VK_FORMAT_R64G64_UINT},
-    {16, VK_FORMAT_R64G64_SINT},
-    {16, VK_FORMAT_R64G64_SFLOAT},
-    {24, VK_FORMAT_R64G64B64_UINT},
-    {24, VK_FORMAT_R64G64B64_SINT},
-    {24, VK_FORMAT_R64G64B64_SFLOAT},
-    {32, VK_FORMAT_R64G64B64A64_UINT},
-    {32, VK_FORMAT_R64G64B64A64_SINT},
-    {32, VK_FORMAT_R64G64B64A64_SFLOAT},
-    {4, VK_FORMAT_B10G11R11_UFLOAT_PACK32},
-    {4, VK_FORMAT_E5B9G9R9_UFLOAT_PACK32},
-    {2, VK_FORMAT_D16_UNORM},
-    {4, VK_FORMAT_X8_D24_UNORM_PACK32},
-    {4, VK_FORMAT_D32_SFLOAT},
-    {1, VK_FORMAT_S8_UINT},
-    {4, VK_FORMAT_D16_UNORM_S8_UINT},
-    {4, VK_FORMAT_D24_UNORM_S8_UINT},
-    {8, VK_FORMAT_D32_SFLOAT_S8_UINT},
-    {8, VK_FORMAT_BC1_RGB_UNORM_BLOCK},
-    {8, VK_FORMAT_BC1_RGB_SRGB_BLOCK},
-    {8, VK_FORMAT_BC1_RGBA_UNORM_BLOCK},
-    {8, VK_FORMAT_BC1_RGBA_SRGB_BLOCK},
-    {16, VK_FORMAT_BC2_UNORM_BLOCK},
-    {16, VK_FORMAT_BC2_SRGB_BLOCK},
-    {16, VK_FORMAT_BC3_UNORM_BLOCK},
-    {16, VK_FORMAT_BC3_SRGB_BLOCK},
-    {8, VK_FORMAT_BC4_UNORM_BLOCK},
-    {8, VK_FORMAT_BC4_SNORM_BLOCK},
-    {16, VK_FORMAT_BC5_UNORM_BLOCK},
-    {16, VK_FORMAT_BC5_SNORM_BLOCK},
-    {16, VK_FORMAT_BC6H_UFLOAT_BLOCK},
-    {16, VK_FORMAT_BC6H_SFLOAT_BLOCK},
-    {16, VK_FORMAT_BC7_UNORM_BLOCK},
-    {16, VK_FORMAT_BC7_SRGB_BLOCK},
-    {8, VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK},
-    {8, VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK},
-    {8, VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK},
-    {8, VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK},
-    {16, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK},
-    {16, VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK},
-    {8, VK_FORMAT_EAC_R11_UNORM_BLOCK},
-    {8, VK_FORMAT_EAC_R11_SNORM_BLOCK},
-    {16, VK_FORMAT_EAC_R11G11_UNORM_BLOCK},
-    {16, VK_FORMAT_EAC_R11G11_SNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_4x4_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_4x4_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_5x4_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_5x4_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_5x5_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_5x5_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_6x5_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_6x5_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_6x6_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_6x6_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_8x5_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_8x5_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_8x6_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_8x6_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_8x8_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_8x8_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_10x5_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_10x5_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_10x6_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_10x6_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_10x8_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_10x8_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_10x10_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_10x10_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_12x10_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_12x10_SRGB_BLOCK},
-    {16, VK_FORMAT_ASTC_12x12_UNORM_BLOCK},
-    {16, VK_FORMAT_ASTC_12x12_SRGB_BLOCK},
-    /*= 1000156000*/ {4, VK_FORMAT_G8B8G8R8_422_UNORM},
-    /*= 1000156001*/ {4, VK_FORMAT_B8G8R8G8_422_UNORM},
-    /*= 1000156002*/ {3, VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM},
-    /*= 1000156003*/ {3, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM},
-    /*= 1000156004*/ {3, VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM},
-    /*= 1000156005*/ {3, VK_FORMAT_G8_B8R8_2PLANE_422_UNORM},
-    /*= 1000156006*/ {3, VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM},
-    /*= 1000156007*/ {2, VK_FORMAT_R10X6_UNORM_PACK16},
-    /*= 1000156008*/ {4, VK_FORMAT_R10X6G10X6_UNORM_2PACK16},
-    /*= 1000156009*/ {8, VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16},
-    /*= 1000156010*/ {4, VK_FORMAT_G10X6B10X6G10X6R10X6_422_UNORM_4PACK16},
-    /*= 1000156011*/ {4, VK_FORMAT_B10X6G10X6R10X6G10X6_422_UNORM_4PACK16},
-    /*= 1000156012*/ {3, VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16},
-    /*= 1000156013*/ {3, VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16},
-    /*= 1000156014*/ {3, VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_422_UNORM_3PACK16},
-    /*= 1000156015*/ {3, VK_FORMAT_G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16},
-    /*= 1000156016*/ {3, VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16},
-    /*= 1000156017*/ {2, VK_FORMAT_R12X4_UNORM_PACK16},
-    /*= 1000156018*/ {4, VK_FORMAT_R12X4G12X4_UNORM_2PACK16},
-    /*= 1000156019*/ {8, VK_FORMAT_R12X4G12X4B12X4A12X4_UNORM_4PACK16},
-    /*= 1000156020*/ {4, VK_FORMAT_G12X4B12X4G12X4R12X4_422_UNORM_4PACK16},
-    /*= 1000156021*/ {4, VK_FORMAT_B12X4G12X4R12X4G12X4_422_UNORM_4PACK16},
-    /*= 1000156022*/ {3, VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16},
-    /*= 1000156023*/ {3, VK_FORMAT_G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16},
-    /*= 1000156024*/ {3, VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_422_UNORM_3PACK16},
-    /*= 1000156025*/ {3, VK_FORMAT_G12X4_B12X4R12X4_2PLANE_422_UNORM_3PACK16},
-    /*= 1000156026*/ {3, VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_444_UNORM_3PACK16},
-    /*= 1000156027*/ {8, VK_FORMAT_G16B16G16R16_422_UNORM},
-    /*= 1000156028*/ {8, VK_FORMAT_B16G16R16G16_422_UNORM},
-    /*= 1000156029*/ {3, VK_FORMAT_G16_B16_R16_3PLANE_420_UNORM},
-    /*= 1000156030*/ {3, VK_FORMAT_G16_B16R16_2PLANE_420_UNORM},
-    /*= 1000156031*/ {3, VK_FORMAT_G16_B16_R16_3PLANE_422_UNORM},
-    /*= 1000156032*/ {3, VK_FORMAT_G16_B16R16_2PLANE_422_UNORM},
-    /*= 1000156033*/ {3, VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM},
-    /*= 1000330000*/ {3, VK_FORMAT_G8_B8R8_2PLANE_444_UNORM},
-    /*= 1000330001*/ {3, VK_FORMAT_G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16},
-    /*= 1000330002*/ {3, VK_FORMAT_G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16},
-    /*= 1000330003*/ {3, VK_FORMAT_G16_B16R16_2PLANE_444_UNORM},
-    /*= 1000340000*/ {2, VK_FORMAT_A4R4G4B4_UNORM_PACK16},
-    /*= 1000340001*/ {2, VK_FORMAT_A4B4G4R4_UNORM_PACK16},
-    /*= 1000066000*/ {16, VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK},
-    /*= 1000066001*/ {16, VK_FORMAT_ASTC_5x4_SFLOAT_BLOCK},
-    /*= 1000066002*/ {16, VK_FORMAT_ASTC_5x5_SFLOAT_BLOCK},
-    /*= 1000066003*/ {16, VK_FORMAT_ASTC_6x5_SFLOAT_BLOCK},
-    /*= 1000066004*/ {16, VK_FORMAT_ASTC_6x6_SFLOAT_BLOCK},
-    /*= 1000066005*/ {16, VK_FORMAT_ASTC_8x5_SFLOAT_BLOCK},
-    /*= 1000066006*/ {16, VK_FORMAT_ASTC_8x6_SFLOAT_BLOCK},
-    /*= 1000066007*/ {16, VK_FORMAT_ASTC_8x8_SFLOAT_BLOCK},
-    /*= 1000066008*/ {16, VK_FORMAT_ASTC_10x5_SFLOAT_BLOCK},
-    /*= 1000066009*/ {16, VK_FORMAT_ASTC_10x6_SFLOAT_BLOCK},
-    /*= 1000066010*/ {16, VK_FORMAT_ASTC_10x8_SFLOAT_BLOCK},
-    /*= 1000066011*/ {16, VK_FORMAT_ASTC_10x10_SFLOAT_BLOCK},
-    /*= 1000066012*/ {16, VK_FORMAT_ASTC_12x10_SFLOAT_BLOCK},
-    /*= 1000066013*/ {16, VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK},
-    /*= 1000054000*/ {8, VK_FORMAT_PVRTC1_2BPP_UNORM_BLOCK_IMG},
-    /*= 1000054001*/ {8, VK_FORMAT_PVRTC1_4BPP_UNORM_BLOCK_IMG},
-    /*= 1000054002*/ {8, VK_FORMAT_PVRTC2_2BPP_UNORM_BLOCK_IMG},
-    /*= 1000054003*/ {8, VK_FORMAT_PVRTC2_4BPP_UNORM_BLOCK_IMG},
-    /*= 1000054004*/ {8, VK_FORMAT_PVRTC1_2BPP_SRGB_BLOCK_IMG},
-    /*= 1000054005*/ {8, VK_FORMAT_PVRTC1_4BPP_SRGB_BLOCK_IMG},
-    /*= 1000054006*/ {8, VK_FORMAT_PVRTC2_2BPP_SRGB_BLOCK_IMG},
-    /*= 1000054007*/ {8, VK_FORMAT_PVRTC2_4BPP_SRGB_BLOCK_IMG},
-    /*= 1000464000*/ {8, VK_FORMAT_R16G16_S10_5_NV}
-};
-
-static_assert(
-    g_platform_pixel_formats[PF_R8G8B8A8_UNORM].format == VK_FORMAT_R8G8B8A8_UNORM
-);
-static_assert(
-    g_platform_pixel_formats[PF_G8B8G8R8_422_UNORM].format == VK_FORMAT_G8B8G8R8_422_UNORM
-);
-static_assert(
-    g_platform_pixel_formats[PF_R16G16_S10_5_NV].format == VK_FORMAT_R16G16_S10_5_NV
-);
-static_assert(g_platform_pixel_formats[PF_ETC2_R8G8B8A8_UNORM_BLOCK].stride == 16);
-
-struct VulkanDescriptorBindingInfo {
-    VkDescriptorSetLayoutBinding vk_binding{};
-    int                          argument_index = 0;
-};
-struct VulkanDescriptorSetLayoutCreateInfo {
-    UnorderedMap<uint, VulkanDescriptorBindingInfo> bindings{};
-    bool                                            is_bindless = false;
-};
-
-struct VulkanResourceBinding {
-    uint             binding_index;
-    uint             argument_index;
-    VkDescriptorType descriptor_type;
-    uint             descriptor_count;
-    uint64           byte_offset; // Binding offset relative to the set start.
-};
-struct VulkanResourceSetBindings {
-    Array<VulkanResourceBinding> bindings;
-    uint64                       allocation_size; // Includes alignment and extra padding.
-};
-
-template<VkDescriptorType DescriptorType>
-struct VulkanBindlessSetBindings {
-    static_assert(
-        DescriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
-            DescriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ||
-            DescriptorType == VK_DESCRIPTOR_TYPE_SAMPLER,
-        "Unsupported bindless descriptor type"
-    );
-    static constexpr VkDescriptorType descriptor_type = DescriptorType;
-
-    uint argument_index;   // Index in ArrayArguments.
-    uint descriptor_count; // Count declared by the pipeline layout.
-};
-using VulkanBindlessBufferSetBindings  = VulkanBindlessSetBindings<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>;
-using VulkanBindlessImageSetBindings   = VulkanBindlessSetBindings<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>;
-using VulkanBindlessSamplerSetBindings = VulkanBindlessSetBindings<VK_DESCRIPTOR_TYPE_SAMPLER>;
-
-using VulkanSetResourceBindings = std::variant<
-    VulkanResourceSetBindings,
-    VulkanBindlessBufferSetBindings,
-    VulkanBindlessImageSetBindings,
-    VulkanBindlessSamplerSetBindings>;
-
-struct VulkanDescriptorSetBinding {
-    uint buffer_index = 0;
-    // Ordinary sets: relative to the draw's resource allocation.
-    // Bindless sets: absolute offset in the bound descriptor buffer.
-    uint64                    byte_offset = 0;
-    VulkanSetResourceBindings resource_bindings;
-};
-
-struct VulkanBindlessIndexAddressBinding {
-    uint argument_index;
-    uint byte_offset;
-};
-
-struct VulkanPipelineBindingTemplate {
-    // Ordinary resources, bindless buffers, and bindless images/samplers.
-    static constexpr size_t descriptor_buffer_capacity = 3;
-
-    UnorderedMap<uint, VulkanDescriptorSetBinding> set_bindings;
-    // Native upload metadata for user bytes; stage visibility covers the whole block.
-    VkPushConstantsInfoKHR                         push_constants_info{};
-    // The user upload excludes this backend-owned 64-bit address.
-    std::optional<VulkanBindlessIndexAddressBinding> bindless_index_address;
-    uint64                                         resource_descriptor_allocation_size = 0;
-    // Shared immutable metadata; bindless addresses are resolved per recording.
-    Array<VkDescriptorBufferBindingInfoEXT> descriptor_buffers;
-};
-
-class VulkanEnumTranslator final {
-public:
-    static VkIndexType           METoVKIndexType(EIndexElementType _type);
-    static VkFormat              METoVKFormat(EPixelFormat _format);
-    static VkImageCreateFlags    METoVKImageCreateFlags(ETextureDimension _dim);
-    static VkImageType           METoVKImageType(ETextureDimension _dim);
-    static VkImageUsageFlags     METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
-    static EPixelFormat          VKToMEFormat(VkFormat _format);
-    static VkBufferUsageFlags    METoVKBufferUsageFlags(EBufferUsageFlags _me_flags);
-    static VkDescriptorType      METoVkBufferDescriptorType(EBufferUsageFlags _type);
-    static VkSampleCountFlagBits METoVKSampleCountFlagBits(uint32_t _me_count);
-    static VkImageAspectFlags    METoVKImageAspectFlags(ETextureAspectFlags _flags);
-    static VkImageViewType       METoVKImageViewType(ETextureDimension _dim);
-    static VkImageLayout         METoVKImageLayout(ETextureLayout _layout);
-    static VkAttachmentLoadOp    METoVKAttachmentLoadOp(EAttachmentLoadOp _load_op);
-    static VkAttachmentStoreOp   METoVKAttachmentStoreOp(EAttachmentStoreOp _store_op);
-    static VkFilter              METoVKImageFilter(ESamplerFilter _filter);
-
-    static VkPipelineStageFlags2 METoVkPipelineStageFlags2(ERHIPipelineStageFlags _flags);
-    static VkAccessFlags2        METoVkAccessFlags2(ERHIAccessFlags _flags);
-
-    static VkCullModeFlags     METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
-    static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
-    static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
-
-    static VkDescriptorType
-    METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type);
-    static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
-
-    static VkFilter             METoVKMinMagFilterMode(ESamplerFilter _filter);
-    static VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
-    static VkSamplerAddressMode METoVKWrapMode(ESamplerAddressMode _address_mode);
-
-    static VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
-    static VkStencilOp METoVKStencilOp(EStencilOp _stencil_op);
-
-    static VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
-    static VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
-
-    static VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
-
-    //Raytracing
-    static VkGeometryTypeKHR  METoVKGeometryType(ERayTracingGeometryType _type);
-    static VkGeometryFlagsKHR METoVKGeometryFlags(ERayTracingGeometryFlags _flags);
-    static VkBuildAccelerationStructureFlagsKHR
-    METoVKAccelerationStructureBuildType(ERayTracingAccelerationStructureBuildFlags _type);
-    static VkBuildAccelerationStructureModeKHR
-    METoVKBuildAccelerationStructureMode(ERaytracingBuildMode _mode);
-};
-
-class VulkanDeviceObject {
-public:
-    VulkanDeviceObject(VulkanDevice* _device = nullptr);
-
-protected:
-    VulkanDevice* m_device;
-    uint          b_deferred_delete : 1 = true;
-};
-class VulkanPipelineState : public PipelineState, public VulkanDeviceObject {
-    enum EType {
-        GFX,
-        Compute,
-        RT
-    };
-
-public:
-    VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX, uint64 active_argument_bits = 0) :
-        PipelineState(active_argument_bits),
-        VulkanDeviceObject(_device),
-        m_pipeline(VK_NULL_HANDLE),
-        m_pipeline_layout(VK_NULL_HANDLE),
-        m_type(_type) {};
-    virtual ~VulkanPipelineState();
-
-    inline VkPipeline GetHandle() const {
-        return m_pipeline;
-    }
-
-    inline const VkPipelineLayout GetPipelineLayout() const {
-        return m_pipeline_layout;
-    }
-
-    bool UsesStencilAttachment() const {
-        return b_uses_stencil_attachment;
-    }
-
-    uint32_t GetViewMask() const {
-        return view_mask;
-    }
-
-    const VulkanArgumentInfo& GetArgumentInfo(uint argument_index) const {
-        return m_argument_infos[argument_index];
-    }
-
-    std::span<const VulkanArgumentInfo> GetArgumentInfos() const {
-        return m_argument_infos;
-    }
-
-    void CreatePipelineLayout(const std::optional<VkPushConstantRange>& push_constant_range);
-    VkPipelineBindPoint GetPipelineBindPoint() const {
-        switch (m_type) {
-            case GFX:
-                return VK_PIPELINE_BIND_POINT_GRAPHICS;
-            case Compute:
-                return VK_PIPELINE_BIND_POINT_COMPUTE;
-            case RT:
-                return VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
-            default:
-                return VK_PIPELINE_BIND_POINT_GRAPHICS;
-        }
-    }
-    void InitPipelineLayout(
-        UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
-        std::optional<VkPushConstantRange> push_constant_range,
-        uint user_constant_byte_size,
-        std::optional<VulkanBindlessIndexAddressBinding> bindless_index_address
-    );
-
-public:
-    UniquePtr<VulkanPipelineBindingTemplate> binding_template;
-
-protected:
-    friend VulkanDevice;
-    Array<VulkanArgumentInfo>    m_argument_infos;
-    VkPipeline                   m_pipeline;
-    VkPipelineLayout             m_pipeline_layout;
-    Array<VkDescriptorSetLayout> descriptor_set_layouts;
-    EType                                     m_type;
-    bool                                      b_uses_stencil_attachment = false;
-    uint32_t                                  view_mask                 = 0;
-};
 
 struct VulkanBufferDescriptorKey {
     uint64   byte_offset{0};
@@ -525,16 +26,14 @@ struct VulkanBufferDescriptorKey {
     VkFormat format{VK_FORMAT_UNDEFINED};
 
     bool operator==(const VulkanBufferDescriptorKey& _other) const {
-        return byte_offset == _other.byte_offset && byte_size == _other.byte_size &&
-               format == _other.format;
+        return byte_offset == _other.byte_offset && byte_size == _other.byte_size && format == _other.format;
     }
 
     struct Hasher {
         size_t operator()(const VulkanBufferDescriptorKey& _key) const {
             size_t hash = std::hash<uint64>()(_key.byte_offset);
             hash ^= std::hash<uint64>()(_key.byte_size) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-            hash ^= std::hash<uint32>()(uint32(_key.format)) + 0x9e3779b9 + (hash << 6) +
-                    (hash >> 2);
+            hash ^= std::hash<uint32>()(uint32(_key.format)) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
             return hash;
         }
     };
@@ -559,8 +58,8 @@ public:
     };
     VulkanBuffer() = delete;
     virtual ~VulkanBuffer();
-    virtual void Destroy() override;
-    void         SetName(const std::string_view _name) override;
+    virtual void       Destroy() override;
+    void               SetName(const std::string_view _name) override;
     [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
         return true;
     }
@@ -623,12 +122,9 @@ struct VulkanTextureDescriptorKey {
     struct Hasher {
         size_t operator()(const VulkanTextureDescriptorKey& _key) const {
             size_t hash = std::hash<uint32>()(uint32(_key.descriptor_type));
-            hash ^= std::hash<uint32>()(uint32(_key.layout)) + 0x9e3779b9 + (hash << 6) +
-                    (hash >> 2);
-            const uint32 subresources = (uint32(_key.mip_level) << 24) |
-                                        (uint32(_key.mip_cnt) << 16) |
-                                        (uint32(_key.array_layer) << 8) |
-                                        uint32(_key.array_count);
+            hash ^= std::hash<uint32>()(uint32(_key.layout)) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+            const uint32 subresources = (uint32(_key.mip_level) << 24) | (uint32(_key.mip_cnt) << 16) |
+                                        (uint32(_key.array_layer) << 8) | uint32(_key.array_count);
             hash ^= std::hash<uint32>()(subresources) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
             return hash;
         }
@@ -648,23 +144,16 @@ public:
     inline VkImage GetHandle() const {
         return m_alloc.image;
     }
-    [[nodiscard]] static VkImageLayout PreferredLayoutForUsage(
-        ETextureUsageFlags _usage
-    ) noexcept {
+    [[nodiscard]] static VkImageLayout PreferredLayoutForUsage(ETextureUsageFlags _usage) noexcept {
         const bool presentation_source =
-            (_usage & ETextureUsageFlags::PRESENTATION_SOURCE) ==
-            ETextureUsageFlags::PRESENTATION_SOURCE;
+            (_usage & ETextureUsageFlags::PRESENTATION_SOURCE) == ETextureUsageFlags::PRESENTATION_SOURCE;
         const bool prefer_sample =
-            !presentation_source &&
-            (_usage & ETextureUsageFlags::SAMPLED) ==
-                ETextureUsageFlags::SAMPLED &&
-            (_usage & ETextureUsageFlags::UNORDERED_ACCESS) ==
-                ETextureUsageFlags::UNDEFINED;
-        return prefer_sample ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL :
-                               VK_IMAGE_LAYOUT_GENERAL;
+            !presentation_source && (_usage & ETextureUsageFlags::SAMPLED) == ETextureUsageFlags::SAMPLED &&
+            (_usage & ETextureUsageFlags::UNORDERED_ACCESS) == ETextureUsageFlags::UNDEFINED;
+        return prefer_sample ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
     }
 
-    uint        GetMipByteSize(uint _mip_idx) const override;
+    uint               GetMipByteSize(uint _mip_idx) const override;
     [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
         return true;
     }
@@ -674,20 +163,14 @@ public:
         uint _base_layer = 0,
         uint _layer_cnt  = VK_REMAINING_ARRAY_LAYERS
     );
-    VkImageView GetAttachmentView(
-        uint _mip_level  = 0,
-        uint _mip_cnt    = 1,
-        uint _base_layer = 0,
-        uint _layer_cnt  = 1
-    );
+    VkImageView
+    GetAttachmentView(uint _mip_level = 0, uint _mip_cnt = 1, uint _base_layer = 0, uint _layer_cnt = 1);
 
-    void          SetName(const std::string_view _name) override;
-    bool          b_has_preferred_state : 1 = false;
-    bool          b_present : 1             = false;
+    void SetName(const std::string_view _name) override;
+    bool b_has_preferred_state : 1 = false;
+    bool b_present : 1             = false;
     void PublishPresentationSourceReady(bool _ready) noexcept {
-        presentation_source_ready.store(
-            _ready, std::memory_order_release
-        );
+        presentation_source_ready.store(_ready, std::memory_order_release);
     }
     [[nodiscard]] bool IsPresentationSourceReady() const noexcept {
         return presentation_source_ready.load(std::memory_order_acquire);
@@ -727,339 +210,15 @@ private:
     std::atomic_bool                  presentation_source_ready{false};
 };
 
-class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
-public:
-    enum EType : uint {
-        Texture,
-        Buffer
-    };
-    struct Handle {
-        uint ptr_1;
-        uint ptr_2;
-        uint slot : 22;
-        uint attrib : 8;
-        uint type : 2;
+using VulkanBufferRef  = CountableRef<VulkanBuffer>;
+using VulkanTextureRef = CountableRef<VulkanTexture>;
 
-        Handle(uint64 _ptr, uint _slot, uint _attrib, uint _type) :
-            ptr_1(_ptr >> 32),
-            ptr_2(_ptr & 0xffffffff),
-            slot(_slot),
-            attrib(_attrib),
-            type(_type) {}
-        Handle() : ptr_1(0), ptr_2(0), slot(0), attrib(0), type(0) {}
-        bool IsTexture() const {
-            return type == Texture;
-        }
-        bool IsBuffer() const {
-            return type == Buffer;
-        }
-        uint64 Ptr() const {
-            return uint64(ptr_1) << 32 | uint64(ptr_2);
-        }
-    };
+inline VulkanBuffer* ResourceCast(Buffer* resource) {
+    return static_cast<VulkanBuffer*>(resource);
+}
 
-    VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size);
-    ~VulkanBindlessArray() override;
-
-    uint AllocateTexture(const TextureView& _texture, Sampler _sampler) override;
-    uint AllocateBuffer(BufferView _buffer) override;
-    void UnbindTexture(uint _slot) override;
-    void UnbindBuffer(uint _slot) override;
-    bool IsResourceAllocated(uint64 _handle) const;
-    bool IsTextureViewAllocated(
-        uint64 _texture,
-        uint8  _mip_level,
-        uint8  _mip_count,
-        uint8  _array_layer,
-        uint8  _array_count
-    ) const;
-    struct PresentationSourceMembershipRecord {
-        TextureRef texture{};
-        uint32     count{0};
-    };
-    struct PresentationSourceMembership {
-        UnorderedMap<uint, TextureRef> slots{};
-        UnorderedMap<
-            ::Moer::Render::Texture*,
-            PresentationSourceMembershipRecord>
-            textures{};
-    };
-    using PresentationSourceMembershipSnapshot =
-        std::shared_ptr<const PresentationSourceMembership>;
-
-    // Descriptor membership becomes visible only after the packet which
-    // updates it reaches vkQueueSubmit. CPU allocation state belongs to a
-    // different timeline and cannot classify an older immutable submit.
-    [[nodiscard]] PresentationSourceMembershipSnapshot
-        SnapshotAcceptedPresentationSourceMembership() const noexcept;
-    void PublishAcceptedPresentationSourceMembership(
-        PresentationSourceMembershipSnapshot _membership
-    ) noexcept;
-    void FinalizeUpdateCommand(
-        const Array<BindlessArray::UpdateCmd>& _updates,
-        bool                                    _gpu_update_succeeded
-    );
-    bool BeginUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates);
-
-    uint64 ArrayHandle() const override {
-        return (uint64)bindless_index_buffer;
-    }
-
-    void Lock() {
-        mtx.lock();
-    }
-    void Unlock() {
-        mtx.unlock();
-    }
-    std::unique_lock<std::mutex> AcquireLock() {
-        return std::unique_lock<std::mutex>(mtx);
-    }
-
-public:
-    // Plain uint index table, read by device address from push constants.
-    VulkanBuffer* bindless_index_buffer;
-    // Descriptor storage bound through vkCmdBindDescriptorBuffersEXT.
-    VulkanBuffer* bindless_buffer_descs;
-    VulkanBuffer* bindless_texture_descs;
-    uint64        texture_offset_in_buffer;
-    uint64        buffer_descriptors_byte_offset;
-    Array<Handle> handles;
-
-private:
-    std::mutex mtx;
-    void       TrackResource(RHIResource* _resource);
-    void       UntrackResource(uint64 _handle);
-    void       TrackTextureView(uint _array_idx, const TextureView& _view);
-    void       UntrackTextureView(uint _array_idx);
-
-protected:
-    UniquePtr<Command>          CreateUpdateCommand() override;
-    void DiscardUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates) override;
-    class VulkanDescriptorHeap& g_heap;
-
-    LockFreeQueueBase<uint, true> free_texture_slots;
-    LockFreeQueueBase<uint, true> free_buffer_slots;
-    LockFreeQueueBase<uint, true> free_slots;
-    std::atomic_uint              texture_slot_offset;
-    std::atomic_uint              buffer_slot_offset;
-    std::atomic_uint              slot_offset;
-    Array<uint64>                 array_slot_generations;
-    Array<uint64>                 texture_slot_generations;
-    Array<uint64>                 buffer_slot_generations;
-    Array<uint64>                 array_slot_claim_tokens;
-    Array<uint64>                 texture_slot_claim_tokens;
-    Array<uint64>                 buffer_slot_claim_tokens;
-    uint64                        next_update_command_token{0};
-    Array<UpdateCmd>             update_cmds;
-    Array<std::pair<uint, uint>> array_indices_dat;
-    Array<byte>                  array_dat;
-    Array<std::pair<uint, uint>> texture_indices_dat;
-    Array<byte>                  texture_dat;
-    Array<std::pair<uint, uint>> buffer_indices_dat;
-    Array<byte>                  buffer_dat;
-    UnorderedMap<uint, uint>     temp_slot_to_cmd;
-
-    struct ResourceAllocationRecord {
-        CountableRef<RHIResource> resource;
-        uint32                    count{0};
-    };
-    UnorderedMap<uint64, ResourceAllocationRecord> resource_allocation_counts;
-    PresentationSourceMembershipSnapshot
-        accepted_presentation_source_membership;
-    UnorderedMap<
-        uint64,
-        UnorderedMap<
-            TextureSubresourceKeyT<VulkanTexture>,
-            uint32,
-            TextureSubresourceKeyHashT<VulkanTexture>>>
-        texture_view_ref_counts;
-    Array<TextureSubresourceKeyT<VulkanTexture>>                           texture_view_infos;
-};
-
-class VulkanRaytracingScene;
-struct VulkanAccelerationStructure : public RaytracingTlas {
-    VulkanAccelerationStructure(VulkanDevice& _device, VulkanRaytracingScene& _src_scene);
-    virtual ~VulkanAccelerationStructure() override;
-    void Destroy() override;
-    Buffer* GetUnderlyingBuffer() const override {
-        return underlying_buffer;
-    }
-
-    VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
-    VulkanBufferRef            underlying_buffer = nullptr;
-    VulkanDevice&              device;
-    VulkanRaytracingScene&     src_scene;
-
-private:
-    friend class VulkanDescriptorHeap;
-    int m_descriptor_cache_slot = -1;
-};
-
-using VulkanAccelRef = CountableRef<VulkanAccelerationStructure>;
-class VulkanRaytracingGeometry final : public RaytracingGeometry, public VulkanDeviceObject {
-public:
-    VulkanRaytracingGeometry(const RaytracingGeometryInfo& _info, VulkanDevice* _device);
-    virtual ~VulkanRaytracingGeometry();
-
-    inline VkAccelerationStructureKHR GetHandle() const {
-        return acc;
-    }
-
-    inline VulkanBuffer* GetUnderlyingBuffer() const override {
-        return underlying_buffer;
-    }
-    Array<VkAccelerationStructureGeometryKHR>       build_geometries;
-    Array<VkAccelerationStructureBuildRangeInfoKHR> build_ranges;
-    VkAccelerationStructureBuildSizesInfoKHR        build_sizes_info{
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR
-    };
-    uint64 blas_address;
-
-private:
-    VkAccelerationStructureKHR acc;
-    VulkanBufferRef            underlying_buffer;
-};
-
-class VulkanRaytracingScene final : public RaytracingScene, public VulkanDeviceObject {
-public:
-    VulkanRaytracingScene(VulkanDevice* _device);
-    virtual ~VulkanRaytracingScene();
-    RaytracingInstance& AddInstance() override;
-
-    void MarkModified(uint _array_idx) override;
-    void FreeInstance(uint _array_idx) override;
-
-    void RegisterGeometry(RaytracingGeometryRef _geometry) override;
-    void UnregisterGeometry(RaytracingGeometryRef _geometry) override;
-
-    RaytracingTlasRef GetTlas() const override;
-    RaytracingTlasRef GetPrevTlas() const override;
-
-    UniquePtr<Command> UpdateScene() override;
-    void               AdvanceFrame() override;
-
-public:
-    void                RefitInstanceBuffer();
-    bool                RefitTLASAndScratchBuffer();
-    RaytracingSizeInfos CalculateSizeInfos();
-    // temperory
-    Array<uint> temp_update_instance_ids;
-    Set<uint>   temp_modified_instance_ids;
-
-    Array<byte> temp_update_instances;
-
-    Set<uint> prev_modified_instance_ids;
-
-public:
-    RaytracingSizeInfos size_infos{};
-    RaytracingSizeInfos prev_size_infos{};
-
-private:
-    VulkanAccelRef  tlas           = nullptr;
-    VulkanAccelRef  prev_tlas      = nullptr;
-    VulkanBufferRef scratch_buffer = nullptr;
-
-    VulkanBufferRef instance_buffer = nullptr;
-
-    // TLAS instance buffer device address must be 16-byte aligned (Vulkan spec)
-    // Store the aligned address to avoid recomputing
-    uint64 aligned_instance_buffer_address = 0;
-
-public:
-    // Get 16-byte aligned device address for TLAS instance data
-    uint64 GetAlignedInstanceBufferAddress() const {
-        constexpr uint64 kAlignment = 256;  // Use 256-byte alignment for AMD GPU compatibility
-        if (aligned_instance_buffer_address != 0) {
-            return aligned_instance_buffer_address;
-        }
-        if (!instance_buffer) return 0;
-        uint64 addr = instance_buffer->DeviceAddress();
-        return Moer::AlignUp(addr, kAlignment);
-    }
-
-    void UpdateAlignedInstanceBufferAddress() {
-        constexpr uint64 kAlignment = 256;
-        if (instance_buffer) {
-            aligned_instance_buffer_address = Moer::AlignUp(instance_buffer->DeviceAddress(), kAlignment);
-        }
-    }
-
-    Array<VkAccelerationStructureInstanceKHR> vk_instances;
-
-    Array<uint> free_instance_slots;
-
-    std::mutex                 geom_mutex;
-    UnorderedMap<uint64, uint> related_geometries;
-    bool                       b_current_full_refit = false;
-
-private:
-    uint instance_capacity      = 1000;
-    uint prev_instance_capacity = 1000;
-    uint exponent               = 2;
-    uint instance_offset        = 1;
-};
-
-#define RESOURCE_CAST(RHIType, VkType)           \
-    inline VkType* ResourceCast(RHIType* _val) { \
-        return static_cast<VkType*>(_val);       \
-    }
-
-// RHI synchronization timeline backed by a VkSemaphore and host-side
-// submission/completion state.
-class VulkanTimeline final : public Fence, VulkanDeviceObject {
-public:
-    VulkanTimeline(VulkanDevice&);
-    virtual ~VulkanTimeline();
-
-    uint64_t GetValue() const override;
-
-    uint64 GetDeviceValue() const;
-
-    void Wait(uint64_t _value) override;
-    void Reject(uint64_t _value) noexcept override;
-    // can be called on any thread to block current thread
-    void Sync(uint64);
-    // Publish observed completion to CPU waiters; does not signal the semaphore.
-    void  Notify(uint64);
-    void  MarkSubmitted(uint64_t _value) override;
-    RENDER_API bool WaitSubmitted(
-        uint64_t               _value,
-        const std::atomic_bool* _continue_waiting = nullptr,
-        EQueueType              _waiting_queue = EQueueType::Ignore,
-        uint32                  _dependency_count = 0
-    ) override;
-    RENDER_API bool IsRejected(uint64_t _value) const override;
-    RENDER_API VkResult HostWait(
-        uint64_t                      _value,
-        const VulkanOperationContext& _context = VulkanOperationContext{}
-    );
-    RENDER_API void Fail(VkResult _result);
-    RENDER_API bool IsFailed() const;
-    RENDER_API void SignalHost(uint64_t _value);
-    VkSemaphore GetSemaphore() const noexcept {
-        return timeline;
-    }
-
-private:
-    uint64 current_value = 0;
-    VkSemaphore             timeline;
-    std::condition_variable cv;
-    mutable std::mutex      cv_m;
-    uint64                  submitted_value{0};
-    UnorderedSet<uint64>    rejected_values;
-    bool                    failed{false};
-    VkResult                failure_result{VK_SUCCESS};
-};
-
-RESOURCE_CAST(Buffer, VulkanBuffer)
-RESOURCE_CAST(Texture, VulkanTexture)
-RESOURCE_CAST(Fence, VulkanTimeline)
-RESOURCE_CAST(Swapchain, VkSwapchain)
-
-RESOURCE_CAST(RaytracingGeometry, VulkanRaytracingGeometry)
-RESOURCE_CAST(RaytracingScene, VulkanRaytracingScene)
-RESOURCE_CAST(RaytracingTlas, VulkanAccelerationStructure)
+inline VulkanTexture* ResourceCast(Texture* resource) {
+    return static_cast<VulkanTexture*>(resource);
+}
 
 } // namespace Moer::Render
-
-#endif //VULKAN_RHI_RESOURCE_H

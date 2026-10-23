@@ -3,7 +3,7 @@
 
 #include "rhi/plugin/NrdPlugin.h"
 
-#include "../VulkanRHIResource.h"
+#include "../VulkanDeviceObject.h"
 
 namespace Moer::Render::Ext {
 
