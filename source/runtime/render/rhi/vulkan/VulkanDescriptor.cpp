@@ -132,7 +132,8 @@ void VulkanDescriptorHeap::CreateDescriptorBuffer() {
     }
 
 #if WITH_CUDA
-    buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+    const auto external_memory_info = MakeExternalMemoryBufferCreateInfo();
+    buffer_ci.pNext = &external_memory_info;
 #endif
 
     VmaAllocationCreateInfo alloc_ci{};

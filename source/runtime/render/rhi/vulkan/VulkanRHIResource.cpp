@@ -96,7 +96,8 @@ VulkanBuffer::VulkanBuffer(
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
 #if WITH_CUDA
-    buffer_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+    const auto external_memory_info = MakeExternalMemoryBufferCreateInfo();
+    buffer_info.pNext = &external_memory_info;
 #endif
     const VmaAllocationCreateInfo allocation_info{
         .flags = _allocation_info.allocation_flags,
@@ -224,7 +225,8 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, Vk
     image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
 #if WITH_CUDA
-    image_create_info.pNext = GetExternalMemoryImageCreateInfoPtr(nullptr);
+    const auto external_memory_info = MakeExternalMemoryImageCreateInfo();
+    image_create_info.pNext = &external_memory_info;
 #endif
 
     image_create_info.tiling = SelectImageTiling(image_create_info, *_device);

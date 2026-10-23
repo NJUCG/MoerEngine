@@ -9,11 +9,23 @@
 
 #include <vk_mem_alloc.h>
 
-// 这两个函数的作用是，在调用vmaCreateImage和vmaCreateBuffer时，将对应资源设置为win32导出
+// Creation-chain values belong to the calling allocation, never to shared state.
 namespace Moer::Render {
 
-VkExternalMemoryImageCreateInfo* GetExternalMemoryImageCreateInfoPtr(const void* pNext);
+inline VkExternalMemoryImageCreateInfo MakeExternalMemoryImageCreateInfo(const void* next = nullptr) {
+    return {
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+        .pNext = next,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+    };
+}
 
-VkExternalMemoryBufferCreateInfo* GetExternalMemoryBufferCreateInfoPtr(const void* pNext);
+inline VkExternalMemoryBufferCreateInfo MakeExternalMemoryBufferCreateInfo(const void* next = nullptr) {
+    return {
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+        .pNext = next,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+    };
+}
 
 } // namespace Moer::Render
