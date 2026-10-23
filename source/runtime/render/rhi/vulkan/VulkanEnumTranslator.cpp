@@ -428,19 +428,6 @@ VkBufferUsageFlags VulkanEnumTranslator::METoVKBufferUsageFlags(EBufferUsageFlag
     return vk_flags;
 }
 
-VkDescriptorType VulkanEnumTranslator::METoVkBufferDescriptorType(EBufferUsageFlags _type) {
-    auto has_flag = [&_type](EBufferUsageFlags _search_me_flags) {
-        return (_type & _search_me_flags) == _search_me_flags;
-    };
-    if (has_flag(EBufferUsageFlags::CONSTANT_BUFFER))
-        return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    if (has_flag(EBufferUsageFlags::UNORDERED_ACCESS))
-        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    if (has_flag(EBufferUsageFlags::TEXTURE_BUFFER))
-        return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
-    return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-}
-
 VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _me_count) {
     switch (_me_count) {
         case 1:

@@ -122,7 +122,6 @@ public:
         return m_argument_infos;
     }
 
-    void                CreatePipelineLayout(const std::optional<VkPushConstantRange>& push_constant_range);
     VkPipelineBindPoint GetPipelineBindPoint() const {
         switch (m_type) {
             case GFX:
@@ -144,6 +143,9 @@ public:
 
 public:
     UniquePtr<VulkanPipelineBindingTemplate> binding_template;
+
+private:
+    void CreatePipelineLayout(const std::optional<VkPushConstantRange>& push_constant_range);
 
 protected:
     friend VulkanDevice;

@@ -21,7 +21,6 @@ public:
     static VkImageUsageFlags            METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
     static EPixelFormat                 VKToMEFormat(VkFormat _format);
     static VkBufferUsageFlags           METoVKBufferUsageFlags(EBufferUsageFlags _me_flags);
-    static VkDescriptorType             METoVkBufferDescriptorType(EBufferUsageFlags _type);
     static VkSampleCountFlagBits        METoVKSampleCountFlagBits(uint32_t _me_count);
     static VkImageAspectFlags           METoVKImageAspectFlags(ETextureAspectFlags _flags);
     static VkImageViewType              METoVKImageViewType(ETextureDimension _dim);

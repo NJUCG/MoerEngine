@@ -127,12 +127,6 @@ protected:
     Array<uint64>                 buffer_slot_claim_tokens;
     uint64                        next_update_command_token{0};
     Array<UpdateCmd>              update_cmds;
-    Array<std::pair<uint, uint>>  array_indices_dat;
-    Array<byte>                   array_dat;
-    Array<std::pair<uint, uint>>  texture_indices_dat;
-    Array<byte>                   texture_dat;
-    Array<std::pair<uint, uint>>  buffer_indices_dat;
-    Array<byte>                   buffer_dat;
     UnorderedMap<uint, uint>      temp_slot_to_cmd;
 
     struct ResourceAllocationRecord {

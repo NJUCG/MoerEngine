@@ -10,16 +10,6 @@
 
 namespace Moer::Render {
 
-class VulkanMemoryManager final {
-public:
-    VulkanMemoryManager()                                      = delete;
-    VulkanMemoryManager(const VulkanMemoryManager&)            = delete;
-    VulkanMemoryManager& operator=(const VulkanMemoryManager&) = delete;
-
-    static VmaAllocationCreateFlags MEGenerateVmaMemoryFlags(EBufferUsageFlags _flags);
-    static VmaMemoryUsage           MEGenerateVmaMemoryUsage();
-};
-
 struct VulkanBufferDescriptorKey {
     uint64   byte_offset{0};
     uint64   byte_size{0};
@@ -90,19 +80,14 @@ public:
         return m_alloc.buffer;
     }
 
-    VkDescriptorType GetDescriptorType() const {
-        return m_descriptor_type;
-    }
-
 private:
     friend class VulkanDescriptorHeap;
 
     VulkanBufferDescriptorCacheSlots& GetDescriptorCacheSlots(VkDescriptorType _type);
     VulkanBufferDescriptorCacheSlots  m_descriptor_cache_slots[4];
 
-    BufferAlloc      m_alloc;
-    uint64           m_device_address = 0;
-    VkDescriptorType m_descriptor_type;
+    BufferAlloc m_alloc;
+    uint64      m_device_address = 0;
 };
 
 struct VulkanTextureDescriptorKey {
@@ -198,7 +183,15 @@ private:
     UnorderedMap<VulkanTextureDescriptorKey, uint, VulkanTextureDescriptorKey::Hasher>
         m_descriptor_cache_slots;
 
-    void Destroy() override;
+    void        Destroy() override;
+    VkImageView GetOrCreateView(
+        UnorderedMap<uint64, VkImageView>& _cache,
+        VkImageViewType                    _view_type,
+        uint                               _mip_level,
+        uint                               _mip_count,
+        uint                               _base_layer,
+        uint                               _layer_count
+    );
     struct TextureAlloc {
         VkImage       image;
         VmaAllocation alloc;

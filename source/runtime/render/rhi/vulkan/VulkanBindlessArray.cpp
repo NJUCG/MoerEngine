@@ -278,6 +278,13 @@ void VulkanBindlessArray::UntrackTextureView(uint _array_idx) {
 UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
     std::unique_lock<std::mutex> lk(mtx);
 
+    Array<std::pair<uint, uint>> array_indices_dat;
+    Array<byte>                  array_dat;
+    Array<std::pair<uint, uint>> texture_indices_dat;
+    Array<byte>                  texture_dat;
+    Array<std::pair<uint, uint>> buffer_indices_dat;
+    Array<byte>                  buffer_dat;
+
     {
         VulkanDescriptorHeap& heap   = m_device->GetGlobalDescriptorHeap();
         uint64 texture_handle_stride = heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);

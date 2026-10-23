@@ -13,14 +13,12 @@
 
 namespace Moer::Render {
 
-VmaAllocationCreateFlags VulkanMemoryManager::MEGenerateVmaMemoryFlags(EBufferUsageFlags _flags) {
+namespace {
+
+VmaAllocationCreateFlags GetBufferAllocationFlags(EBufferUsageFlags _flags) {
     if ((_flags & EBufferUsageFlags::CPU_VISIBLE) == EBufferUsageFlags::CPU_VISIBLE)
         return VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
     return 0;
-}
-
-VmaMemoryUsage VulkanMemoryManager::MEGenerateVmaMemoryUsage() {
-    return VMA_MEMORY_USAGE_AUTO;
 }
 
 uint64 EncodeViewKey(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
@@ -28,7 +26,7 @@ uint64 EncodeViewKey(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _lay
            ((uint64)_layer_cnt << 48);
 }
 
-VkImageTiling GetVkImageTilling(VkImageCreateInfo _create_infos, VulkanDevice& _device) {
+VkImageTiling SelectImageTiling(const VkImageCreateInfo& _create_infos, VulkanDevice& _device) {
     //query device property
     VkImageFormatProperties2 properties2{};
     properties2.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
@@ -42,170 +40,12 @@ VkImageTiling GetVkImageTilling(VkImageCreateInfo _create_infos, VulkanDevice& _
     properties2.pNext  = VK_NULL_HANDLE;
     VkResult result = vkGetPhysicalDeviceImageFormatProperties2(_device.GetGpu(), &format_info, &properties2);
     if (result != VK_SUCCESS) {
-        // LOG_CRITICAL("Failed to get image format properties");
         return VK_IMAGE_TILING_LINEAR;
     }
     return format_info.tiling;
 }
-VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, VkImage _image) :
-    Texture(_info),
-    VulkanDeviceObject(_device) {
-    b_present          = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
-    m_preferred_layout = PreferredLayoutForUsage(_info.usage);
 
-    if (_image != VK_NULL_HANDLE) {
-        m_alloc.image = _image;
-        m_alloc.alloc = {};
-        return;
-    }
-    // 验证 texture 参数
-    if (_info.extent.x == 0 || _info.extent.y == 0) {
-        LOG_ERROR(
-            "Invalid texture extent: ({}, {}). Texture name: {}",
-            _info.extent.x,
-            _info.extent.y,
-            _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown"
-        );
-        assert(false && "Texture extent cannot be zero");
-    }
-
-    VkImageCreateInfo image_create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    image_create_info.flags       = VulkanEnumTranslator::METoVKImageCreateFlags(_info.dimension);
-    image_create_info.imageType   = VulkanEnumTranslator::METoVKImageType(_info.dimension);
-    image_create_info.format      = VulkanEnumTranslator::METoVKFormat(_info.format);
-    image_create_info.extent      = {uint(_info.extent.x), uint(_info.extent.y), _info.depth};
-    image_create_info.mipLevels   = _info.num_mips;
-    image_create_info.arrayLayers = _info.array_size;
-    image_create_info.samples     = VulkanEnumTranslator::METoVKSampleCountFlagBits(_info.num_samples);
-    image_create_info.tiling      = VK_IMAGE_TILING_OPTIMAL;
-    image_create_info.usage       = VulkanEnumTranslator::METoVKImageUsageFlags(_info.usage) |
-                              VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-    image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-#if WITH_CUDA
-    image_create_info.pNext = GetExternalMemoryImageCreateInfoPtr(nullptr);
-#endif
-
-    auto tilling             = GetVkImageTilling(image_create_info, *_device);
-    image_create_info.tiling = tilling;
-    VmaAllocationCreateInfo alloc_create_info{};
-    alloc_create_info.flags = 0;
-    alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
-
-    VmaAllocator allocator = m_device->GetVmaAllocator();
-    VkResult     result    = vmaCreateImage(
-        allocator, &image_create_info, &alloc_create_info, &m_alloc.image, &m_alloc.alloc, nullptr
-    );
-    if (result != VK_SUCCESS) {
-        std::string texture_name = _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown";
-        LOG_CRITICAL(
-            "Failed to create texture '{}': extent=({},{}), format={}, mips={}, layers={}, "
-            "VkResult={}",
-            texture_name,
-            _info.extent.x,
-            _info.extent.y,
-            uint(_info.format),
-            _info.num_mips,
-            _info.array_size,
-            int(result)
-        );
-        VK_CHECK_RESULT(result);
-    }
-    if (!_info.debug_name.has_value()) {
-        SetName("UserTexture");
-    } else {
-        SetName(_info.debug_name->c_str());
-    }
-}
-
-VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
-    std::lock_guard<std::mutex> lock(m_views_mutex);
-    uint64                      key = EncodeViewKey(_mip_level, _mip_cnt, _base_layer, _layer_cnt);
-    auto                        it  = m_views.find(key);
-    if (it != m_views.end()) {
-        return it->second;
-    }
-    VkImageView           view;
-    VkImageViewCreateInfo view_create_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    view_create_info.image = m_alloc.image;
-
-    // 如果是 CubeMap 但只请求了 1 层，必须降级为 2D View
-    if (GetDimension() == ETextureDimension::TEX_CUBE && _layer_cnt == 1) {
-        view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    } else {
-        view_create_info.viewType = VulkanEnumTranslator::METoVKImageViewType(GetDimension());
-    }
-
-    view_create_info.format     = VulkanEnumTranslator::METoVKFormat(GetFormat());
-    view_create_info.components = {
-        VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY
-    };
-    view_create_info.subresourceRange.aspectMask =
-        VulkanEnumTranslator::METoVKImageAspectFlags(GetAspectFlags());
-    view_create_info.subresourceRange.baseMipLevel   = _mip_level;
-    view_create_info.subresourceRange.levelCount     = _mip_cnt; // 含义：这次我想看多少，而不是纹理总共有多少
-    view_create_info.subresourceRange.baseArrayLayer = _base_layer;
-    view_create_info.subresourceRange.layerCount = _layer_cnt; // 含义：这次我想看多少，而不是纹理总共有多少
-    view_create_info.pNext                       = nullptr;
-    view_create_info.flags                       = 0;
-
-    VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &view_create_info, nullptr, &view));
-    m_views[key] = view;
-    return view;
-}
-
-VkImageView
-VulkanTexture::GetAttachmentView(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
-    const bool requires_attachment_view = _layer_cnt > 1 || GetDimension() == ETextureDimension::TEX_CUBE ||
-                                          GetDimension() == ETextureDimension::TEX_CUBE_ARRAY;
-    if (!requires_attachment_view) {
-        return GetView(_mip_level, _mip_cnt, _base_layer, _layer_cnt);
-    }
-
-    std::lock_guard<std::mutex> lock(m_views_mutex);
-    const uint64                key = EncodeViewKey(_mip_level, _mip_cnt, _base_layer, _layer_cnt);
-    const auto                  it  = m_attachment_views.find(key);
-    if (it != m_attachment_views.end()) {
-        return it->second;
-    }
-
-    VkImageViewCreateInfo view_create_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    view_create_info.image      = m_alloc.image;
-    view_create_info.viewType   = _layer_cnt == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    view_create_info.format     = VulkanEnumTranslator::METoVKFormat(GetFormat());
-    view_create_info.components = {
-        VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY
-    };
-    view_create_info.subresourceRange.aspectMask =
-        VulkanEnumTranslator::METoVKImageAspectFlags(GetAspectFlags());
-    view_create_info.subresourceRange.baseMipLevel   = _mip_level;
-    view_create_info.subresourceRange.levelCount     = _mip_cnt;
-    view_create_info.subresourceRange.baseArrayLayer = _base_layer;
-    view_create_info.subresourceRange.layerCount     = _layer_cnt;
-
-    VkImageView view = VK_NULL_HANDLE;
-    VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &view_create_info, nullptr, &view));
-    m_attachment_views.emplace(key, view);
-    return view;
-}
-
-uint VulkanTexture::GetMipByteSize(uint _mip_level) const {
-    uint         mip_width  = std::max(1u, GetWidth() >> _mip_level);
-    uint         mip_height = std::max(1u, GetHeight() >> _mip_level);
-    uint         mip_depth  = std::max(1u, GetDepth() >> _mip_level);
-    const uint64 byte_size  = GetSizeFromPixelFormat(GetFormat(), uint3{mip_width, mip_height, mip_depth});
-    MOER_ASSERT(
-        byte_size <= std::numeric_limits<uint>::max(), "Texture mip size exceeds uint: {}", byte_size
-    );
-    return static_cast<uint>(byte_size);
-}
+} // namespace
 
 VulkanBuffer::~VulkanBuffer() {
     if (m_alloc.buffer != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) {
@@ -228,8 +68,7 @@ VulkanBuffer::VulkanBuffer(std::string_view _name, const BufferInfo& _info, Vulk
             .vk_usage = VulkanEnumTranslator::METoVKBufferUsageFlags(_info.usage) |
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            .allocation_flags     = VulkanMemoryManager::MEGenerateVmaMemoryFlags(_info.usage),
-            .memory_usage         = VulkanMemoryManager::MEGenerateVmaMemoryUsage(),
+            .allocation_flags     = GetBufferAllocationFlags(_info.usage),
             .needs_device_address = true,
         },
         true
@@ -278,7 +117,6 @@ VulkanBuffer::VulkanBuffer(
     }
     try {
         b_deferred_delete = _defer_destroy;
-        m_descriptor_type = VulkanEnumTranslator::METoVkBufferDescriptorType(_info.usage);
         if (_allocation_info.needs_device_address) {
             const VkBufferDeviceAddressInfo address_info{
                 .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
@@ -312,7 +150,6 @@ VulkanBuffer::VulkanBuffer(
     m_alloc.buffer    = _handle;
     m_alloc.alloc     = _alloc;
     b_deferred_delete = _defer_destroy;
-    m_descriptor_type = VulkanEnumTranslator::METoVkBufferDescriptorType(_info.usage);
     if (_get_address) {
         VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         info.buffer      = m_alloc.buffer;
@@ -337,6 +174,158 @@ VulkanBufferDescriptorCacheSlots& VulkanBuffer::GetDescriptorCacheSlots(VkDescri
     return m_descriptor_cache_slots[0];
 }
 
+void VulkanBuffer::Destroy() {
+    if (b_deferred_delete) {
+        m_device->EnqueueDeferredRelease(this);
+        return;
+    }
+    MoerDelete(this);
+}
+
+void VulkanBuffer::SetName(const std::string_view _name) {
+    debug_name = _name;
+    m_device->SetResourceName(uint64(m_alloc.buffer), VK_OBJECT_TYPE_BUFFER, _name);
+}
+
+VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, VkImage _image) :
+    Texture(_info),
+    VulkanDeviceObject(_device) {
+    b_present          = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
+    m_preferred_layout = PreferredLayoutForUsage(_info.usage);
+
+    if (_image != VK_NULL_HANDLE) {
+        m_alloc.image = _image;
+        m_alloc.alloc = {};
+        return;
+    }
+    // 验证 texture 参数
+    if (_info.extent.x == 0 || _info.extent.y == 0) {
+        LOG_ERROR(
+            "Invalid texture extent: ({}, {}). Texture name: {}",
+            _info.extent.x,
+            _info.extent.y,
+            _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown"
+        );
+        assert(false && "Texture extent cannot be zero");
+    }
+
+    VkImageCreateInfo image_create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    image_create_info.flags       = VulkanEnumTranslator::METoVKImageCreateFlags(_info.dimension);
+    image_create_info.imageType   = VulkanEnumTranslator::METoVKImageType(_info.dimension);
+    image_create_info.format      = VulkanEnumTranslator::METoVKFormat(_info.format);
+    image_create_info.extent      = {uint(_info.extent.x), uint(_info.extent.y), _info.depth};
+    image_create_info.mipLevels   = _info.num_mips;
+    image_create_info.arrayLayers = _info.array_size;
+    image_create_info.samples     = VulkanEnumTranslator::METoVKSampleCountFlagBits(_info.num_samples);
+    image_create_info.tiling      = VK_IMAGE_TILING_OPTIMAL;
+    image_create_info.usage       = VulkanEnumTranslator::METoVKImageUsageFlags(_info.usage) |
+                              VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+#if WITH_CUDA
+    image_create_info.pNext = GetExternalMemoryImageCreateInfoPtr(nullptr);
+#endif
+
+    image_create_info.tiling = SelectImageTiling(image_create_info, *_device);
+    VmaAllocationCreateInfo alloc_create_info{};
+    alloc_create_info.flags = 0;
+    alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO;
+
+    VmaAllocator allocator = m_device->GetVmaAllocator();
+    VkResult     result    = vmaCreateImage(
+        allocator, &image_create_info, &alloc_create_info, &m_alloc.image, &m_alloc.alloc, nullptr
+    );
+    if (result != VK_SUCCESS) {
+        std::string texture_name = _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown";
+        LOG_CRITICAL(
+            "Failed to create texture '{}': extent=({},{}), format={}, mips={}, layers={}, "
+            "VkResult={}",
+            texture_name,
+            _info.extent.x,
+            _info.extent.y,
+            uint(_info.format),
+            _info.num_mips,
+            _info.array_size,
+            int(result)
+        );
+        VK_CHECK_RESULT(result);
+    }
+    if (!_info.debug_name.has_value()) {
+        SetName("UserTexture");
+    } else {
+        SetName(_info.debug_name->c_str());
+    }
+}
+
+VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
+    const VkImageViewType view_type = GetDimension() == ETextureDimension::TEX_CUBE && _layer_cnt == 1 ?
+                                          VK_IMAGE_VIEW_TYPE_2D :
+                                          VulkanEnumTranslator::METoVKImageViewType(GetDimension());
+    return GetOrCreateView(m_views, view_type, _mip_level, _mip_cnt, _base_layer, _layer_cnt);
+}
+
+VkImageView
+VulkanTexture::GetAttachmentView(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
+    const bool requires_attachment_view = _layer_cnt > 1 || GetDimension() == ETextureDimension::TEX_CUBE ||
+                                          GetDimension() == ETextureDimension::TEX_CUBE_ARRAY;
+    if (!requires_attachment_view) {
+        return GetView(_mip_level, _mip_cnt, _base_layer, _layer_cnt);
+    }
+    const VkImageViewType view_type = _layer_cnt == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    return GetOrCreateView(m_attachment_views, view_type, _mip_level, _mip_cnt, _base_layer, _layer_cnt);
+}
+
+VkImageView VulkanTexture::GetOrCreateView(
+    UnorderedMap<uint64, VkImageView>& _cache,
+    VkImageViewType                    _view_type,
+    uint                               _mip_level,
+    uint                               _mip_count,
+    uint                               _base_layer,
+    uint                               _layer_count
+) {
+    std::lock_guard<std::mutex> lock(m_views_mutex);
+    const uint64                key = EncodeViewKey(_mip_level, _mip_count, _base_layer, _layer_count);
+    const auto                  it  = _cache.find(key);
+    if (it != _cache.end()) {
+        return it->second;
+    }
+
+    VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    view_info.image      = m_alloc.image;
+    view_info.viewType   = _view_type;
+    view_info.format     = VulkanEnumTranslator::METoVKFormat(GetFormat());
+    view_info.components = {
+        VK_COMPONENT_SWIZZLE_IDENTITY,
+        VK_COMPONENT_SWIZZLE_IDENTITY,
+        VK_COMPONENT_SWIZZLE_IDENTITY,
+        VK_COMPONENT_SWIZZLE_IDENTITY
+    };
+    view_info.subresourceRange = {
+        VulkanEnumTranslator::METoVKImageAspectFlags(GetAspectFlags()),
+        _mip_level,
+        _mip_count,
+        _base_layer,
+        _layer_count
+    };
+
+    VkImageView view = VK_NULL_HANDLE;
+    VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &view_info, nullptr, &view));
+    _cache.emplace(key, view);
+    return view;
+}
+
+uint VulkanTexture::GetMipByteSize(uint _mip_level) const {
+    uint         mip_width  = std::max(1u, GetWidth() >> _mip_level);
+    uint         mip_height = std::max(1u, GetHeight() >> _mip_level);
+    uint         mip_depth  = std::max(1u, GetDepth() >> _mip_level);
+    const uint64 byte_size  = GetSizeFromPixelFormat(GetFormat(), uint3{mip_width, mip_height, mip_depth});
+    MOER_ASSERT(
+        byte_size <= std::numeric_limits<uint>::max(), "Texture mip size exceeds uint: {}", byte_size
+    );
+    return static_cast<uint>(byte_size);
+}
+
 VulkanTexture::~VulkanTexture() {
     //destroy image views
     {
@@ -357,19 +346,6 @@ VulkanTexture::~VulkanTexture() {
     for (auto& [key, desc] : m_descriptor_cache_slots) {
         m_device->GetGlobalDescriptorHeap().FreeImageDescriptorSlot(desc);
     }
-}
-
-void VulkanBuffer::Destroy() {
-    if (b_deferred_delete) {
-        m_device->EnqueueDeferredRelease(this);
-        return;
-    }
-    MoerDelete(this);
-}
-
-void VulkanBuffer::SetName(const std::string_view _name) {
-    debug_name = _name;
-    m_device->SetResourceName(uint64(m_alloc.buffer), VK_OBJECT_TYPE_BUFFER, _name);
 }
 
 void VulkanTexture::Destroy() {
