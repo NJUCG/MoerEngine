@@ -17,6 +17,7 @@ static const uint k_batch_size = 256;
 groupshared float4 batch_centers_cutoffs[k_batch_size];
 groupshared float4 batch_conics[k_batch_size];
 groupshared float3 batch_colors[k_batch_size];
+groupshared float3 batch_reference_colors[k_batch_size];
 groupshared uint active_pixel_count;
 
 float3 SRGBToLinear(float3 color) {
@@ -60,7 +61,10 @@ void main(uint3 group_id : SV_GroupID, uint3 local_id : SV_GroupThreadID) {
             Moer::GProjectedGaussian gaussian = projected[pairs[pair_id].z];
             batch_centers_cutoffs[lane_id] = gaussian.center_depth;
             batch_conics[lane_id] = gaussian.conic_opacity;
-            batch_colors[lane_id] = gaussian.color.xyz;
+            // Decode once per tile batch and share the linear result across pixels.
+            batch_colors[lane_id] = param.job.x != 0 ?
+                SRGBToLinear(gaussian.color.xyz) * exp2(camera.background.w) : gaussian.color.xyz;
+            if (param.job.y != 0) batch_reference_colors[lane_id] = gaussian.color.xyz;
         }
         GroupMemoryBarrierWithGroupSync();
         if (active_pixel_count == 0) break;
@@ -87,8 +91,7 @@ void main(uint3 group_id : SV_GroupID, uint3 local_id : SV_GroupThreadID) {
                 break;
             }
             float3 rgb = batch_colors[gaussian_id];
-            if (param.job.y != 0) reference_color += rgb * (alpha * transmittance);
-            if (param.job.x != 0) rgb = SRGBToLinear(rgb) * exp2(camera.background.w);
+            if (param.job.y != 0) reference_color += batch_reference_colors[gaussian_id] * (alpha * transmittance);
             color += rgb * (alpha * transmittance);
             transmittance = next_transmittance;
         }

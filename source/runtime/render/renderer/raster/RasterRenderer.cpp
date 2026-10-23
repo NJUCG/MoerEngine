@@ -496,7 +496,7 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
             frame_packet.gaussian_content = scene.GetGaussianSceneContentForView(
                 editor_config->active_viewport_mode == EEditorViewportMode::Scene);
             const auto gaussian_snapshot = scene.GetGaussianSnapshot();
-            // Retain the empty path after deleting the last splat; empty mesh buffers are not renderable.
+            // Track asset presence separately from visible draw work and export requests.
             frame_packet.has_gaussian_assets = scene.HasGaussianSceneData();
             frame_packet.gaussian_view_settings = scene.GetGaussianViewSettings();
             frame_packet.gaussian_export_request = scene.TakeGaussianImageExportRequest();
@@ -907,10 +907,22 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             m_gaussian_export = MakeUnique<GaussianImageExport>();
         const bool has_visible_gaussians = frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
             frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
-        const bool has_meshes = frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly ||
+        // Preserve the legacy mesh schedule, including procedural surfaces, in scenes without GS assets.
+        const bool has_meshes = !frame_packet.has_gaussian_assets ||
+            frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly ||
             frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
+        if (has_meshes != m_had_mesh_pipeline_work) {
+            // Surface histories cannot survive an interval with no mesh passes.
+            raster_context.InvalidateHiZHistory();
+            rtao_denoiser_pass->ResetHistory();
+        }
+        m_had_mesh_pipeline_work = has_meshes;
         const bool record_gaussians = has_visible_gaussians || bool(frame_packet.gaussian_export_request);
         if (has_visible_gaussians != m_had_visible_gaussians) aa_pass->ResetHistory();
+        const bool gaussian_display_context = has_visible_gaussians || (frame_packet.has_gaussian_assets && !has_meshes);
+        if (gaussian_display_context && !m_has_gaussian_exposure)
+            cmd_list.ClearResource(tonemapping_pass->GetExposureBuffer()->GetView(), 0x3f800000u);
+        m_has_gaussian_exposure = gaussian_display_context;
         m_had_visible_gaussians = has_visible_gaussians;
         if (has_visible_gaussians && raster_config.aa_mode == EAaMode::SMAA_T2X)
             raster_config.aa_mode = EAaMode::SMAA_1X;
@@ -943,7 +955,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         raster_commit_view_proj = camera.GetViewProjectionMatrix();
         raster_commit_aa_phase  = smaa_t2x_phase;
-        raster_context.Update(camera.GetDeltaTime());
+        raster_context.Update(gaussian_display_context ?
+            std::clamp(camera.GetDeltaTime(), 0.f, .1f) : camera.GetDeltaTime());
         cooperative_ops_pass->Commit(
             raster_config, cooperative_ops_pass->Prepare(raster_config)
         );
@@ -1035,12 +1048,26 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         if (record_gaussians) {
             const bool needs_reference = frame_packet.gaussian_export_request &&
                 frame_packet.gaussian_export_request->view_settings.display_mode == EGaussianDisplayMode::Reference &&
-                frame_packet.gaussian_content != EGaussianSceneContent::Mixed;
+                (frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
+                 frame_packet.gaussian_content == EGaussianSceneContent::Empty);
             gaussian_parameters = m_gaussian_splat_pass->Prepare(render_scene->GetGaussianGpuScene(), camera,
                 raster_context.GetResolution(), frame_packet.active_viewport_mode == EEditorViewportMode::Scene,
                 frame_packet.gaussian_view_settings,
                 TextureRef(raster_context.textures.depth_nearest_sampler.tex->GetView().GetTexture()), needs_reference);
         }
+        const auto record_gaussian_export = [&](CommandList& commands) {
+            const auto& request = *frame_packet.gaussian_export_request;
+            if (request.view_settings.display_mode == EGaussianDisplayMode::Reference &&
+                (frame_packet.gaussian_content == EGaussianSceneContent::Mixed ||
+                 frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly)) {
+                m_gaussian_export->Reject(request.request_id, "Reference PNG requires a pure Gaussian view; select Viewport PNG for mixed scenes");
+                return;
+            }
+            const auto image = request.view_settings.display_mode == EGaussianDisplayMode::Reference ?
+                m_gaussian_splat_pass->GetDisplay()->GetView() : raster_context.textures.tonemapping_output.tex->GetView();
+            m_gaussian_export->Request(commands, image, m_gaussian_splat_pass->GetStatusBuffer(),
+                raster_context.GetResolution(), request.path, request.request_id);
+        };
         auto define_raster_passes = [&](auto&& dispatch, auto&& dispatch_prepared) {
             auto schedule_external = [&](std::string_view name, auto&& setup, auto&& execute) {
                 dispatch(
@@ -1120,152 +1147,152 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 };
             RenderGraph::PreparedPassHandle shadow_depth_pass_handle{}, probe_update_pass_handle{};
             if (has_meshes) {
-            shadow_depth_pass_handle = schedule_prepared(
-                "ShadowDepth",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Write(graph_resources.shadow_maps)
-                        .SideEffect();
-                },
-                [&]() {
-                    return shadow_depth_pass->Prepare(raster_context, raster_config, camera);
-                },
-                [&](CommandList& recording_cmd_list,
-                    const ShadowDepthPass::RecordParameters& parameters) {
-                    recording_cmd_list.PushScopeWithTimeScope(
-                        RasterTool::GetShadowDepthPassProfileScopeName()
-                    );
-                    shadow_depth_pass->Record(recording_cmd_list, parameters);
-                    recording_cmd_list.PopScopeWithTimeScope();
-                },
-                // Updates the persistent shadow cache and shadow resources.
-                RenderGraph::PrepareSafety::Unsafe
-            );
-            probe_update_pass_handle = schedule_prepared(
-                "ProbeUpdate",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.ReadWrite(graph_resources.probe_volume)
-                        .SideEffect();
-                },
-                [&]() {
-                    return probe_update_pass->Prepare(
-                        raster_context, raster_config, camera, time
-                    );
-                },
-                [&](CommandList& recording_cmd_list,
-                    const ProbeUpdatePass::RecordParameters& parameters) {
-                    probe_update_pass->Record(recording_cmd_list, parameters);
-                },
-                // Advances persistent probe-volume streaming and layout state.
-                RenderGraph::PrepareSafety::Unsafe
-            );
-            schedule_prepared_after_two(
-                "UploadLightingData",
-                shadow_depth_pass_handle.setup,
-                probe_update_pass_handle.setup,
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Write(graph_resources.lighting_data)
-                        .SideEffect();
-                },
-                [&]() {
-                    return PrepareGlobalLightingData(raster_context, raster_config, camera);
-                },
-                [&](CommandList& recording_cmd_list,
-                    const LightingUploadRecordParameters& parameters) {
-                    RecordGlobalLightingData(recording_cmd_list, parameters);
-                }
-            );
-            schedule_prepared_after(
-                "Geometry",
-                shadow_depth_pass_handle.setup,
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.hiz_previous)
-                        .Write(graph_resources.base_color)
-                        .Write(graph_resources.normal)
-                        .Write(graph_resources.metal_rough_ao)
-                        .Write(graph_resources.depth);
-                },
-                [&]() {
-                    return geometry_pass->Prepare(raster_context, raster_config, camera);
-                },
-                [&](CommandList& recording_cmd_list,
-                    const GeometryPass::RecordParameters& parameters) {
-                    recording_cmd_list.PushScopeWithTimeScope(
-                        RasterTool::GetGeometryPassProfileScopeName()
-                    );
-                    geometry_pass->Record(recording_cmd_list, parameters);
-                    recording_cmd_list.PopScopeWithTimeScope();
-                },
-                // Publishes culling statistics into the frame's mutable config.
-                RenderGraph::PrepareSafety::Unsafe
-            );
-            schedule_prepared(
-                "TessellatedSurface",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.ReadWrite(graph_resources.base_color)
-                        .ReadWrite(graph_resources.normal)
-                        .ReadWrite(graph_resources.metal_rough_ao)
-                        .ReadWrite(graph_resources.depth);
-                },
-                [&]() {
-                    return tessellated_surface_pass->Prepare(
-                        raster_context, raster_config, camera
-                    );
-                },
-                [&](CommandList& recording_cmd_list,
-                    const TessellatedSurfacePass::RecordParameters& parameters) {
-                    tessellated_surface_pass->Record(recording_cmd_list, parameters);
-                }
-            );
-            schedule_prepared(
-                "HiZBuild",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.depth)
-                        .Write(graph_resources.hiz_current);
-                },
-                [&]() { return hiz_build_pass->Prepare(raster_context); },
-                [&](CommandList& recording_cmd_list,
-                    const HiZBuildPass::RecordParameters& parameters) {
-                    hiz_build_pass->Record(recording_cmd_list, parameters);
-                }
-            );
-            schedule_prepared_after(
-                "DirectionalShadowMask",
-                shadow_depth_pass_handle.setup,
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.normal)
-                        .Read(graph_resources.depth)
-                        .Read(graph_resources.lighting_data)
-                        .Read(graph_resources.shadow_maps)
-                        .Write(graph_resources.shadow_mask);
-                },
-                [&]() { return directional_shadow_mask_pass->Prepare(raster_context); },
-                [&](CommandList& recording_cmd_list,
-                    const DirectionalShadowMaskPass::RecordParameters& parameters) {
-                    directional_shadow_mask_pass->Record(recording_cmd_list, parameters);
-                }
-            );
-            schedule_prepared(
-                "Lighting",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.base_color)
-                        .Read(graph_resources.normal)
-                        .Read(graph_resources.metal_rough_ao)
-                        .Read(graph_resources.depth)
-                        .Read(graph_resources.shadow_mask)
-                        .Read(graph_resources.lighting_data)
-                        .Read(graph_resources.cubemap)
-                        .Read(graph_resources.probe_volume)
-                        .Write(graph_resources.lighting_output);
-                    if (graph_resources.scene_lights.IsValid()) {
-                        builder.Read(graph_resources.scene_lights);
+                shadow_depth_pass_handle = schedule_prepared(
+                    "ShadowDepth",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Write(graph_resources.shadow_maps)
+                            .SideEffect();
+                    },
+                    [&]() {
+                        return shadow_depth_pass->Prepare(raster_context, raster_config, camera);
+                    },
+                    [&](CommandList& recording_cmd_list,
+                        const ShadowDepthPass::RecordParameters& parameters) {
+                        recording_cmd_list.PushScopeWithTimeScope(
+                            RasterTool::GetShadowDepthPassProfileScopeName()
+                        );
+                        shadow_depth_pass->Record(recording_cmd_list, parameters);
+                        recording_cmd_list.PopScopeWithTimeScope();
+                    },
+                    // Updates the persistent shadow cache and shadow resources.
+                    RenderGraph::PrepareSafety::Unsafe
+                );
+                probe_update_pass_handle = schedule_prepared(
+                    "ProbeUpdate",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.ReadWrite(graph_resources.probe_volume)
+                            .SideEffect();
+                    },
+                    [&]() {
+                        return probe_update_pass->Prepare(
+                            raster_context, raster_config, camera, time
+                        );
+                    },
+                    [&](CommandList& recording_cmd_list,
+                        const ProbeUpdatePass::RecordParameters& parameters) {
+                        probe_update_pass->Record(recording_cmd_list, parameters);
+                    },
+                    // Advances persistent probe-volume streaming and layout state.
+                    RenderGraph::PrepareSafety::Unsafe
+                );
+                schedule_prepared_after_two(
+                    "UploadLightingData",
+                    shadow_depth_pass_handle.setup,
+                    probe_update_pass_handle.setup,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Write(graph_resources.lighting_data)
+                            .SideEffect();
+                    },
+                    [&]() {
+                        return PrepareGlobalLightingData(raster_context, raster_config, camera);
+                    },
+                    [&](CommandList& recording_cmd_list,
+                        const LightingUploadRecordParameters& parameters) {
+                        RecordGlobalLightingData(recording_cmd_list, parameters);
                     }
-                },
-                [&]() { return lighting_pass->Prepare(raster_context, raster_config); },
-                [&](CommandList& recording_cmd_list,
-                    const LightingPass::RecordParameters& parameters) {
-                    lighting_pass->Record(recording_cmd_list, parameters);
-                }
-            );
+                );
+                schedule_prepared_after(
+                    "Geometry",
+                    shadow_depth_pass_handle.setup,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.hiz_previous)
+                            .Write(graph_resources.base_color)
+                            .Write(graph_resources.normal)
+                            .Write(graph_resources.metal_rough_ao)
+                            .Write(graph_resources.depth);
+                    },
+                    [&]() {
+                        return geometry_pass->Prepare(raster_context, raster_config, camera);
+                    },
+                    [&](CommandList& recording_cmd_list,
+                        const GeometryPass::RecordParameters& parameters) {
+                        recording_cmd_list.PushScopeWithTimeScope(
+                            RasterTool::GetGeometryPassProfileScopeName()
+                        );
+                        geometry_pass->Record(recording_cmd_list, parameters);
+                        recording_cmd_list.PopScopeWithTimeScope();
+                    },
+                    // Publishes culling statistics into the frame's mutable config.
+                    RenderGraph::PrepareSafety::Unsafe
+                );
+                schedule_prepared(
+                    "TessellatedSurface",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.ReadWrite(graph_resources.base_color)
+                            .ReadWrite(graph_resources.normal)
+                            .ReadWrite(graph_resources.metal_rough_ao)
+                            .ReadWrite(graph_resources.depth);
+                    },
+                    [&]() {
+                        return tessellated_surface_pass->Prepare(
+                            raster_context, raster_config, camera
+                        );
+                    },
+                    [&](CommandList& recording_cmd_list,
+                        const TessellatedSurfacePass::RecordParameters& parameters) {
+                        tessellated_surface_pass->Record(recording_cmd_list, parameters);
+                    }
+                );
+                schedule_prepared(
+                    "HiZBuild",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.depth)
+                            .Write(graph_resources.hiz_current);
+                    },
+                    [&]() { return hiz_build_pass->Prepare(raster_context); },
+                    [&](CommandList& recording_cmd_list,
+                        const HiZBuildPass::RecordParameters& parameters) {
+                        hiz_build_pass->Record(recording_cmd_list, parameters);
+                    }
+                );
+                schedule_prepared_after(
+                    "DirectionalShadowMask",
+                    shadow_depth_pass_handle.setup,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.normal)
+                            .Read(graph_resources.depth)
+                            .Read(graph_resources.lighting_data)
+                            .Read(graph_resources.shadow_maps)
+                            .Write(graph_resources.shadow_mask);
+                    },
+                    [&]() { return directional_shadow_mask_pass->Prepare(raster_context); },
+                    [&](CommandList& recording_cmd_list,
+                        const DirectionalShadowMaskPass::RecordParameters& parameters) {
+                        directional_shadow_mask_pass->Record(recording_cmd_list, parameters);
+                    }
+                );
+                schedule_prepared(
+                    "Lighting",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.base_color)
+                            .Read(graph_resources.normal)
+                            .Read(graph_resources.metal_rough_ao)
+                            .Read(graph_resources.depth)
+                            .Read(graph_resources.shadow_mask)
+                            .Read(graph_resources.lighting_data)
+                            .Read(graph_resources.cubemap)
+                            .Read(graph_resources.probe_volume)
+                            .Write(graph_resources.lighting_output);
+                        if (graph_resources.scene_lights.IsValid()) {
+                            builder.Read(graph_resources.scene_lights);
+                        }
+                    },
+                    [&]() { return lighting_pass->Prepare(raster_context, raster_config); },
+                    [&](CommandList& recording_cmd_list,
+                        const LightingPass::RecordParameters& parameters) {
+                        lighting_pass->Record(recording_cmd_list, parameters);
+                    }
+                );
             }
             schedule_prepared(
                 "Skybox",
@@ -1311,132 +1338,132 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             }
 
             if (has_meshes) {
-            ao_result = ao_pass->DescribeNextOutput(raster_context, raster_config);
-            raster_commit_ao_index = ao_result.ao_only_idx;
-            schedule_prepared(
-                "AmbientOcclusion",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.normal)
-                        .Read(graph_resources.depth)
-                        .Read(graph_resources.lighting_output)
-                        .Write(graph_resources.ao_only)
-                        .Write(graph_resources.camera_motion_vector)
-                        .Write(graph_resources.motion_vector_data);
-                },
-                [&]() { return ao_pass->Prepare(raster_context, raster_config, camera, time); },
-                [&](CommandList& recording_cmd_list,
-                    const AoPass::RecordParameters& parameters) {
-                    ao_pass->Record(recording_cmd_list, parameters);
-                }
-            );
-            schedule_prepared(
-                "RtaoDenoise",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.normal)
-                        .Read(graph_resources.depth)
-                        .Read(graph_resources.camera_motion_vector)
-                        .Read(graph_resources.ao_history_read)
-                        .ReadWrite(graph_resources.ao_only)
-                        .Write(graph_resources.ao_history_write);
-                },
-                [&]() {
-                    return rtao_denoiser_pass->Prepare(
-                        raster_context, raster_config, ao_result.ao_only_idx
-                    );
-                },
-                [&](CommandList& recording_cmd_list,
-                    const RtaoDenoiserPass::RecordParameters& parameters) {
-                    rtao_denoiser_pass->Record(recording_cmd_list, parameters);
-                }
-            );
-            schedule_prepared(
-                "AoComposite",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.ao_only)
-                        .Read(graph_resources.lighting_output)
-                        .Read(graph_resources.depth)
-                        .Read(graph_resources.normal)
-                        .Write(graph_resources.ao_output);
-                },
-                [&]() {
-                    return ao_pass->PrepareComposite(
-                        raster_context, raster_config, ao_result.ao_only
-                    );
-                },
-                [&](CommandList& recording_cmd_list,
-                    const AoPass::CompositeRecordParameters& parameters) {
-                    ao_pass->RecordComposite(recording_cmd_list, parameters);
-                }
-            );
-            processing_image = raster_context.textures.ao_output;
-            processing_image_resource = graph_resources.ao_output;
-
-#if WITH_CUDA
-            if (raster_config.ai_is_cuda_enabled) {
-                schedule_external(
-                    "TensorRT",
+                ao_result = ao_pass->DescribeNextOutput(raster_context, raster_config);
+                raster_commit_ao_index = ao_result.ao_only_idx;
+                schedule_prepared(
+                    "AmbientOcclusion",
                     [&](RenderGraph::PassBuilder& builder) {
-                        builder.Read(graph_resources.ao_only)
+                        builder.Read(graph_resources.normal)
                             .Read(graph_resources.depth)
-                            .Read(graph_resources.camera_motion_vector)
-                            .ReadWrite(graph_resources.lighting_output)
-                            .SideEffect();
+                            .Read(graph_resources.lighting_output)
+                            .Write(graph_resources.ao_only)
+                            .Write(graph_resources.camera_motion_vector)
+                            .Write(graph_resources.motion_vector_data);
                     },
-                    [&]() {
-                        processing_image = tensor_rt_pass->Process(
-                            raster_context, raster_config, ao_result.ao_only_idx
-                        );
-                        processing_image_resource =
-                            graph_resources.lighting_output;
+                    [&]() { return ao_pass->Prepare(raster_context, raster_config, camera, time); },
+                    [&](CommandList& recording_cmd_list,
+                        const AoPass::RecordParameters& parameters) {
+                        ao_pass->Record(recording_cmd_list, parameters);
                     }
                 );
-            }
-#endif
+                schedule_prepared(
+                    "RtaoDenoise",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.normal)
+                            .Read(graph_resources.depth)
+                            .Read(graph_resources.camera_motion_vector)
+                            .Read(graph_resources.ao_history_read)
+                            .ReadWrite(graph_resources.ao_only)
+                            .Write(graph_resources.ao_history_write);
+                    },
+                    [&]() {
+                        return rtao_denoiser_pass->Prepare(
+                            raster_context, raster_config, ao_result.ao_only_idx
+                        );
+                    },
+                    [&](CommandList& recording_cmd_list,
+                        const RtaoDenoiserPass::RecordParameters& parameters) {
+                        rtao_denoiser_pass->Record(recording_cmd_list, parameters);
+                    }
+                );
+                schedule_prepared(
+                    "AoComposite",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.ao_only)
+                            .Read(graph_resources.lighting_output)
+                            .Read(graph_resources.depth)
+                            .Read(graph_resources.normal)
+                            .Write(graph_resources.ao_output);
+                    },
+                    [&]() {
+                        return ao_pass->PrepareComposite(
+                            raster_context, raster_config, ao_result.ao_only
+                        );
+                    },
+                    [&](CommandList& recording_cmd_list,
+                        const AoPass::CompositeRecordParameters& parameters) {
+                        ao_pass->RecordComposite(recording_cmd_list, parameters);
+                    }
+                );
+                processing_image = raster_context.textures.ao_output;
+                processing_image_resource = graph_resources.ao_output;
 
-            const TextureWithHandle bilateral_input = processing_image;
-            schedule_prepared(
-                "BilateralDenoise",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(processing_image_resource)
-                        .Write(graph_resources.denoiser_output);
-                },
-                [&, bilateral_input]() {
-                    return bilateral_filter_denoiser_pass->Prepare(
-                        raster_context, raster_config, bilateral_input
+    #if WITH_CUDA
+                if (raster_config.ai_is_cuda_enabled) {
+                    schedule_external(
+                        "TensorRT",
+                        [&](RenderGraph::PassBuilder& builder) {
+                            builder.Read(graph_resources.ao_only)
+                                .Read(graph_resources.depth)
+                                .Read(graph_resources.camera_motion_vector)
+                                .ReadWrite(graph_resources.lighting_output)
+                                .SideEffect();
+                        },
+                        [&]() {
+                            processing_image = tensor_rt_pass->Process(
+                                raster_context, raster_config, ao_result.ao_only_idx
+                            );
+                            processing_image_resource =
+                                graph_resources.lighting_output;
+                        }
                     );
-                },
-                [&](CommandList& recording_cmd_list,
-                    const BilateralFilterDenoiserPass::RecordParameters& parameters) {
-                    bilateral_filter_denoiser_pass->Record(recording_cmd_list, parameters);
                 }
-            );
-            if (raster_config.denoiser_mode != EDenoiserMode::NONE) {
-                processing_image = raster_context.textures.denoiser_output;
-                processing_image_resource = graph_resources.denoiser_output;
-            }
+    #endif
 
-            const TextureWithHandle ssr_input = processing_image;
-            schedule_prepared(
-                "ScreenSpaceReflection",
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(processing_image_resource)
-                        .Read(graph_resources.normal)
-                        .Read(graph_resources.depth)
-                        .Read(graph_resources.metal_rough_ao)
-                        .Write(graph_resources.ssr_output);
-                },
-                [&, ssr_input]() {
-                    return ssr_pass->Prepare(raster_context, raster_config, camera, ssr_input);
-                },
-                [&](CommandList& recording_cmd_list,
-                    const SsrPass::RecordParameters& parameters) {
-                    ssr_pass->Record(recording_cmd_list, parameters);
+                const TextureWithHandle bilateral_input = processing_image;
+                schedule_prepared(
+                    "BilateralDenoise",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(processing_image_resource)
+                            .Write(graph_resources.denoiser_output);
+                    },
+                    [&, bilateral_input]() {
+                        return bilateral_filter_denoiser_pass->Prepare(
+                            raster_context, raster_config, bilateral_input
+                        );
+                    },
+                    [&](CommandList& recording_cmd_list,
+                        const BilateralFilterDenoiserPass::RecordParameters& parameters) {
+                        bilateral_filter_denoiser_pass->Record(recording_cmd_list, parameters);
+                    }
+                );
+                if (raster_config.denoiser_mode != EDenoiserMode::NONE) {
+                    processing_image = raster_context.textures.denoiser_output;
+                    processing_image_resource = graph_resources.denoiser_output;
                 }
-            );
-            if (raster_config.ssr_is_ssr_enabled != 0) {
-                processing_image = raster_context.textures.ssr_output;
-                processing_image_resource = graph_resources.ssr_output;
-            }
+
+                const TextureWithHandle ssr_input = processing_image;
+                schedule_prepared(
+                    "ScreenSpaceReflection",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(processing_image_resource)
+                            .Read(graph_resources.normal)
+                            .Read(graph_resources.depth)
+                            .Read(graph_resources.metal_rough_ao)
+                            .Write(graph_resources.ssr_output);
+                    },
+                    [&, ssr_input]() {
+                        return ssr_pass->Prepare(raster_context, raster_config, camera, ssr_input);
+                    },
+                    [&](CommandList& recording_cmd_list,
+                        const SsrPass::RecordParameters& parameters) {
+                        ssr_pass->Record(recording_cmd_list, parameters);
+                    }
+                );
+                if (raster_config.ssr_is_ssr_enabled != 0) {
+                    processing_image = raster_context.textures.ssr_output;
+                    processing_image_resource = graph_resources.ssr_output;
+                }
             } else {
                 processing_image = raster_context.textures.lighting_output;
                 processing_image_resource = graph_resources.lighting_output;
@@ -1520,6 +1547,19 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             processing_image = raster_context.textures.tonemapping_output;
             processing_image_resource = graph_resources.tonemapping_output;
 
+            if (record_gaussians && frame_packet.gaussian_view_settings.debug_view != EGaussianDebugView::Color) {
+                const auto debug = m_gaussian_composite_pass->Prepare(processing_image,
+                    m_gaussian_splat_pass->GetColor(),m_gaussian_splat_pass->GetTransmittance(),
+                    BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),m_gaussian_splat_pass->GetRanges(),
+                    frame_packet.gaussian_view_settings.debug_view);
+                schedule_prepared("GaussianDebug", [&](RenderGraph::PassBuilder&) {}, [debug]() { return debug; },
+                    [&](CommandList& commands, const GaussianCompositePass::RecordParameters& parameters) {
+                        m_gaussian_composite_pass->RecordDebug(commands,parameters,raster_context.textures.tonemapping_output.tex);
+                    });
+            }
+            if (frame_packet.gaussian_export_request)
+                schedule_prepared("GaussianExport", [&](RenderGraph::PassBuilder&) {}, []() { return uint8(0); },
+                    [&](CommandList& commands, uint8) { record_gaussian_export(commands); });
                 if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
                     schedule_prepared(
                         "CameraGizmo",
@@ -1857,98 +1897,98 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 if (record_gaussians) gaussian_graph = m_gaussian_splat_pass->ImportGraphResources(graph);
                 RenderGraph::PreparedPassHandle shadow_depth_handle{}, probe_update_handle{};
                 if (has_meshes) {
-                shadow_depth_handle = shadow_depth_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    camera,
-                    {.shadow_maps = graph_resources.shadow_maps}
-                );
-                probe_update_handle = probe_update_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    camera,
-                    time,
-                    {.probe_volume = graph_resources.probe_volume}
-                );
+                    shadow_depth_handle = shadow_depth_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        camera,
+                        {.shadow_maps = graph_resources.shadow_maps}
+                    );
+                    probe_update_handle = probe_update_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        camera,
+                        time,
+                        {.probe_volume = graph_resources.probe_volume}
+                    );
 
-                const StaticArray<RenderGraph::SetupPassHandle, 2> lighting_dependencies{
-                    shadow_depth_handle.setup,
-                    probe_update_handle.setup
-                };
-                LightingUploadPass{}.AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    camera,
-                    {.lighting_data = graph_resources.lighting_data},
-                    lighting_dependencies
-                );
+                    const StaticArray<RenderGraph::SetupPassHandle, 2> lighting_dependencies{
+                        shadow_depth_handle.setup,
+                        probe_update_handle.setup
+                    };
+                    LightingUploadPass{}.AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        camera,
+                        {.lighting_data = graph_resources.lighting_data},
+                        lighting_dependencies
+                    );
 
-                const StaticArray<RenderGraph::SetupPassHandle, 1> shadow_dependency{
-                    shadow_depth_handle.setup
-                };
-                geometry_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    camera,
-                    {
-                        .hiz_previous = graph_resources.hiz_previous,
-                        .base_color = graph_resources.base_color,
-                        .normal = graph_resources.normal,
-                        .metal_rough_ao = graph_resources.metal_rough_ao,
-                        .depth = graph_resources.depth
-                    },
-                    shadow_dependency
-                );
-                tessellated_surface_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    camera,
-                    {
-                        .base_color = graph_resources.base_color,
-                        .normal = graph_resources.normal,
-                        .metal_rough_ao = graph_resources.metal_rough_ao,
-                        .depth = graph_resources.depth
-                    }
-                );
-                hiz_build_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    {.depth = graph_resources.depth, .hiz_current = graph_resources.hiz_current}
-                );
-                directional_shadow_mask_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    {
-                        .normal = graph_resources.normal,
-                        .depth = graph_resources.depth,
-                        .lighting_data = graph_resources.lighting_data,
-                        .shadow_maps = graph_resources.shadow_maps,
-                        .shadow_mask = graph_resources.shadow_mask
-                    },
-                    shadow_dependency
-                );
-                lighting_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    {
-                        .base_color = graph_resources.base_color,
-                        .normal = graph_resources.normal,
-                        .metal_rough_ao = graph_resources.metal_rough_ao,
-                        .depth = graph_resources.depth,
-                        .shadow_mask = graph_resources.shadow_mask,
-                        .lighting_data = graph_resources.lighting_data,
-                        .cubemap = graph_resources.cubemap,
-                        .probe_volume = graph_resources.probe_volume,
-                        .lighting_output = graph_resources.lighting_output,
-                        .scene_lights = graph_resources.scene_lights
-                    }
-                );
+                    const StaticArray<RenderGraph::SetupPassHandle, 1> shadow_dependency{
+                        shadow_depth_handle.setup
+                    };
+                    geometry_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        camera,
+                        {
+                            .hiz_previous = graph_resources.hiz_previous,
+                            .base_color = graph_resources.base_color,
+                            .normal = graph_resources.normal,
+                            .metal_rough_ao = graph_resources.metal_rough_ao,
+                            .depth = graph_resources.depth
+                        },
+                        shadow_dependency
+                    );
+                    tessellated_surface_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        camera,
+                        {
+                            .base_color = graph_resources.base_color,
+                            .normal = graph_resources.normal,
+                            .metal_rough_ao = graph_resources.metal_rough_ao,
+                            .depth = graph_resources.depth
+                        }
+                    );
+                    hiz_build_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        {.depth = graph_resources.depth, .hiz_current = graph_resources.hiz_current}
+                    );
+                    directional_shadow_mask_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        {
+                            .normal = graph_resources.normal,
+                            .depth = graph_resources.depth,
+                            .lighting_data = graph_resources.lighting_data,
+                            .shadow_maps = graph_resources.shadow_maps,
+                            .shadow_mask = graph_resources.shadow_mask
+                        },
+                        shadow_dependency
+                    );
+                    lighting_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        {
+                            .base_color = graph_resources.base_color,
+                            .normal = graph_resources.normal,
+                            .metal_rough_ao = graph_resources.metal_rough_ao,
+                            .depth = graph_resources.depth,
+                            .shadow_mask = graph_resources.shadow_mask,
+                            .lighting_data = graph_resources.lighting_data,
+                            .cubemap = graph_resources.cubemap,
+                            .probe_volume = graph_resources.probe_volume,
+                            .lighting_output = graph_resources.lighting_output,
+                            .scene_lights = graph_resources.scene_lights
+                        }
+                    );
                 }
                 const StaticArray<RenderGraph::SetupPassHandle, 1> shadow_dependency{shadow_depth_handle.setup};
                 skybox_pass->AddToGraph(
@@ -1990,108 +2030,108 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 }
 
                 if (has_meshes) {
-                ao_result = ao_pass->DescribeNextOutput(raster_context, raster_config);
-                raster_commit_ao_index = ao_result.ao_only_idx;
-                ao_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    camera,
-                    time,
-                    {
-                        .normal = graph_resources.normal,
-                        .depth = graph_resources.depth,
-                        .lighting_output = graph_resources.lighting_output,
-                        .ao_only = graph_resources.ao_only,
-                        .camera_motion_vector = graph_resources.camera_motion_vector,
-                        .motion_vector_data = graph_resources.motion_vector_data
-                    }
-                );
-                rtao_denoiser_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    ao_result.ao_only_idx,
-                    {
-                        .normal = graph_resources.normal,
-                        .depth = graph_resources.depth,
-                        .camera_motion_vector = graph_resources.camera_motion_vector,
-                        .ao_only = graph_resources.ao_only,
-                        .history_read = graph_resources.ao_history_read,
-                        .history_write = graph_resources.ao_history_write
-                    }
-                );
-                ao_pass->AddCompositeToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    ao_result.ao_only,
-                    {
-                        .ao_only = graph_resources.ao_only,
-                        .lighting_output = graph_resources.lighting_output,
-                        .depth = graph_resources.depth,
-                        .normal = graph_resources.normal,
-                        .ao_output = graph_resources.ao_output
-                    }
-                );
-                processing_image = raster_context.textures.ao_output;
-                processing_image_resource = graph_resources.ao_output;
-
-#if WITH_CUDA
-                if (raster_config.ai_is_cuda_enabled) {
-                    graph.AddUnsafePass(
-                        "TensorRT",
-                        [&](RenderGraph::PassBuilder& builder) {
-                            builder.Read(graph_resources.ao_only)
-                                .Read(graph_resources.depth)
-                                .Read(graph_resources.camera_motion_vector)
-                                .ReadWrite(graph_resources.lighting_output)
-                                .SideEffect()
-                                .ExternalControl();
-                        },
-                        [&]() {
-                            processing_image = tensor_rt_pass->Process(
-                                raster_context, raster_config, ao_result.ao_only_idx
-                            );
-                            processing_image_resource =
-                                graph_resources.lighting_output;
+                    ao_result = ao_pass->DescribeNextOutput(raster_context, raster_config);
+                    raster_commit_ao_index = ao_result.ao_only_idx;
+                    ao_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        camera,
+                        time,
+                        {
+                            .normal = graph_resources.normal,
+                            .depth = graph_resources.depth,
+                            .lighting_output = graph_resources.lighting_output,
+                            .ao_only = graph_resources.ao_only,
+                            .camera_motion_vector = graph_resources.camera_motion_vector,
+                            .motion_vector_data = graph_resources.motion_vector_data
                         }
                     );
-                }
-#endif
+                    rtao_denoiser_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        ao_result.ao_only_idx,
+                        {
+                            .normal = graph_resources.normal,
+                            .depth = graph_resources.depth,
+                            .camera_motion_vector = graph_resources.camera_motion_vector,
+                            .ao_only = graph_resources.ao_only,
+                            .history_read = graph_resources.ao_history_read,
+                            .history_write = graph_resources.ao_history_write
+                        }
+                    );
+                    ao_pass->AddCompositeToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        ao_result.ao_only,
+                        {
+                            .ao_only = graph_resources.ao_only,
+                            .lighting_output = graph_resources.lighting_output,
+                            .depth = graph_resources.depth,
+                            .normal = graph_resources.normal,
+                            .ao_output = graph_resources.ao_output
+                        }
+                    );
+                    processing_image = raster_context.textures.ao_output;
+                    processing_image_resource = graph_resources.ao_output;
 
-                bilateral_filter_denoiser_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    processing_image,
-                    {
-                        .input = processing_image_resource,
-                        .denoiser_output = graph_resources.denoiser_output
+    #if WITH_CUDA
+                    if (raster_config.ai_is_cuda_enabled) {
+                        graph.AddUnsafePass(
+                            "TensorRT",
+                            [&](RenderGraph::PassBuilder& builder) {
+                                builder.Read(graph_resources.ao_only)
+                                    .Read(graph_resources.depth)
+                                    .Read(graph_resources.camera_motion_vector)
+                                    .ReadWrite(graph_resources.lighting_output)
+                                    .SideEffect()
+                                    .ExternalControl();
+                            },
+                            [&]() {
+                                processing_image = tensor_rt_pass->Process(
+                                    raster_context, raster_config, ao_result.ao_only_idx
+                                );
+                                processing_image_resource =
+                                    graph_resources.lighting_output;
+                            }
+                        );
                     }
-                );
-                if (raster_config.denoiser_mode != EDenoiserMode::NONE) {
-                    processing_image = raster_context.textures.denoiser_output;
-                    processing_image_resource = graph_resources.denoiser_output;
-                }
-                ssr_pass->AddToGraph(
-                    graph,
-                    raster_context,
-                    raster_config,
-                    camera,
-                    processing_image,
-                    {
-                        .input = processing_image_resource,
-                        .normal = graph_resources.normal,
-                        .depth = graph_resources.depth,
-                        .metal_rough_ao = graph_resources.metal_rough_ao,
-                        .ssr_output = graph_resources.ssr_output
+    #endif
+
+                    bilateral_filter_denoiser_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        processing_image,
+                        {
+                            .input = processing_image_resource,
+                            .denoiser_output = graph_resources.denoiser_output
+                        }
+                    );
+                    if (raster_config.denoiser_mode != EDenoiserMode::NONE) {
+                        processing_image = raster_context.textures.denoiser_output;
+                        processing_image_resource = graph_resources.denoiser_output;
                     }
-                );
-                if (raster_config.ssr_is_ssr_enabled != 0) {
-                    processing_image = raster_context.textures.ssr_output;
-                    processing_image_resource = graph_resources.ssr_output;
-                }
+                    ssr_pass->AddToGraph(
+                        graph,
+                        raster_context,
+                        raster_config,
+                        camera,
+                        processing_image,
+                        {
+                            .input = processing_image_resource,
+                            .normal = graph_resources.normal,
+                            .depth = graph_resources.depth,
+                            .metal_rough_ao = graph_resources.metal_rough_ao,
+                            .ssr_output = graph_resources.ssr_output
+                        }
+                    );
+                    if (raster_config.ssr_is_ssr_enabled != 0) {
+                        processing_image = raster_context.textures.ssr_output;
+                        processing_image_resource = graph_resources.ssr_output;
+                    }
                 } else {
                     processing_image = raster_context.textures.lighting_output;
                     processing_image_resource = graph_resources.lighting_output;
@@ -2150,6 +2190,23 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 processing_image = raster_context.textures.tonemapping_output;
                 processing_image_resource = graph_resources.tonemapping_output;
 
+                if (record_gaussians && frame_packet.gaussian_view_settings.debug_view != EGaussianDebugView::Color) {
+                    const auto debug = m_gaussian_composite_pass->Prepare(processing_image,
+                        m_gaussian_splat_pass->GetColor(),m_gaussian_splat_pass->GetTransmittance(),
+                        BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),m_gaussian_splat_pass->GetRanges(),
+                        frame_packet.gaussian_view_settings.debug_view);
+                    graph.AddRecordPass("GaussianDebug", [=](RenderGraph::PassBuilder& builder) {
+                        builder.Read(gaussian_graph.transmittance).Read(gaussian_graph.status).Read(gaussian_graph.ranges)
+                            .Write(graph_resources.tonemapping_output);
+                    }, [&,debug](CommandList& commands) {
+                        m_gaussian_composite_pass->RecordDebug(commands,debug,raster_context.textures.tonemapping_output.tex);
+                    }, RenderGraph::PassExecutionClass::ParallelRecordEligible);
+                }
+                if (frame_packet.gaussian_export_request)
+                    graph.AddRecordPass("GaussianExport", [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.tonemapping_output).Read(gaussian_graph.display)
+                            .Read(gaussian_graph.status).SideEffect();
+                    }, [&](CommandList& commands) { record_gaussian_export(commands); }, RenderGraph::PassExecutionClass::SerialRecord);
                 if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
                     camera_gizmo_pass->AddToGraph(
                         graph,
@@ -2287,18 +2344,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             LOG_DEBUG("FPS Limit Enabled: {}", raster_config.debug_fps_limit);
         }
 
-        if (frame_packet.gaussian_export_request) {
-            const auto& request = *frame_packet.gaussian_export_request;
-            if (request.view_settings.display_mode == EGaussianDisplayMode::Reference &&
-                frame_packet.gaussian_content == EGaussianSceneContent::Mixed)
-                m_gaussian_export->Reject(request.request_id, "Reference export requires a pure Gaussian viewport; select Engine output for mixed PNG");
-            else {
-                const auto image = request.view_settings.display_mode == EGaussianDisplayMode::Reference ?
-                    m_gaussian_splat_pass->GetDisplay()->GetView() : raster_context.textures.tonemapping_output.tex->GetView();
-                m_gaussian_export->Request(cmd_list, image, m_gaussian_splat_pass->GetStatusBuffer(),
-                    raster_context.GetResolution(), request.path, request.request_id);
-            }
-        }
         scene_updates.main_camera = std::move(main_camera);
     }
 
@@ -2427,7 +2472,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     const bool frame_native_accepted = timeline->WaitSubmitted(time);
     if (frame_native_accepted && raster_pipeline_recorded) {
-        const bool has_mesh_history = frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly ||
+        const bool has_mesh_history = !frame_packet.has_gaussian_assets ||
+            frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly ||
             frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
         if (has_mesh_history) raster_context.CommitHiZHistory(raster_commit_view_proj);
         else raster_context.InvalidateHiZHistory();
@@ -2458,8 +2504,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     RasterFrameFeedback feedback{};
     if (m_gaussian_export) feedback.gaussian_export_status = m_gaussian_export->GetStatus();
-    if (m_gaussian_splat_pass && frame_packet.has_gaussian_assets && frame_packet.gaussian_content != EGaussianSceneContent::MeshOnly)
+    if (m_gaussian_splat_pass && (frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
+        frame_packet.gaussian_content == EGaussianSceneContent::Mixed)) {
         feedback.gaussian_status = m_gaussian_splat_pass->GetStatus();
+        if(m_gaussian_composite_pass) feedback.gaussian_status.composite_gpu_ms = m_gaussian_composite_pass->GetGpuTime();
+    }
     feedback.frame_id              = frame_packet.frame_id;
     feedback.main_present_receipt  = std::move(main_present_receipt);
     feedback.culling_stats          = frame_packet.raster_config.culling_stats;

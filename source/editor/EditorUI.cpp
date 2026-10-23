@@ -574,8 +574,6 @@ void EditorUI::PollGaussianImport(Scene& scene) {
             if (entity != entt::null) {
                 m_selected_node = entity;
                 m_last_file_action_status = "Imported " + std::to_string(result.asset->gaussians.size()) + " Gaussians";
-                if (scene.GetGaussianSceneContent() == EGaussianSceneContent::Mixed)
-                    m_last_file_action_status += "; mixed rendering is not implemented yet";
             } else {
                 m_last_file_action_status = "Import failed: cannot create Gaussian instance";
             }
@@ -658,7 +656,8 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
     );
     const bool can_export_gaussians = scene.HasGaussianSceneData() &&
         m_config->selected_render_method == ERenderMethod::Raster && !export_status.is_busy &&
-        (gaussian_content == EGaussianSceneContent::GaussianOnly || gaussian_content == EGaussianSceneContent::Empty);
+        (scene.GetGaussianViewSettings().display_mode == EGaussianDisplayMode::Engine ||
+         gaussian_content == EGaussianSceneContent::GaussianOnly || gaussian_content == EGaussianSceneContent::Empty);
     if (ImGui::MenuItem("Export Gaussian PNG...", nullptr, false, can_export_gaussians)) {
         NFD::UniquePath selected_path;
         const nfdfilteritem_t filter{"PNG image", "png"};
@@ -671,7 +670,7 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
         }
     }
     if (scene.HasGaussianSceneData() && gaussian_content == EGaussianSceneContent::Mixed)
-        ImGui::TextDisabled("PNG export is unavailable for mixed Mesh/Gaussian rendering.");
+        ImGui::TextDisabled("Mixed scenes require PNG output = Viewport (engine) in Gaussian Rendering.");
     if (!export_status.message.empty()) ImGui::TextWrapped("%s", export_status.message.c_str());
     if (ImGui::BeginMenu("Scene Cache")) {
         const bool can_restore_source_scene = scene.IsReady() && !scene.GetSourceFilePath().empty() && !m_gaussian_import.valid();
@@ -1018,48 +1017,97 @@ void EditorUI::ShowViewportWindow(
 }
 
 void EditorUI::ShowGaussianSettings(Scene& scene) {
-    if (!scene.HasGaussianSceneData() || !ImGui::CollapsingHeader("Gaussian Rendering", ImGuiTreeNodeFlags_DefaultOpen)) return;
-    const auto content = scene.GetGaussianSceneContentForView(m_config->active_viewport_mode == EEditorViewportMode::Scene);
-    if (content == EGaussianSceneContent::Mixed)
-        ImGui::TextWrapped("Mixed Mesh/Gaussian rendering is not implemented yet. The magenta image is diagnostic.");
+    if (!scene.HasGaussianSceneData() ||
+        !ImGui::CollapsingHeader("Gaussian Rendering", ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+    const auto content =
+        scene.GetGaussianSceneContentForView(m_config->active_viewport_mode == EEditorViewportMode::Scene);
+    ImGui::TextWrapped("Gaussian splats share the raster frame and use opaque Mesh depth for occlusion.");
     ImGui::TextDisabled("Standard SH appearance; scene lights do not relight it.");
     ImGui::TextWrapped("Save edits: File > Scene Cache > Save State Cache (.moca).");
-    auto settings=scene.GetGaussianViewSettings();
-    int display_mode=static_cast<int>(settings.display_mode);
-    bool has_changed=ImGui::Combo("Display mode", &display_mode, "Reference RGB\0Engine preview\0");
-    settings.display_mode=static_cast<EGaussianDisplayMode>(display_mode);
-    has_changed |= ImGui::ColorEdit3("Background", &settings.background.x);
-    ImGui::BeginDisabled(settings.display_mode==EGaussianDisplayMode::Reference);
-    has_changed |= ImGui::SliderFloat("Display exposure (EV)", &settings.exposure_ev,-16.f,16.f);
-    ImGui::EndDisabled();
-    if (settings.display_mode==EGaussianDisplayMode::Reference)
-        ImGui::TextDisabled("Reference output bypasses exposure and tone mapping.");
-    else ImGui::TextDisabled("Preview uses display exposure and Reinhard tone mapping.");
-    int debug_view=static_cast<int>(settings.debug_view);
+    auto settings     = scene.GetGaussianViewSettings();
+    int  display_mode = static_cast<int>(settings.display_mode);
+    bool has_changed =
+        ImGui::Combo("PNG output", &display_mode, "Reference RGB (pure GS)\0Viewport (engine)\0");
+    settings.display_mode = static_cast<EGaussianDisplayMode>(display_mode);
+    has_changed |= ImGui::ColorEdit3("Reference background", &settings.background.x);
+    has_changed |= ImGui::SliderFloat("Gaussian brightness (EV)", &settings.exposure_ev, -16.f, 16.f);
+    ImGui::TextDisabled(
+        "Viewport uses shared exposure and tone mapping. Reference PNG uses its own background."
+    );
+    const bool has_visible_gaussians =
+        content == EGaussianSceneContent::GaussianOnly || content == EGaussianSceneContent::Mixed;
+    const auto requested_aa = m_config->raster_config.aa_mode;
+    const auto effective_aa =
+        has_visible_gaussians && requested_aa == EAaMode::SMAA_T2X ? EAaMode::SMAA_1X : requested_aa;
+    ImGui::Text(
+        "AA requested: %s | Actual: %s",
+        s_aa_mode_name_map.at(requested_aa).c_str(),
+        s_aa_mode_name_map.at(effective_aa).c_str()
+    );
+    if (requested_aa != effective_aa)
+        ImGui::TextDisabled("Gaussian temporal data unavailable; using spatial AA.");
+    int debug_view = static_cast<int>(settings.debug_view);
     has_changed |= ImGui::Combo("View", &debug_view, "Color\0Transmittance\0Tile coverage\0");
-    settings.debug_view=static_cast<EGaussianDebugView>(debug_view);
-    int pair_capacity=static_cast<int>(settings.tile_pair_capacity);
-    has_changed |= ImGui::InputInt("Tile-pair capacity", &pair_capacity,65536,1048576);
+    settings.debug_view = static_cast<EGaussianDebugView>(debug_view);
+    int pair_capacity   = static_cast<int>(settings.tile_pair_capacity);
+    has_changed |= ImGui::InputInt("Tile-pair capacity", &pair_capacity, 65536, 1048576);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Allocation budget: 1 to 16,777,216 pairs. Increase only if the pair count overflows; higher values use more GPU memory.");
-    settings.tile_pair_capacity=static_cast<uint>(std::clamp(pair_capacity,1,1<<24));
-    if(has_changed) scene.SetGaussianViewSettings(settings);
-    if(ImGui::Button("Reset reference settings")) scene.SetGaussianViewSettings({});
-    const auto snapshot=scene.GetGaussianSnapshot();
+        ImGui::SetTooltip(
+            "Allocation budget: 1 to 16,777,216 pairs. Increase only if the pair count overflows; higher "
+            "values use more GPU memory."
+        );
+    settings.tile_pair_capacity = static_cast<uint>(std::clamp(pair_capacity, 1, 1 << 24));
+    if (has_changed)
+        scene.SetGaussianViewSettings(settings);
+    if (ImGui::Button("Reset Gaussian settings"))
+        scene.SetGaussianViewSettings({});
+    const auto snapshot = scene.GetGaussianSnapshot();
     ImGui::BeginDisabled(!snapshot || !snapshot->bounds.IsValid());
-    if(ImGui::Button("Frame Gaussian bounds")) m_config->raster_config.should_frame_gaussians=true;
+    if (ImGui::Button("Frame Gaussian bounds"))
+        m_config->raster_config.should_frame_gaussians = true;
     ImGui::EndDisabled();
-    const auto& status=m_config->raster_config.gaussian_status;
-    const auto export_status=scene.GetGaussianImageExportStatus();
-    if(!export_status.message.empty()) ImGui::TextWrapped("%s",export_status.message.c_str());
-    if(!status.is_active) {ImGui::TextDisabled("Gaussian renderer inactive.");return;}
-    ImGui::Text("Unique: %u | Instances: %u | Submitted: %u",status.unique_gaussian_count,status.instance_count,status.work_count);
-    if(status.has_completed_counts) ImGui::Text("Projected: %u | Tile pairs: %u",status.visible_count,status.tile_pair_count);
-    else ImGui::TextDisabled("Waiting for GPU counts...");
-    ImGui::Text("Geometry: %.2f MiB | Workspace: ~%.2f MiB",double(status.geometry_bytes)/(1024*1024),double(status.workspace_bytes)/(1024*1024));
-    if(status.has_gpu_time) ImGui::Text("Last completed GPU: %.3f ms",status.gpu_ms);
-    if(status.has_work_overflow) ImGui::TextWrapped("Expanded Gaussian count exceeds 2,097,152. Reduce the number of instances or use a smaller asset.");
-    else if(status.has_overflow) ImGui::TextWrapped("Tile-pair capacity exceeded. The magenta frame is invalid; increase the capacity.");
+    const auto& status        = m_config->raster_config.gaussian_status;
+    const auto  export_status = scene.GetGaussianImageExportStatus();
+    if (!export_status.message.empty())
+        ImGui::TextWrapped("%s", export_status.message.c_str());
+    if (!status.is_active) {
+        ImGui::TextDisabled("Gaussian renderer inactive.");
+        return;
+    }
+    ImGui::Text(
+        "Unique: %u | Instances: %u | Submitted: %u",
+        status.unique_gaussian_count,
+        status.instance_count,
+        status.work_count
+    );
+    if (status.has_completed_counts)
+        ImGui::Text("Projected: %u | Tile pairs: %u", status.visible_count, status.tile_pair_count);
+    else
+        ImGui::TextDisabled("Waiting for GPU counts...");
+    ImGui::Text(
+        "Geometry: %.2f MiB | Workspace: ~%.2f MiB",
+        double(status.geometry_bytes) / (1024 * 1024),
+        double(status.workspace_bytes) / (1024 * 1024)
+    );
+    if (status.has_gpu_time) {
+        ImGui::Text("Last GS GPU: %.3f ms | Composite: %.3f ms", status.gpu_ms, status.composite_gpu_ms);
+        ImGui::Text(
+            "Project/bin: %.3f | Sort: %.3f | Accumulate: %.3f ms",
+            status.projection_gpu_ms,
+            status.sorting_gpu_ms,
+            status.accumulation_gpu_ms
+        );
+    }
+    if (status.has_work_overflow)
+        ImGui::TextWrapped(
+            "Expanded Gaussian count exceeds 2,097,152. Reduce the number of instances or use a smaller "
+            "asset."
+        );
+    else if (status.has_overflow)
+        ImGui::TextWrapped(
+            "Tile-pair capacity exceeded. The magenta frame is invalid; increase the capacity."
+        );
 }
 
 void EditorUI::ShowConfig(Scene& scene) {
@@ -1140,8 +1188,7 @@ void EditorUI::ShowConfig(Scene& scene) {
         switch (m_config->selected_render_method) {
             case ERenderMethod::Raster:
                 ShowGaussianSettings(scene);
-                if (scene.GetGaussianSceneContentForView(m_config->active_viewport_mode == EEditorViewportMode::Scene) != EGaussianSceneContent::GaussianOnly)
-                    m_raster_ui.ShowConfig();
+                m_raster_ui.ShowConfig();
                 break;
             case ERenderMethod::Raytracing:
                 m_raytracing_ui.ShowConfig();

@@ -160,14 +160,25 @@ struct GaussianSplatPass::Impl {
     };
     std::vector<ScanLevel> m_scan;
     TextureRef             m_color, m_transmittance, m_display, m_reference, m_empty_depth;
-    bool m_is_engine_linear = false;
+    bool                   m_is_engine_linear = false;
     ReadbackFuture         m_status_readback;
     bool                   m_has_reported_overflow = false;
     GaussianRasterStatus   m_telemetry{};
     uint64                 m_readback_revision = 0;
     uint2                  m_readback_resolution{};
     QueryFuture            m_timing_future;
+    QueryFuture            m_stage_timing[3];
     void                   Poll() {
+        double* stages[] = {
+            &m_telemetry.projection_gpu_ms, &m_telemetry.sorting_gpu_ms, &m_telemetry.accumulation_gpu_ms
+        };
+        for (uint i = 0; i < 3; ++i)
+            if (m_stage_timing[i].Valid() && m_stage_timing[i].Status() != QueryStatus::Pending) {
+                const auto result = m_stage_timing[i].Get();
+                if (const auto* timing = std::get_if<TimestampQueryResult>(&result.payload))
+                    *stages[i] = timing->duration_ns / 1000000.0;
+                m_stage_timing[i] = {};
+            }
         if (m_status_readback.Valid() && m_status_readback.Status() != ReadbackStatus::Pending) {
             const auto result = m_status_readback.Get();
             const auto values = result.CopyAs<uint>();
@@ -225,8 +236,13 @@ struct GaussianSplatPass::Impl {
     }
     void Resize(uint2 resolution, uint work_count) {
         if (!m_empty_depth) {
-            m_empty_depth = RenderDevice::Get().CreateTexture("Gaussian empty depth", Extent3D(1,1,1), PF_R32_SFLOAT,
-                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::UNORDERED_ACCESS);
+            m_empty_depth = RenderDevice::Get().CreateTexture(
+                "Gaussian empty depth",
+                Extent3D(1, 1, 1),
+                PF_R32_SFLOAT,
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST |
+                    ETextureUsageFlags::UNORDERED_ACCESS
+            );
         }
         if (!m_status) {
             m_status = Buffer<uint4>("Gaussian status", 1);
@@ -244,10 +260,11 @@ struct GaussianSplatPass::Impl {
                 "Gaussian premultiplied RGB and alpha", extent, PF_R32G32B32A32_SFLOAT, usage
             );
             m_transmittance = device.CreateTexture("Gaussian transmittance", extent, PF_R32_SFLOAT, usage);
-            m_display =
-                device.CreateTexture("Gaussian display linear RGB", extent, PF_R32G32B32A32_SFLOAT, usage);
+            m_display       = device.CreateTexture(
+                "Gaussian display linear RGB", Extent3D(1, 1, 1), PF_R32G32B32A32_SFLOAT, usage
+            );
             m_reference = nullptr;
-            m_ranges = Buffer<uint>(
+            m_ranges    = Buffer<uint>(
                 "Gaussian tile intervals", ((resolution.x + 15) / 16) * ((resolution.y + 15) / 16) * 2
             );
             m_resolution = resolution;
@@ -306,11 +323,11 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     const Camera&           camera,
     uint2                   resolution,
     bool                    is_editor_view,
-    bool                    is_unsupported_mixed,
+    bool                    is_invalid_scene,
     GaussianViewSettings    view_settings,
-    TextureRef opaque_depth,
-    bool is_engine_linear,
-    bool needs_reference
+    TextureRef              opaque_depth,
+    bool                    is_engine_linear,
+    bool                    needs_reference
 ) {
     auto& state = *m_impl;
     if (resolution.x == 0 || resolution.y == 0)
@@ -321,9 +338,9 @@ TextureRef GaussianSplatPass::RecordAccumulation(
         for (const auto& instance : scene->GetInstances())
             if (instance.range.w & visibility_mask)
                 work_count_64 += instance.range.y;
-    const bool is_work_overflow = work_count_64 > k_max_work_count;
+    const bool is_work_overflow         = work_count_64 > k_max_work_count;
     state.m_telemetry.has_work_overflow = is_work_overflow;
-    const uint work_count       = is_work_overflow ? 0u : static_cast<uint>(work_count_64);
+    const uint work_count               = is_work_overflow ? 0u : static_cast<uint>(work_count_64);
     if (!IsValidGaussianViewSettings(view_settings))
         throw std::invalid_argument("Invalid Gaussian view settings");
     const uint64 revision = scene ? scene->GetRevision() : 0;
@@ -338,12 +355,25 @@ TextureRef GaussianSplatPass::RecordAccumulation(
                                        uint64(state.m_telemetry.instance_count) * sizeof(GGaussianInstance);
     state.Resize(resolution, work_count);
     state.m_is_engine_linear = is_engine_linear;
+    if ((!is_engine_linear || needs_reference) &&
+        (state.m_display->GetWidth() != resolution.x || state.m_display->GetHeight() != resolution.y))
+        state.m_display = RenderDevice::Get().CreateTexture(
+            "Gaussian reference display",
+            Extent3D(resolution.x, resolution.y, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS |
+                ETextureUsageFlags::TRANSFER_SRC
+        );
     if (!state.m_reference || (needs_reference && state.m_reference->GetWidth() != resolution.x)) {
-        state.m_reference = RenderDevice::Get().CreateTexture("Gaussian reference RGB",
-            needs_reference ? Extent3D(resolution.x, resolution.y, 1) : Extent3D(1,1,1),
-            PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        state.m_reference = RenderDevice::Get().CreateTexture(
+            "Gaussian reference RGB",
+            needs_reference ? Extent3D(resolution.x, resolution.y, 1) : Extent3D(1, 1, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
+        );
     }
-    if (!opaque_depth) commands.ClearResource(state.m_empty_depth->GetView(), float4(0));
+    if (!opaque_depth)
+        commands.ClearResource(state.m_empty_depth->GetView(), float4(0));
     // Commands retain descriptor resources through translation. Keep owners explicitly until
     // GPU completion too: camera uploads, resize and instance replacement can overlap frames.
     Array<BufferRef> buffer_owners{
@@ -360,7 +390,10 @@ TextureRef GaussianSplatPass::RecordAccumulation(
         buffer_owners.push_back(level.prefix);
         buffer_owners.push_back(level.sums);
     }
-    state.m_telemetry.workspace_bytes = uint64(resolution.x) * resolution.y * 36u;
+    state.m_telemetry.workspace_bytes =
+        uint64(resolution.x) * resolution.y * 20u +
+        state.m_display->GetWidth() * uint64(state.m_display->GetHeight()) * 16u +
+        state.m_reference->GetWidth() * uint64(state.m_reference->GetHeight()) * 16u;
     for (const auto& buffer : buffer_owners)
         if (buffer)
             state.m_telemetry.workspace_bytes += buffer->GetByteSize();
@@ -371,8 +404,10 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     commands.AddCallback([buffer_owners = std::move(buffer_owners),
                           color         = state.m_color,
                           transmittance = state.m_transmittance,
-                          display       = state.m_display, reference = state.m_reference, depth = opaque_depth,
-                          empty_depth = state.m_empty_depth]() {});
+                          display       = state.m_display,
+                          reference     = state.m_reference,
+                          depth         = opaque_depth,
+                          empty_depth   = state.m_empty_depth]() {});
     state.Poll();
     QueryToken timing_token;
     if (!state.m_timing_future.Valid()) {
@@ -406,8 +441,8 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     );
     commands.AddCallback([camera_data, camera_buffer]() {});
     state.m_camera = camera_buffer;
-    if (is_unsupported_mixed || is_work_overflow || work_count == 0) {
-        const bool is_invalid                  = is_unsupported_mixed || is_work_overflow;
+    if (is_invalid_scene || is_work_overflow || work_count == 0) {
+        const bool is_invalid                  = is_invalid_scene || is_work_overflow;
         state.m_telemetry.has_overflow         = is_work_overflow;
         state.m_telemetry.has_completed_counts = true;
         state.m_telemetry.tile_pair_count = state.m_telemetry.visible_count = 0;
@@ -424,6 +459,23 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     GaussianDispatchParams param{};
     param.info = uint4(work_count, state.m_pair_capacity, camera_data->viewport.z, camera_data->viewport.w);
     commands.ClearResource(state.m_status->GetView(), 0u);
+    QueryToken  stage_tokens[3];
+    const char* stage_names[] = {
+        "Gaussian project and bin", "Gaussian sort and ranges", "Gaussian accumulate"
+    };
+    auto begin_stage = [&](uint stage) {
+        commands.PushScopeWithTimeScope(stage_names[stage]);
+        if (!state.m_stage_timing[stage].Valid()) {
+            stage_tokens[stage]         = commands.BeginTimestampQuery(stage_names[stage]);
+            state.m_stage_timing[stage] = stage_tokens[stage].GetFuture();
+        }
+    };
+    auto end_stage = [&](uint stage) {
+        if (stage_tokens[stage].Valid())
+            commands.EndTimestampQuery(stage_tokens[stage]);
+        commands.PopScopeWithTimeScope();
+    };
+    begin_stage(0);
     uint work_offset = 0;
     for (uint instance_id = 0; instance_id < scene->GetInstances().size(); ++instance_id) {
         const auto& instance = scene->GetInstances()[instance_id];
@@ -484,6 +536,8 @@ TextureRef GaussianSplatPass::RecordAccumulation(
             state.m_pairs[0]->GetView()
         )
         .Dispatch(uint3(Groups(work_count), 1, 1), "Gaussian emit pairs");
+    end_stage(0);
+    begin_stage(1);
     for (uint digit_id = 0; digit_id < 8; ++digit_id) {
         param.job          = uint4(digit_id, 0, 0, 0);
         auto& pairs        = state.m_pairs[digit_id & 1];
@@ -527,9 +581,9 @@ TextureRef GaussianSplatPass::RecordAccumulation(
             state.m_ranges->GetView()
         )
         .Dispatch(uint3(Groups(state.m_pair_capacity), 1, 1), "Gaussian tile ranges");
-    param.job = uint4(
-        uint(is_engine_linear), uint(needs_reference), uint(bool(opaque_depth)), 0
-    );
+    end_stage(1);
+    begin_stage(2);
+    param.job = uint4(uint(is_engine_linear), uint(needs_reference), uint(bool(opaque_depth)), 0);
     commands
         .Compute(
             state.m_splat,
@@ -545,6 +599,7 @@ TextureRef GaussianSplatPass::RecordAccumulation(
             state.m_reference->GetView()
         )
         .Dispatch(uint3(camera_data->viewport.z, camera_data->viewport.w, 1), "Gaussian splat");
+    end_stage(2);
     if (!state.m_status_readback.Valid()) {
         state.m_status_readback     = commands.Readback(state.m_status->GetView(), "Gaussian pair status");
         state.m_readback_revision   = revision;
@@ -556,72 +611,163 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     return state.m_color;
 }
 TextureRef GaussianSplatPass::RecordDisplay(CommandList& commands, GaussianViewSettings settings) {
-    auto& state = *m_impl;
+    auto&                  state = *m_impl;
     GaussianDispatchParams param{};
     param.job = uint4(static_cast<uint>(settings.display_mode), static_cast<uint>(settings.debug_view), 0, 0);
-    commands.Compute(state.m_display_pipeline, param, (state.m_is_engine_linear ? state.m_reference : state.m_color)->GetView(),
-        state.m_transmittance->GetView(), state.m_ranges->GetView(), state.m_status->GetView(),
-        state.m_display->GetView(), state.m_camera->GetView())
-        .Dispatch(uint3((state.m_resolution.x + 15) / 16, (state.m_resolution.y + 15) / 16, 1), "Gaussian reference display");
+    commands
+        .Compute(
+            state.m_display_pipeline,
+            param,
+            (state.m_is_engine_linear ? state.m_reference : state.m_color)->GetView(),
+            state.m_transmittance->GetView(),
+            state.m_ranges->GetView(),
+            state.m_status->GetView(),
+            state.m_display->GetView(),
+            state.m_camera->GetView()
+        )
+        .Dispatch(
+            uint3((state.m_resolution.x + 15) / 16, (state.m_resolution.y + 15) / 16, 1),
+            "Gaussian reference display"
+        );
     commands.AddCallback([display = state.m_display, camera = state.m_camera]() {});
     return state.m_display;
 }
-TextureRef GaussianSplatPass::Record(CommandList& commands, const GaussianGpuScene* scene,
-    const Camera& camera, uint2 resolution, bool is_editor_view, bool is_invalid, GaussianViewSettings settings) {
+TextureRef GaussianSplatPass::Record(
+    CommandList&            commands,
+    const GaussianGpuScene* scene,
+    const Camera&           camera,
+    uint2                   resolution,
+    bool                    is_editor_view,
+    bool                    is_invalid,
+    GaussianViewSettings    settings
+) {
     RecordAccumulation(commands, scene, camera, resolution, is_editor_view, is_invalid, settings);
     return RecordDisplay(commands, settings);
 }
-const TextureRef& GaussianSplatPass::GetDisplay() const { return m_impl->m_display; }
-const BufferRef& GaussianSplatPass::GetRanges() const { return m_impl->m_ranges; }
-GaussianSplatPass::RecordParameters GaussianSplatPass::Prepare(const GaussianGpuScene* scene,
-    const Camera& camera, uint2 resolution, bool is_editor_view, GaussianViewSettings settings,
-    TextureRef opaque_depth, bool needs_reference) {
+const TextureRef& GaussianSplatPass::GetDisplay() const {
+    return m_impl->m_display;
+}
+const BufferRef& GaussianSplatPass::GetRanges() const {
+    return m_impl->m_ranges;
+}
+GaussianSplatPass::RecordParameters GaussianSplatPass::Prepare(
+    const GaussianGpuScene* scene,
+    const Camera&           camera,
+    uint2                   resolution,
+    bool                    is_editor_view,
+    GaussianViewSettings    settings,
+    TextureRef              opaque_depth,
+    bool                    needs_reference
+) {
     uint64 work_count = 0;
-    if (scene) for (const auto& instance : scene->GetInstances())
-        if (instance.range.w & (is_editor_view ? 2u : 1u)) work_count += instance.range.y;
+    if (scene)
+        for (const auto& instance : scene->GetInstances())
+            if (instance.range.w & (is_editor_view ? 2u : 1u))
+                work_count += instance.range.y;
     m_impl->Resize(resolution, work_count > k_max_work_count ? 0 : uint(work_count));
     if (!m_impl->m_reference || (needs_reference && m_impl->m_reference->GetWidth() != resolution.x))
-        m_impl->m_reference = RenderDevice::Get().CreateTexture("Gaussian reference RGB",
-            needs_reference ? Extent3D(resolution.x,resolution.y,1) : Extent3D(1,1,1),
-            PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    return {scene, camera, resolution, is_editor_view, settings, std::move(opaque_depth), true, needs_reference};
+        m_impl->m_reference = RenderDevice::Get().CreateTexture(
+            "Gaussian reference RGB",
+            needs_reference ? Extent3D(resolution.x, resolution.y, 1) : Extent3D(1, 1, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
+        );
+    if (needs_reference &&
+        (m_impl->m_display->GetWidth() != resolution.x || m_impl->m_display->GetHeight() != resolution.y))
+        m_impl->m_display = RenderDevice::Get().CreateTexture(
+            "Gaussian reference display",
+            Extent3D(resolution.x, resolution.y, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED |
+                ETextureUsageFlags::TRANSFER_SRC
+        );
+    return {
+        scene, camera, resolution, is_editor_view, settings, std::move(opaque_depth), true, needs_reference
+    };
 }
 void GaussianSplatPass::Record(CommandList& commands, const RecordParameters& parameters) {
-    RecordAccumulation(commands, parameters.scene, parameters.camera, parameters.resolution,
-        parameters.is_editor_view, false, parameters.settings, parameters.opaque_depth,
-        parameters.is_engine_linear, parameters.needs_reference);
-    if (parameters.needs_reference) RecordDisplay(commands, parameters.settings);
+    RecordAccumulation(
+        commands,
+        parameters.scene,
+        parameters.camera,
+        parameters.resolution,
+        parameters.is_editor_view,
+        false,
+        parameters.settings,
+        parameters.opaque_depth,
+        parameters.is_engine_linear,
+        parameters.needs_reference
+    );
+    if (parameters.needs_reference) {
+        auto settings       = parameters.settings;
+        settings.debug_view = EGaussianDebugView::Color;
+        RecordDisplay(commands, settings);
+    }
 }
 GaussianSplatPass::GraphResources GaussianSplatPass::ImportGraphResources(RenderGraph& graph) const {
     auto& state = *m_impl;
-    return {graph.ImportTexture("gs_color", state.m_color, {}),
+    return {
+        graph.ImportTexture("gs_color", state.m_color, {}),
         graph.ImportTexture("gs_transmittance", state.m_transmittance, {}),
         graph.ImportTexture("gs_reference", state.m_reference, {}),
         graph.ImportTexture("gs_display", state.m_display, {}),
         graph.ImportBuffer("gs_status", state.m_status, {.byte_size = state.m_status->GetByteSize()}),
-        graph.ImportBuffer("gs_ranges", state.m_ranges, {.byte_size = state.m_ranges->GetByteSize()})};
+        graph.ImportBuffer("gs_ranges", state.m_ranges, {.byte_size = state.m_ranges->GetByteSize()})
+    };
 }
-RenderGraph::PassHandle GaussianSplatPass::AddToGraph(RenderGraph& graph, RecordParameters parameters,
-    GraphResources resources, RenderGraph::TextureHandle opaque_depth) {
+RenderGraph::PassHandle GaussianSplatPass::AddToGraph(
+    RenderGraph&               graph,
+    RecordParameters           parameters,
+    GraphResources             resources,
+    RenderGraph::TextureHandle opaque_depth
+) {
     Array<RenderGraph::BufferHandle> scratch;
-    auto add_buffer = [&](const BufferRef& buffer) {
-        scratch.push_back(graph.ImportBuffer("gs_workspace_" + std::to_string(scratch.size()), buffer, {.byte_size = buffer->GetByteSize()}));
+    auto                             add_buffer = [&](const BufferRef& buffer) {
+        scratch.push_back(graph.ImportBuffer(
+            "gs_workspace_" + std::to_string(scratch.size()), buffer, {.byte_size = buffer->GetByteSize()}
+        ));
     };
     auto& state = *m_impl;
-    for (const auto& buffer : {state.m_projected, state.m_counts, state.m_pairs[0], state.m_pairs[1],
-                              state.m_histogram, state.m_offsets}) add_buffer(buffer);
-    for (const auto& level : state.m_scan) { add_buffer(level.prefix); add_buffer(level.sums); }
+    for (const auto& buffer :
+         {state.m_projected,
+          state.m_counts,
+          state.m_pairs[0],
+          state.m_pairs[1],
+          state.m_histogram,
+          state.m_offsets})
+        add_buffer(buffer);
+    for (const auto& level : state.m_scan) {
+        add_buffer(level.prefix);
+        add_buffer(level.sums);
+    }
     Array<RenderGraph::BufferHandle> inputs;
     if (parameters.scene && parameters.scene->GetGaussianBuffer()) {
-        for (const auto& buffer : {parameters.scene->GetGaussianBuffer(), parameters.scene->GetInstanceBuffer()})
-            inputs.push_back(graph.ImportBuffer("gs_scene_" + std::to_string(inputs.size()), buffer, {.byte_size = buffer->GetByteSize()}));
+        for (const auto& buffer :
+             {parameters.scene->GetGaussianBuffer(), parameters.scene->GetInstanceBuffer()})
+            inputs.push_back(graph.ImportBuffer(
+                "gs_scene_" + std::to_string(inputs.size()), buffer, {.byte_size = buffer->GetByteSize()}
+            ));
     }
-    return graph.AddRecordPass("GaussianRaster", [=](RenderGraph::PassBuilder& builder) {
-        builder.Read(opaque_depth).Write(resources.color).Write(resources.transmittance)
-            .Write(resources.reference).Write(resources.display).ReadWrite(resources.status).ReadWrite(resources.ranges).SideEffect();
-        for (const auto buffer : scratch) builder.ReadWrite(buffer);
-        for (const auto buffer : inputs) builder.Read(buffer);
-    }, [this, parameters](CommandList& commands) { Record(commands, parameters); },
-        RenderGraph::PassExecutionClass::SerialRecord);
+    return graph.AddRecordPass(
+        "GaussianRaster",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(opaque_depth)
+                .Write(resources.color)
+                .Write(resources.transmittance)
+                .Write(resources.reference)
+                .Write(resources.display)
+                .ReadWrite(resources.status)
+                .ReadWrite(resources.ranges)
+                .SideEffect();
+            for (const auto buffer : scratch)
+                builder.ReadWrite(buffer);
+            for (const auto buffer : inputs)
+                builder.Read(buffer);
+        },
+        [this, parameters](CommandList& commands) {
+            Record(commands, parameters);
+        },
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
 }
 } // namespace Moer::Render::Raster

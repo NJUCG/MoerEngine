@@ -107,6 +107,10 @@ void GaussianImageExport::Request(
     m_active_request_id = request_id;
     m_path              = path;
     m_resolution        = resolution;
+    if (display.GetTexture()->GetWidth() != resolution.x || display.GetTexture()->GetHeight() != resolution.y) {
+        Reject(request_id, "PNG source resolution does not match the captured frame");
+        return;
+    }
     const auto format = display.GetTexture()->GetFormat();
     if (format != PF_R32G32B32A32_SFLOAT && format != PF_R8G8B8A8_UNORM) {
         Reject(request_id, "PNG export requires a linear float32 or linear RGBA8 image");

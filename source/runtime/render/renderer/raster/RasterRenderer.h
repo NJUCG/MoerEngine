@@ -82,6 +82,8 @@ private:
     UniquePtr<GaussianImageExport>         m_gaussian_export;
     UniquePtr<GaussianCompositePass> m_gaussian_composite_pass;
     bool m_had_visible_gaussians = false;
+    bool m_had_mesh_pipeline_work = true;
+    bool m_has_gaussian_exposure = false;
     UniquePtr<HiZBuildPass>                hiz_build_pass;
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
     UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;

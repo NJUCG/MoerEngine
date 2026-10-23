@@ -351,15 +351,44 @@ void RunInFlightResize(ShaderManager& manager) {
     CommandList upload(EQueueType::Graphics);
     scene.ApplyUpdate(snapshot, upload);
     RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit(), ERHIExecSubmitFlags::None);
-    Raster::GaussianSplatPass pass(manager);
-    Camera                    camera;
+    Raster::GaussianSplatPass     pass(manager);
+    auto                          bindless = RenderDevice::Get().CreateBindlessArray();
+    Raster::GaussianCompositePass composite(manager, bindless);
+    Camera                        camera;
     camera.Initialize(float3(0), -90, 0, 60, 1, .01f, 100.f);
     std::vector<ReadbackFuture> results;
     for (uint frame_id = 0; frame_id < 8; ++frame_id) {
         pass.SetPairCapacity(frame_id % 2 ? 1024u : 4096u);
         CommandList commands(EQueueType::Graphics);
-        pass.Record(commands, &scene, camera, uint2(64 + frame_id * 8, 64 + frame_id * 4), false);
-        results.push_back(commands.Readback(pass.GetColor()->GetView(), "Gaussian in-flight resize"));
+        const uint2 size(64 + frame_id * 8, 64 + frame_id * 4);
+        if (frame_id % 2 == 0) {
+            pass.Record(commands, &scene, camera, size, false);
+            results.push_back(
+                commands.Readback(pass.GetColor()->GetView(), "Gaussian reference in-flight resize")
+            );
+        } else {
+            auto parameters = pass.Prepare(&scene, camera, size, false, {}, TextureRef{}, frame_id % 3 == 0);
+            pass.Record(commands, parameters);
+            auto background = RenderDevice::Get().CreateTexture(
+                "In-flight scene background",
+                Extent3D(size.x, size.y, 1),
+                PF_R32G32B32A32_SFLOAT,
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS |
+                    ETextureUsageFlags::TRANSFER_DST
+            );
+            commands.ClearResource(background->GetView(), float4(.1f, .2f, .3f, 1));
+            auto parameters_composite = composite.Prepare(
+                TextureWithHandle{.tex = background},
+                pass.GetColor(),
+                pass.GetTransmittance(),
+                BufferRef(pass.GetStatusBuffer().GetBuffer()),
+                pass.GetRanges()
+            );
+            composite.Record(commands, parameters_composite);
+            results.push_back(commands.Readback(
+                parameters_composite.output.tex->GetView(), "Gaussian common in-flight resize"
+            ));
+        }
         RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::None);
     }
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -389,91 +418,192 @@ void RunInFlightResize(ShaderManager& manager) {
     std::cout << "in-flight resize passed" << std::endl;
 }
 
+void RunViewportPng() {
+    auto&      device = RenderDevice::Get();
+    const auto path  = std::filesystem::temp_directory_path() /
+                       ("moer-viewport-" +
+                        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".png");
+    auto       image = device.CreateTexture(
+        "Viewport PNG contract",
+        Extent3D(2, 1, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+    );
+    auto status = device.CreateBuffer<uint>(
+        "Viewport PNG status",
+        4,
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    unsigned char pixels[] = {0, 128, 255, 255, 64, 0, 0, 255};
+    CommandList   commands(EQueueType::Graphics);
+    commands.CopyFrom(std::span<byte>(reinterpret_cast<byte*>(pixels), sizeof(pixels)), image->GetView());
+    commands.ClearResource(status->GetView(), 0u);
+    Raster::GaussianImageExport exporter;
+    exporter.Request(commands, image->GetView(), status->GetView(), uint2(2, 1), path, 1);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    exporter.Finish();
+    Require(exporter.GetStatus().is_successful, "Viewport RGBA8 PNG export failed");
+    std::ifstream              file(path, std::ios::binary);
+    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(file)), {});
+    int                        width = 0, height = 0, channels = 0;
+    auto* decoded = stbi_load_from_memory(bytes.data(), int(bytes.size()), &width, &height, &channels, 3);
+    Require(decoded && width == 2 && height == 1, "Viewport PNG dimensions invalid");
+    Require(
+        decoded[0] == 0 && std::abs(int(decoded[1]) - 188) <= 1 && decoded[2] == 255 &&
+            std::abs(int(decoded[3]) - 137) <= 1,
+        "Viewport PNG must encode linear UNORM exactly once"
+    );
+    stbi_image_free(decoded);
+    file.close();
+    std::filesystem::remove(path);
+    std::cout << "viewport RGBA8 PNG passed" << std::endl;
+}
+
 void RunHybrid(ShaderManager& manager, bool use_graph) {
     constexpr uint width = 65, height = 49;
-    Camera camera;
-    camera.Initialize(float3(0), -90, 0, 60, float(width)/height, .01f, 100.f);
-    auto asset = Synthetic(2);
-    const float3 rgb[2] = {float3(.5f,.25f,.75f), float3(0,1,0)};
-    for (uint i=0; i<2; ++i) {
-        auto& gaussian = asset->gaussians[i];
-        gaussian.position = float4(0,0,i == 0 ? -2.f : -4.f,1);
-        gaussian.scale_opacity = float4(.35f,.35f,.35f,.5f);
-        gaussian.sh[0] = float4((rgb[i].x-.5f)/.2820947918f,
-            (rgb[i].y-.5f)/.2820947918f,(rgb[i].z-.5f)/.2820947918f,0);
+    Camera         camera;
+    camera.Initialize(float3(0), -90, 0, 60, float(width) / height, .01f, 100.f);
+    auto         asset  = Synthetic(2);
+    const float3 rgb[2] = {float3(.5f, .25f, .75f), float3(0, 1, 0)};
+    for (uint i = 0; i < 2; ++i) {
+        auto& gaussian         = asset->gaussians[i];
+        gaussian.position      = float4(0, 0, i == 0 ? -2.f : -4.f, 1);
+        gaussian.scale_opacity = float4(.35f, .35f, .35f, .5f);
+        gaussian.sh[0]         = float4(
+            (rgb[i].x - .5f) / .2820947918f,
+            (rgb[i].y - .5f) / .2820947918f,
+            (rgb[i].z - .5f) / .2820947918f,
+            0
+        );
     }
     GaussianGpuScene scene;
-    auto snapshot = std::make_shared<GaussianSceneSnapshot>();
-    snapshot->revision = 1;
-    GaussianInstanceSnapshot instance; instance.asset=asset; snapshot->instances.push_back(instance);
-    auto& device=RenderDevice::Get();
-    const auto usage=ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC;
-    auto depth=device.CreateTexture("Hybrid test depth",Extent3D(width,height,1),PF_R32_SFLOAT,usage);
-    auto mesh=device.CreateTexture("Hybrid test mesh color",Extent3D(width,height,1),PF_R32G32B32A32_SFLOAT,usage);
-    std::vector<float> depths(width*height), mesh_pixels(width*height*4);
-    const auto projection=camera.GetProjectionMatrix();
-    for(uint y=0;y<height;++y) for(uint x=0;x<width;++x) {
-        float z=y<height/2 ? (x<width/2 ? 1.f:3.f) : (x<width/2 ? 5.f:0.f);
-        depths[y*width+x]=z>0 ? (-z*projection[2][2]+projection[2][3])/(-z*projection[3][2]+projection[3][3]):0.f;
-        mesh_pixels[(y*width+x)*4+2]=1;
-        mesh_pixels[(y*width+x)*4+3]=1;
-    }
-    auto bindless=device.CreateBindlessArray();
-    Raster::GaussianSplatPass splats(manager,{.tile_pair_capacity=1024});
-    Raster::GaussianCompositePass composite(manager,bindless);
-    CommandList commands(EQueueType::Graphics);
-    scene.ApplyUpdate(snapshot,commands);
-    commands.CopyFrom(std::span<byte>(reinterpret_cast<byte*>(depths.data()),depths.size()*sizeof(float)),depth->GetView());
-    commands.CopyFrom(std::span<byte>(reinterpret_cast<byte*>(mesh_pixels.data()),mesh_pixels.size()*sizeof(float)),mesh->GetView());
-    GaussianViewSettings settings; settings.exposure_ev=1;
-    auto parameters=splats.Prepare(&scene,camera,uint2(width,height),false,settings,depth,true);
-    auto merge=composite.Prepare(TextureWithHandle{.tex=mesh},splats.GetColor(),splats.GetTransmittance(),
-        BufferRef(splats.GetStatusBuffer().GetBuffer()),splats.GetRanges());
+    auto             snapshot = std::make_shared<GaussianSceneSnapshot>();
+    snapshot->revision        = 1;
+    GaussianInstanceSnapshot instance;
+    instance.asset = asset;
+    snapshot->instances.push_back(instance);
+    auto&      device = RenderDevice::Get();
+    const auto usage =
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC;
+    auto depth = device.CreateTexture("Hybrid test depth", Extent3D(width, height, 1), PF_R32_SFLOAT, usage);
+    auto mesh  = device.CreateTexture(
+        "Hybrid test mesh color", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, usage
+    );
+    std::vector<float> depths(width * height), mesh_pixels(width * height * 4);
+    const auto         projection = camera.GetProjectionMatrix();
+    for (uint y = 0; y < height; ++y)
+        for (uint x = 0; x < width; ++x) {
+            float z = y < height / 2 ? (x < width / 2 ? 1.f : 3.f) : (x < width / 2 ? 5.f : 0.f);
+            if (y == height / 2)
+                z = 2.f;
+            depths[y * width + x]                = z > 0 ? (-z * projection[2][2] + projection[2][3]) /
+                                                               (-z * projection[3][2] + projection[3][3]) :
+                                                           0.f;
+            mesh_pixels[(y * width + x) * 4 + 2] = 1;
+            mesh_pixels[(y * width + x) * 4 + 3] = 1;
+        }
+    auto                          bindless = device.CreateBindlessArray();
+    Raster::GaussianSplatPass     splats(manager, {.tile_pair_capacity = 1024});
+    Raster::GaussianCompositePass composite(manager, bindless);
+    CommandList                   commands(EQueueType::Graphics);
+    scene.ApplyUpdate(snapshot, commands);
+    commands.CopyFrom(
+        std::span<byte>(reinterpret_cast<byte*>(depths.data()), depths.size() * sizeof(float)),
+        depth->GetView()
+    );
+    commands.CopyFrom(
+        std::span<byte>(reinterpret_cast<byte*>(mesh_pixels.data()), mesh_pixels.size() * sizeof(float)),
+        mesh->GetView()
+    );
+    GaussianViewSettings settings;
+    settings.exposure_ev = 1;
+    auto parameters      = splats.Prepare(&scene, camera, uint2(width, height), false, settings, depth, true);
+    auto merge           = composite.Prepare(
+        TextureWithHandle{.tex = mesh},
+        splats.GetColor(),
+        splats.GetTransmittance(),
+        BufferRef(splats.GetStatusBuffer().GetBuffer()),
+        splats.GetRanges()
+    );
     if (use_graph) {
-        RenderGraph graph("HybridContract",RenderGraph::QueueTopology::FromRHI());
-        auto resources=splats.ImportGraphResources(graph);
-        auto depth_resource=graph.ImportTexture("mesh_depth",depth,{});
-        auto mesh_resource=graph.ImportTexture("mesh_color",mesh,{});
-        auto output=graph.ImportTexture("composite",merge.output.tex,{});
-        splats.AddToGraph(graph,parameters,resources,depth_resource);
-        composite.AddToGraph(graph,merge,mesh_resource,resources.color,resources.transmittance,resources.status,resources.ranges,output);
+        RenderGraph graph("HybridContract", RenderGraph::QueueTopology::FromRHI());
+        auto        resources      = splats.ImportGraphResources(graph);
+        auto        depth_resource = graph.ImportTexture("mesh_depth", depth, {});
+        auto        mesh_resource  = graph.ImportTexture("mesh_color", mesh, {});
+        auto        output         = graph.ImportTexture("composite", merge.output.tex, {});
+        splats.AddToGraph(graph, parameters, resources, depth_resource);
+        composite.AddToGraph(
+            graph,
+            merge,
+            mesh_resource,
+            resources.color,
+            resources.transmittance,
+            resources.status,
+            resources.ranges,
+            output
+        );
         graph.Export(output);
-        if (!graph.Compile()) throw std::runtime_error("Hybrid graph: " + graph.GetCompileError());
-        Require(graph.RecordAndMergeFrontendCommands(commands,true),"Hybrid graph recording failed");
+        if (!graph.Compile())
+            throw std::runtime_error("Hybrid graph: " + graph.GetCompileError());
+        Require(graph.RecordAndMergeFrontendCommands(commands, true), "Hybrid graph recording failed");
     } else {
-        splats.Record(commands,parameters);
-        composite.Record(commands,merge);
+        splats.Record(commands, parameters);
+        composite.Record(commands, merge);
     }
-    auto colors=commands.Readback(splats.GetColor()->GetView(),"Hybrid Gaussian color");
-    auto transmit=commands.Readback(splats.GetTransmittance()->GetView(),"Hybrid transmittance");
-    auto final=commands.Readback(merge.output.tex->GetView(),"Hybrid scene color");
-    RHIExecutor::Get().Submit(EQueueType::Graphics,commands.Submit(),ERHIExecSubmitFlags::FlushGPU);
-    auto color=colors.Get().CopyAs<float>(), t=transmit.Get().CopyAs<float>(), image=final.Get().CopyAs<float>();
-    Require(color && t && image,"Hybrid readback failed");
-    const auto decode=[](float c) { return c<=.04045f?c/12.92f:std::pow((c+.055f)/1.055f,2.4f); };
-    for(uint y=0;y<height;++y) for(uint x=0;x<width;++x) {
-        float limit=y<height/2 ? (x<width/2 ? 1.f:3.f) : (x<width/2 ? 5.f:1000.f);
-        float expected_t=1; float3 expected(0);
-        for(uint i=0;i<2;++i) {
-            const float z=i==0?2.f:4.f;
-            if(z>limit) continue;
-            float scale=height*.5f*projection[1][1]*.35f/z;
-            float variance=scale*scale+.3f;
-            float dx=float(x)-(width*.5f-.5f),dy=float(y)-(height*.5f-.5f);
-            float alpha=.5f*std::exp(-.5f*(dx*dx+dy*dy)/variance);
-            if(alpha<1.f/255.f) continue;
-            for(uint c=0;c<3;++c) expected[c]+=decode(rgb[i][c])*2.f*alpha*expected_t;
-            expected_t*=1-alpha;
+    auto reference = commands.Readback(splats.GetDisplay()->GetView(), "Hybrid reference display");
+    auto colors    = commands.Readback(splats.GetColor()->GetView(), "Hybrid Gaussian color");
+    auto transmit  = commands.Readback(splats.GetTransmittance()->GetView(), "Hybrid transmittance");
+    auto final     = commands.Readback(merge.output.tex->GetView(), "Hybrid scene color");
+    RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    auto color = colors.Get().CopyAs<float>(), t = transmit.Get().CopyAs<float>(),
+         image            = final.Get().CopyAs<float>();
+    auto reference_pixels = reference.Get().CopyAs<float>();
+    Require(color && t && image && reference_pixels, "Hybrid readback failed");
+    const auto decode = [](float c) {
+        return c <= .04045f ? c / 12.92f : std::pow((c + .055f) / 1.055f, 2.4f);
+    };
+    for (uint y = 0; y < height; ++y)
+        for (uint x = 0; x < width; ++x) {
+            float limit = y < height / 2 ? (x < width / 2 ? 1.f : 3.f) : (x < width / 2 ? 5.f : 1000.f);
+            if (y == height / 2)
+                limit = 2.f;
+            float  expected_t = 1;
+            float3 expected(0), expected_reference(0);
+            for (uint i = 0; i < 2; ++i) {
+                const float z = i == 0 ? 2.f : 4.f;
+                if (z > limit)
+                    continue;
+                float scale    = height * .5f * projection[1][1] * .35f / z;
+                float variance = scale * scale + .3f;
+                float dx = float(x) - (width * .5f - .5f), dy = float(y) - (height * .5f - .5f);
+                float alpha = .5f * std::exp(-.5f * (dx * dx + dy * dy) / variance);
+                if (alpha < 1.f / 255.f)
+                    continue;
+                for (uint c = 0; c < 3; ++c) {
+                    expected[c] += decode(rgb[i][c]) * 2.f * alpha * expected_t;
+                    expected_reference[c] += rgb[i][c] * alpha * expected_t;
+                }
+                expected_t *= 1 - alpha;
+            }
+            const uint pixel = y * width + x;
+            Require(std::abs((*t)[pixel] - expected_t) < .00003f, "Hybrid depth/alpha mismatch");
+            for (uint c = 0; c < 3; ++c) {
+                Require(
+                    std::abs((*reference_pixels)[pixel * 4 + c] - decode(expected_reference[c])) < .00003f,
+                    "Reference export domain must remain independent of engine linear accumulation"
+                );
+                Require(
+                    std::abs((*color)[pixel * 4 + c] - expected[c]) < .00003f,
+                    "Hybrid linear SH accumulation mismatch"
+                );
+                Require(
+                    std::abs((*image)[pixel * 4 + c] - (expected[c] + (c == 2 ? expected_t : 0))) < .00003f,
+                    "Hybrid premultiplied scene composite mismatch"
+                );
+            }
         }
-        const uint pixel=y*width+x;
-        Require(std::abs((*t)[pixel]-expected_t)<.00003f,"Hybrid depth/alpha mismatch");
-        for(uint c=0;c<3;++c) {
-            Require(std::abs((*color)[pixel*4+c]-expected[c])<.00003f,"Hybrid linear SH accumulation mismatch");
-            Require(std::abs((*image)[pixel*4+c]-(expected[c]+(c==2?expected_t:0)))<.00003f,
-                "Hybrid premultiplied scene composite mismatch");
-        }
-    }
-    std::cout<<"hybrid depth/linear-color/composite passed (graph="<<use_graph<<")"<<std::endl;
+    std::cout << "hybrid depth/linear-color/composite passed (graph=" << use_graph << ")" << std::endl;
 }
 
 } // namespace
@@ -514,6 +644,7 @@ int main(int argc, char** argv) {
             rotated_asset->gaussians[0].scale_opacity = float4(1.2f, .0001f, .01f, opacity);
             Run(manager, rotated_asset, 1, {}, false, false, uint2(65, 49), 20);
         }
+        RunViewportPng();
         RunHybrid(manager, false);
         RunHybrid(manager, true);
         RunInFlightResize(manager);

@@ -56,5 +56,9 @@ struct GaussianRasterStatus {
     uint64 geometry_bytes        = 0;
     uint64 workspace_bytes       = 0;
     double gpu_ms                = 0;
+    double projection_gpu_ms = 0;
+    double sorting_gpu_ms = 0;
+    double accumulation_gpu_ms = 0;
+    double composite_gpu_ms = 0;
 };
 } // namespace Moer
