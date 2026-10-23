@@ -14,13 +14,6 @@
 
 namespace Moer::Render {
 
-VulkanResourceTracker::VulkanResourceTracker(EQueueType _queue) : queue_type(_queue) {
-    assert(
-        (_queue == EQueueType::Graphics || _queue == EQueueType::Compute || _queue == EQueueType::Copy) &&
-        "Invalid queue type for Vulkan resource tracker"
-    );
-}
-
 namespace {
 template<typename T>
 uint64_t BarrierNativeHandleKey(T _handle) {
@@ -31,223 +24,15 @@ uint64_t BarrierNativeHandleKey(T _handle) {
     }
 }
 
-[[noreturn]] void RejectLegacyResourceState(const char* _message) {
-    throw std::invalid_argument(_message);
-}
-
-void ValidateLegacyPassType(EPassType _type) {
-    switch (_type) {
-        case EPassType::Graphics:
-        case EPassType::Compute:
-        case EPassType::Raytracing:
-        case EPassType::Copy:
-            return;
-        default:
-            RejectLegacyResourceState("Unknown legacy pass type");
-    }
-}
-
-VkPipelineStageFlags2 LegacyShaderStagesForPass(EPassType _type) {
-    switch (_type) {
-        case EPassType::Graphics:
-            return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        case EPassType::Compute:
-            return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        case EPassType::Raytracing:
-            return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-        case EPassType::Copy:
-            RejectLegacyResourceState(
-                "Copy pass cannot use a shader resource state"
-            );
-        default:
-            RejectLegacyResourceState("Unknown legacy pass type");
-    }
-}
-
-} // namespace
-auto VulkanResourceTracker::ResolveBufferState(EBufferState _state, EPassType _type, bool _is_write)
-    -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
-    ValidateLegacyPassType(_type);
-    switch (_state) {
-        case EBufferState::UNDEFINED:
-            return {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE};
-        case EBufferState::TRANSFER:
-            return {
-                _is_write ? VK_ACCESS_2_TRANSFER_WRITE_BIT :
-                            VK_ACCESS_2_TRANSFER_READ_BIT,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT
-            };
-        case EBufferState::VERTEX:
-            if (_is_write || _type != EPassType::Graphics) {
-                RejectLegacyResourceState(
-                    "Vertex buffers are read-only graphics resources"
-                );
-            }
-            return {
-                VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT,
-                VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT
-            };
-        case EBufferState::INDEX:
-            if (_is_write || _type != EPassType::Graphics) {
-                RejectLegacyResourceState(
-                    "Index buffers are read-only graphics resources"
-                );
-            }
-            return {
-                VK_ACCESS_2_INDEX_READ_BIT,
-                VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT
-            };
-        case EBufferState::INDIRECT:
-            if (_is_write || _type == EPassType::Copy) {
-                RejectLegacyResourceState(
-                    "Indirect buffers are read-only non-copy resources"
-                );
-            }
-            return {
-                VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
-                VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
-            };
-        case EBufferState::SHADER_RESOURCE:
-            if (_is_write || _type == EPassType::Copy) {
-                RejectLegacyResourceState(
-                    "Shader-resource buffers are read-only non-copy resources"
-                );
-            }
-            return {
-                VK_ACCESS_2_SHADER_READ_BIT,
-                LegacyShaderStagesForPass(_type)
-            };
-        case EBufferState::UNORDERED_ACCESS:
-            if (_type == EPassType::Copy) {
-                RejectLegacyResourceState(
-                    "Copy pass cannot use an unordered-access buffer state"
-                );
-            }
-            return {
-                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-                LegacyShaderStagesForPass(_type)
-            };
-        case EBufferState::Num:
-        default:
-            RejectLegacyResourceState("Unknown legacy buffer state");
-    }
-}
-
-auto VulkanResourceTracker::ReadBuffer(VulkanBuffer* _buffer, EBufferState _state, EPassType _type)
-    -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
-    (void)_buffer;
-    return ResolveBufferState(_state, _type, false);
-}
-auto VulkanResourceTracker::WriteBuffer(VulkanBuffer* _buffer, EBufferState _state, EPassType _type)
-    -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
-    (void)_buffer;
-    return ResolveBufferState(_state, _type, true);
-}
-
-auto VulkanResourceTracker::ResolveTextureState(
-    ETextureState _state,
-    EPassType     _type,
-    bool          _is_write,
-    bool          _is_depth
-) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
-    ValidateLegacyPassType(_type);
-    switch (_state) {
-        case ETextureState::UNDEFINED:
-            return {
-                VK_ACCESS_2_NONE,
-                VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_PIPELINE_STAGE_2_NONE
-            };
-        case ETextureState::TRANSFER:
-            return {
-                _is_write ? VK_ACCESS_2_TRANSFER_WRITE_BIT :
-                            VK_ACCESS_2_TRANSFER_READ_BIT,
-                _is_write ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL :
-                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT
-            };
-        case ETextureState::SHADER_RESOURCE:
-        case ETextureState::SAMPLE:
-            if (_is_write || _type == EPassType::Copy) {
-                RejectLegacyResourceState(
-                    "Shader-resource textures are read-only non-copy resources"
-                );
-            }
-            return {
-                _state == ETextureState::SAMPLE ?
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT :
-                    VK_ACCESS_2_SHADER_READ_BIT,
-                _is_depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                LegacyShaderStagesForPass(_type)
-            };
-        case ETextureState::RENDER_TARGET:
-            if (_type != EPassType::Graphics) {
-                RejectLegacyResourceState(
-                    "Render targets are graphics attachments"
-                );
-            }
-            return {
-                _is_write ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT :
-                            VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
-            };
-        case ETextureState::DEPTH_STENCIL:
-            if (_type != EPassType::Graphics) {
-                RejectLegacyResourceState(
-                    "Depth-stencil textures are graphics attachments"
-                );
-            }
-            return {
-                _is_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT :
-                            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-                _is_write ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL :
-                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT
-            };
-        case ETextureState::UNORDERED_ACCESS:
-            if (_type == EPassType::Copy) {
-                RejectLegacyResourceState(
-                    "Copy pass cannot use an unordered-access texture state"
-                );
-            }
-            return {
-                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-                VK_IMAGE_LAYOUT_GENERAL,
-                LegacyShaderStagesForPass(_type)
-            };
-        case ETextureState::Num:
-        default:
-            RejectLegacyResourceState("Unknown legacy texture state");
-    }
-}
-
-auto VulkanResourceTracker::ReadTexture(VulkanTexture* _texture, ETextureState _state, EPassType _type)
-    -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
-    const bool is_depth =
-        uint(_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0u;
-    return ResolveTextureState(_state, _type, false, is_depth);
-}
-
-auto VulkanResourceTracker::WriteTexture(VulkanTexture* _texture, ETextureState _state, EPassType _type)
-    -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
-    const bool is_depth =
-        uint(_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0u;
-    return ResolveTextureState(_state, _type, true, is_depth);
-}
-
-static bool IsWriteState(VkImageLayout _layout, VkAccessFlags2 _access) {
+bool IsWriteState(VkImageLayout _layout, VkAccessFlags2 _access) {
     bool read_layout = _layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
                        _layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     if (read_layout)
         return false;
 
-    bool read_access = _access & VK_ACCESS_2_SHADER_READ_BIT ||
-                       _access & VK_ACCESS_2_SHADER_SAMPLED_READ_BIT ||
-                       _access & VK_ACCESS_2_TRANSFER_READ_BIT;
+    bool read_access  = _access & VK_ACCESS_2_SHADER_READ_BIT ||
+                        _access & VK_ACCESS_2_SHADER_SAMPLED_READ_BIT ||
+                        _access & VK_ACCESS_2_TRANSFER_READ_BIT;
     bool write_access = _access & VK_ACCESS_2_SHADER_WRITE_BIT ||
                         _access & VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT ||
                         _access & VK_ACCESS_2_MEMORY_WRITE_BIT || _access & VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -256,9 +41,28 @@ static bool IsWriteState(VkImageLayout _layout, VkAccessFlags2 _access) {
     return true;
 }
 
-static bool IsWriteState(VkAccessFlags2 _access) {
+bool IsWriteState(VkAccessFlags2 _access) {
     return _access & VK_ACCESS_2_SHADER_WRITE_BIT || _access & VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT ||
            _access & VK_ACCESS_2_MEMORY_WRITE_BIT || _access & VK_ACCESS_2_TRANSFER_WRITE_BIT;
+}
+
+VkImageLayout GetInitialTextureLayout(VulkanTexture* _texture, EQueueType _queue) {
+    if (!_texture->b_has_preferred_state) {
+        return VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+    if (_texture->b_present) {
+        return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    }
+    return _texture->GetQueuePreferredLayout(_queue);
+}
+
+} // namespace
+
+VulkanResourceTracker::VulkanResourceTracker(EQueueType _queue) : queue_type(_queue) {
+    assert(
+        (_queue == EQueueType::Graphics || _queue == EQueueType::Compute || _queue == EQueueType::Copy) &&
+        "Invalid queue type for Vulkan resource tracker"
+    );
 }
 
 void VulkanResourceTracker::SetWriteState(const TextureSubresourceKeyT<VulkanTexture>& _key, bool _is_write) {
@@ -297,9 +101,7 @@ void VulkanResourceTracker::RecordState(
             "A partial-range explicit buffer barrier cannot be followed by "
             "backend-inferred state tracking in the same submit"
         );
-        throw std::logic_error(
-            "mixed explicit partial buffer barrier and inferred buffer state"
-        );
+        throw std::logic_error("mixed explicit partial buffer barrier and inferred buffer state");
     }
     SetWriteState(_buffer, IsWriteState(_access));
     pending_buffers.insert(_buffer);
@@ -356,15 +158,15 @@ void VulkanResourceTracker::AdoptExternalState(
 }
 
 void VulkanResourceTracker::RecordState(
-    VulkanBuffer*                                       _buffer,
-    std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&& _state,
-    uint32_t                                            _src_queue_family,
-    uint32_t                                            _dst_queue_family
+    VulkanBuffer*                  _buffer,
+    const VulkanBufferAccessState& _state,
+    uint32_t                       _src_queue_family,
+    uint32_t                       _dst_queue_family
 ) {
-    RecordState(_buffer, std::get<0>(_state), std::get<1>(_state), _src_queue_family, _dst_queue_family);
+    RecordState(_buffer, _state.access, _state.stages, _src_queue_family, _dst_queue_family);
 }
 
-void VulkanResourceTracker::RegisterFlushBufferRange(
+void VulkanResourceTracker::RecordInternalBufferRange(
     const BufferView&     _view,
     VkAccessFlags2        _access,
     VkPipelineStageFlags2 _stage,
@@ -373,33 +175,34 @@ void VulkanResourceTracker::RegisterFlushBufferRange(
 ) {
     VulkanBuffer* buffer = ResourceCast(_view.buffer);
 
-    if (flush_buffer_ranges
-            .try_emplace(buffer, _view.GetByteOffset(), _view.GetByteSize() + _view.GetByteOffset())
-            .second) {
-        auto& state = flush_buffer_states[buffer];
+    auto [range_iter, inserted] = pending_internal_buffer_ranges.try_emplace(
+        buffer, _view.GetByteOffset(), _view.GetByteSize() + _view.GetByteOffset()
+    );
+    if (inserted) {
+        auto& state = internal_buffer_states[buffer];
         state.dst_access |= _access;
         state.dst_stage |= _stage;
         state.src_access = _src_access;
         state.src_stage  = _src_stage;
         pending_buffers.insert(buffer);
     } else {
-        auto& range = flush_buffer_ranges[buffer];
+        auto& range = range_iter->second;
         range.begin = Min(range.begin, _view.GetByteOffset());
         range.end   = Max(range.end, _view.GetByteSize() + _view.GetByteOffset());
     }
 }
 
 void VulkanResourceTracker::RecordState(
-    VulkanTexture*                                                     _texture,
-    std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&& _state,
-    uint32_t                                                           _src_queue_family,
-    uint32_t                                                           _dst_queue_family
+    VulkanTexture*                  _texture,
+    const VulkanTextureAccessState& _state,
+    uint32_t                        _src_queue_family,
+    uint32_t                        _dst_queue_family
 ) {
     RecordState(
         _texture,
-        std::get<0>(_state),
-        std::get<1>(_state),
-        std::get<2>(_state),
+        _state.access,
+        _state.layout,
+        _state.stages,
         0,
         _texture->GetNumMips(),
         0,
@@ -409,28 +212,6 @@ void VulkanResourceTracker::RecordState(
     );
 }
 
-void GetInitImageLayoutAndAccess(
-    VulkanTexture*  _texture,
-    VkImageLayout&  _layout,
-    VkAccessFlags2& _access,
-    EQueueType      _queue
-) {
-    if (!_texture->b_has_preferred_state) {
-        _layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        _access = VK_ACCESS_2_NONE;
-        return;
-    }
-    if (_texture->b_present) {
-        _layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        _access = VK_ACCESS_2_NONE;
-        return;
-    }
-    if (_texture->b_has_preferred_state) {
-        _layout = _texture->GetQueuePreferredLayout(_queue);
-        _access = VK_ACCESS_2_NONE;
-        return;
-    }
-}
 void VulkanResourceTracker::QueueTransferReleaseResource(
     VulkanTexture* _texture,
     uint           _src_queue,
@@ -461,7 +242,7 @@ void VulkanResourceTracker::QueueTransferReleaseResource(
                 _src_queue,
                 _dst_queue
             };
-            GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
+            state.src_layout = GetInitialTextureLayout(_texture, queue_type);
             texture_states.emplace(key, state);
         }
     }
@@ -554,7 +335,7 @@ void VulkanResourceTracker::QueueTransferAcquireResource(
     // - 我们要对这种情况做出处理
     if (_src_queue == _dst_queue) {
         for (uint8 mip = 0; mip < num_mips; ++mip) {
-            auto key = MakeTextureStateKey(_texture, mip, 1, 0, num_arrays);
+            auto key            = MakeTextureStateKey(_texture, mip, 1, 0, num_arrays);
             texture_states[key] = TextureState{
                 VK_ACCESS_2_NONE,
                 _dst_layout,
@@ -632,34 +413,19 @@ void VulkanResourceTracker::RecordState(
             "A partial-aspect explicit texture barrier cannot be followed by "
             "backend-inferred state tracking in the same submit"
         );
-        throw std::logic_error(
-            "mixed explicit partial-aspect barrier and inferred texture state"
-        );
+        throw std::logic_error("mixed explicit partial-aspect barrier and inferred texture state");
     }
     uint8 resolved_mip_count =
         _mip_count == kRemainingSubresource ? uint8(_texture->GetNumMips() - _mip_level) : _mip_count;
     uint8 resolved_array_count =
-        _array_count == kRemainingSubresource ?
-            uint8(_texture->GetNumArray() - _array_layer) :
-            _array_count;
+        _array_count == kRemainingSubresource ? uint8(_texture->GetNumArray() - _array_layer) : _array_count;
     const TextureAspectSubresourceRangeT<VulkanTexture> requested_range{
-        .subresource = MakeTextureStateKey(
-            _texture,
-            _mip_level,
-            resolved_mip_count,
-            _array_layer,
-            resolved_array_count
-        ),
-        .aspects = VulkanEnumTranslator::METoVKImageAspectFlags(
-            _texture->GetAspectFlags()
-        ),
+        .subresource =
+            MakeTextureStateKey(_texture, _mip_level, resolved_mip_count, _array_layer, resolved_array_count),
+        .aspects = VulkanEnumTranslator::METoVKImageAspectFlags(_texture->GetAspectFlags()),
     };
-    for (const auto& released_range :
-         explicit_released_texture_ranges) {
-        if (TextureAspectSubresourceRangesOverlap(
-                released_range,
-                requested_range
-            )) {
+    for (const auto& released_range : explicit_released_texture_ranges) {
+        if (TextureAspectSubresourceRangesOverlap(released_range, requested_range)) {
             throw std::logic_error(
                 "a queue-release texture barrier must be the final overlapping "
                 "access in its submit"
@@ -682,11 +448,9 @@ void VulkanResourceTracker::RecordState(
     // example layers 0+4 followed by 1+2). Once a texture enters the explicit
     // state domain, use atomic mip/layer tracker keys without widening the
     // native barriers or changing legacy-only submits.
-    if (resolved_mip_count > 1 ||
-        (has_explicit_texture_state && resolved_array_count > 1)) {
+    if (resolved_mip_count > 1 || (has_explicit_texture_state && resolved_array_count > 1)) {
         for (uint8_t i = 0; i < resolved_mip_count; ++i) {
-            const uint8 layer_count =
-                has_explicit_texture_state ? resolved_array_count : 1;
+            const uint8 layer_count = has_explicit_texture_state ? resolved_array_count : 1;
             for (uint8 layer = 0; layer < layer_count; ++layer) {
                 RecordState(
                     _texture,
@@ -695,9 +459,7 @@ void VulkanResourceTracker::RecordState(
                     _stage,
                     _mip_level + i,
                     1,
-                    has_explicit_texture_state ?
-                        static_cast<uint8>(_array_layer + layer) :
-                        _array_layer,
+                    has_explicit_texture_state ? static_cast<uint8>(_array_layer + layer) : _array_layer,
                     has_explicit_texture_state ? 1 : resolved_array_count,
                     _src_queue_family,
                     _dst_queue_family
@@ -707,10 +469,9 @@ void VulkanResourceTracker::RecordState(
         return;
     }
 
-    auto         key = MakeTextureStateKey(_texture, _mip_level, 1, _array_layer, _array_count);
+    auto key = MakeTextureStateKey(_texture, _mip_level, 1, _array_layer, _array_count);
     for (const auto& explicit_range : explicit_texture_ranges) {
-        if (!TextureSubresourceRangesOverlap(explicit_range, key) ||
-            explicit_range == key) {
+        if (!TextureSubresourceRangesOverlap(explicit_range, key) || explicit_range == key) {
             continue;
         }
         LOG_CRITICAL(
@@ -726,9 +487,7 @@ void VulkanResourceTracker::RecordState(
             key.array_layer,
             key.array_count
         );
-        throw std::logic_error(
-            "mixed explicit and inferred texture ranges have incompatible shapes"
-        );
+        throw std::logic_error("mixed explicit and inferred texture ranges have incompatible shapes");
     }
     TextureState state{
         VK_ACCESS_2_NONE,
@@ -767,7 +526,7 @@ void VulkanResourceTracker::RecordState(
             target_state.dst_stage  = state.dst_stage;
         }
     } else {
-        GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
+        state.src_layout = GetInitialTextureLayout(_texture, queue_type);
         texture_states.emplace(key, state);
     }
     bool is_write = IsWriteState(_layout, _access);
@@ -793,14 +552,9 @@ void VulkanResourceTracker::EmitExplicitBarrier(
     VkPipelineStageFlags2      _dst_stage,
     VkAccessFlags2             _dst_access
 ) {
-    if (_buffer == nullptr || _byte_size == 0 ||
-        _offset > _buffer->GetByteSize() ||
+    if (_buffer == nullptr || _byte_size == 0 || _offset > _buffer->GetByteSize() ||
         _byte_size > _buffer->GetByteSize() - _offset) {
-        LOG_CRITICAL(
-            "Invalid explicit buffer barrier range: offset={} size={}",
-            _offset,
-            _byte_size
-        );
+        LOG_CRITICAL("Invalid explicit buffer barrier range: offset={} size={}", _offset, _byte_size);
         throw std::out_of_range("invalid explicit buffer barrier range");
     }
     const BufferByteRangeT<VulkanBuffer> transfer_range{
@@ -816,57 +570,43 @@ void VulkanResourceTracker::EmitExplicitBarrier(
             );
         }
     }
-    if (_phase != EBarrierQueueTransferPhase::None &&
-        _phase != EBarrierQueueTransferPhase::Release &&
+    if (_phase != EBarrierQueueTransferPhase::None && _phase != EBarrierQueueTransferPhase::Release &&
         _phase != EBarrierQueueTransferPhase::Acquire) {
-        throw std::invalid_argument(
-            "explicit buffer barrier carries an unknown transfer phase"
-        );
+        throw std::invalid_argument("explicit buffer barrier carries an unknown transfer phase");
     }
-    const bool ownership =
-        _phase != EBarrierQueueTransferPhase::None;
+    const bool ownership = _phase != EBarrierQueueTransferPhase::None;
     if ((ownership &&
-         (_src_queue_family == VK_QUEUE_FAMILY_IGNORED ||
-          _dst_queue_family == VK_QUEUE_FAMILY_IGNORED ||
+         (_src_queue_family == VK_QUEUE_FAMILY_IGNORED || _dst_queue_family == VK_QUEUE_FAMILY_IGNORED ||
           _src_queue_family == _dst_queue_family)) ||
         (!ownership &&
-         (_src_queue_family != VK_QUEUE_FAMILY_IGNORED ||
-          _dst_queue_family != VK_QUEUE_FAMILY_IGNORED))) {
-        throw std::invalid_argument(
-            "explicit buffer barrier carries an invalid queue-family pair"
-        );
+         (_src_queue_family != VK_QUEUE_FAMILY_IGNORED || _dst_queue_family != VK_QUEUE_FAMILY_IGNORED))) {
+        throw std::invalid_argument("explicit buffer barrier carries an invalid queue-family pair");
     }
 
     const VkPipelineStageFlags2 native_src_stage =
-        _phase == EBarrierQueueTransferPhase::Acquire ?
-            VK_PIPELINE_STAGE_2_NONE :
-            _src_stage;
+        _phase == EBarrierQueueTransferPhase::Acquire ? VK_PIPELINE_STAGE_2_NONE : _src_stage;
     const VkAccessFlags2 native_src_access =
-        _phase == EBarrierQueueTransferPhase::Acquire ?
-            VK_ACCESS_2_NONE :
-            _src_access;
+        _phase == EBarrierQueueTransferPhase::Acquire ? VK_ACCESS_2_NONE : _src_access;
     const VkPipelineStageFlags2 native_dst_stage =
-        _phase == EBarrierQueueTransferPhase::Release ?
-            VK_PIPELINE_STAGE_2_NONE :
-            _dst_stage;
+        _phase == EBarrierQueueTransferPhase::Release ? VK_PIPELINE_STAGE_2_NONE : _dst_stage;
     const VkAccessFlags2 native_dst_access =
-        _phase == EBarrierQueueTransferPhase::Release ?
-            VK_ACCESS_2_NONE :
-            _dst_access;
+        _phase == EBarrierQueueTransferPhase::Release ? VK_ACCESS_2_NONE : _dst_access;
 
-    buffer_barriers.emplace_back(VkBufferMemoryBarrier2{
-        .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-        .pNext               = nullptr,
-        .srcStageMask        = native_src_stage,
-        .srcAccessMask       = native_src_access,
-        .dstStageMask        = native_dst_stage,
-        .dstAccessMask       = native_dst_access,
-        .srcQueueFamilyIndex = _src_queue_family,
-        .dstQueueFamilyIndex = _dst_queue_family,
-        .buffer              = _buffer->GetHandle(),
-        .offset              = _offset,
-        .size                = _byte_size,
-    });
+    buffer_barriers.emplace_back(
+        VkBufferMemoryBarrier2{
+            .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .pNext               = nullptr,
+            .srcStageMask        = native_src_stage,
+            .srcAccessMask       = native_src_access,
+            .dstStageMask        = native_dst_stage,
+            .dstAccessMask       = native_dst_access,
+            .srcQueueFamilyIndex = _src_queue_family,
+            .dstQueueFamilyIndex = _dst_queue_family,
+            .buffer              = _buffer->GetHandle(),
+            .offset              = _offset,
+            .size                = _byte_size,
+        }
+    );
 
     if (_phase == EBarrierQueueTransferPhase::Release) {
         explicit_released_buffer_ranges.emplace_back(transfer_range);
@@ -908,9 +648,7 @@ void VulkanResourceTracker::EmitExplicitBarrier(
     if (_texture == nullptr) {
         throw std::invalid_argument("explicit texture barrier requires a texture");
     }
-    ValidateSubresourceRange(
-        _texture, _mip_level, _mip_count, _array_layer, _array_count
-    );
+    ValidateSubresourceRange(_texture, _mip_level, _mip_count, _array_layer, _array_count);
     const VkImageAspectFlags available_aspects =
         VulkanEnumTranslator::METoVKImageAspectFlags(_texture->GetAspectFlags());
     if (_aspects == 0 || (_aspects & ~available_aspects) != 0) {
@@ -921,51 +659,30 @@ void VulkanResourceTracker::EmitExplicitBarrier(
         );
         throw std::invalid_argument("explicit texture barrier aspect is unavailable");
     }
-    if (_phase != EBarrierQueueTransferPhase::None &&
-        _phase != EBarrierQueueTransferPhase::Release &&
+    if (_phase != EBarrierQueueTransferPhase::None && _phase != EBarrierQueueTransferPhase::Release &&
         _phase != EBarrierQueueTransferPhase::Acquire) {
-        throw std::invalid_argument(
-            "explicit texture barrier carries an unknown transfer phase"
-        );
+        throw std::invalid_argument("explicit texture barrier carries an unknown transfer phase");
     }
-    const bool ownership =
-        _phase != EBarrierQueueTransferPhase::None;
+    const bool ownership = _phase != EBarrierQueueTransferPhase::None;
     if ((ownership &&
-         (_src_queue_family == VK_QUEUE_FAMILY_IGNORED ||
-          _dst_queue_family == VK_QUEUE_FAMILY_IGNORED ||
+         (_src_queue_family == VK_QUEUE_FAMILY_IGNORED || _dst_queue_family == VK_QUEUE_FAMILY_IGNORED ||
           _src_queue_family == _dst_queue_family)) ||
         (!ownership &&
-         (_src_queue_family != VK_QUEUE_FAMILY_IGNORED ||
-          _dst_queue_family != VK_QUEUE_FAMILY_IGNORED))) {
-        throw std::invalid_argument(
-            "explicit texture barrier carries an invalid queue-family pair"
-        );
+         (_src_queue_family != VK_QUEUE_FAMILY_IGNORED || _dst_queue_family != VK_QUEUE_FAMILY_IGNORED))) {
+        throw std::invalid_argument("explicit texture barrier carries an invalid queue-family pair");
     }
 
     const uint8 resolved_mip_count =
-        _mip_count == kRemainingSubresource ?
-            uint8(_texture->GetNumMips() - _mip_level) :
-            _mip_count;
+        _mip_count == kRemainingSubresource ? uint8(_texture->GetNumMips() - _mip_level) : _mip_count;
     const uint8 resolved_array_count =
-        _array_count == kRemainingSubresource ?
-            uint8(_texture->GetNumArray() - _array_layer) :
-            _array_count;
+        _array_count == kRemainingSubresource ? uint8(_texture->GetNumArray() - _array_layer) : _array_count;
     const TextureAspectSubresourceRangeT<VulkanTexture> transfer_range{
-        .subresource = MakeTextureStateKey(
-            _texture,
-            _mip_level,
-            resolved_mip_count,
-            _array_layer,
-            resolved_array_count
-        ),
+        .subresource =
+            MakeTextureStateKey(_texture, _mip_level, resolved_mip_count, _array_layer, resolved_array_count),
         .aspects = _aspects,
     };
-    for (const auto& released_range :
-         explicit_released_texture_ranges) {
-        if (TextureAspectSubresourceRangesOverlap(
-                released_range,
-                transfer_range
-            )) {
+    for (const auto& released_range : explicit_released_texture_ranges) {
+        if (TextureAspectSubresourceRangesOverlap(released_range, transfer_range)) {
             throw std::logic_error(
                 "a queue-release texture barrier must be the final overlapping "
                 "access in its submit"
@@ -973,43 +690,36 @@ void VulkanResourceTracker::EmitExplicitBarrier(
         }
     }
     const VkPipelineStageFlags2 native_src_stage =
-        _phase == EBarrierQueueTransferPhase::Acquire ?
-            VK_PIPELINE_STAGE_2_NONE :
-            _src_stage;
+        _phase == EBarrierQueueTransferPhase::Acquire ? VK_PIPELINE_STAGE_2_NONE : _src_stage;
     const VkAccessFlags2 native_src_access =
-        _phase == EBarrierQueueTransferPhase::Acquire ?
-            VK_ACCESS_2_NONE :
-            _src_access;
+        _phase == EBarrierQueueTransferPhase::Acquire ? VK_ACCESS_2_NONE : _src_access;
     const VkPipelineStageFlags2 native_dst_stage =
-        _phase == EBarrierQueueTransferPhase::Release ?
-            VK_PIPELINE_STAGE_2_NONE :
-            _dst_stage;
+        _phase == EBarrierQueueTransferPhase::Release ? VK_PIPELINE_STAGE_2_NONE : _dst_stage;
     const VkAccessFlags2 native_dst_access =
-        _phase == EBarrierQueueTransferPhase::Release ?
-            VK_ACCESS_2_NONE :
-            _dst_access;
+        _phase == EBarrierQueueTransferPhase::Release ? VK_ACCESS_2_NONE : _dst_access;
 
-    texture_barriers.emplace_back(VkImageMemoryBarrier2{
-        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-        .pNext               = nullptr,
-        .srcStageMask        = native_src_stage,
-        .srcAccessMask       = native_src_access,
-        .dstStageMask        = native_dst_stage,
-        .dstAccessMask       = native_dst_access,
-        .oldLayout           = _src_layout,
-        .newLayout           = _dst_layout,
-        .srcQueueFamilyIndex = _src_queue_family,
-        .dstQueueFamilyIndex = _dst_queue_family,
-        .image               = _texture->GetHandle(),
-        .subresourceRange =
-            VkImageSubresourceRange{
+    texture_barriers.emplace_back(
+        VkImageMemoryBarrier2{
+            .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext               = nullptr,
+            .srcStageMask        = native_src_stage,
+            .srcAccessMask       = native_src_access,
+            .dstStageMask        = native_dst_stage,
+            .dstAccessMask       = native_dst_access,
+            .oldLayout           = _src_layout,
+            .newLayout           = _dst_layout,
+            .srcQueueFamilyIndex = _src_queue_family,
+            .dstQueueFamilyIndex = _dst_queue_family,
+            .image               = _texture->GetHandle(),
+            .subresourceRange    = VkImageSubresourceRange{
                 .aspectMask     = _aspects,
                 .baseMipLevel   = _mip_level,
                 .levelCount     = resolved_mip_count,
                 .baseArrayLayer = _array_layer,
                 .layerCount     = resolved_array_count,
             },
-    });
+        }
+    );
 
     if (_phase == EBarrierQueueTransferPhase::Release) {
         explicit_released_texture_ranges.emplace_back(transfer_range);
@@ -1027,11 +737,7 @@ void VulkanResourceTracker::EmitExplicitBarrier(
     for (uint8 mip = 0; mip < resolved_mip_count; ++mip) {
         for (uint8 layer = 0; layer < resolved_array_count; ++layer) {
             const TextureSubresourceKeyT<VulkanTexture> key = MakeTextureStateKey(
-                _texture,
-                static_cast<uint8>(_mip_level + mip),
-                1,
-                static_cast<uint8>(_array_layer + layer),
-                1
+                _texture, static_cast<uint8>(_mip_level + mip), 1, static_cast<uint8>(_array_layer + layer), 1
             );
             texture_states[key] = TextureState{
                 .src_access       = static_cast<VkAccessFlags2>(_dst_access),
@@ -1095,8 +801,9 @@ void VulkanResourceTracker::ResolveBarriers() {
         }
 
         //internal buffers with certain ranges and states to flush
-        if (auto it = flush_buffer_ranges.find(buffer); it != flush_buffer_ranges.end()) {
-            auto state = flush_buffer_states[buffer];
+        if (auto it = pending_internal_buffer_ranges.find(buffer);
+            it != pending_internal_buffer_ranges.end()) {
+            auto state = internal_buffer_states[buffer];
             buffer_barriers.emplace_back();
             VkBufferMemoryBarrier2& barrier = buffer_barriers.back();
             barrier.sType                   = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -1160,7 +867,7 @@ void VulkanResourceTracker::ResolveBarriers() {
     }
     pending_buffers.clear();
     pending_textures.clear();
-    flush_buffer_ranges.clear();
+    pending_internal_buffer_ranges.clear();
 }
 
 BarrierSemanticDiagnostics VulkanResourceTracker::GetPendingBarrierDiagnostics(
@@ -1173,9 +880,9 @@ BarrierSemanticDiagnostics VulkanResourceTracker::GetPendingBarrierDiagnostics(
     diagnostics.texture_count = static_cast<uint32>(texture_barriers.size());
     diagnostics.memory_count  = static_cast<uint32>(memory_barriers.size());
 
-    uint64 digest_sum = 0;
-    uint64 digest_xor = 0;
-    auto add_barrier_digest = [&](uint64 _barrier_digest) {
+    uint64 digest_sum         = 0;
+    uint64 digest_xor         = 0;
+    auto   add_barrier_digest = [&](uint64 _barrier_digest) {
         const uint64 mixed = StableRecordHash::Mix(_barrier_digest);
         digest_sum += mixed;
         digest_xor ^= mixed;
@@ -1194,21 +901,20 @@ BarrierSemanticDiagnostics VulkanResourceTracker::GetPendingBarrierDiagnostics(
     for (const VkBufferMemoryBarrier2& barrier : buffer_barriers) {
         const StableSubmissionToken resource =
             _serial_golden->ResolveNativeBuffer(BarrierNativeHandleKey(barrier.buffer));
-        const auto [src_queue_role, dst_queue_role, queue_roles_complete] = queue_roles(
-            barrier.srcQueueFamilyIndex, barrier.dstQueueFamilyIndex
-        );
+        const auto [src_queue_role, dst_queue_role, queue_roles_complete] =
+            queue_roles(barrier.srcQueueFamilyIndex, barrier.dstQueueFamilyIndex);
         const SerialBarrierItem serial_item{
-            .group_ordinal       = _group_ordinal,
-            .resource            = resource,
-            .src_stage_mask      = barrier.srcStageMask,
-            .dst_stage_mask      = barrier.dstStageMask,
-            .src_access_mask     = barrier.srcAccessMask,
-            .dst_access_mask     = barrier.dstAccessMask,
-            .src_queue_role      = src_queue_role,
-            .dst_queue_role      = dst_queue_role,
+            .group_ordinal        = _group_ordinal,
+            .resource             = resource,
+            .src_stage_mask       = barrier.srcStageMask,
+            .dst_stage_mask       = barrier.dstStageMask,
+            .src_access_mask      = barrier.srcAccessMask,
+            .dst_access_mask      = barrier.dstAccessMask,
+            .src_queue_role       = src_queue_role,
+            .dst_queue_role       = dst_queue_role,
             .queue_roles_complete = queue_roles_complete,
-            .range_offset        = barrier.offset,
-            .range_size          = barrier.size,
+            .range_offset         = barrier.offset,
+            .range_size           = barrier.size,
         };
         _serial_golden->AddBarrier(serial_item);
         if (!resource.complete) {
@@ -1230,27 +936,28 @@ BarrierSemanticDiagnostics VulkanResourceTracker::GetPendingBarrierDiagnostics(
     for (const VkImageMemoryBarrier2& barrier : texture_barriers) {
         const StableSubmissionToken resource =
             _serial_golden->ResolveNativeImage(BarrierNativeHandleKey(barrier.image));
-        const auto [src_queue_role, dst_queue_role, queue_roles_complete] = queue_roles(
-            barrier.srcQueueFamilyIndex, barrier.dstQueueFamilyIndex
+        const auto [src_queue_role, dst_queue_role, queue_roles_complete] =
+            queue_roles(barrier.srcQueueFamilyIndex, barrier.dstQueueFamilyIndex);
+        _serial_golden->AddBarrier(
+            SerialBarrierItem{
+                .group_ordinal        = _group_ordinal,
+                .resource             = resource,
+                .src_stage_mask       = barrier.srcStageMask,
+                .dst_stage_mask       = barrier.dstStageMask,
+                .src_access_mask      = barrier.srcAccessMask,
+                .dst_access_mask      = barrier.dstAccessMask,
+                .old_state            = static_cast<uint64_t>(barrier.oldLayout),
+                .new_state            = static_cast<uint64_t>(barrier.newLayout),
+                .src_queue_role       = src_queue_role,
+                .dst_queue_role       = dst_queue_role,
+                .queue_roles_complete = queue_roles_complete,
+                .aspect_mask          = barrier.subresourceRange.aspectMask,
+                .base_mip_level       = barrier.subresourceRange.baseMipLevel,
+                .level_count          = barrier.subresourceRange.levelCount,
+                .base_array_layer     = barrier.subresourceRange.baseArrayLayer,
+                .layer_count          = barrier.subresourceRange.layerCount,
+            }
         );
-        _serial_golden->AddBarrier(SerialBarrierItem{
-            .group_ordinal        = _group_ordinal,
-            .resource             = resource,
-            .src_stage_mask       = barrier.srcStageMask,
-            .dst_stage_mask       = barrier.dstStageMask,
-            .src_access_mask      = barrier.srcAccessMask,
-            .dst_access_mask      = barrier.dstAccessMask,
-            .old_state            = static_cast<uint64_t>(barrier.oldLayout),
-            .new_state            = static_cast<uint64_t>(barrier.newLayout),
-            .src_queue_role       = src_queue_role,
-            .dst_queue_role       = dst_queue_role,
-            .queue_roles_complete = queue_roles_complete,
-            .aspect_mask          = barrier.subresourceRange.aspectMask,
-            .base_mip_level       = barrier.subresourceRange.baseMipLevel,
-            .level_count          = barrier.subresourceRange.levelCount,
-            .base_array_layer     = barrier.subresourceRange.baseArrayLayer,
-            .layer_count          = barrier.subresourceRange.layerCount,
-        });
         StableRecordHash hash;
         hash.Add(0x494d4147455f4241ull);
         hash.Add(barrier.srcStageMask);
@@ -1270,14 +977,16 @@ BarrierSemanticDiagnostics VulkanResourceTracker::GetPendingBarrierDiagnostics(
         add_barrier_digest(hash.Value());
     }
     for (const VkMemoryBarrier2& barrier : memory_barriers) {
-        _serial_golden->AddBarrier(SerialBarrierItem{
-            .group_ordinal   = _group_ordinal,
-            .resource        = StableSubmissionToken::Null(),
-            .src_stage_mask  = barrier.srcStageMask,
-            .dst_stage_mask  = barrier.dstStageMask,
-            .src_access_mask = barrier.srcAccessMask,
-            .dst_access_mask = barrier.dstAccessMask,
-        });
+        _serial_golden->AddBarrier(
+            SerialBarrierItem{
+                .group_ordinal   = _group_ordinal,
+                .resource        = StableSubmissionToken::Null(),
+                .src_stage_mask  = barrier.srcStageMask,
+                .dst_stage_mask  = barrier.dstStageMask,
+                .src_access_mask = barrier.srcAccessMask,
+                .dst_access_mask = barrier.dstAccessMask,
+            }
+        );
         StableRecordHash hash;
         hash.Add(0x4d454d4f52595f42ull);
         hash.Add(barrier.srcStageMask);
@@ -1328,13 +1037,18 @@ void VulkanResourceTracker::DispatchBarriers(VulkanCommandList& _cmdlist) {
     TakeResolvedBarriers().Record(_cmdlist);
 }
 
-void VulkanResourceTracker::RestoreState() {
+void VulkanResourceTracker::RestorePreferredStates() {
+    InitializeUntrackedTextureLayouts();
+    RestoreTrackedTextureLayouts();
+    AppendBufferRestoreBarrier();
+}
+
+void VulkanResourceTracker::InitializeUntrackedTextureLayouts() {
     Set<VulkanTexture*> first_restore_textures;
     for (const auto& [key, state] : texture_states) {
         (void)state;
         VulkanTexture* texture = key.texture;
-        if (exported_textures.find(texture) !=
-            exported_textures.end()) {
+        if (exported_textures.find(texture) != exported_textures.end()) {
             continue;
         }
         if (texture->b_present) {
@@ -1354,35 +1068,27 @@ void VulkanResourceTracker::RestoreState() {
     // promise. The ranges are complementary to texture_states, so they never
     // overlap the ordinary current-layout -> preferred-layout barriers below.
     for (VulkanTexture* texture : first_restore_textures) {
-        const VkImageLayout layout =
-            texture->GetQueuePreferredLayout(queue_type);
+        const VkImageLayout      layout = texture->GetQueuePreferredLayout(queue_type);
         const VkImageAspectFlags aspects =
-            VulkanEnumTranslator::METoVKImageAspectFlags(
-                texture->GetAspectFlags()
-            );
-        const uint32 mip_count = texture->GetNumMips();
+            VulkanEnumTranslator::METoVKImageAspectFlags(texture->GetAspectFlags());
+        const uint32 mip_count   = texture->GetNumMips();
         const uint32 array_count = texture->GetNumArray();
-        const auto is_tracked =
-            [&](uint32 mip, uint32 layer) {
-                for (const auto& [key, state] : texture_states) {
-                    (void)state;
-                    if (key.texture != texture) {
-                        continue;
-                    }
-                    const uint32 mip_end =
-                        static_cast<uint32>(key.mip_level) +
-                        static_cast<uint32>(key.mip_count);
-                    const uint32 layer_end =
-                        static_cast<uint32>(key.array_layer) +
-                        static_cast<uint32>(key.array_count);
-                    if (mip >= key.mip_level && mip < mip_end &&
-                        layer >= key.array_layer &&
-                        layer < layer_end) {
-                        return true;
-                    }
+        const auto   is_tracked  = [&](uint32 mip, uint32 layer) {
+            for (const auto& [key, state] : texture_states) {
+                (void)state;
+                if (key.texture != texture) {
+                    continue;
                 }
-                return false;
-            };
+                const uint32 mip_end =
+                    static_cast<uint32>(key.mip_level) + static_cast<uint32>(key.mip_count);
+                const uint32 layer_end =
+                    static_cast<uint32>(key.array_layer) + static_cast<uint32>(key.array_count);
+                if (mip >= key.mip_level && mip < mip_end && layer >= key.array_layer && layer < layer_end) {
+                    return true;
+                }
+            }
+            return false;
+        };
 
         for (uint32 mip = 0; mip < mip_count; ++mip) {
             uint32 layer = 0;
@@ -1394,46 +1100,42 @@ void VulkanResourceTracker::RestoreState() {
                 const uint32 first_layer = layer;
                 do {
                     ++layer;
-                } while (layer < array_count &&
-                         !is_tracked(mip, layer));
+                } while (layer < array_count && !is_tracked(mip, layer));
 
                 texture_barriers.emplace_back(
                     VkImageMemoryBarrier2{
-                        .sType =
-                            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                        .pNext = nullptr,
-                        .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-                        .srcAccessMask = VK_ACCESS_2_NONE,
-                        .dstStageMask =
-                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                        .dstAccessMask = VK_ACCESS_2_NONE,
-                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                        .newLayout = layout,
-                        .srcQueueFamilyIndex =
-                            VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex =
-                            VK_QUEUE_FAMILY_IGNORED,
-                        .image = texture->GetHandle(),
-                        .subresourceRange =
-                            VkImageSubresourceRange{
-                                .aspectMask = aspects,
-                                .baseMipLevel = mip,
-                                .levelCount = 1,
-                                .baseArrayLayer = first_layer,
-                                .layerCount = layer - first_layer,
-                            },
+                        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .pNext               = nullptr,
+                        .srcStageMask        = VK_PIPELINE_STAGE_2_NONE,
+                        .srcAccessMask       = VK_ACCESS_2_NONE,
+                        .dstStageMask        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                        .dstAccessMask       = VK_ACCESS_2_NONE,
+                        .oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED,
+                        .newLayout           = layout,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image               = texture->GetHandle(),
+                        .subresourceRange    = VkImageSubresourceRange{
+                            .aspectMask     = aspects,
+                            .baseMipLevel   = mip,
+                            .levelCount     = 1,
+                            .baseArrayLayer = first_layer,
+                            .layerCount     = layer - first_layer,
+                        },
                     }
                 );
             }
         }
         texture->b_has_preferred_state = true;
     }
+}
 
+void VulkanResourceTracker::RestoreTrackedTextureLayouts() {
     for (auto& [key, state] : texture_states) {
         VulkanTexture* texture = key.texture;
         if (exported_textures.find(texture) != exported_textures.end())
             continue;
-        VkImageLayout layout           = texture->GetQueuePreferredLayout(queue_type);
+        VkImageLayout layout = texture->GetQueuePreferredLayout(queue_type);
         if (texture->b_present)
             continue;
         texture_barriers.emplace_back();
@@ -1460,6 +1162,9 @@ void VulkanResourceTracker::RestoreState() {
         state.dst_access = VK_ACCESS_2_NONE;
         state.dst_layout = layout;
     }
+}
+
+void VulkanResourceTracker::AppendBufferRestoreBarrier() {
     VkAccessFlags2        src_buffer_access = VK_ACCESS_2_NONE;
     VkPipelineStageFlags2 src_buffer_stages = VK_PIPELINE_STAGE_2_NONE;
     for (auto& [buffer, state] : buffer_states) {
@@ -1469,11 +1174,11 @@ void VulkanResourceTracker::RestoreState() {
         src_buffer_stages |= state.src_stage;
     }
 
-    for (auto& [buffer, state] : flush_buffer_states) {
+    for (auto& [buffer, state] : internal_buffer_states) {
         src_buffer_access |= state.dst_access;
         src_buffer_stages |= state.dst_stage;
     }
-    if (!buffer_states.empty() || !flush_buffer_states.empty()) {
+    if (!buffer_states.empty() || !internal_buffer_states.empty()) {
         //memory barrier
         memory_barriers.emplace_back();
         VkMemoryBarrier2& barrier = memory_barriers.back();
@@ -1495,8 +1200,8 @@ void VulkanResourceTracker::Reset() {
     write_state_textures.clear();
     write_state_buffers.clear();
     written_blas_handles.clear();
-    flush_buffer_states.clear();
-    flush_buffer_ranges.clear();
+    internal_buffer_states.clear();
+    pending_internal_buffer_ranges.clear();
     pending_buffers.clear();
     pending_textures.clear();
     explicit_partial_buffers.clear();

@@ -87,165 +87,155 @@ void ExpectInvalidArgument(TCallable&& _callable, const char* _message) {
 }
 
 void LegacyVulkanStateMappingIsStageCompatible() {
-    const auto compute_srv = VulkanResourceTracker::ResolveTextureState(
-        ETextureState::SHADER_RESOURCE, EPassType::Compute, false, false
+    const auto compute_srv = ResolveVulkanTextureState(
+        ETextureState::SHADER_RESOURCE, EPassType::Compute, false, ETextureAspectFlags::COLOR
     );
     Expect(
-        std::get<0>(compute_srv) == VK_ACCESS_2_SHADER_READ_BIT &&
-            std::get<1>(compute_srv) ==
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
-            std::get<2>(compute_srv) ==
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        compute_srv.access == VK_ACCESS_2_SHADER_READ_BIT &&
+            compute_srv.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+            compute_srv.stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         "compute SRV texture mapping is not shader-stage compatible"
     );
 
-    const auto raytracing_sampled = VulkanResourceTracker::ResolveTextureState(
-        ETextureState::SAMPLE, EPassType::Raytracing, false, false
+    const auto raytracing_sampled = ResolveVulkanTextureState(
+        ETextureState::SAMPLE, EPassType::Raytracing, false, ETextureAspectFlags::COLOR
     );
     Expect(
-        std::get<0>(raytracing_sampled) ==
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT &&
-            std::get<2>(raytracing_sampled) ==
-                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        raytracing_sampled.access == VK_ACCESS_2_SHADER_SAMPLED_READ_BIT &&
+            raytracing_sampled.stages == VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
         "raytracing sampled texture mapping lost its shader stage"
     );
 
-    const auto graphics_srv = VulkanResourceTracker::ResolveTextureState(
-        ETextureState::SHADER_RESOURCE, EPassType::Graphics, false, false
+    const auto graphics_srv = ResolveVulkanTextureState(
+        ETextureState::SHADER_RESOURCE, EPassType::Graphics, false, ETextureAspectFlags::COLOR
     );
     Expect(
-        std::get<2>(graphics_srv) ==
-            (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT),
+        graphics_srv.stages ==
+            (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT),
         "graphics SRV texture mapping must cover vertex and fragment shaders"
     );
 
-    const auto graphics_render_target_read = VulkanResourceTracker::ResolveTextureState(
-        ETextureState::RENDER_TARGET, EPassType::Graphics, false, false
+    const auto graphics_render_target_read = ResolveVulkanTextureState(
+        ETextureState::RENDER_TARGET, EPassType::Graphics, false, ETextureAspectFlags::COLOR
     );
     Expect(
-        std::get<0>(graphics_render_target_read) ==
-                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT &&
-            std::get<1>(graphics_render_target_read) ==
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
-            std::get<2>(graphics_render_target_read) ==
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        graphics_render_target_read.access == VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT &&
+            graphics_render_target_read.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+            graphics_render_target_read.stages == VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
         "graphics render-target read mapping lost queue-transfer compatibility"
     );
 
-    const auto copy_src =
-        VulkanResourceTracker::ResolveTextureState(ETextureState::TRANSFER, EPassType::Copy, false, false);
+    const auto copy_src = ResolveVulkanTextureState(
+        ETextureState::TRANSFER, EPassType::Copy, false, ETextureAspectFlags::COLOR
+    );
     const auto copy_dst =
-        VulkanResourceTracker::ResolveTextureState(ETextureState::TRANSFER, EPassType::Copy, true, false);
+        ResolveVulkanTextureState(ETextureState::TRANSFER, EPassType::Copy, true, ETextureAspectFlags::COLOR);
     Expect(
-        std::get<0>(copy_src) == VK_ACCESS_2_TRANSFER_READ_BIT &&
-            std::get<1>(copy_src) == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
-            std::get<2>(copy_src) == VK_PIPELINE_STAGE_2_TRANSFER_BIT &&
-            std::get<0>(copy_dst) == VK_ACCESS_2_TRANSFER_WRITE_BIT &&
-            std::get<1>(copy_dst) == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
-            std::get<2>(copy_dst) == VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        copy_src.access == VK_ACCESS_2_TRANSFER_READ_BIT &&
+            copy_src.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
+            copy_src.stages == VK_PIPELINE_STAGE_2_TRANSFER_BIT &&
+            copy_dst.access == VK_ACCESS_2_TRANSFER_WRITE_BIT &&
+            copy_dst.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+            copy_dst.stages == VK_PIPELINE_STAGE_2_TRANSFER_BIT,
         "copy texture mapping is not transfer-stage compatible"
     );
 
-    const auto depth_read = VulkanResourceTracker::ResolveTextureState(
-        ETextureState::DEPTH_STENCIL, EPassType::Graphics, false, true
+    const auto depth_read = ResolveVulkanTextureState(
+        ETextureState::DEPTH_STENCIL, EPassType::Graphics, false, ETextureAspectFlags::DEPTH_SLICE
     );
     Expect(
-        std::get<0>(depth_read) ==
-                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT &&
-            std::get<1>(depth_read) ==
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL &&
-            std::get<2>(depth_read) ==
-                (VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT),
+        depth_read.access == VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT &&
+            depth_read.layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL &&
+            depth_read.stages ==
+                (VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT),
         "depth read mapping is not attachment-stage compatible"
     );
 
-    const auto compute_uav = VulkanResourceTracker::ResolveTextureState(
-        ETextureState::UNORDERED_ACCESS, EPassType::Compute, true, false
+    const auto sampled_depth = ResolveVulkanTextureState(
+        ETextureState::SAMPLE,
+        EPassType::Compute,
+        false,
+        ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE
     );
     Expect(
-        std::get<0>(compute_uav) ==
-                (VK_ACCESS_2_SHADER_READ_BIT |
-                 VK_ACCESS_2_SHADER_WRITE_BIT) &&
-            std::get<1>(compute_uav) == VK_IMAGE_LAYOUT_GENERAL &&
-            std::get<2>(compute_uav) ==
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        sampled_depth.access == VK_ACCESS_2_SHADER_SAMPLED_READ_BIT &&
+            sampled_depth.layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL &&
+            sampled_depth.stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        "sampled depth-stencil texture mapping lost depth layout or compute scope"
+    );
+
+    const auto compute_uav = ResolveVulkanTextureState(
+        ETextureState::UNORDERED_ACCESS, EPassType::Compute, true, ETextureAspectFlags::COLOR
+    );
+    Expect(
+        compute_uav.access == (VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT) &&
+            compute_uav.layout == VK_IMAGE_LAYOUT_GENERAL &&
+            compute_uav.stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         "compute UAV texture mapping is not shader-stage compatible"
     );
 
-    const auto copy_buffer_src =
-        VulkanResourceTracker::ResolveBufferState(EBufferState::TRANSFER, EPassType::Copy, false);
-    const auto raytracing_buffer_srv = VulkanResourceTracker::ResolveBufferState(
-        EBufferState::SHADER_RESOURCE, EPassType::Raytracing, false
-    );
+    const auto copy_buffer_src = ResolveVulkanBufferState(EBufferState::TRANSFER, EPassType::Copy, false);
+    const auto raytracing_buffer_srv =
+        ResolveVulkanBufferState(EBufferState::SHADER_RESOURCE, EPassType::Raytracing, false);
     const auto graphics_buffer_srv =
-        VulkanResourceTracker::ResolveBufferState(EBufferState::SHADER_RESOURCE, EPassType::Graphics, false);
+        ResolveVulkanBufferState(EBufferState::SHADER_RESOURCE, EPassType::Graphics, false);
     Expect(
-        std::get<0>(copy_buffer_src) == VK_ACCESS_2_TRANSFER_READ_BIT &&
-            std::get<1>(copy_buffer_src) ==
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT &&
-            std::get<0>(raytracing_buffer_srv) ==
-                VK_ACCESS_2_SHADER_READ_BIT &&
-            std::get<1>(raytracing_buffer_srv) ==
-                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR &&
-            std::get<1>(graphics_buffer_srv) ==
-                (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT),
+        copy_buffer_src.access == VK_ACCESS_2_TRANSFER_READ_BIT &&
+            copy_buffer_src.stages == VK_PIPELINE_STAGE_2_TRANSFER_BIT &&
+            raytracing_buffer_srv.access == VK_ACCESS_2_SHADER_READ_BIT &&
+            raytracing_buffer_srv.stages == VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR &&
+            graphics_buffer_srv.stages ==
+                (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT),
         "legacy buffer mapping lost copy or raytracing stage semantics"
     );
 
     ExpectInvalidArgument(
         [] {
-            (void)VulkanResourceTracker::ResolveTextureState(
-                ETextureState::SHADER_RESOURCE, EPassType::Copy, false, false
+            (void)ResolveVulkanTextureState(
+                ETextureState::SHADER_RESOURCE, EPassType::Copy, false, ETextureAspectFlags::COLOR
             );
         },
         "copy pass accepted a shader-resource texture"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VulkanResourceTracker::ResolveTextureState(
-                ETextureState::RENDER_TARGET, EPassType::Compute, true, false
+            (void)ResolveVulkanTextureState(
+                ETextureState::RENDER_TARGET, EPassType::Compute, true, ETextureAspectFlags::COLOR
             );
         },
         "compute pass accepted a render-target attachment"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VulkanResourceTracker::ResolveTextureState(
-                ETextureState::SAMPLE, EPassType::Graphics, true, false
+            (void)ResolveVulkanTextureState(
+                ETextureState::SAMPLE, EPassType::Graphics, true, ETextureAspectFlags::COLOR
             );
         },
         "write path accepted a sampled texture"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VulkanResourceTracker::ResolveBufferState(
-                EBufferState::SHADER_RESOURCE, EPassType::Copy, false
-            );
+            (void)ResolveVulkanBufferState(EBufferState::SHADER_RESOURCE, EPassType::Copy, false);
         },
         "copy pass accepted a shader-resource buffer"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VulkanResourceTracker::ResolveBufferState(EBufferState::VERTEX, EPassType::Graphics, true);
+            (void)ResolveVulkanBufferState(EBufferState::VERTEX, EPassType::Graphics, true);
         },
         "write path accepted a vertex buffer"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VulkanResourceTracker::ResolveTextureState(
-                ETextureState::TRANSFER, static_cast<EPassType>(99), false, false
+            (void)ResolveVulkanTextureState(
+                ETextureState::TRANSFER, static_cast<EPassType>(99), false, ETextureAspectFlags::COLOR
             );
         },
         "texture mapping accepted an unknown pass type"
     );
     ExpectInvalidArgument(
         [] {
-            (void)VulkanResourceTracker::ResolveBufferState(
-                static_cast<EBufferState>(99), EPassType::Graphics, false
-            );
+            (void)ResolveVulkanBufferState(static_cast<EBufferState>(99), EPassType::Graphics, false);
         },
         "buffer mapping accepted an unknown state"
     );

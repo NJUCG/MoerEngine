@@ -896,12 +896,14 @@ struct VkCmdPreprocessor {
         }
         if (!to_read_textures.empty()) {
             for (const auto& key : to_read_textures) {
-                auto access = tracker.ReadTexture(key.texture, ETextureState::SAMPLE, pass_type);
+                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
+                    ETextureState::SAMPLE, pass_type, false, key.texture->GetAspectFlags()
+                );
                 tracker.RecordState(
                     key.texture,
-                    std::get<0>(access),
-                    std::get<1>(access),
-                    std::get<2>(access),
+                    texture_state.access,
+                    texture_state.layout,
+                    texture_state.stages,
                     key.mip_level,
                     key.mip_count,
                     key.array_layer,
@@ -1118,7 +1120,7 @@ struct VkCmdPreprocessor {
         auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
         tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         //Register Inner Buffer Ranges for queue execution sync
-        tracker.RegisterFlushBufferRange(
+        tracker.RecordInternalBufferRange(
             _cmd->staging_buffer,
             VK_ACCESS_2_TRANSFER_READ_BIT,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -1147,7 +1149,7 @@ struct VkCmdPreprocessor {
             _cmd->array_layer, // array_layer
             1                  // array_count
         );
-        tracker.RegisterFlushBufferRange(
+        tracker.RecordInternalBufferRange(
             _cmd->staging_buffer,
             VK_ACCESS_2_TRANSFER_READ_BIT,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -1217,7 +1219,7 @@ struct VkCmdPreprocessor {
 
         auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
         tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-        tracker.RegisterFlushBufferRange(
+        tracker.RecordInternalBufferRange(
             _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
         );
     }
@@ -1238,7 +1240,7 @@ struct VkCmdPreprocessor {
             _cmd->ArrayLayer(),
             1
         );
-        tracker.RegisterFlushBufferRange(
+        tracker.RecordInternalBufferRange(
             _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
         );
     }
@@ -1533,24 +1535,26 @@ struct VkCmdPreprocessor {
             for (auto& barrier : _cmd->ReadBuffers()) {
                 auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
                 tracker.RecordState(
-                    vk_buffer, tracker.ReadBuffer(vk_buffer, barrier.state, barrier.pass_type)
+                    vk_buffer, ResolveVulkanBufferState(barrier.state, barrier.pass_type, false)
                 );
             }
             for (auto& barrier : _cmd->WriteBuffers()) {
                 auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
                 tracker.RecordState(
-                    vk_buffer, tracker.WriteBuffer(vk_buffer, barrier.state, barrier.pass_type)
+                    vk_buffer, ResolveVulkanBufferState(barrier.state, barrier.pass_type, true)
                 );
             }
 
             for (auto& barrier : _cmd->ReadTextures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                auto  access     = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
+                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
+                    barrier.state, barrier.pass_type, false, vk_texture->GetAspectFlags()
+                );
                 tracker.RecordState(
                     vk_texture,
-                    std::get<0>(access),
-                    std::get<1>(access),
-                    std::get<2>(access),
+                    texture_state.access,
+                    texture_state.layout,
+                    texture_state.stages,
                     static_cast<uint8>(barrier.mip_level),
                     static_cast<uint8>(barrier.mip_cnt),
                     static_cast<uint8>(barrier.array_layer),
@@ -1559,12 +1563,14 @@ struct VkCmdPreprocessor {
             }
             for (auto& barrier : _cmd->WriteTextures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                auto  access     = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
+                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
+                    barrier.state, barrier.pass_type, true, vk_texture->GetAspectFlags()
+                );
                 tracker.RecordState(
                     vk_texture,
-                    std::get<0>(access),
-                    std::get<1>(access),
-                    std::get<2>(access),
+                    texture_state.access,
+                    texture_state.layout,
+                    texture_state.stages,
                     static_cast<uint8>(barrier.mip_level),
                     static_cast<uint8>(barrier.mip_cnt),
                     static_cast<uint8>(barrier.array_layer),
@@ -1582,7 +1588,7 @@ struct VkCmdPreprocessor {
             auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
             tracker.RecordState(
                 vk_buffer,
-                tracker.ReadBuffer(vk_buffer, barrier.state, barrier.pass_type),
+                ResolveVulkanBufferState(barrier.state, barrier.pass_type, false),
                 src_queue_family,
                 dst_queue_family
             );
@@ -1591,7 +1597,7 @@ struct VkCmdPreprocessor {
             auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
             tracker.RecordState(
                 vk_buffer,
-                tracker.WriteBuffer(vk_buffer, barrier.state, barrier.pass_type),
+                ResolveVulkanBufferState(barrier.state, barrier.pass_type, true),
                 src_queue_family,
                 dst_queue_family
             );
@@ -1599,12 +1605,14 @@ struct VkCmdPreprocessor {
 
         for (auto& barrier : _cmd->ReadTextures()) {
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-            auto  access     = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
+            const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
+                barrier.state, barrier.pass_type, false, vk_texture->GetAspectFlags()
+            );
             tracker.RecordState(
                 vk_texture,
-                std::get<0>(access),
-                std::get<1>(access),
-                std::get<2>(access),
+                texture_state.access,
+                texture_state.layout,
+                texture_state.stages,
                 static_cast<uint8>(barrier.mip_level),
                 static_cast<uint8>(barrier.mip_cnt),
                 static_cast<uint8>(barrier.array_layer),
@@ -1615,12 +1623,14 @@ struct VkCmdPreprocessor {
         }
         for (auto& barrier : _cmd->WriteTextures()) {
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-            auto  access     = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
+            const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
+                barrier.state, barrier.pass_type, true, vk_texture->GetAspectFlags()
+            );
             tracker.RecordState(
                 vk_texture,
-                std::get<0>(access),
-                std::get<1>(access),
-                std::get<2>(access),
+                texture_state.access,
+                texture_state.layout,
+                texture_state.stages,
                 static_cast<uint8>(barrier.mip_level),
                 static_cast<uint8>(barrier.mip_cnt),
                 static_cast<uint8>(barrier.array_layer),
@@ -1666,13 +1676,15 @@ struct VkCmdPreprocessor {
         if (_cmd->IsImport()) {
             for (auto& barrier : _cmd->ImportTextures()) {
                 auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
-                auto  access     = tracker.ReadTexture(vk_texture, barrier.state);
+                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
+                    barrier.state, EPassType::Graphics, false, vk_texture->GetAspectFlags()
+                );
                 tracker.QueueTransferAcquireResource(
                     vk_texture,
                     src_queue_family,
                     dst_queue_family,
                     vk_texture->GetQueuePreferredLayout(src_queue),
-                    std::get<1>(access),
+                    texture_state.layout,
                     VK_ACCESS_2_NONE,
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
                 );
@@ -1680,7 +1692,7 @@ struct VkCmdPreprocessor {
 
             for (auto& barrier : _cmd->ImportBuffers()) {
                 auto* vk_buffer = ResourceCast(barrier.buffer.GetBuffer());
-                auto  access    = tracker.ReadBuffer(vk_buffer, barrier.state);
+                (void)ResolveVulkanBufferState(barrier.state, EPassType::Graphics, false);
                 tracker.QueueTransferAcquireResource(
                     vk_buffer,
                     src_queue_family,
@@ -1693,19 +1705,21 @@ struct VkCmdPreprocessor {
         } else {
             for (auto& barrier : _cmd->ExportTextures()) {
                 auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
-                auto  access     = tracker.ReadTexture(vk_texture, barrier.state);
+                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
+                    barrier.state, EPassType::Graphics, false, vk_texture->GetAspectFlags()
+                );
                 tracker.QueueTransferReleaseResource(
                     vk_texture,
                     src_queue_family,
                     dst_queue_family,
                     vk_texture->GetQueuePreferredLayout(src_queue),
-                    std::get<1>(access)
+                    texture_state.layout
                 );
             }
 
             for (auto& barrier : _cmd->ExportBuffers()) {
                 auto* vk_buffer = ResourceCast(barrier.buffer.GetBuffer());
-                auto  access    = tracker.ReadBuffer(vk_buffer, barrier.state);
+                (void)ResolveVulkanBufferState(barrier.state, EPassType::Graphics, false);
                 tracker.QueueTransferReleaseResource(
                     vk_buffer,
                     src_queue_family,
@@ -2414,19 +2428,19 @@ public:
 
         // for (const auto& buffer : read_buffers) {
         //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
-        //     tracker.RecordState(vk_buffer, tracker.ReadBuffer(vk_buffer, buffer.state, buffer.pass_type));
+        //     tracker.RecordState(vk_buffer, ResolveVulkanBufferState(buffer.state, buffer.pass_type, false));
         // }
         // for (const auto& buffer : write_buffers) {
         //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
-        //     tracker.RecordState(vk_buffer, tracker.WriteBuffer(vk_buffer, buffer.state, buffer.pass_type));
+        //     tracker.RecordState(vk_buffer, ResolveVulkanBufferState(buffer.state, buffer.pass_type, true));
         // }
         // for (const auto& texture : read_textures) {
         //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
-        //     tracker.RecordState(vk_texture, tracker.ReadTexture(vk_texture, texture.state, texture.pass_type));
+        //     tracker.RecordState(vk_texture, ResolveVulkanTextureState(texture.state, texture.pass_type, false, vk_texture->GetAspectFlags()));
         // }
         // for (const auto& texture : write_textures) {
         //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
-        //     tracker.RecordState(vk_texture, tracker.WriteTexture(vk_texture, texture.state, texture.pass_type));
+        //     tracker.RecordState(vk_texture, ResolveVulkanTextureState(texture.state, texture.pass_type, true, vk_texture->GetAspectFlags()));
         // }
     }
 
@@ -6218,7 +6232,7 @@ bool VkCommandQueue::TryExecuteParallel(
         ResetSplitProfilingCpuFrame();
         // Once preprocessing/recording has begun, falling back to replaying
         // the whole packet is unsafe: serial commands may already have moved
-        // payloads or allocated transient resources, and RestoreState may have
+        // payloads or allocated transient resources, and RestorePreferredStates may have
         // published preferred layouts. Treat native record failure as terminal
         // so no later frame can consume partially prepared CPU-side state.
         vk_device.TryLatchFirstFault(_context, _result, false, false, true);
@@ -6890,7 +6904,7 @@ bool VkCommandQueue::TryExecuteParallel(
         }
 
         if (!_submit.HasExplicitResourceStateOwnership()) {
-            tracker.RestoreState();
+            tracker.RestorePreferredStates();
         }
         tracker.DispatchBarriers(assembly_cmd);
         if (ends_profiling_frame) {
@@ -7460,7 +7474,7 @@ bool VkCommandQueue::TryExecuteParallel(
     }
 
     if (!_submit.HasExplicitResourceStateOwnership()) {
-        tracker.RestoreState();
+        tracker.RestorePreferredStates();
     }
     VulkanCommandList& epilogue_cmd = tracker_owner->GetCommandList();
     epilogue_cmd.SetDescriptorBufferLease(descriptor_lease);
@@ -8219,7 +8233,7 @@ void VkCommandQueue::ExecuteNow(
 
     if (has_cmd) {
         if (!_submit.HasExplicitResourceStateOwnership()) {
-            tracker.RestoreState();
+            tracker.RestorePreferredStates();
         }
         if (record_sample) {
             record_pending_barriers(std::numeric_limits<uint64>::max());
@@ -8558,7 +8572,10 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     VK_IMAGE_LAYOUT_GENERAL
                 );
                 vk_tracker.RecordState(
-                    swapchain_tex, vk_tracker.WriteTexture(swapchain_tex, ETextureState::TRANSFER)
+                    swapchain_tex,
+                    ResolveVulkanTextureState(
+                        ETextureState::TRANSFER, EPassType::Graphics, true, swapchain_tex->GetAspectFlags()
+                    )
                 );
                 vk_tracker.ResolveBarriers();
                 vk_tracker.DispatchBarriers(vk_cmd_list);
@@ -10272,7 +10289,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
         }
 
         if (!recorded->submit.HasExplicitResourceStateOwnership()) {
-            vk_tracker.RestoreState();
+            vk_tracker.RestorePreferredStates();
         }
         vk_tracker.DispatchBarriers(vk_cmd_list);
         vk_cmd_list.EndLabel();

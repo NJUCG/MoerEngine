@@ -329,17 +329,19 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHICmdReordererContract COMMAND $<TARGET_FILE:${test_target}>)
 
-# The barrier contract calls VulkanResourceTracker methods implemented only by the Vulkan
-# backend, which is excluded from the Render library on macOS.
-if (NOT APPLE)
-    set(test_target TestRHIExplicitBarrier)
-    add_executable(${test_target} "RHIExplicitBarrierTest.cpp")
-    target_link_libraries(${test_target}
-        PRIVATE Moer::Render
+# State conversion is CPU-only. Compile it directly on macOS, where the Render
+# library excludes the Vulkan backend; other platforms use the Render symbols.
+set(test_target TestRHIExplicitBarrier)
+add_executable(${test_target} "RHIExplicitBarrierTest.cpp")
+if (APPLE)
+    target_sources(${test_target} PRIVATE
+        "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanResourceState.cpp"
     )
-    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-    add_test(NAME RHIExplicitBarrierContract COMMAND $<TARGET_FILE:${test_target}>)
 endif()
+target_link_libraries(${test_target} PRIVATE Moer::Render Moer::VulkanHeaders)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIExplicitBarrierContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RHIExplicitBarrierContract PROPERTIES TIMEOUT 60)
 
 # CPU-only contract for Vulkan-style multiview masks and attachment layer
 # coverage. The Vulkan integration test below owns the real GPU draw/readback.
