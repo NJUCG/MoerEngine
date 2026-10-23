@@ -309,13 +309,16 @@ RenderGraph::PreparedPassHandle SkyboxPass::AddToGraph(
     const RasterContext& context,
     const RasterConfig& config,
     const Camera& camera,
-    GraphResources resources
+    GraphResources resources,
+    bool clear_depth
 ) {
     auto prepared = graph.AddSetupPass(
         "Skybox.Prepare",
         uint8_t{0},
-        [this, &context, &config, &camera](const uint8_t&) {
-            return Prepare(context, config, camera);
+        [this, &context, &config, &camera, clear_depth](const uint8_t&) {
+            auto parameters = Prepare(context, config, camera);
+            parameters.clear_depth = clear_depth;
+            return parameters;
         }
     );
     if (!prepared.IsValid()) {
@@ -324,9 +327,10 @@ RenderGraph::PreparedPassHandle SkyboxPass::AddToGraph(
 
     auto pass = graph.AddRecordPass(
         "Skybox",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.depth)
-                .Read(resources.cubemap)
+        [resources, clear_depth](RenderGraph::PassBuilder& builder) {
+            if (clear_depth) builder.Write(resources.depth);
+            else builder.Read(resources.depth);
+            builder.Read(resources.cubemap)
                 .ReadWrite(resources.lighting_output);
         },
         [this, prepared](CommandList& cmd_list) {

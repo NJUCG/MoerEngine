@@ -11,6 +11,7 @@
 #include "DirectionalShadowMaskPass.h"
 #include "GeometryPass.h"
 #include "GaussianSplatPass.h"
+#include "GaussianCompositePass.h"
 #include "GaussianImageExport.h"
 #include <cmath>
 #include "TessellatedSurfacePass.h"
@@ -904,42 +905,21 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         if (m_gaussian_export) m_gaussian_export->Poll();
         if (frame_packet.gaussian_export_request && !m_gaussian_export)
             m_gaussian_export = MakeUnique<GaussianImageExport>();
-        const bool should_render_gaussians = frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
-            frame_packet.gaussian_content == EGaussianSceneContent::Mixed ||
-            (frame_packet.gaussian_content == EGaussianSceneContent::Empty && frame_packet.has_gaussian_assets);
-        if (should_render_gaussians) {
-            static_cast<void>(ensure_profile_source(cmd_list, graphics_profile_binding, next_profile_source_order++));
-            if (!m_gaussian_splat_pass)
-                m_gaussian_splat_pass = MakeUnique<GaussianSplatPass>(manager, GaussianRasterSettings{frame_packet.gaussian_view_settings.tile_pair_capacity});
+        const bool has_visible_gaussians = frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
+            frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
+        const bool has_meshes = frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly ||
+            frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
+        const bool record_gaussians = has_visible_gaussians || bool(frame_packet.gaussian_export_request);
+        if (has_visible_gaussians != m_had_visible_gaussians) aa_pass->ResetHistory();
+        m_had_visible_gaussians = has_visible_gaussians;
+        if (has_visible_gaussians && raster_config.aa_mode == EAaMode::SMAA_T2X)
+            raster_config.aa_mode = EAaMode::SMAA_1X;
+        if (record_gaussians) {
+            if (!m_gaussian_splat_pass) m_gaussian_splat_pass = MakeUnique<GaussianSplatPass>(manager);
+            if (!m_gaussian_composite_pass)
+                m_gaussian_composite_pass = MakeUnique<GaussianCompositePass>(manager, raster_context.bdls);
             m_gaussian_splat_pass->SetPairCapacity(frame_packet.gaussian_view_settings.tile_pair_capacity);
-            const bool is_mixed = frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
-            if (is_mixed && !m_has_warned_mixed)
-                LOG_WARNING("[GaussianRaster] Mixed rendering is not implemented yet; invalid magenta frame");
-            m_has_warned_mixed = is_mixed;
-            const auto gaussian_display = m_gaussian_splat_pass->Record(cmd_list, render_scene->GetGaussianGpuScene(),
-                frame_packet.render_camera, raster_context.GetResolution(),
-                frame_packet.active_viewport_mode == EEditorViewportMode::Scene, is_mixed, frame_packet.gaussian_view_settings);
-            if (frame_packet.gaussian_export_request) {
-                const auto& request = *frame_packet.gaussian_export_request;
-                if (is_mixed) m_gaussian_export->Reject(request.request_id,"Mixed rendering is not implemented; PNG was not written");
-                else m_gaussian_export->Request(cmd_list,gaussian_display->GetView(),m_gaussian_splat_pass->GetStatusBuffer(),
-                    raster_context.GetResolution(),request.path,request.request_id);
-            }
-            const auto& ui_frame = frame_packet.ui_composition;
-            const auto window_view = ui_frame.window_frame_buffer ? ui_frame.window_frame_buffer->GetView() : TextureView{};
-            default_output_texture = ui_combine_pass->Process(cmd_list,
-                ui_frame.enabled ? ui_frame.separate_window : true,
-                ui_frame.enabled ? ui_frame.output_resolution : presentation_resolution,
-                ui_frame.enabled ? ui_frame.scene_color_position : float2(0),
-                ui_frame.enabled ? ui_frame.scene_color_resolution : float2(presentation_resolution.x, presentation_resolution.y),
-                ui_frame.enabled ? window_view : raster_context.textures.output.tex->GetView(),
-                gaussian_display->GetView(), raster_context.textures.output.tex->GetView());
-            raster_context.InvalidateHiZHistory();
-            aa_pass->ResetHistory();
-            rtao_denoiser_pass->ResetHistory();
-        } else {
-        if (frame_packet.gaussian_export_request)
-            m_gaussian_export->Reject(frame_packet.gaussian_export_request->request_id,"No Gaussian raster output in this viewport");
+        }
         const Camera& main_camera = scene_updates.main_camera;
         Camera        camera      = frame_packet.render_camera;
         const uint8 smaa_t2x_phase =
@@ -1050,6 +1030,17 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::BufferHandle  scene_lights;
         } graph_resources{};
 
+        GaussianSplatPass::RecordParameters gaussian_parameters{};
+        GaussianSplatPass::GraphResources gaussian_graph{};
+        if (record_gaussians) {
+            const bool needs_reference = frame_packet.gaussian_export_request &&
+                frame_packet.gaussian_export_request->view_settings.display_mode == EGaussianDisplayMode::Reference &&
+                frame_packet.gaussian_content != EGaussianSceneContent::Mixed;
+            gaussian_parameters = m_gaussian_splat_pass->Prepare(render_scene->GetGaussianGpuScene(), camera,
+                raster_context.GetResolution(), frame_packet.active_viewport_mode == EEditorViewportMode::Scene,
+                frame_packet.gaussian_view_settings,
+                TextureRef(raster_context.textures.depth_nearest_sampler.tex->GetView().GetTexture()), needs_reference);
+        }
         auto define_raster_passes = [&](auto&& dispatch, auto&& dispatch_prepared) {
             auto schedule_external = [&](std::string_view name, auto&& setup, auto&& execute) {
                 dispatch(
@@ -1127,7 +1118,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         prepare_safety
                     );
                 };
-            const auto shadow_depth_pass_handle = schedule_prepared(
+            RenderGraph::PreparedPassHandle shadow_depth_pass_handle{}, probe_update_pass_handle{};
+            if (has_meshes) {
+            shadow_depth_pass_handle = schedule_prepared(
                 "ShadowDepth",
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.Write(graph_resources.shadow_maps)
@@ -1147,7 +1140,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 // Updates the persistent shadow cache and shadow resources.
                 RenderGraph::PrepareSafety::Unsafe
             );
-            const auto probe_update_pass_handle = schedule_prepared(
+            probe_update_pass_handle = schedule_prepared(
                 "ProbeUpdate",
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.ReadWrite(graph_resources.probe_volume)
@@ -1273,21 +1266,23 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     lighting_pass->Record(recording_cmd_list, parameters);
                 }
             );
+            }
             schedule_prepared(
                 "Skybox",
                 [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.depth)
-                        .Read(graph_resources.cubemap)
-                        .ReadWrite(graph_resources.lighting_output);
+                    if (has_meshes) builder.Read(graph_resources.depth);
+                    else builder.Write(graph_resources.depth);
+                    builder.Read(graph_resources.cubemap).ReadWrite(graph_resources.lighting_output);
                 },
-                [&]() { return skybox_pass->Prepare(raster_context, raster_config, camera); },
+                [&]() { auto parameters = skybox_pass->Prepare(raster_context, raster_config, camera);
+                    parameters.clear_depth = !has_meshes; return parameters; },
                 [&](CommandList& recording_cmd_list,
                     const SkyboxPass::RecordParameters& parameters) {
                     skybox_pass->Record(recording_cmd_list, parameters);
                 }
             );
 
-            if (draw_scene_gizmos && scene_gizmos.show_probe_gi) {
+            if (has_meshes && draw_scene_gizmos && scene_gizmos.show_probe_gi) {
                 schedule_prepared_after(
                     "ProbeGizmo",
                     probe_update_pass_handle.setup,
@@ -1315,6 +1310,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 );
             }
 
+            if (has_meshes) {
             ao_result = ao_pass->DescribeNextOutput(raster_context, raster_config);
             raster_commit_ao_index = ao_result.ao_only_idx;
             schedule_prepared(
@@ -1441,6 +1437,27 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 processing_image = raster_context.textures.ssr_output;
                 processing_image_resource = graph_resources.ssr_output;
             }
+            } else {
+                processing_image = raster_context.textures.lighting_output;
+                processing_image_resource = graph_resources.lighting_output;
+            }
+            if (record_gaussians) {
+                schedule_prepared("GaussianRaster", [&](RenderGraph::PassBuilder&) {},
+                    [&]() { return gaussian_parameters; },
+                    [&](CommandList& commands, const GaussianSplatPass::RecordParameters& parameters) {
+                        m_gaussian_splat_pass->Record(commands, parameters);
+                    });
+                const auto composite = m_gaussian_composite_pass->Prepare(processing_image,
+                    m_gaussian_splat_pass->GetColor(), m_gaussian_splat_pass->GetTransmittance(),
+                    BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()), m_gaussian_splat_pass->GetRanges());
+                schedule_prepared("GaussianComposite", [&](RenderGraph::PassBuilder&) {},
+                    [composite]() { return composite; },
+                    [&](CommandList& commands, const GaussianCompositePass::RecordParameters& parameters) {
+                        m_gaussian_composite_pass->Record(commands, parameters);
+                    });
+                processing_image = composite.output;
+            }
+            // Reserved boundary: transparent geometry consumes the composited scene color.
             const TextureWithHandle aa_input = processing_image;
             schedule_prepared(
                 "AntiAliasing",
@@ -1517,7 +1534,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     }
                 );
             }
-            if (draw_scene_gizmos && scene_gizmos.show_csm) {
+            if (has_meshes && draw_scene_gizmos && scene_gizmos.show_csm) {
                 schedule_prepared_after(
                     "CsmGizmo",
                     shadow_depth_pass_handle.setup,
@@ -1837,14 +1854,17 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             if (render_graph_fallback_latched) {
                 execute_linear();
             } else {
-                const auto shadow_depth_handle = shadow_depth_pass->AddToGraph(
+                if (record_gaussians) gaussian_graph = m_gaussian_splat_pass->ImportGraphResources(graph);
+                RenderGraph::PreparedPassHandle shadow_depth_handle{}, probe_update_handle{};
+                if (has_meshes) {
+                shadow_depth_handle = shadow_depth_pass->AddToGraph(
                     graph,
                     raster_context,
                     raster_config,
                     camera,
                     {.shadow_maps = graph_resources.shadow_maps}
                 );
-                const auto probe_update_handle = probe_update_pass->AddToGraph(
+                probe_update_handle = probe_update_pass->AddToGraph(
                     graph,
                     raster_context,
                     raster_config,
@@ -1929,6 +1949,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         .scene_lights = graph_resources.scene_lights
                     }
                 );
+                }
+                const StaticArray<RenderGraph::SetupPassHandle, 1> shadow_dependency{shadow_depth_handle.setup};
                 skybox_pass->AddToGraph(
                     graph,
                     raster_context,
@@ -1938,10 +1960,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         .depth = graph_resources.depth,
                         .cubemap = graph_resources.cubemap,
                         .lighting_output = graph_resources.lighting_output
-                    }
+                    },
+                    !has_meshes
                 );
 
-                if (draw_scene_gizmos && scene_gizmos.show_probe_gi) {
+                if (has_meshes && draw_scene_gizmos && scene_gizmos.show_probe_gi) {
                     RasterConfig probe_gizmo_config = raster_config;
                     probe_gizmo_config.probe_gi_gizmo_enabled =
                         scene_gizmos.show_probe_gi_probes;
@@ -1966,6 +1989,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     );
                 }
 
+                if (has_meshes) {
                 ao_result = ao_pass->DescribeNextOutput(raster_context, raster_config);
                 raster_commit_ao_index = ao_result.ao_only_idx;
                 ao_pass->AddToGraph(
@@ -2068,6 +2092,23 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     processing_image = raster_context.textures.ssr_output;
                     processing_image_resource = graph_resources.ssr_output;
                 }
+                } else {
+                    processing_image = raster_context.textures.lighting_output;
+                    processing_image_resource = graph_resources.lighting_output;
+                }
+                if (record_gaussians) {
+                    m_gaussian_splat_pass->AddToGraph(graph, gaussian_parameters, gaussian_graph, graph_resources.depth);
+                    const auto composite = m_gaussian_composite_pass->Prepare(processing_image,
+                        m_gaussian_splat_pass->GetColor(), m_gaussian_splat_pass->GetTransmittance(),
+                        BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()), m_gaussian_splat_pass->GetRanges());
+                    auto composite_resource = graph.ImportTexture("gs_scene_composite", composite.output.tex, {});
+                    m_gaussian_composite_pass->AddToGraph(graph, composite, processing_image_resource,
+                        gaussian_graph.color, gaussian_graph.transmittance, gaussian_graph.status,
+                        gaussian_graph.ranges, composite_resource);
+                    processing_image = composite.output;
+                    processing_image_resource = composite_resource;
+                }
+                // Reserved boundary for a future transparent-geometry pass.
                 aa_pass->AddToGraph(
                     graph,
                     raster_context,
@@ -2118,7 +2159,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         {.tonemapping_output = graph_resources.tonemapping_output}
                     );
                 }
-                if (draw_scene_gizmos && scene_gizmos.show_csm) {
+                if (has_meshes && draw_scene_gizmos && scene_gizmos.show_csm) {
                     csm_gizmo_pass->AddToGraph(
                         graph,
                         raster_context,
@@ -2246,8 +2287,19 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             LOG_DEBUG("FPS Limit Enabled: {}", raster_config.debug_fps_limit);
         }
 
+        if (frame_packet.gaussian_export_request) {
+            const auto& request = *frame_packet.gaussian_export_request;
+            if (request.view_settings.display_mode == EGaussianDisplayMode::Reference &&
+                frame_packet.gaussian_content == EGaussianSceneContent::Mixed)
+                m_gaussian_export->Reject(request.request_id, "Reference export requires a pure Gaussian viewport; select Engine output for mixed PNG");
+            else {
+                const auto image = request.view_settings.display_mode == EGaussianDisplayMode::Reference ?
+                    m_gaussian_splat_pass->GetDisplay()->GetView() : raster_context.textures.tonemapping_output.tex->GetView();
+                m_gaussian_export->Request(cmd_list, image, m_gaussian_splat_pass->GetStatusBuffer(),
+                    raster_context.GetResolution(), request.path, request.request_id);
+            }
+        }
         scene_updates.main_camera = std::move(main_camera);
-        } // Existing mesh path.
     }
 
     // 因为目前Vulkan的输出信息会聚合后再print，所以我们需要轮询，打印出最后添加的信息
@@ -2375,8 +2427,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     const bool frame_native_accepted = timeline->WaitSubmitted(time);
     if (frame_native_accepted && raster_pipeline_recorded) {
-        raster_context.CommitHiZHistory(raster_commit_view_proj);
-        ao_pass->CommitFrame(raster_commit_view_proj, raster_commit_ao_index);
+        const bool has_mesh_history = frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly ||
+            frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
+        if (has_mesh_history) raster_context.CommitHiZHistory(raster_commit_view_proj);
+        else raster_context.InvalidateHiZHistory();
+        if (has_mesh_history) ao_pass->CommitFrame(raster_commit_view_proj, raster_commit_ao_index);
         rtao_denoiser_pass->CommitFrame(frame_packet.raster_config);
         aa_pass->CommitFrame(
             frame_packet.raster_config.aa_mode,

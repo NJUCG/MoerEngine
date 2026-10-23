@@ -12,9 +12,11 @@ struct GGaussianCamera {
 #ifdef __cplusplus
     float4x4 world_to_view;
     float4x4 view_to_clip;
+    float4x4 clip_to_view;
 #else
     row_major float4x4 world_to_view;
     row_major float4x4 view_to_clip;
+    row_major float4x4 clip_to_view;
 #endif
     float4 position;
     uint4  viewport; // width, height, tile columns, tile rows
@@ -36,7 +38,7 @@ struct GaussianDispatchParams {
 };
 
 #ifdef __cplusplus
-static_assert(sizeof(GGaussianCamera) == 192);
+static_assert(sizeof(GGaussianCamera) == 256);
 static_assert(sizeof(GProjectedGaussian) == 64);
 static_assert(sizeof(GaussianDispatchParams) == 32);
 #endif

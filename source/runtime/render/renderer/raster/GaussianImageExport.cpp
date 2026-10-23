@@ -1,4 +1,6 @@
 #include "GaussianImageExport.h"
+#include "rhi/RHI.h"
+#include "PixelFormat.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -22,12 +24,15 @@ std::atomic<uint64> g_export_sequence{0};
 void WritePng(const std::filesystem::path& path, uint2 resolution, const ReadbackResult& image) {
     const auto   pixels      = image.CopyAs<float>();
     const size_t pixel_count = size_t(resolution.x) * resolution.y;
-    if (!pixels || pixels->size() != pixel_count * 4 || !pixel_count)
+    const bool is_unorm = image.ByteSize() == pixel_count * 4;
+    const auto bytes = image.Bytes();
+    if (!pixels || (!is_unorm && pixels->size() != pixel_count * 4) || !pixel_count)
         throw std::runtime_error("Invalid Gaussian image readback");
     Array<unsigned char> encoded(pixel_count * 3);
     for (size_t pixel_id = 0; pixel_id < pixel_count; ++pixel_id)
         for (size_t channel_id = 0; channel_id < 3; ++channel_id) {
-            const float linear = (*pixels)[pixel_id * 4 + channel_id];
+            const float linear = is_unorm ? float(static_cast<unsigned char>(bytes[pixel_id * 4 + channel_id])) / 255.f :
+                (*pixels)[pixel_id * 4 + channel_id];
             if (!std::isfinite(linear))
                 throw std::runtime_error("Gaussian output contains a nonfinite color");
             const float srgb =
@@ -102,7 +107,18 @@ void GaussianImageExport::Request(
     m_active_request_id = request_id;
     m_path              = path;
     m_resolution        = resolution;
-    m_image_readback    = commands.Readback(display, "Gaussian PNG display");
+    const auto format = display.GetTexture()->GetFormat();
+    if (format != PF_R32G32B32A32_SFLOAT && format != PF_R8G8B8A8_UNORM) {
+        Reject(request_id, "PNG export requires a linear float32 or linear RGBA8 image");
+        return;
+    }
+    // Public raster attachments need no TRANSFER_SRC flag just to support occasional exports.
+    auto readback_texture = RenderDevice::Get().CreateTexture("Gaussian PNG snapshot",
+        Extent3D(resolution.x,resolution.y,1), format,
+        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST);
+    commands.CopyFrom(display, readback_texture->GetView());
+    m_image_readback = commands.Readback(readback_texture->GetView(), "Gaussian PNG display");
+    commands.AddCallback([readback_texture]() {});
     m_status_readback   = commands.Readback(frame_status, "Gaussian PNG validity");
     if (!m_image_readback.Valid() || !m_status_readback.Valid()) {
         m_image_readback  = {};

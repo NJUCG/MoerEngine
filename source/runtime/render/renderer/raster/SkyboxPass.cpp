@@ -51,7 +51,7 @@ SkyboxPass::RecordParameters SkyboxPass::Prepare(
 
 void SkyboxPass::Record(CommandList& cmd_list, const RecordParameters& parameters) {
     DepthAttachment depth_attachment(parameters.depth_owner->GetView().GetTexture());
-    depth_attachment.action = EAttachmentAction::AC_DS_LOAD_STORE;
+    depth_attachment.action = parameters.clear_depth ? EAttachmentAction::AC_DS_CLEAR_STORE : EAttachmentAction::AC_DS_LOAD_STORE;
 
     cmd_list.Gfx(skybox_pipeline, parameters.bindless, parameters.pass_param)
         .Draw(

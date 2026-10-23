@@ -2,6 +2,7 @@
 #include "log/LogSystem.h"
 #include "renderer/raster/GaussianImageExport.h"
 #include "renderer/raster/GaussianSplatPass.h"
+#include "renderer/raster/GaussianCompositePass.h"
 #include "rhi/RHIExecutor.h"
 #include "scene/loader/GaussianPlyLoader.h"
 #include "taskgraph/TaskSystem.h"
@@ -388,6 +389,93 @@ void RunInFlightResize(ShaderManager& manager) {
     std::cout << "in-flight resize passed" << std::endl;
 }
 
+void RunHybrid(ShaderManager& manager, bool use_graph) {
+    constexpr uint width = 65, height = 49;
+    Camera camera;
+    camera.Initialize(float3(0), -90, 0, 60, float(width)/height, .01f, 100.f);
+    auto asset = Synthetic(2);
+    const float3 rgb[2] = {float3(.5f,.25f,.75f), float3(0,1,0)};
+    for (uint i=0; i<2; ++i) {
+        auto& gaussian = asset->gaussians[i];
+        gaussian.position = float4(0,0,i == 0 ? -2.f : -4.f,1);
+        gaussian.scale_opacity = float4(.35f,.35f,.35f,.5f);
+        gaussian.sh[0] = float4((rgb[i].x-.5f)/.2820947918f,
+            (rgb[i].y-.5f)/.2820947918f,(rgb[i].z-.5f)/.2820947918f,0);
+    }
+    GaussianGpuScene scene;
+    auto snapshot = std::make_shared<GaussianSceneSnapshot>();
+    snapshot->revision = 1;
+    GaussianInstanceSnapshot instance; instance.asset=asset; snapshot->instances.push_back(instance);
+    auto& device=RenderDevice::Get();
+    const auto usage=ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC;
+    auto depth=device.CreateTexture("Hybrid test depth",Extent3D(width,height,1),PF_R32_SFLOAT,usage);
+    auto mesh=device.CreateTexture("Hybrid test mesh color",Extent3D(width,height,1),PF_R32G32B32A32_SFLOAT,usage);
+    std::vector<float> depths(width*height), mesh_pixels(width*height*4);
+    const auto projection=camera.GetProjectionMatrix();
+    for(uint y=0;y<height;++y) for(uint x=0;x<width;++x) {
+        float z=y<height/2 ? (x<width/2 ? 1.f:3.f) : (x<width/2 ? 5.f:0.f);
+        depths[y*width+x]=z>0 ? (-z*projection[2][2]+projection[2][3])/(-z*projection[3][2]+projection[3][3]):0.f;
+        mesh_pixels[(y*width+x)*4+2]=1;
+        mesh_pixels[(y*width+x)*4+3]=1;
+    }
+    auto bindless=device.CreateBindlessArray();
+    Raster::GaussianSplatPass splats(manager,{.tile_pair_capacity=1024});
+    Raster::GaussianCompositePass composite(manager,bindless);
+    CommandList commands(EQueueType::Graphics);
+    scene.ApplyUpdate(snapshot,commands);
+    commands.CopyFrom(std::span<byte>(reinterpret_cast<byte*>(depths.data()),depths.size()*sizeof(float)),depth->GetView());
+    commands.CopyFrom(std::span<byte>(reinterpret_cast<byte*>(mesh_pixels.data()),mesh_pixels.size()*sizeof(float)),mesh->GetView());
+    GaussianViewSettings settings; settings.exposure_ev=1;
+    auto parameters=splats.Prepare(&scene,camera,uint2(width,height),false,settings,depth,true);
+    auto merge=composite.Prepare(TextureWithHandle{.tex=mesh},splats.GetColor(),splats.GetTransmittance(),
+        BufferRef(splats.GetStatusBuffer().GetBuffer()),splats.GetRanges());
+    if (use_graph) {
+        RenderGraph graph("HybridContract",RenderGraph::QueueTopology::FromRHI());
+        auto resources=splats.ImportGraphResources(graph);
+        auto depth_resource=graph.ImportTexture("mesh_depth",depth,{});
+        auto mesh_resource=graph.ImportTexture("mesh_color",mesh,{});
+        auto output=graph.ImportTexture("composite",merge.output.tex,{});
+        splats.AddToGraph(graph,parameters,resources,depth_resource);
+        composite.AddToGraph(graph,merge,mesh_resource,resources.color,resources.transmittance,resources.status,resources.ranges,output);
+        graph.Export(output);
+        if (!graph.Compile()) throw std::runtime_error("Hybrid graph: " + graph.GetCompileError());
+        Require(graph.RecordAndMergeFrontendCommands(commands,true),"Hybrid graph recording failed");
+    } else {
+        splats.Record(commands,parameters);
+        composite.Record(commands,merge);
+    }
+    auto colors=commands.Readback(splats.GetColor()->GetView(),"Hybrid Gaussian color");
+    auto transmit=commands.Readback(splats.GetTransmittance()->GetView(),"Hybrid transmittance");
+    auto final=commands.Readback(merge.output.tex->GetView(),"Hybrid scene color");
+    RHIExecutor::Get().Submit(EQueueType::Graphics,commands.Submit(),ERHIExecSubmitFlags::FlushGPU);
+    auto color=colors.Get().CopyAs<float>(), t=transmit.Get().CopyAs<float>(), image=final.Get().CopyAs<float>();
+    Require(color && t && image,"Hybrid readback failed");
+    const auto decode=[](float c) { return c<=.04045f?c/12.92f:std::pow((c+.055f)/1.055f,2.4f); };
+    for(uint y=0;y<height;++y) for(uint x=0;x<width;++x) {
+        float limit=y<height/2 ? (x<width/2 ? 1.f:3.f) : (x<width/2 ? 5.f:1000.f);
+        float expected_t=1; float3 expected(0);
+        for(uint i=0;i<2;++i) {
+            const float z=i==0?2.f:4.f;
+            if(z>limit) continue;
+            float scale=height*.5f*projection[1][1]*.35f/z;
+            float variance=scale*scale+.3f;
+            float dx=float(x)-(width*.5f-.5f),dy=float(y)-(height*.5f-.5f);
+            float alpha=.5f*std::exp(-.5f*(dx*dx+dy*dy)/variance);
+            if(alpha<1.f/255.f) continue;
+            for(uint c=0;c<3;++c) expected[c]+=decode(rgb[i][c])*2.f*alpha*expected_t;
+            expected_t*=1-alpha;
+        }
+        const uint pixel=y*width+x;
+        Require(std::abs((*t)[pixel]-expected_t)<.00003f,"Hybrid depth/alpha mismatch");
+        for(uint c=0;c<3;++c) {
+            Require(std::abs((*color)[pixel*4+c]-expected[c])<.00003f,"Hybrid linear SH accumulation mismatch");
+            Require(std::abs((*image)[pixel*4+c]-(expected[c]+(c==2?expected_t:0)))<.00003f,
+                "Hybrid premultiplied scene composite mismatch");
+        }
+    }
+    std::cout<<"hybrid depth/linear-color/composite passed (graph="<<use_graph<<")"<<std::endl;
+}
+
 } // namespace
 int main(int argc, char** argv) {
     bool has_device = false, has_tasks = false, has_shaders = false;
@@ -426,6 +514,8 @@ int main(int argc, char** argv) {
             rotated_asset->gaussians[0].scale_opacity = float4(1.2f, .0001f, .01f, opacity);
             Run(manager, rotated_asset, 1, {}, false, false, uint2(65, 49), 20);
         }
+        RunHybrid(manager, false);
+        RunHybrid(manager, true);
         RunInFlightResize(manager);
         RunViewSettings(manager);
         Run(manager, Synthetic(2), 2, {}, true);
