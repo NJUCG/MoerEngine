@@ -1246,21 +1246,14 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const DispatchCmd* _cmd) {
-        std::visit(
-            [this](auto&& _arg) {
-                using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, uint3>) {
-                    return;
-                } else if constexpr (std::is_same_v<T, BufferView>) {
-                    tracker.RecordState(
-                        reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer()),
-                        VK_ACCESS_2_SHADER_READ_BIT,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                    );
-                }
-            },
-            _cmd->Param()
-        );
+        const DispatchCmd::DispatchParam dispatch_param = _cmd->Param();
+        if (const auto* indirect = std::get_if<DispatchIndirectParam>(&dispatch_param)) {
+            tracker.RecordState(
+                ResourceCast(indirect->indirect.GetBuffer()),
+                VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
+            );
+        }
 
         const auto& pipeline = _cmd->Pipeline();
         const auto*  vk_pipeline          = static_cast<VulkanPipelineState*>(pipeline.GetState());
@@ -1783,11 +1776,11 @@ struct VkCmdPreprocessor {
             auto* vk_texture = ResourceCast(rt.target);
             auto  action     = rt.action;
             bool  b_load     = GetLoadOp(action) == EAttachmentLoadOp::LOAD;
-            bool  b_store    = GetStoreOp(action) == EAttachmentStoreOp::STORE;
+            // Both STORE and DONT_CARE access attachment memory for writing.
             RecordAttachmentState(
                 vk_texture,
                 (b_load ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-                    (b_store ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                 rt.mip_level,
@@ -1796,18 +1789,15 @@ struct VkCmdPreprocessor {
             );
         }
         if (_cmd->RenderPassInfo().depth_attachment.Valid()) {
-            auto* vk_texture      = ResourceCast(_cmd->RenderPassInfo().depth_attachment.target);
-            auto  action          = _cmd->RenderPassInfo().depth_attachment.action;
-            bool  b_depth_load    = GetLoadOp(GetDepthAction(action)) == EAttachmentLoadOp::LOAD;
-            bool  b_depth_store   = GetStoreOp(GetDepthAction(action)) == EAttachmentStoreOp::STORE;
-            bool  b_stencil_load  = GetLoadOp(GetStencilAction(action)) == EAttachmentLoadOp::LOAD;
-            bool  b_stencil_store = GetStoreOp(GetStencilAction(action)) == EAttachmentStoreOp::STORE;
-            bool  b_read          = b_depth_load || b_stencil_load;
-            bool  b_write         = b_depth_store || b_stencil_store;
+            auto* vk_texture     = ResourceCast(_cmd->RenderPassInfo().depth_attachment.target);
+            auto  action         = _cmd->RenderPassInfo().depth_attachment.action;
+            bool  b_depth_load   = GetLoadOp(GetDepthAction(action)) == EAttachmentLoadOp::LOAD;
+            bool  b_stencil_load = GetLoadOp(GetStencilAction(action)) == EAttachmentLoadOp::LOAD;
+            bool  b_read         = b_depth_load || b_stencil_load;
             RecordAttachmentState(
                 vk_texture,
                 (b_read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-                    (b_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                 _cmd->RenderPassInfo().depth_attachment.mip_level,
@@ -1879,11 +1869,11 @@ struct VkCmdPreprocessor {
             auto* vk_texture = ResourceCast(rt.target);
             auto  action     = rt.action;
             bool  b_load     = GetLoadOp(action) == EAttachmentLoadOp::LOAD;
-            bool  b_store    = GetStoreOp(action) == EAttachmentStoreOp::STORE;
+            // Both STORE and DONT_CARE access attachment memory for writing.
             RecordAttachmentState(
                 vk_texture,
                 (b_load ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-                    (b_store ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                 rt.mip_level,
@@ -1892,18 +1882,15 @@ struct VkCmdPreprocessor {
             );
         }
         if (_cmd->RenderPassInfo().depth_attachment.Valid()) {
-            auto* vk_texture      = ResourceCast(_cmd->RenderPassInfo().depth_attachment.target);
-            auto  action          = _cmd->RenderPassInfo().depth_attachment.action;
-            bool  b_depth_load    = GetLoadOp(GetDepthAction(action)) == EAttachmentLoadOp::LOAD;
-            bool  b_depth_store   = GetStoreOp(GetDepthAction(action)) == EAttachmentStoreOp::STORE;
-            bool  b_stencil_load  = GetLoadOp(GetStencilAction(action)) == EAttachmentLoadOp::LOAD;
-            bool  b_stencil_store = GetStoreOp(GetStencilAction(action)) == EAttachmentStoreOp::STORE;
-            bool  b_read          = b_depth_load || b_stencil_load;
-            bool  b_write         = b_depth_store || b_stencil_store;
+            auto* vk_texture     = ResourceCast(_cmd->RenderPassInfo().depth_attachment.target);
+            auto  action         = _cmd->RenderPassInfo().depth_attachment.action;
+            bool  b_depth_load   = GetLoadOp(GetDepthAction(action)) == EAttachmentLoadOp::LOAD;
+            bool  b_stencil_load = GetLoadOp(GetStencilAction(action)) == EAttachmentLoadOp::LOAD;
+            bool  b_read         = b_depth_load || b_stencil_load;
             RecordAttachmentState(
                 vk_texture,
                 (b_read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-                    (b_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                 _cmd->RenderPassInfo().depth_attachment.mip_level,

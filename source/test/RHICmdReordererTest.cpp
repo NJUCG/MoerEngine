@@ -6,11 +6,15 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 
 using namespace Moer;
 using namespace Moer::Render;
 
 namespace {
+
+static_assert(!std::is_move_constructible_v<ArenaAllocator>);
+static_assert(!std::is_move_assignable_v<ArenaAllocator>);
 
 void Expect(bool _condition, const char* _message) {
     if (!_condition) {
@@ -268,6 +272,163 @@ void ShaderArgumentAccessUsesPipelineAndFullSlotIndex() {
         FindCommandLayer(reorderer, &read) == FindCommandLayer(reorderer, &write) + 1,
         "shader resource array write did not order the following read"
     );
+}
+
+void ResourceFreeCommandsRespectOrderingBoundaries() {
+    TCachedArgArray cached_args;
+    PipelineState  empty_state(0);
+    PipelineHandle pipeline(&empty_state);
+    DispatchCmd dispatch(
+        TShaderArgArray{ArrayArguments{}}, pipeline, uint3{1, 1, 1}, ProfileSection("NoResources")
+    );
+    SetDrawStateCmd draw(pipeline, ArrayArguments{}, RenderPassInfo{}, Array<MeshDrawData>{});
+    MultiDrawCmd multi_draw(DrawBatch{}, RenderPassInfo{}, "NoResources");
+    struct EmptyCustomDispatch final : CustomDispatchCmd {
+        void IterateArgs(const std::function<void(const TArg&, ERHIAccessFlags)>&) const override {}
+        EQueueType GetQueueType() const override {
+            return EQueueType::Compute;
+        }
+    } custom_dispatch;
+    const Command* commands[] = {&dispatch, &draw, &multi_draw, &custom_dispatch};
+
+    ScopeCmd scope("Boundary", true, false, GpuMarkerPalette::Pass());
+    QueryCmd query(QueryToken{}, QueryCmd::EOp::BeginTimestamp, EQueueType::Graphics);
+    TestBuffer buffer(16, 4, EBufferUsageFlags::UNORDERED_ACCESS);
+    BarrierCmd barrier(1, EQueueType::Graphics, EQueueType::Graphics);
+    barrier.AddExplicitBarrier(BarrierCreateInfo::Transition(
+        BufferView(&buffer),
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_COMPUTE_SHADER, ERHIAccessFlags::SHADER_WRITE),
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_COMPUTE_SHADER, ERHIAccessFlags::SHADER_READ)
+    ));
+    const Command* boundaries[] = {&scope, &query, &barrier};
+
+    for (const Command* command : commands) {
+        CmdReorderer first(MakeFunctionTable(), cached_args);
+        first.AcceptCmd(command);
+        Expect(FindCommandLayer(first, command) == 0, "resource-free first command has an invalid layer");
+
+        for (const Command* boundary : boundaries) {
+            CmdReorderer reorderer(MakeFunctionTable(), cached_args);
+            DispatchCmd preceding(
+                TShaderArgArray{ArrayArguments{}}, pipeline, uint3{1, 1, 1}, ProfileSection("Preceding")
+            );
+            reorderer.AcceptCmd(&preceding);
+            reorderer.AcceptCmd(boundary);
+            reorderer.AcceptCmd(command);
+            Expect(FindCommandLayer(reorderer, boundary) == 1, "boundary did not own its layer");
+            Expect(FindCommandLayer(reorderer, command) == 2, "resource-free command crossed a boundary");
+        }
+    }
+}
+
+void IndependentShaderCommandsDoNotInheritPriorLayers() {
+    TCachedArgArray cached_args;
+    FunctionTable functions = MakeFunctionTable();
+    functions.get_argument_access = [](const PipelineHandle&, uint) { return ERHIAccessFlags::SHADER_READ; };
+    CmdReorderer reorderer(functions, cached_args);
+    TestBuffer buffer(16, 4, EBufferUsageFlags::UNORDERED_ACCESS);
+    std::array<byte, 16> data{};
+    UploadBufferCmd first_write(uint64(&buffer), 0, data.size(), data.data());
+    UploadBufferCmd second_write(uint64(&buffer), 0, data.size(), data.data());
+    PipelineState state(1);
+    PipelineHandle pipeline(&state);
+    ArrayArguments args;
+    args.args.emplace_back(BufferView(&buffer));
+    DispatchCmd dependent(
+        TShaderArgArray{std::move(args)}, pipeline, uint3{1, 1, 1}, ProfileSection("Dependent")
+    );
+    PipelineState empty_state(0);
+    PipelineHandle empty_pipeline(&empty_state);
+    DispatchCmd independent(
+        TShaderArgArray{ArrayArguments{}}, empty_pipeline, uint3{1, 1, 1}, ProfileSection("Independent")
+    );
+    reorderer.AcceptCmd(&first_write);
+    reorderer.AcceptCmd(&second_write);
+    reorderer.AcceptCmd(&dependent);
+    reorderer.AcceptCmd(&independent);
+    Expect(FindCommandLayer(reorderer, &dependent) == 2, "dependent dispatch lost its write dependency");
+    Expect(FindCommandLayer(reorderer, &independent) == 0, "independent dispatch inherited a prior layer");
+}
+
+void IndirectDispatchTracksItsParameterRange() {
+    TCachedArgArray cached_args;
+    CmdReorderer reorderer(MakeFunctionTable(), cached_args);
+    TestBuffer buffer(16, 4, EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+    std::array<byte, 12> data{};
+    UploadBufferCmd upload(uint64(&buffer), 16, data.size(), data.data());
+    PipelineState state(0);
+    PipelineHandle pipeline(&state);
+    DispatchCmd dispatch(
+        TShaderArgArray{ArrayArguments{}}, pipeline, BufferView(&buffer, 16, 3, 4), ProfileSection("Indirect")
+    );
+    UploadBufferCmd overwrite(uint64(&buffer), 16, data.size(), data.data());
+    UploadBufferCmd disjoint_write(uint64(&buffer), 32, data.size(), data.data());
+
+    reorderer.AcceptCmd(&upload);
+    reorderer.AcceptCmd(&dispatch);
+    reorderer.AcceptCmd(&overwrite);
+    reorderer.AcceptCmd(&disjoint_write);
+    Expect(FindCommandLayer(reorderer, &upload) == 0, "initial upload was not in layer zero");
+    Expect(FindCommandLayer(reorderer, &dispatch) == 1, "indirect dispatch missed its parameter upload");
+    Expect(FindCommandLayer(reorderer, &overwrite) == 2, "parameter overwrite raced the indirect read");
+    Expect(FindCommandLayer(reorderer, &disjoint_write) == 0, "indirect read covered an unrelated range");
+}
+
+void DiscardedAttachmentsStillParticipateInWriteDependencies() {
+    TCachedArgArray cached_args;
+    FunctionTable functions = MakeFunctionTable();
+    functions.get_argument_access = [](const PipelineHandle&, uint) { return ERHIAccessFlags::SHADER_READ; };
+    PipelineState state(1);
+    PipelineHandle pipeline(&state);
+    const EAttachmentAction color_actions[] = {
+        AC_CLEAR_NO_STORE, AC_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE, AC_CLEAR_RESOLVE
+    };
+    const EAttachmentAction depth_actions[] = {
+        AC_DS_CLEAR_NO_STORE, AC_DS_LOAD_NO_STORE, AC_DS_NO_LOAD_NO_STORE, AC_DS_CLEAR_STENCIL_STORE_STENCIL
+    };
+    for (bool depth : {false, true}) {
+        for (EAttachmentAction action : depth ? depth_actions : color_actions) {
+            TestTexture texture(3, 2);
+            TextureView view(&texture);
+            view.mip_level   = 1;
+            view.num_mips    = 1;
+            view.array_layer = 1;
+            view.num_array   = 1;
+            ArrayArguments args;
+            args.args.emplace_back(view);
+            DispatchCmd prior_read(
+                TShaderArgArray{std::move(args)}, pipeline, uint3{1, 1, 1}, ProfileSection("BeforeDiscard")
+            );
+            RenderPassInfo pass{};
+            if (depth) {
+                pass.depth_attachment = DepthAttachment(view);
+                pass.depth_attachment.action = action;
+            } else {
+                pass.color_attachments.emplace_back(ColorAttachment{
+                    .target = &texture, .action = action, .mip_level = 1, .array_layer = 1, .array_count = 1
+                });
+            }
+            RenderPassInfo multi_pass = pass;
+            SetDrawStateCmd draw(pipeline, ArrayArguments{}, std::move(pass), Array<MeshDrawData>{});
+            MultiDrawCmd multi_draw(DrawBatch{}, std::move(multi_pass), "DiscardAttachment");
+            const Command* commands[] = {&draw, &multi_draw};
+            for (const Command* command : commands) {
+                CmdReorderer reorderer(functions, cached_args);
+                reorderer.AcceptCmd(&prior_read);
+                reorderer.AcceptCmd(command);
+                Expect(FindCommandLayer(reorderer, command) == 1, "attachment discard raced a prior reader");
+                auto* handle = reorderer.GetHandle(uint64(&texture), CmdReorderer::ResourceType::Texture_Buffer);
+                Expect(
+                    reorderer.SetWrite(handle, CmdReorderer::Range(1, 1, 1, 1)) == 2,
+                    "attachment discard did not publish its write for the following reuse"
+                );
+                Expect(
+                    reorderer.SetWrite(handle, CmdReorderer::Range(0, 1, 2, 1)) == 0,
+                    "attachment write escaped its mip/array range"
+                );
+            }
+        }
+    }
 }
 
 void ReadBarrierParticipatesInFollowingWarDependency() {
@@ -1408,6 +1569,10 @@ int main() {
         PipelineMovesReleaseEachStateOnce<ShaderPipeline>();
         PipelineMovesReleaseEachStateOnce<TestComputePipeline>();
         ShaderArgumentAccessUsesPipelineAndFullSlotIndex();
+        ResourceFreeCommandsRespectOrderingBoundaries();
+        IndependentShaderCommandsDoNotInheritPriorLayers();
+        IndirectDispatchTracksItsParameterRange();
+        DiscardedAttachmentsStillParticipateInWriteDependencies();
         AccessHazardsAreLayeredWithoutReadAfterReadEdges();
         ReadBarrierParticipatesInFollowingWarDependency();
         MultiResourceBarrierPublishesEveryAccessAtItsFinalLayer();

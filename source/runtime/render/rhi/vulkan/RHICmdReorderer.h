@@ -43,24 +43,9 @@ struct ArenaAllocator {
     ArenaAllocator(const ArenaAllocator&)            = delete;
     ArenaAllocator& operator=(const ArenaAllocator&) = delete;
 
-    ArenaAllocator(ArenaAllocator&& _other) noexcept {
-        head            = _other.head;
-        capacity        = _other.capacity;
-        _other.head     = nullptr;
-        _other.capacity = 0;
-    }
-    ArenaAllocator& operator=(ArenaAllocator&& _other) noexcept {
-        if (this != &_other) {
-            this->~ArenaAllocator();
-        }
-        head            = _other.head;
-        offset          = _other.offset;
-        capacity        = _other.capacity;
-        _other.head     = nullptr;
-        _other.capacity = 0;
-        _other.offset   = 0;
-        return *this;
-    }
+    // Allocator wrappers retain references to this arena for its whole lifetime.
+    ArenaAllocator(ArenaAllocator&&)            = delete;
+    ArenaAllocator& operator=(ArenaAllocator&&) = delete;
 
     ~ArenaAllocator() {
         LinkedChunk* iter = head;
@@ -1201,8 +1186,8 @@ public:
     }
 
     void VisitCmd(const SetDrawStateCmd* _cmd) {
-        int64 layer      = 0;
-        bool  b_use_bdls = false;
+        m_dispatch_layer = GetLayerWithOffset(0);
+        bool b_use_bdls = false;
         m_arg_read_resources.clear();
         m_arg_write_resources.clear();
         temp_writed_resources.clear();
@@ -1266,9 +1251,9 @@ public:
         //depth and render targets
         const auto& pass_info = _cmd->RenderPassInfo();
         if (pass_info.depth_attachment.Valid()) {
-            const auto& depth          = pass_info.depth_attachment;
-            auto        depth_store_op = GetStoreOp(GetDepthAction(depth.action));
-            if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD) {
+            const auto& depth = pass_info.depth_attachment;
+            if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD ||
+                GetLoadOp(GetStencilAction(depth.action)) == EAttachmentLoadOp::LOAD) {
                 EmplaceArg(
                     (uint64)(depth.target),
                     ResourceType::Texture_Buffer,
@@ -1276,17 +1261,15 @@ public:
                     false
                 );
             }
-            if (depth_store_op == EAttachmentStoreOp::STORE) {
-                EmplaceArg(
-                    (uint64)(depth.target),
-                    ResourceType::Texture_Buffer,
-                    Range(depth.mip_level, 1, depth.array_layer, depth.array_count),
-                    true
-                );
-            }
+            // StoreOp::NONE maps to DONT_CARE, which still performs a write.
+            EmplaceArg(
+                (uint64)(depth.target),
+                ResourceType::Texture_Buffer,
+                Range(depth.mip_level, 1, depth.array_layer, depth.array_count),
+                true
+            );
         }
         for (const auto& target : pass_info.color_attachments) {
-            auto color_store_op = GetStoreOp(target.action);
             if (GetLoadOp(target.action) == EAttachmentLoadOp::LOAD) {
                 EmplaceArg(
                     (uint64)(target.target),
@@ -1295,14 +1278,13 @@ public:
                     false
                 );
             }
-            if (color_store_op == EAttachmentStoreOp::STORE) {
-                EmplaceArg(
-                    (uint64)(target.target),
-                    ResourceType::Texture_Buffer,
-                    Range(target.mip_level, 1, target.array_layer, target.array_count),
-                    true
-                );
-            }
+            // StoreOp::NONE maps to DONT_CARE, which still performs a write.
+            EmplaceArg(
+                (uint64)(target.target),
+                ResourceType::Texture_Buffer,
+                Range(target.mip_level, 1, target.array_layer, target.array_count),
+                true
+            );
         }
         for (const auto& write_res : m_arg_write_resources) {
             RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
@@ -1317,6 +1299,7 @@ public:
     }
 
     void VisitCmd(const MultiDrawCmd* _cmd) {
+        m_dispatch_layer = GetLayerWithOffset(0);
         bool b_use_bdls = false;
         m_arg_write_resources.clear();
         m_arg_read_resources.clear();
@@ -1383,9 +1366,9 @@ public:
         //depth and render targets
         const auto& pass_info = _cmd->RenderPassInfo();
         if (pass_info.depth_attachment.Valid()) {
-            const auto& depth          = pass_info.depth_attachment;
-            auto        depth_store_op = GetStoreOp(GetDepthAction(depth.action));
-            if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD) {
+            const auto& depth = pass_info.depth_attachment;
+            if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD ||
+                GetLoadOp(GetStencilAction(depth.action)) == EAttachmentLoadOp::LOAD) {
                 EmplaceArg(
                     (uint64)(depth.target),
                     ResourceType::Texture_Buffer,
@@ -1393,17 +1376,15 @@ public:
                     false
                 );
             }
-            if (depth_store_op == EAttachmentStoreOp::STORE) {
-                EmplaceArg(
-                    (uint64)(depth.target),
-                    ResourceType::Texture_Buffer,
-                    Range(depth.mip_level, 1, depth.array_layer, depth.array_count),
-                    true
-                );
-            }
+            // StoreOp::NONE maps to DONT_CARE, which still performs a write.
+            EmplaceArg(
+                (uint64)(depth.target),
+                ResourceType::Texture_Buffer,
+                Range(depth.mip_level, 1, depth.array_layer, depth.array_count),
+                true
+            );
         }
         for (const auto& target : pass_info.color_attachments) {
-            auto color_store_op = GetStoreOp(target.action);
             if (GetLoadOp(target.action) == EAttachmentLoadOp::LOAD) {
                 EmplaceArg(
                     (uint64)(target.target),
@@ -1412,14 +1393,13 @@ public:
                     false
                 );
             }
-            if (color_store_op == EAttachmentStoreOp::STORE) {
-                EmplaceArg(
-                    (uint64)(target.target),
-                    ResourceType::Texture_Buffer,
-                    Range(target.mip_level, 1, target.array_layer, target.array_count),
-                    true
-                );
-            }
+            // StoreOp::NONE maps to DONT_CARE, which still performs a write.
+            EmplaceArg(
+                (uint64)(target.target),
+                ResourceType::Texture_Buffer,
+                Range(target.mip_level, 1, target.array_layer, target.array_count),
+                true
+            );
         }
 
         for (const auto& write_res : m_arg_write_resources) {
@@ -1522,10 +1502,22 @@ public:
     }
 
     void VisitCmd(const DispatchCmd* _cmd) {
+        m_dispatch_layer = GetLayerWithOffset(0);
         bool b_use_bdls = false;
         m_arg_write_resources.clear();
         m_arg_read_resources.clear();
         temp_writed_resources.clear();
+
+        const DispatchCmd::DispatchParam dispatch_param = _cmd->Param();
+        if (const auto* indirect = std::get_if<DispatchIndirectParam>(&dispatch_param)) {
+            const BufferView& buffer = indirect->indirect;
+            EmplaceArg(
+                uint64(buffer.GetBuffer()),
+                ResourceType::Texture_Buffer,
+                Range(buffer.GetByteOffset(), buffer.GetByteSize()),
+                false
+            );
+        }
 
         const auto& pipeline = _cmd->Pipeline();
         const uint64 active_argument_bits =
@@ -1675,6 +1667,7 @@ public:
         m_arg_read_resources.clear();
         temp_writed_resources.clear();
         layer_offset = m_cmd_lists.size(); // make sure the custom dispatch command is in a separate scope
+        m_dispatch_layer = GetLayerWithOffset(0);
         Array<BindlessArrayRef> bindless_arrays{};
         UnorderedSet<BindlessArray*> seen_bindless{};
         auto                         func = [&](const TArg& _arg, ERHIAccessFlags access) {
@@ -1694,10 +1687,6 @@ public:
             VisitBindlessArg(bindless, temp_writed_resources);
         }
 
-        // A side-effect-only custom dispatch may intentionally expose no
-        // resource usages. Keep it in the isolated custom-command scope
-        // instead of converting the initial -1 layer to UINT64_MAX.
-        m_dispatch_layer = GetLayerWithOffset(m_dispatch_layer);
         for (const auto& write_res : m_arg_write_resources) {
             RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
         }
