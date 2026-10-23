@@ -21,6 +21,15 @@ just clean          # Remove build/ and target/
 - Set `default_render_method = "Raster"` when working on the raster pipeline, and set `default_render_method = "Raytracing"` when working on the ray tracing pipeline.
 - After starting the editor with `just r`, allow up to one minute for the engine to finish loading so startup errors, validation errors, and obvious runtime regressions have time to surface.
 
+## Design and Explanation Principles
+
+- 从少数真实约束推导设计。解释机制时先说明约束来源，区分 API/硬件的强制要求、业务与并发/生命周期要求，以及当前实现自行选择的组织方式或性能优化。
+- 始终追问：我们是在解决原本存在的问题，还是在解决上一个抽象引入的问题？不能用“现有类需要这个字段/接口”证明该抽象本身必要；应说明删去机制后，哪个实际场景会违反哪条约束。
+- 每个状态应有明确含义、所有者和有效期；每个机制应有具体责任。新增状态、缓存、包装层或同步机制前，检查能否从已有信息推导、复用现有机制，或在更粗的生命周期边界统一管理。
+- 整理复杂度时明确区分三种情况：归入已有机制；转移到更粗且安全的生命周期边界；补齐此前遗漏的真实约束。不要预设所有复杂度都能删除，也不要仅靠新增抽象掩盖问题。
+- 回答按“真实约束 → 最简可行模型 → 当前设计选择及代价 → 可简化之处”展开。命名与函数抽取应让这些关系更清楚；成熟引擎的做法只能作为参考，不能代替必要性论证。
+- 详细判断方法见 [从真实约束推导设计](docs/DEVELOPMENT.md#从真实约束推导设计)。
+
 ## Architecture Overview
 
 ```
