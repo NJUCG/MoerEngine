@@ -108,6 +108,20 @@ VulkanBuffer::VulkanBuffer(
         .usage       = _allocation_info.vk_usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
+    const auto queue_families = _allocation_info.queue_family_indices;
+    if (queue_families.size() > 1) {
+        if (queue_families.size() > std::numeric_limits<uint32_t>::max()) {
+            throw std::overflow_error("Vulkan buffer queue family count exceeds uint32_t");
+        }
+        for (auto family = queue_families.begin(); family != queue_families.end(); ++family) {
+            if (std::find(queue_families.begin(), family, *family) != family) {
+                throw std::invalid_argument("Vulkan buffer concurrent queue families must be distinct");
+            }
+        }
+        buffer_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        buffer_info.queueFamilyIndexCount = static_cast<uint32_t>(queue_families.size());
+        buffer_info.pQueueFamilyIndices   = queue_families.data();
+    }
 #if WITH_CUDA
     const auto external_memory_info = MakeExternalMemoryBufferCreateInfo();
     buffer_info.pNext = &external_memory_info;
@@ -148,28 +162,6 @@ VulkanBuffer::VulkanBuffer(
 
 uint64 VulkanBuffer::DeviceAddress() const {
     return m_device_address;
-}
-
-VulkanBuffer::VulkanBuffer(
-    std::string_view  _name,
-    const BufferInfo& _info,
-    VulkanDevice&     _device,
-    VkBuffer          _handle,
-    VmaAllocation     _alloc,
-    bool              _defer_destroy,
-    bool              _get_address
-) :
-    Buffer(_info),
-    VulkanDeviceObject(&_device) {
-    m_alloc.buffer    = _handle;
-    m_alloc.alloc     = _alloc;
-    b_deferred_delete = _defer_destroy;
-    if (_get_address) {
-        VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-        info.buffer      = m_alloc.buffer;
-        m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
-    }
-    SetName(_name);
 }
 
 VulkanBufferDescriptorCacheSlots& VulkanBuffer::GetDescriptorCacheSlots(VkDescriptorType _type) {

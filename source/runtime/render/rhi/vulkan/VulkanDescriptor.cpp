@@ -3,11 +3,9 @@
 #include "VulkanDescriptor.h"
 
 #include "VulkanDevice.h"
-#include "VulkanMemoryAllocator.h"
 #include "VulkanRHIResource.h"
 
 #include "misc/Alignment.h"
-#include "misc/RAII.h"
 #include "rhi/RHIResource.h"
 
 #include <algorithm>
@@ -113,54 +111,24 @@ void VulkanDescriptorHeap::InitializeSamplerDescriptors() {
 }
 
 void VulkanDescriptorHeap::CreateDescriptorBuffer() {
-    VkBuffer           desc_buffer            = VK_NULL_HANDLE;
-    VmaAllocation      desc_buffer_allocation = VK_NULL_HANDLE;
-    VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    buffer_ci.size  = s_descriptor_buffer_capacity;
-    buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
-                      VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
-                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-
     const uint32_t queue_families[] = {
         m_device->GetQueueFamilyIndex(EQueueType::Graphics),
         m_device->GetQueueFamilyIndex(EQueueType::Compute)
     };
-    if (queue_families[0] != queue_families[1]) {
-        buffer_ci.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-        buffer_ci.queueFamilyIndexCount = 2;
-        buffer_ci.pQueueFamilyIndices   = queue_families;
-    }
-
-#if WITH_CUDA
-    const auto external_memory_info = MakeExternalMemoryBufferCreateInfo();
-    buffer_ci.pNext = &external_memory_info;
-#endif
-
-    VmaAllocationCreateInfo alloc_ci{};
-    alloc_ci.flags        = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    alloc_ci.usage        = VMA_MEMORY_USAGE_AUTO;
-    const VkResult result = vmaCreateBuffer(
-        m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &desc_buffer, &desc_buffer_allocation, nullptr
-    );
-    if (result != VK_SUCCESS) {
-        throw std::runtime_error("failed to create descriptor buffer: " + std::to_string(result));
-    }
-    // Release the native allocation if C++ wrapper construction fails.
-    auto release_unowned_buffer = OnScopeExit([&] {
-        if (desc_buffer_allocation != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(m_device->GetVmaAllocator(), desc_buffer, desc_buffer_allocation);
-        }
-    });
-
-    BufferInfo buffer_info{};
-    buffer_info.size   = buffer_ci.size;
-    buffer_info.stride = 1;
-    buffer_info.usage  = EBufferUsageFlags::UNORDERED_ACCESS;
-
     descriptor_buffer = std::make_unique<VulkanBuffer>(
-        s_descriptor_buffer_name, buffer_info, *m_device, desc_buffer, desc_buffer_allocation, false, true
+        s_descriptor_buffer_name,
+        BufferInfo(s_descriptor_buffer_capacity, 1, EBufferUsageFlags::UNORDERED_ACCESS),
+        *m_device,
+        VulkanBufferAllocationInfo{
+            .vk_usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
+                        VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            .allocation_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+            .needs_device_address = true,
+            .queue_family_indices = std::span(queue_families, queue_families[0] == queue_families[1] ? 1 : 2),
+        },
+        false
     );
-    desc_buffer_allocation = VK_NULL_HANDLE;
 }
 
 void VulkanDescriptorHeap::MapDescriptorBuffer() {

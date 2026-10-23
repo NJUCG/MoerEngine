@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <span>
 
 namespace Moer::Render {
 
@@ -38,6 +39,8 @@ struct VulkanBufferAllocationInfo {
     VmaAllocationCreateFlags allocation_flags{0};
     VmaMemoryUsage           memory_usage{VMA_MEMORY_USAGE_AUTO};
     bool                     needs_device_address{false};
+    // Borrowed only during creation. Two or more distinct families use concurrent sharing.
+    std::span<const uint32_t> queue_family_indices{};
 };
 
 class VulkanBuffer : public Buffer, VulkanDeviceObject {
@@ -61,15 +64,6 @@ public:
         VulkanDevice&                     _device,
         const VulkanBufferAllocationInfo& _allocation_info,
         bool                              _defer_destroy
-    );
-    VulkanBuffer(
-        std::string_view  _name,
-        const BufferInfo& _info,
-        VulkanDevice&     _device,
-        VkBuffer          _handle,
-        VmaAllocation     _alloc,
-        bool              _defer_destroy,
-        bool              _get_address = false
     );
     uint64                     DeviceAddress() const;
     inline const VmaAllocation GetAllocation() const {
