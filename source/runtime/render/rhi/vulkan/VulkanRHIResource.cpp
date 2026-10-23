@@ -3,6 +3,7 @@
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanEnumTranslator.h"
+#include "VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 #include "misc/MMemory.h"
 
@@ -26,23 +27,35 @@ uint64 EncodeViewKey(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _lay
            ((uint64)_layer_cnt << 48);
 }
 
-VkImageTiling SelectImageTiling(const VkImageCreateInfo& create_infos, VulkanDevice& device) {
-    //query device property
-    VkImageFormatProperties2 properties2{};
-    properties2.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
-    VkPhysicalDeviceImageFormatInfo2 format_info{};
-    format_info.sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
-    format_info.format = create_infos.format;
-    format_info.type   = create_infos.imageType;
-    format_info.tiling = create_infos.tiling;
-    format_info.usage  = create_infos.usage;
-    format_info.flags  = create_infos.flags;
-    properties2.pNext  = VK_NULL_HANDLE;
-    VkResult result = vkGetPhysicalDeviceImageFormatProperties2(device.GetGpu(), &format_info, &properties2);
-    if (result != VK_SUCCESS) {
-        return VK_IMAGE_TILING_LINEAR;
+void ValidateImageFormatSupport(VkPhysicalDevice gpu, const VkImageCreateInfo& image_info) {
+    VkPhysicalDeviceImageFormatInfo2 format_info{
+        .sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
+        .format = image_info.format,
+        .type   = image_info.imageType,
+        .tiling = image_info.tiling,
+        .usage  = image_info.usage,
+        .flags  = image_info.flags,
+    };
+#if WITH_CUDA
+    // Match the external-memory configuration used by texture creation.
+    const VkPhysicalDeviceExternalImageFormatInfo external_info{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+    };
+    format_info.pNext = &external_info;
+#endif
+    VkImageFormatProperties2 properties{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
+    VK_CHECK_RESULT(vkGetPhysicalDeviceImageFormatProperties2(gpu, &format_info, &properties));
+
+    const auto& limits = properties.imageFormatProperties;
+    if (image_info.extent.width == 0 || image_info.extent.height == 0 || image_info.extent.depth == 0 ||
+        image_info.extent.width > limits.maxExtent.width ||
+        image_info.extent.height > limits.maxExtent.height || image_info.extent.depth > limits.maxExtent.depth ||
+        image_info.mipLevels == 0 || image_info.mipLevels > limits.maxMipLevels ||
+        image_info.arrayLayers == 0 || image_info.arrayLayers > limits.maxArrayLayers ||
+        (image_info.samples & limits.sampleCounts) == 0) {
+        throw std::invalid_argument("Vulkan texture dimensions, mip levels, layers or samples exceed format support");
     }
-    return format_info.tiling;
 }
 
 } // namespace
@@ -229,7 +242,7 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, Vk
     image_create_info.pNext = &external_memory_info;
 #endif
 
-    image_create_info.tiling = SelectImageTiling(image_create_info, *_device);
+    ValidateImageFormatSupport(_device->GetGpu(), image_create_info);
     VmaAllocationCreateInfo alloc_create_info{};
     alloc_create_info.flags = 0;
     alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO;
@@ -241,14 +254,18 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, Vk
     if (result != VK_SUCCESS) {
         std::string texture_name = _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown";
         LOG_CRITICAL(
-            "Failed to create texture '{}': extent=({},{}), format={}, mips={}, layers={}, "
-            "VkResult={}",
+            "Failed to create texture '{}': extent=({},{},{}), format={}, mips={}, layers={}, "
+            "samples={}, usage={}, tiling={}, VkResult={}",
             texture_name,
             _info.extent.x,
             _info.extent.y,
+            _info.depth,
             uint(_info.format),
             _info.num_mips,
             _info.array_size,
+            uint(image_create_info.samples),
+            image_create_info.usage,
+            uint(image_create_info.tiling),
             int(result)
         );
         throw std::runtime_error(std::format("failed to create Vulkan texture (VkResult {})", int(result)));
