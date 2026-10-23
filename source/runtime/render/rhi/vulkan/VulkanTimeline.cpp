@@ -224,8 +224,9 @@ void VulkanTimeline::SignalHost(uint64_t _value) {
 }
 
 VulkanTimeline::~VulkanTimeline() {
-    VK_CHECK_NULLPTR(timeline, "Timeline semaphore is null");
-    vkDestroySemaphore(m_device->GetDevice(), timeline, VK_NULL_HANDLE);
+    if (timeline != VK_NULL_HANDLE) {
+        vkDestroySemaphore(m_device->GetDevice(), timeline, VK_NULL_HANDLE);
+    }
 }
 
 } // namespace Moer::Render

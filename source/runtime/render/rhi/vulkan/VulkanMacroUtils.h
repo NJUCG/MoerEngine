@@ -7,27 +7,38 @@
 
 #include "VulkanCommon.h"
 #include "log/LogSystem.h"
+#include <format>
+#include <source_location>
+#include <stdexcept>
 
-#define VK_CHECK_RESULT(f)                                                                           \
-    {                                                                                                \
-        VkResult res = (f);                                                                          \
-                                                                                                     \
-        if (res != VK_SUCCESS) {                                                                     \
-            std::stringstream ss;                                                                    \
-            ss << "Fatal : VkResult is \"" << res << "\" in " << __FILE__ << " at line " << __LINE__ \
-               << "\n";                                                                              \
-            LOG_CRITICAL(ss.str());                                                                  \
-            assert(false);                                                                           \
-        }                                                                                            \
-    }
+namespace Moer::Render {
+class VulkanCallError : public std::runtime_error {
+public:
+    VulkanCallError(VkResult result, const char* operation, std::source_location location) :
+        std::runtime_error(std::format(
+            "{} failed with VkResult {} at {}:{}", operation, int(result), location.file_name(), location.line()
+        )),
+        m_result(result) {}
 
-#define VK_CHECK_NULLPTR(ptr, msg, ...) \
-    {                                   \
-        if (ptr == nullptr) {           \
-            LOG_CRITICAL(msg);          \
-            __VA_ARGS__;                \
-        }                               \
+    VkResult GetResult() const noexcept { return m_result; }
+
+private:
+    VkResult m_result;
+};
+
+// For operations requiring VK_SUCCESS. Expected statuses (retry/recreate) are
+// classified by their callers instead of passing through this check.
+inline void CheckVulkanResult(
+    VkResult result, const char* operation,
+    std::source_location location = std::source_location::current()
+) {
+    if (result != VK_SUCCESS) {
+        throw VulkanCallError(result, operation, location);
     }
+}
+} // namespace Moer::Render
+
+#define VK_CHECK_RESULT(f) ::Moer::Render::CheckVulkanResult((f), #f)
 
 #if defined(_DEBUG) || defined(DEBUG)
 #include <vulkan/vk_enum_string_helper.h>

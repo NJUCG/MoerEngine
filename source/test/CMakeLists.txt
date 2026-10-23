@@ -574,6 +574,13 @@ endif()
 # intentionally includes vulkan_core.h before engine Vulkan headers to ensure
 # VK_NO_PROTOTYPES propagates through the same lightweight header interface
 # used by Moer::Render.
+set(test_target TestVulkanFailure)
+add_executable(${test_target} "VulkanFailureTest.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders Moer::Render)
+target_compile_definitions(${test_target} PRIVATE NDEBUG)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanFailureContract COMMAND $<TARGET_FILE:${test_target}>)
+
 set(test_target TestVulkanHeaderContract)
 add_executable(${test_target} "VulkanHeaderContractTest.cpp")
 # Public Render headers contain inline code that references Render symbols.

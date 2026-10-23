@@ -8623,6 +8623,12 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 recorded.deferred_releases = TakeDeferredReleases();
             }
         }
+    } catch (const VulkanCallError& error) {
+        queue.DiscardPendingSubmitState();
+        vk_device.RecordRejectedPresent();
+        vk_device.TryLatchFirstFault(context, error.GetResult(), false);
+        final_outcome = {EVulkanOperationStatus::Faulted, error.GetResult()};
+        AccumulatePresentReceiptOutcome(receipt_status, receipt_stage, final_outcome, EPresentStage::Submit);
     } catch (const std::exception& error) {
         queue.DiscardPendingSubmitState();
         vk_device.RecordRejectedPresent();
@@ -10198,7 +10204,12 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
             command_context_ptr->EnsureQueryCapacity(
                 suppress_timestamp_queries ? 0 : timestamp_query_slot_count, 0
             );
-        } catch (const std::exception& error) {
+        } catch (const VulkanCallError& error) {
+        device.RecordRejectedSubmit();
+        device.TryLatchFirstFault(recorded->context, error.GetResult(), false);
+        recorded->retirement_outcome = {EVulkanOperationStatus::Faulted, error.GetResult()};
+        recorded->native_submit_resolved = true;
+    } catch (const std::exception& error) {
             try {
                 LOG_ERROR(
                     "[RHIExecutor][Vulkan] Copy query pool preparation "

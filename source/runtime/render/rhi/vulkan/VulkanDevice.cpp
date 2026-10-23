@@ -95,18 +95,23 @@ VulkanDevice::VulkanDevice(const VulkanRHIConfig& _config) : RenderDevice::Impl(
         LOG_INFO("[Threading] rhi_bypass=false is ignored while rhi_thread=false.");
     }
 
-    InitVulkanInstance(_config.api_version);
+    try {
+        InitVulkanInstance(_config.api_version);
 
-    m_gpu = SelectGpu(_config.api_version);
-    InitGpu(_config.api_version);
+        m_gpu = SelectGpu(_config.api_version);
+        InitGpu(_config.api_version);
 
-    CreateDevice();
-    CreateMemoryAllocator(m_instance, _config.api_version);
+        CreateDevice();
+        CreateMemoryAllocator(m_instance, _config.api_version);
 
-    CreateInternalResources();
+        CreateInternalResources();
 
-    RegisterDefaultPlugins();
-    LogGpuEnvironment(_config.api_version);
+        RegisterDefaultPlugins();
+        LogGpuEnvironment(_config.api_version);
+    } catch (...) {
+        Destroy();
+        throw;
+    }
 }
 
 void VulkanDevice::PostInit() {
@@ -250,7 +255,7 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     instance_create_info.enabledExtensionCount   = instance_extensions_loaded.size();
     instance_create_info.ppEnabledExtensionNames = instance_extensions_loaded.data();
 
-    VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
+    VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance));
     volkLoadInstance(m_instance);
 
     if (b_validation_layer_enabled) {
@@ -268,11 +273,11 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     */
 VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
     uint32 gpu_count = 0;
-    VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, nullptr))
+    VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, nullptr));
     CHECK_ASSERT(gpu_count, "No GPU with Vulkan support found!");
 
     Array<VkPhysicalDevice> gpu_list(gpu_count);
-    VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, gpu_list.data()))
+    VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, gpu_list.data()));
 
     // lambda helpers
     const auto& extensions_required = VulkanDeviceExtension::GetMERequiredDeviceExtensions();
@@ -712,9 +717,9 @@ void VulkanDevice::CreateDescriptorHeap() {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
     };
     descriptor_set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-    vkCreateDescriptorSetLayout(
+    VK_CHECK_RESULT(vkCreateDescriptorSetLayout(
         m_device, &descriptor_set_layout_create_info, VK_NULL_HANDLE, &empty_descriptor_set_layout
-    );
+    ));
 
     LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
 }
@@ -763,19 +768,25 @@ void VulkanDevice::CreateImmutableSamplers() {
             VulkanEnumTranslator::METoVKCompareOp(ECompareOption(compare_function));
         sampler_create_info.compareEnable = compare_function != SCF_NEVER;
 
-        vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]);
+        VK_CHECK_RESULT(vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]));
     }
 }
 
 void VulkanDevice::DestroyImmutableSamplers() {
     for (auto& sampler : immutable_samplers) {
-        vkDestroySampler(m_device, sampler, VK_NULL_HANDLE);
+        if (sampler) {
+            vkDestroySampler(m_device, sampler, VK_NULL_HANDLE);
+            sampler = VK_NULL_HANDLE;
+        }
     }
 }
 
 void VulkanDevice::DestroyDescriptorHeap() {
     m_global_descriptor_heap.reset();
-    vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
+    if (empty_descriptor_set_layout) {
+        vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
+        empty_descriptor_set_layout = VK_NULL_HANDLE;
+    }
 }
 
 void VulkanDevice::Destroy() {
@@ -794,8 +805,13 @@ void VulkanDevice::Destroy() {
     FlushDeferredReleases();
     DestroyInternalResources();
     FlushDeferredReleases();
-    vmaDestroyAllocator(m_allocator);
-    vkDestroyDevice(m_device, VK_NULL_HANDLE);
+    if (m_allocator) {
+        vmaDestroyAllocator(m_allocator);
+        m_allocator = VK_NULL_HANDLE;
+    }
+    if (m_device) {
+        vkDestroyDevice(m_device, VK_NULL_HANDLE);
+    }
     m_device = VK_NULL_HANDLE;
 
     // The callback coalesces non-error messages. Flush before removing the
@@ -1856,19 +1872,26 @@ Array<VkPipelineShaderStageCreateInfo>
 CreateVulkanShaderStages(VkDevice device, std::span<const SingleShaderInfo* const> shaders) {
     Array<VkPipelineShaderStageCreateInfo> stages;
     stages.reserve(shaders.size());
-    for (const auto* shader : shaders) {
-        VkShaderModuleCreateInfo module_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        module_info.codeSize = shader->shader_data.size();
-        module_info.pCode    = reinterpret_cast<const uint32_t*>(shader->shader_data.data());
-        VkShaderModule module;
-        VK_CHECK_RESULT(vkCreateShaderModule(device, &module_info, nullptr, &module));
-        VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        stage.stage = static_cast<VkShaderStageFlagBits>(
-            VulkanEnumTranslator::METoVKShaderStageFlags(shader->shader_type)
-        );
-        stage.module = module;
-        stage.pName  = shader->entry_point.data();
-        stages.push_back(stage);
+    try {
+        for (const auto* shader : shaders) {
+            VkShaderModuleCreateInfo module_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            module_info.codeSize = shader->shader_data.size();
+            module_info.pCode    = reinterpret_cast<const uint32_t*>(shader->shader_data.data());
+            VkShaderModule module;
+            VK_CHECK_RESULT(vkCreateShaderModule(device, &module_info, nullptr, &module));
+            VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+            stage.stage = static_cast<VkShaderStageFlagBits>(
+                VulkanEnumTranslator::METoVKShaderStageFlags(shader->shader_type)
+            );
+            stage.module = module;
+            stage.pName  = shader->entry_point.data();
+            stages.push_back(stage);
+        }
+    } catch (...) {
+        for (const auto& stage : stages) {
+            vkDestroyShaderModule(device, stage.module, nullptr);
+        }
+        throw;
     }
     return stages;
 }
@@ -2256,9 +2279,12 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
         BuildVulkanPipelineBindingInfo(
             stages, shader_info, m_device_info.core_properties.core_1_0.limits.maxPushConstantsSize
         );
-    VulkanPipelineState* vk_pso =
-        MoerNew(VulkanPipelineState)(this, VulkanPipelineState::Compute, binding_info.active_argument_bits);
+    UniquePtr<VulkanPipelineState> vk_pso =
+        MakeUnique<VulkanPipelineState>(this, VulkanPipelineState::Compute, binding_info.active_argument_bits);
     Array<VkPipelineShaderStageCreateInfo> shader_stages = CreateVulkanShaderStages(m_device, stages);
+    auto shader_module_cleanup = OnScopeExit([&]() {
+        vkDestroyShaderModule(m_device, shader_stages.front().module, nullptr);
+    });
     vk_pso->m_argument_infos = std::move(binding_info.argument_infos);
     InitializeVulkanPipelineLayout(*vk_pso, binding_info);
 
@@ -2272,8 +2298,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
         m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline
     ));
 
-    vkDestroyShaderModule(m_device, shader_stages.front().module, nullptr);
-    return PipelineHandle{vk_pso};
+    return PipelineHandle{vk_pso.release()};
 }
 
 CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) {

@@ -181,37 +181,46 @@ Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
         VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
         VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
 
-    for (const auto& [set_index, layout_info] : set_layout_infos) {
-        // FillMissingDescriptorBindings has made the binding indices contiguous.
-        Array<VkDescriptorSetLayoutBinding> vk_bindings(layout_info.bindings.size());
-        for (const auto& [binding_index, binding_info] : layout_info.bindings) {
-            vk_bindings[binding_info.vk_binding.binding] = binding_info.vk_binding;
-        }
+    try {
+        for (const auto& [set_index, layout_info] : set_layout_infos) {
+            // FillMissingDescriptorBindings has made the binding indices contiguous.
+            Array<VkDescriptorSetLayoutBinding> vk_bindings(layout_info.bindings.size());
+            for (const auto& [binding_index, binding_info] : layout_info.bindings) {
+                vk_bindings[binding_info.vk_binding.binding] = binding_info.vk_binding;
+            }
 
-        VkDescriptorSetLayoutCreateInfo layout_create_info{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
-        };
-        layout_create_info.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-        layout_create_info.bindingCount = vk_bindings.size();
-        layout_create_info.pBindings    = vk_bindings.data();
+            VkDescriptorSetLayoutCreateInfo layout_create_info{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
+            };
+            layout_create_info.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+            layout_create_info.bindingCount = vk_bindings.size();
+            layout_create_info.pBindings    = vk_bindings.data();
 
-        VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags_info{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO
-        };
-        if (layout_info.is_bindless) {
-            binding_flags_info.bindingCount  = 1;
-            binding_flags_info.pBindingFlags = &bindless_array_binding_flags;
-            layout_create_info.pNext         = &binding_flags_info;
-        }
+            VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags_info{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO
+            };
+            if (layout_info.is_bindless) {
+                binding_flags_info.bindingCount  = 1;
+                binding_flags_info.pBindingFlags = &bindless_array_binding_flags;
+                layout_create_info.pNext         = &binding_flags_info;
+            }
 
-        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(
-            device.GetDevice(), &layout_create_info, nullptr, &set_layouts[set_index]
-        ));
-        auto& set_binding = binding_template.set_bindings.at(set_index);
-        if (auto* resource_bindings =
-                std::get_if<VulkanResourceSetBindings>(&set_binding.resource_bindings)) {
-            CacheDescriptorSetStorageLayout(device, set_layouts[set_index], layout_info, *resource_bindings);
+            VK_CHECK_RESULT(vkCreateDescriptorSetLayout(
+                device.GetDevice(), &layout_create_info, nullptr, &set_layouts[set_index]
+            ));
+            auto& set_binding = binding_template.set_bindings.at(set_index);
+            if (auto* resource_bindings =
+                    std::get_if<VulkanResourceSetBindings>(&set_binding.resource_bindings)) {
+                CacheDescriptorSetStorageLayout(device, set_layouts[set_index], layout_info, *resource_bindings);
+            }
         }
+    } catch (...) {
+        for (VkDescriptorSetLayout layout : set_layouts) {
+            if (layout && layout != device.GetEmptyDescriptorSetLayout()) {
+                vkDestroyDescriptorSetLayout(device.GetDevice(), layout, nullptr);
+            }
+        }
+        throw;
     }
     return set_layouts;
 }
