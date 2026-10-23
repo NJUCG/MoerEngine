@@ -2,14 +2,14 @@
 // Created by 74535 on 2023/10/1.
 //
 
-#ifndef VULKAN_UTIL_H
-#define VULKAN_UTIL_H
+#ifndef VULKAN_SURFACE_SUPPORT_H
+#define VULKAN_SURFACE_SUPPORT_H
 
 #include "misc/STL.h"
 
-#include "VulkanPlatform.h"
+#include "VulkanCommon.h"
 
-namespace Moer { namespace RHI { namespace Vulkan { namespace Util {
+namespace Moer::Render {
 struct SwapChainSupportDetails {
     VkSurfaceCapabilitiesKHR        capabilities{};
     Moer::Array<VkSurfaceFormatKHR> formats;
@@ -40,6 +40,6 @@ struct SwapChainSupportQueryResult {
 SwapChainSupportQueryResult
 QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32_t _present_queue_family);
 
-}}}} // namespace Moer::RHI::Vulkan::Util
+} // namespace Moer::Render
 
-#endif // !VULKAN_UTIL_H
+#endif // !VULKAN_SURFACE_SUPPORT_H

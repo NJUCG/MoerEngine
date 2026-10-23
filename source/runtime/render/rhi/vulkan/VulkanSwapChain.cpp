@@ -4,7 +4,7 @@
 #include "PixelFormat.h"
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
-#include "VulkanUtil.h"
+#include "VulkanSurfaceSupport.h"
 #include "log/LogSystem.h"
 #include "misc/MMemory.h"
 #include "rhi/RHICommon.h"
@@ -17,7 +17,6 @@
 #include <string>
 #include <utility>
 
-namespace VkUtil = Moer::RHI::Vulkan::Util;
 namespace Moer::Render {
 
 namespace {
@@ -302,8 +301,8 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    const VkUtil::SwapChainSupportQueryResult support_query =
-        VkUtil::QuerySwapChainSupport(device.GetGpu(), candidate_surface, queue_families.present.value());
+    const SwapChainSupportQueryResult support_query =
+        QuerySwapChainSupport(device.GetGpu(), candidate_surface, queue_families.present.value());
     if (!support_query.Succeeded()) {
         observe_setup_result(support_query.native_result);
         LOG_ERROR(

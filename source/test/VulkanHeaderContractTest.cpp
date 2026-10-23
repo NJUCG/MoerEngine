@@ -26,6 +26,7 @@
 #include "rhi/vulkan/VulkanPipeline.h"
 #include "rhi/vulkan/VulkanRaytracingResource.h"
 #include "rhi/vulkan/VulkanTimeline.h"
+#include "rhi/vulkan/VulkanSurfaceSupport.h"
 #include "rhi/vulkan/VulkanTemporaryBufferAllocator.h"
 #include "rhi/vulkan/VulkanTypeDefs.h"
 #include "window/WindowFrameSnapshot.h"

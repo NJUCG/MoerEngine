@@ -2,10 +2,10 @@
 // Created by 74535 on 2023/10/1.
 //
 
-#include "VulkanPlatform.h"
-#include "VulkanUtil.h"
+#include "VulkanCommon.h"
+#include "VulkanSurfaceSupport.h"
 
-namespace Moer { namespace RHI { namespace Vulkan { namespace Util {
+namespace Moer::Render {
 
 namespace {
 
@@ -112,4 +112,4 @@ QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32_t _pr
     return query_result;
 }
 
-}}}} // namespace Moer::RHI::Vulkan::Util
+} // namespace Moer::Render

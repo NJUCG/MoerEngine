@@ -16,7 +16,6 @@
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanSwapChain.h"
-#include "VulkanUtil.h"
 #include "VulkanVertexFormat.h"
 #include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "plugin/VulkanCooperativeSupport.h"
@@ -63,7 +62,6 @@
 #endif
 
 namespace Moer::Render {
-namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanDevice::VulkanDevice(const VulkanRHIConfig& _config) : RenderDevice::Impl() {
     rhi_thread_enabled            = _config.rhi_thread && !_config.rhi_bypass;
