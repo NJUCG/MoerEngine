@@ -50,8 +50,9 @@ BuildGaussianGpuUpload(const GaussianSceneSnapshot& snapshot, bool should_includ
         const uint32 visibility =
             (instance.is_visible_in_game ? 1u : 0u) | (instance.is_visible_in_editor ? 2u : 0u);
         gpu_instance.range =
-            uint4(first_gaussian_id, asset_gaussian_count, instance.asset->sh_degree, visibility);
+            uint4(first_gaussian_id, asset_gaussian_count, instance.asset->sh_degree, visibility | (settings.cast_shadows ? 4u : 0u) | (settings.receive_shadows ? 8u : 0u));
         upload.instances.push_back(gpu_instance);
+        upload.bounds.push_back(instance.world_bounds);
         if (upload.instances.size() > std::numeric_limits<uint32>::max() / sizeof(GGaussianInstance))
             throw std::runtime_error("Gaussian instance buffer exceeds RHI size limit");
     }
@@ -88,6 +89,7 @@ void GaussianGpuScene::ApplyUpdate(
         upload_buffer(upload->gaussians, m_gaussian_buffer, "Gaussian geometry");
     upload_buffer(upload->instances, m_instance_buffer, "Gaussian instances");
     m_instances      = upload->instances;
+    m_bounds = upload->bounds;
     m_assets         = upload->assets;
     m_gaussian_count = 0;
     for (const auto& asset : m_assets)

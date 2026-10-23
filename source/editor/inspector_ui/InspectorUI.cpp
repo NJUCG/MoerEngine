@@ -195,6 +195,8 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         auto settings = *scene->GetGaussianInstanceSettings(selected_node);
         ImGui::PushItemWidth(std::max(80.f,ImGui::GetContentRegionAvail().x-140.f));
         bool has_changed = ImGui::Checkbox("Enabled##gaussian", &settings.is_enabled);
+        has_changed |= ImGui::Checkbox("Cast shadows##gaussian", &settings.cast_shadows);
+        has_changed |= ImGui::Checkbox("Receive shadows (approximate)##gaussian", &settings.receive_shadows);
         has_changed |= ImGui::DragFloat("Opacity multiplier", &settings.opacity_multiplier, .01f, 0.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         has_changed |= ImGui::ColorEdit3("Color multiplier", &settings.color_multiplier.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
         ImGui::PopItemWidth();

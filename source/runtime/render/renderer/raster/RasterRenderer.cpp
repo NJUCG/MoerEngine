@@ -1043,6 +1043,10 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::BufferHandle  scene_lights;
         } graph_resources{};
 
+        shadow_depth_pass->SetGaussians(raster_context,
+            has_meshes && has_visible_gaussians ? render_scene->GetGaussianGpuScene() : nullptr,
+            frame_packet.gaussian_view_settings,
+            frame_packet.active_viewport_mode == EEditorViewportMode::Scene);
         GaussianSplatPass::RecordParameters gaussian_parameters{};
         GaussianSplatPass::GraphResources gaussian_graph{};
         if (record_gaussians) {

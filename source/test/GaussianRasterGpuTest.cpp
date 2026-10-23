@@ -3,6 +3,9 @@
 #include "renderer/raster/GaussianImageExport.h"
 #include "renderer/raster/GaussianSplatPass.h"
 #include "renderer/raster/GaussianCompositePass.h"
+#include "renderer/raster/GaussianShadowPass.h"
+#include "scene/RenderScene.h"
+#include "scene/Scene.h"
 #include "rhi/RHIExecutor.h"
 #include "scene/loader/GaussianPlyLoader.h"
 #include "taskgraph/TaskSystem.h"
@@ -607,6 +610,64 @@ void RunHybrid(ShaderManager& manager, bool use_graph) {
 }
 
 } // namespace
+void RunGaussianShadows(ShaderManager& manager, bool cube) {
+    auto& device = RenderDevice::Get();
+    auto bindless = device.CreateBindlessArray();
+    CommandList commands(EQueueType::Graphics);
+    Camera camera;
+    camera.Initialize(float3(0),-90,0,60,1,.01f,100.f);
+    auto asset = Synthetic(cube ? 6 : 1);
+    const float3 axes[6] = {{3,0,0},{-3,0,0},{0,3,0},{0,-3,0},{0,0,3},{0,0,-3}};
+    for (uint i=0;i<asset->gaussians.size();++i) {
+        asset->gaussians[i].position = cube ? float4(axes[i],1) : float4(0,0,-3,1);
+        asset->gaussians[i].scale_opacity = float4(.2f,.2f,.2f,.8f);
+    }
+    auto snapshot = std::make_shared<GaussianSceneSnapshot>(); snapshot->revision = 1;
+    GaussianInstanceSnapshot instance; instance.asset=asset; instance.settings.cast_shadows=true;
+    snapshot->instances.push_back(instance);
+    GaussianGpuScene scene; scene.ApplyUpdate(snapshot,commands);
+    Raster::GaussianShadowPass shadows(manager,bindless,PF_D32_SFLOAT);
+    Raster::GaussianShadowPass::RecordParameters parameters;
+    parameters.bindless = bindless;
+    parameters.data_buffer = shadows.GetDataBuffer();
+    parameters.gaussians=scene.GetGaussianBuffer(); parameters.instances=scene.GetInstanceBuffer();
+    parameters.draws.push_back(scene.GetInstances()[0]); parameters.instance_indices.push_back(0);
+    parameters.data.config=uint4(cube?2u:1u,1,64,1);
+    parameters.data.options=float4(.4f,.5f,.005f,0);
+    if (cube) {
+        parameters.maps[0]=device.CreateCubeMap("Shadow cube contract",Extent2D(64,64),PF_D32_SFLOAT,ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT|ETextureUsageFlags::SAMPLED|ETextureUsageFlags::TRANSFER_SRC);
+        const float3 dirs[6]={{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+        const float3 ups[6]={{0,-1,0},{0,-1,0},{0,0,1},{0,0,-1},{0,-1,0},{0,-1,0}};
+        auto proj=MakePerspectiveMatrixRH(1.57079632679f,1.f,100.f,.01f);
+        for (uint face=0;face<6;++face) parameters.data.world_to_clip[face]=proj*MakeLookatViewMatrixRH(float3(0),dirs[face],ups[face]);
+    } else {
+        parameters.maps[0]=device.CreateTexture("Shadow ortho contract",Extent3D(64,64,1),PF_D32_SFLOAT,ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT|ETextureUsageFlags::SAMPLED|ETextureUsageFlags::TRANSFER_SRC);
+        parameters.data.world_to_clip[0]=float4x4::Identity();
+        parameters.data.world_to_clip[0][2][2]=.1f; parameters.data.world_to_clip[0][2][3]=1.f;
+    }
+    uint map_handle=bindless->AllocateTexture(parameters.maps[0]->GetView(),Sampler(SF_NEAREST,SAM_CLAMP_TO_EDGE));
+    parameters.data.gaussian_maps.x=map_handle;
+    shadows.Record(commands,parameters);
+    auto debug=shadows.RecordDepthDebug(commands,parameters);
+    auto readback = commands.Readback(debug->GetView(),"Gaussian shadow depth contract");
+    RHIExecutor::Get().Submit(EQueueType::Graphics,commands.Submit(),ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    auto shadow_readback = readback.Get();
+    std::cout << "shadow readback status=" << int(shadow_readback.status) << " bytes=" << shadow_readback.ByteSize() << " reason=" << shadow_readback.error_reason << std::endl;
+    auto pixels = shadow_readback.CopyAs<float>();
+    Require(pixels && pixels->size() == 64*64*(cube?6:4)*4, "Gaussian shadow depth readback size");
+    const float expected=cube ? .01f/(.01f-100.f) - .01f*100.f/((.01f-100.f)*3.f) : .7f;
+    for (uint face=0;face<(cube?6u:1u);++face) {
+        uint columns=cube?3u:2u;
+        uint offset=((face/columns*64+32)*columns*64+(face%columns*64+32))*4;
+        float center=(*pixels)[offset];
+        Require(std::abs(center-expected)<1e-5, "Gaussian shadow depth differs from reverse-Z reference");
+        Require((*pixels)[((face/columns*64)*columns*64+face%columns*64)*4]==0, "Gaussian shadow map clear or ellipse cutoff incorrect");
+    }
+    bindless->UnbindTexture(map_handle);
+    std::cout << "Gaussian shadow depth " << (cube?"six cube faces":"orthographic") << " passed\n";
+}
+
 int main(int argc, char** argv) {
     bool has_device = false, has_tasks = false, has_shaders = false;
     try {
@@ -644,6 +705,8 @@ int main(int argc, char** argv) {
             rotated_asset->gaussians[0].scale_opacity = float4(1.2f, .0001f, .01f, opacity);
             Run(manager, rotated_asset, 1, {}, false, false, uint2(65, 49), 20);
         }
+        RunGaussianShadows(manager, false);
+        RunGaussianShadows(manager, true);
         RunViewportPng();
         RunHybrid(manager, false);
         RunHybrid(manager, true);

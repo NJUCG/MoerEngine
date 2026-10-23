@@ -13,6 +13,7 @@ bool WriteGaussianCacheExtension(
 bool ReadGaussianCacheExtension(
     SceneCacheBinaryReader&    reader,
     entt::registry&            registry,
-    const Array<entt::entity>& entities
+    const Array<entt::entity>& entities,
+    uint32 version = 7
 );
 } // namespace Moer

@@ -9,6 +9,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "pipelines/raster/deferred/lighting/shadows/CSM.hlsli"
 
 #include "shared/raster/ShaderParameters.h"
+#include "features/gaussian/ShadowSampling.hlsli"
 
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::LightingData> lighting_data;
 #include "shared/raster/lighting_pass/Constants.h"
@@ -61,10 +62,25 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     LightContext light_ctx;
     light_ctx.Init(brdf_ctx, position, lighting_data.lut_ggx_emu_handle);
 
+    float gaussian_visibility = 1;
+    Moer::GaussianShadowData gaussian_shadow = (Moer::GaussianShadowData)0;
+    if (lighting_data.gaussian_shadow.y != 0) {
+        gaussian_shadow = ArrayBuffer(lighting_data.gaussian_shadow.x).Load<Moer::GaussianShadowData>(0);
+        gaussian_visibility = GaussianShadowVisibility(gaussian_shadow,gaussian_shadow.gaussian_maps,position);
+    }
+    bool found_directional = false, found_point = false;
     for (uint i = 0; i < lighting_data.light_count; i++) {
         Moer::GLight light = light_buf.Load<Moer::GLight>(i);
 
-        light_ctx.AccumulateLight(light, shadow);
+        float gs_shadow = 1;
+        if (light.type == Moer::ELightType::Directional) {
+            if (!found_directional && gaussian_shadow.config.x == 1) gs_shadow = gaussian_visibility;
+            found_directional = true;
+        } else if (light.type == Moer::ELightType::Point) {
+            if (!found_point && gaussian_shadow.config.x == 2) gs_shadow = gaussian_visibility;
+            found_point = true;
+        }
+        light_ctx.AccumulateLight(light, shadow, gs_shadow);
     }
 
     float3 color = light_ctx.GetResult();

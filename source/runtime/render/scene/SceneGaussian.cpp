@@ -15,6 +15,8 @@ bool Same(const GaussianInstanceSnapshot& lhs, const GaussianInstanceSnapshot& r
     if (lhs.key != rhs.key || lhs.asset != rhs.asset || lhs.is_visible_in_game != rhs.is_visible_in_game ||
         lhs.is_visible_in_editor != rhs.is_visible_in_editor ||
         lhs.settings.is_enabled != rhs.settings.is_enabled ||
+        lhs.settings.cast_shadows != rhs.settings.cast_shadows ||
+        lhs.settings.receive_shadows != rhs.settings.receive_shadows ||
         lhs.settings.opacity_multiplier != rhs.settings.opacity_multiplier ||
         lhs.settings.color_multiplier.x != rhs.settings.color_multiplier.x ||
         lhs.settings.color_multiplier.y != rhs.settings.color_multiplier.y ||

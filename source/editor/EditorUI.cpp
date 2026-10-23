@@ -1032,6 +1032,10 @@ void EditorUI::ShowGaussianSettings(Scene& scene) {
     settings.display_mode = static_cast<EGaussianDisplayMode>(display_mode);
     has_changed |= ImGui::ColorEdit3("Reference background", &settings.background.x);
     has_changed |= ImGui::SliderFloat("Gaussian brightness (EV)", &settings.exposure_ev, -16.f, 16.f);
+    has_changed |= ImGui::SliderFloat("Shadow alpha cutoff", &settings.shadow_alpha_cutoff, .01f, .99f);
+    has_changed |= ImGui::SliderFloat("Shadow receive strength", &settings.shadow_receive_strength, 0.f, 1.f);
+    has_changed |= ImGui::DragFloat("Shadow world bias", &settings.shadow_world_bias, .001f, 0.f, 100.f);
+    ImGui::TextDisabled("SH shadow receiving is an approximate brightness modulation.");
     ImGui::TextDisabled(
         "Viewport uses shared exposure and tone mapping. Reference PNG uses its own background."
     );

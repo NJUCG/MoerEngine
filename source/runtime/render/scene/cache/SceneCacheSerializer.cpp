@@ -16,7 +16,7 @@ namespace Moer {
 namespace {
 
 constexpr uint32 k_logical_scene_payload_version = 5; // v5: parent_group_id in ClusterGroupInfo
-constexpr uint32 k_gaussian_scene_payload_version = 6; // v5 core followed by shared Gaussian data
+constexpr uint32 k_gaussian_scene_payload_version = 7; // v5 core followed by shared Gaussian data
 constexpr uint64 k_null_entity_id                = std::numeric_limits<uint64>::max();
 
 enum ESceneCacheComponentFlag : uint64 {
@@ -1112,7 +1112,7 @@ bool SceneCacheSerializer::LoadLogicalScene(
         return false;
     }
     if (payload_header.version != k_logical_scene_payload_version &&
-        payload_header.version != k_gaussian_scene_payload_version) {
+        payload_header.version != 6 && payload_header.version != k_gaussian_scene_payload_version) {
         LOG_WARNING(
             "Scene Cache load failed: path={}, reason=Scene cache logical scene payload version mismatch.",
             cache_path.string()
@@ -1167,8 +1167,8 @@ bool SceneCacheSerializer::LoadLogicalScene(
         registry.ctx().emplace<ecs::CtxMegaBuffers>(std::move(mega_buffers));
     }
 
-    if (payload_header.version == k_gaussian_scene_payload_version &&
-        !ReadGaussianCacheExtension(reader, registry, local_id_to_entity)) return false;
+    if (payload_header.version >= 6 &&
+        !ReadGaussianCacheExtension(reader, registry, local_id_to_entity, payload_header.version)) return false;
 
     logical_scene.r() = std::move(registry);
     logical_scene.SBuildPrimitiveHash();

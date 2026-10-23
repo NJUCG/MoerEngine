@@ -19,6 +19,9 @@ struct GaussianViewSettings {
     EGaussianDisplayMode display_mode       = EGaussianDisplayMode::Reference;
     EGaussianDebugView   debug_view         = EGaussianDebugView::Color;
     uint                 tile_pair_capacity = 4u * 1024u * 1024u;
+    float shadow_alpha_cutoff = 0.4f;
+    float shadow_receive_strength = 0.5f;
+    float shadow_world_bias = 0.005f;
 };
 inline bool IsValidGaussianViewSettings(const GaussianViewSettings& value) {
     return std::isfinite(value.background.x) && std::isfinite(value.background.y) &&
@@ -28,6 +31,9 @@ inline bool IsValidGaussianViewSettings(const GaussianViewSettings& value) {
            value.exposure_ev <= 16 &&
            static_cast<uint>(value.display_mode) <= static_cast<uint>(EGaussianDisplayMode::Engine) &&
            static_cast<uint>(value.debug_view) <= static_cast<uint>(EGaussianDebugView::TileCoverage) &&
+           std::isfinite(value.shadow_alpha_cutoff) && value.shadow_alpha_cutoff >= 0.01f && value.shadow_alpha_cutoff <= 0.99f &&
+           std::isfinite(value.shadow_receive_strength) && value.shadow_receive_strength >= 0 && value.shadow_receive_strength <= 1 &&
+           std::isfinite(value.shadow_world_bias) && value.shadow_world_bias >= 0 &&
            value.tile_pair_capacity > 0 && value.tile_pair_capacity <= (1u << 24);
 }
 struct GaussianExportRequest {
