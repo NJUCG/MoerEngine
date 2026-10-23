@@ -7,6 +7,7 @@
 #include "VulkanVertexFormat.h"
 #include "log/LogSystem.h"
 #include "misc/MMemory.h"
+#include "misc/Alignment.h"
 
 #include <algorithm>
 #include <format>
@@ -15,11 +16,10 @@ namespace Moer::Render {
 
 static constexpr std::string_view s_tlas_underlying_buffer_name = "VkRaytracing::TLASUnderlyingBuffer";
 static constexpr std::string_view s_blas_underlying_buffer_name = "VkRaytracing::BLASUnderlyingBuffer";
-static constexpr std::string_view s_blas_scratch_buffer_name    = "VkRaytracing::BLASScratchBuffer";
 static constexpr std::string_view s_tlas_scratch_buffer_name    = "VkRaytracing::TLASScratchBuffer";
 static constexpr std::string_view s_tlas_instance_buffer_name   = "VkRaytracing::TLASInstanceBuffer";
 
-static void GetBuildRaytracingGeometryInfo(
+static void BuildRaytracingGeometryInfo(
     Array<VkAccelerationStructureGeometryKHR>&       _build_info,
     Array<uint>&                                     _primitive_counts,
     Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
@@ -36,8 +36,6 @@ static void GetBuildRaytracingGeometryInfo(
     if (vertex_format == VK_FORMAT_UNDEFINED) {
         throw std::invalid_argument("Invalid Vulkan ray tracing vertex format");
     }
-
-    VkGeometryTypeKHR geometry_type = VulkanEnumTranslator::METoVKGeometryType(_info.segments[0].type);
 
     for (const auto& segment : _info.segments) {
         //TODO: currently only support triangle
@@ -88,7 +86,7 @@ VulkanRaytracingGeometry::VulkanRaytracingGeometry(
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR
     };
     Array<uint> primitive_counts;
-    GetBuildRaytracingGeometryInfo(build_geometries, primitive_counts, build_ranges, _info);
+    BuildRaytracingGeometryInfo(build_geometries, primitive_counts, build_ranges, _info);
     build_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
     build_info.flags         = VulkanEnumTranslator::METoVKAccelerationStructureBuildType(_info.build_flags);
     build_info.geometryCount = build_geometries.size();
@@ -97,34 +95,18 @@ VulkanRaytracingGeometry::VulkanRaytracingGeometry(
         m_device->GetDevice(), build_type, &build_info, primitive_counts.data(), &build_sizes_info
     );
 
-    {
-        BufferInfo buffer_info(
-            build_sizes_info.accelerationStructureSize, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE
-        );
-
-        VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        buffer_ci.size  = buffer_info.size;
-        buffer_ci.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-        buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-#if WITH_CUDA
-        buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
-#endif
-
-        VmaAllocationCreateInfo alloc_ci{};
-        alloc_ci.flags = 0;
-        alloc_ci.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-        VkBuffer      buffer = VK_NULL_HANDLE;
-        VmaAllocation alloc  = VK_NULL_HANDLE;
-
-        vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &buffer, &alloc, nullptr);
-
-        underlying_buffer = MoerNew(VulkanBuffer)(
-            s_blas_underlying_buffer_name, buffer_info, *m_device, buffer, alloc, false, true
-        );
-    }
+    underlying_buffer = MoerNew(VulkanBuffer)(
+        s_blas_underlying_buffer_name,
+        BufferInfo{build_sizes_info.accelerationStructureSize, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE},
+        *m_device,
+        VulkanBufferAllocationInfo{
+            .vk_usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            .memory_usage = VMA_MEMORY_USAGE_GPU_ONLY,
+            .needs_device_address = true,
+        },
+        false
+    );
 
     VkAccelerationStructureCreateInfoKHR create_info{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR
@@ -144,13 +126,7 @@ VulkanRaytracingGeometry::VulkanRaytracingGeometry(
     blas_address = vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &address_info);
 }
 
-VulkanAccelerationStructure::VulkanAccelerationStructure(
-    VulkanDevice&          _device,
-    VulkanRaytracingScene& _scene
-) :
-    device(_device),
-    src_scene(_scene),
-    RaytracingTlas() {}
+VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanDevice& device) : device(device) {}
 
 VulkanRaytracingGeometry::~VulkanRaytracingGeometry() {
     if (acc != VK_NULL_HANDLE) {
@@ -181,56 +157,12 @@ void VulkanAccelerationStructure::Destroy() {
     device.EnqueueDeferredRelease(this);
 }
 
-VulkanRaytracingScene::VulkanRaytracingScene(VulkanDevice* _device) :
-    VulkanDeviceObject(_device),
-    RaytracingScene() {
-
-    VkBuffer      current_handle = VK_NULL_HANDLE;
-    VmaAllocation alloc          = VK_NULL_HANDLE;
-
-    // TLAS instance buffer must be 16-byte aligned (Vulkan spec requirement)
-    // Add extra padding for alignment and use 256-byte alignment for AMD GPU compatibility
-    constexpr uint64 kInstanceBufferAlignment     = 256;
-    const uint64     base_instance_buffer_size    = sizeof(VkAccelerationStructureInstanceKHR) * 1000;
-    const uint64     aligned_instance_buffer_size = base_instance_buffer_size + kInstanceBufferAlignment;
-
-    VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    buffer_ci.size  = aligned_instance_buffer_size;
-    buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-    buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    buffer_ci.flags       = 0;
-
-#if WITH_CUDA
-    buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
-#endif
-
-    VmaAllocationCreateInfo alloc_ci{};
-    alloc_ci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-
-    VK_CHECK_RESULT(
-        vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr)
-    );
-
-    instance_buffer = MoerNew(VulkanBuffer)(
-        s_tlas_instance_buffer_name,
-        BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE},
-        *m_device,
-        current_handle,
-        alloc,
-        true,
-        true
-    );
-
-    // Initialize aligned address for AMD GPU compatibility
-    UpdateAlignedInstanceBufferAddress();
+VulkanRaytracingScene::VulkanRaytracingScene(VulkanDevice* device) : VulkanDeviceObject(device) {
+    instance_buffer = CreateInstanceBuffer(instance_capacity);
 }
 
-VulkanRaytracingScene::~VulkanRaytracingScene() {}
-
 RaytracingInstance& VulkanRaytracingScene::AddInstance() {
-    auto& instance = VulkanRaytracingDetail::AddInstance(instances, vk_instances, free_instance_slots);
+    auto& instance = VulkanRaytracingDetail::AddInstance(instances, free_instance_slots);
     MarkModified(instance.array_idx);
     return instance;
 }
@@ -241,38 +173,14 @@ void VulkanRaytracingScene::FreeInstance(uint array_index) {
 }
 
 void VulkanRaytracingScene::MarkModified(uint _array_idx) {
-    auto res = temp_modified_instance_ids.emplace(_array_idx);
+    auto res = modified_instance_indices.emplace(_array_idx);
     if (res.second) {
-        temp_update_instance_ids.emplace_back(_array_idx);
-    }
-}
-
-void VulkanRaytracingScene::RegisterGeometry(RaytracingGeometryRef _geometry) {
-    VulkanRaytracingGeometry* geometry = ResourceCast(_geometry.Get());
-    assert(geometry && "Invalid geometry");
-
-    auto pair = related_geometries.try_emplace(uint64(geometry), 1);
-    if (!pair.second) {
-        related_geometries[uint64(geometry)]++;
-    }
-}
-
-void VulkanRaytracingScene::UnregisterGeometry(RaytracingGeometryRef _geometry) {
-    VulkanRaytracingGeometry* geometry = ResourceCast(_geometry.Get());
-    assert(geometry && "Invalid geometry");
-    auto iter = related_geometries.find(uint64(geometry));
-    if (iter == related_geometries.end()) {
-        return;
-    }
-    if (iter->second > 1) {
-        --iter->second;
-    } else {
-        related_geometries.erase(iter);
+        pending_instance_indices.emplace_back(_array_idx);
     }
 }
 
 static VkGeometryInstanceFlagsKHR
-METoRTInstanceFlags(const RaytracingSegment& _segment, const RaytracingInstance& _instance) {
+ToVulkanInstanceFlags(const RaytracingSegment& _segment) {
     VkGeometryInstanceFlagsKHR flags = 0;
     if ((EnumHasAllFlag(_segment.flags, ERayTracingGeometryFlags::GEOMETRY_OPAQUE)) &&
         _segment.b_force_opaque) {
@@ -287,90 +195,67 @@ METoRTInstanceFlags(const RaytracingSegment& _segment, const RaytracingInstance&
     return flags;
 }
 
+static VkAccelerationStructureInstanceKHR BuildNativeInstance(const RaytracingInstance& instance) {
+    const auto* geometry = ResourceCast(instance.geom);
+    if (!geometry) {
+        if (instance.visible_mask != RTVM_NONE) {
+            throw std::invalid_argument("Visible ray tracing instance has no geometry");
+        }
+        return {};
+    }
+    const auto& segments = geometry->GetInfo().segments;
+    if (instance.segment_idx >= segments.size()) {
+        throw std::invalid_argument("Ray tracing instance segment is out of range");
+    }
+    VkAccelerationStructureInstanceKHR native{};
+    native.instanceCustomIndex = instance.custom_index;
+    native.mask = instance.visible_mask;
+    native.instanceShaderBindingTableRecordOffset = instance.material_ref.sbt_offset;
+    native.flags = ToVulkanInstanceFlags(segments[instance.segment_idx]);
+    native.accelerationStructureReference = geometry->blas_address;
+    std::memcpy(&native.transform, &instance.transform, sizeof(native.transform));
+    return native;
+}
+
 UniquePtr<Command> VulkanRaytracingScene::UpdateScene() {
 
-    related_geometries.clear();
-    temp_update_instances.clear();
+    UnorderedMap<uint64, uint> related_geometries;
+    Array<byte> instance_update_data;
     if (instances.empty()) {
-        temp_update_instance_ids.clear();
-        temp_modified_instance_ids.clear();
-        prev_modified_instance_ids.clear();
+        pending_instance_indices.clear();
+        modified_instance_indices.clear();
+        previous_modified_instance_indices.clear();
         return {};
     }
 
     //update gpu buffer
-    bool b_full_refit = false;
+    bool instance_buffer_recreated = false;
     if (instance_capacity < instances.size()) {
-        RefitInstanceBuffer();
-        b_full_refit = true;
+        GrowInstanceBuffer();
+        instance_buffer_recreated = true;
     }
-    bool b_need_force_build = RefitTLASAndScratchBuffer();
+    bool force_build = EnsureAccelerationStructureStorage();
 
-    // for(auto prev_idx : prev_modified_instance_ids){
-    //     if(!temp_modified_instance_ids.contains(prev_idx)){
-    //         temp_update_instance_ids.push_back(prev_idx);
-    //     }
-    // }
-    if (!prev_modified_instance_ids.empty()) {
-        b_need_force_build = true;
+    if (!previous_modified_instance_indices.empty()) {
+        force_build = true;
     }
 
-    prev_modified_instance_ids.clear();
+    previous_modified_instance_indices.clear();
 
-    // b_current_full_refit |= b_full_refit;
-
-    // if(b_prev_full_refit){
-    //     b_full_refit = true;
-    //     b_prev_full_refit = false;
-    // }
-
-    if (b_full_refit) {
-        temp_update_instances.reserve(instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
-        std::span<byte> temp_span(
-            (byte*)vk_instances.data(), vk_instances.size() * sizeof(VkAccelerationStructureInstanceKHR)
-        );
-
-        temp_update_instance_ids.clear();
+    if (instance_buffer_recreated) {
+        pending_instance_indices.clear();
         for (uint i = 0; i < instances.size(); i++) {
-            temp_update_instance_ids.push_back(i);
+            pending_instance_indices.push_back(i);
         }
     }
 
-    {
-
-        temp_update_instances.resize(
-            temp_update_instance_ids.size() * sizeof(VkAccelerationStructureInstanceKHR)
+    instance_update_data.resize(pending_instance_indices.size() * sizeof(VkAccelerationStructureInstanceKHR));
+    for (size_t update_index = 0; update_index < pending_instance_indices.size(); ++update_index) {
+        const auto native_instance = BuildNativeInstance(instances[pending_instance_indices[update_index]]);
+        std::memcpy(
+            instance_update_data.data() + update_index * sizeof(native_instance),
+            &native_instance, sizeof(native_instance)
         );
-        //update cpu size vk_instance datas
-        for (const auto& idx : temp_update_instance_ids) {
-            VulkanRaytracingGeometry* geometry = ResourceCast(instances[idx].geom);
-            if (!geometry) {
-                if (instances[idx].visible_mask != RTVM_NONE) {
-                    throw std::invalid_argument("Visible ray tracing instance has no geometry");
-                }
-                vk_instances[idx] = {};
-                const size_t update_index = &idx - temp_update_instance_ids.data();
-                std::memcpy(temp_update_instances.data() + update_index * sizeof(VkAccelerationStructureInstanceKHR),
-                            &vk_instances[idx], sizeof(VkAccelerationStructureInstanceKHR));
-                continue;
-            }
-            const Array<RaytracingSegment>&     segments       = geometry->GetInfo().segments;
-            VkAccelerationStructureInstanceKHR& vk_instance    = vk_instances[idx];
-            const RaytracingInstance&           instance       = instances[idx];
-            vk_instance.instanceCustomIndex                    = instance.custom_index;
-            vk_instance.mask                                   = instance.visible_mask;
-            vk_instance.instanceShaderBindingTableRecordOffset = instance.material_ref.sbt_offset;
-            vk_instance.flags = METoRTInstanceFlags(segments[instance.segment_idx], instance);
-            vk_instance.accelerationStructureReference = geometry->blas_address;
-            std::memcpy(&vk_instance.transform, &instance.transform, sizeof(vk_instance.transform));
-
-            uint indice = &idx - &temp_update_instance_ids[0];
-            std::memcpy(
-                temp_update_instances.data() + indice * sizeof(VkAccelerationStructureInstanceKHR),
-                &vk_instance,
-                sizeof(VkAccelerationStructureInstanceKHR)
-            );
-        }
     }
 
     Array<RaytracingGeometryRef> geometry_refs;
@@ -387,10 +272,6 @@ UniquePtr<Command> VulkanRaytracingScene::UpdateScene() {
         }
     }
 
-    //maybe we should calculate relative blas here
-    // Array<uint> instance_ids_to_update = temp_update_instance_ids;
-
-    // RefitTLASAndScratchBuffer();
     auto cmd = MakeUnique<UpdateRaytracingSceneCmd>(
         std::move(related_geometries),
         RaytracingSceneRef(this),
@@ -398,24 +279,23 @@ UniquePtr<Command> VulkanRaytracingScene::UpdateScene() {
         BufferRef(scratch_buffer.Get()),
         RaytracingTlasRef(tlas.Get()),
         std::move(geometry_refs),
-        std::move(temp_update_instance_ids),
-        std::move(temp_update_instances),
-        vk_instances.size(),
-        b_full_refit || b_need_force_build
+        std::move(pending_instance_indices),
+        std::move(instance_update_data),
+        instances.size(),
+        instance_buffer_recreated || force_build
     );
-    temp_modified_instance_ids.clear();
+    modified_instance_indices.clear();
     return cmd;
 }
 
 void VulkanRaytracingScene::AdvanceFrame() {
 
     assert(
-        prev_modified_instance_ids.empty() &&
+        previous_modified_instance_indices.empty() &&
         "There are still modified instances not updated, call UpdateScene() first"
     );
 
-    prev_modified_instance_ids.swap(temp_modified_instance_ids);
-    b_current_full_refit = false;
+    previous_modified_instance_indices.swap(modified_instance_indices);
 
     std::swap(prev_instance_capacity, instance_capacity);
     prev_size_infos.build_scratch_size  = size_infos.build_scratch_size;
@@ -433,48 +313,28 @@ RaytracingTlasRef VulkanRaytracingScene::GetPrevTlas() const {
     return RaytracingTlasRef(prev_tlas.Get());
 }
 
-void VulkanRaytracingScene::RefitInstanceBuffer() {
-    VkBuffer      current_handle = VK_NULL_HANDLE;
-    VmaAllocation alloc          = VK_NULL_HANDLE;
-
-    instance_capacity = std::max<size_t>(instances.size(), size_t(instance_capacity) * 2);
-
-    // TLAS instance buffer must be 16-byte aligned (Vulkan spec requirement)
-    // Add extra padding for alignment and use 256-byte alignment for AMD GPU compatibility
-    constexpr uint64 kInstanceBufferAlignment = 256;
-    const uint64 base_instance_buffer_size = sizeof(VkAccelerationStructureInstanceKHR) * instance_capacity;
-    const uint64 aligned_instance_buffer_size = base_instance_buffer_size + kInstanceBufferAlignment;
-
-    VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    buffer_ci.size  = aligned_instance_buffer_size;
-    buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-    buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    buffer_ci.flags       = 0;
-
-#if WITH_CUDA
-    buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
-#endif
-
-    VmaAllocationCreateInfo alloc_ci{};
-    alloc_ci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-
-    VK_CHECK_RESULT(
-        vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr)
-    );
-    instance_buffer = MoerNew(VulkanBuffer)(
+VulkanBufferRef VulkanRaytracingScene::CreateInstanceBuffer(uint capacity) {
+    // Preserve the existing 256-byte address alignment policy and padding.
+    const uint64 byte_size = uint64(capacity) * sizeof(VkAccelerationStructureInstanceKHR) + 256;
+    return MoerNew(VulkanBuffer)(
         s_tlas_instance_buffer_name,
-        BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE},
+        BufferInfo{byte_size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE},
         *m_device,
-        current_handle,
-        alloc,
-        true,
+        VulkanBufferAllocationInfo{
+            .vk_usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+            .allocation_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+            .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .needs_device_address = true,
+        },
         true
     );
+}
 
-    // Update aligned address after buffer recreation
-    UpdateAlignedInstanceBufferAddress();
+void VulkanRaytracingScene::GrowInstanceBuffer() {
+    const uint capacity = std::max<size_t>(instances.size(), size_t(instance_capacity) * 2);
+    instance_buffer = CreateInstanceBuffer(capacity);
+    instance_capacity = capacity;
 }
 
 RaytracingSizeInfos VulkanRaytracingScene::CalculateSizeInfos() {
@@ -529,100 +389,60 @@ RaytracingSizeInfos VulkanRaytracingScene::CalculateSizeInfos() {
     };
 }
 
-bool VulkanRaytracingScene::RefitTLASAndScratchBuffer() {
-    //calculate prebuild info
-
-    RaytracingSizeInfos build_sizes_info = CalculateSizeInfos();
-
-    if (build_sizes_info.result_size > size_infos.result_size ||
-        build_sizes_info.build_scratch_size > size_infos.build_scratch_size) {
-        //recreate buffers
-        VkBuffer      current_handle = VK_NULL_HANDLE;
-        VmaAllocation alloc          = VK_NULL_HANDLE;
-
-        VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-
-        buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        buffer_ci.flags       = 0;
-
-#if WITH_CUDA
-        buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
-#endif
-
-        VmaAllocationCreateInfo alloc_ci{};
-        alloc_ci.flags = 0;
-        alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-
-        if (build_sizes_info.build_scratch_size > size_infos.build_scratch_size) {
-            //scratch buffer
-            buffer_ci.size  = build_sizes_info.build_scratch_size;
-            buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            VK_CHECK_RESULT(vmaCreateBuffer(
-                m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr
-            ));
-
-            scratch_buffer = MoerNew(VulkanBuffer)(
-                s_tlas_scratch_buffer_name,
-                BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE},
-                *m_device,
-                current_handle,
-                alloc,
-                true,
-                true
-            );
-        }
-        //TLAS
-        if (build_sizes_info.result_size > size_infos.result_size) {
-            buffer_ci.size  = build_sizes_info.result_size;
-            buffer_ci.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                              VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            VK_CHECK_RESULT(vmaCreateBuffer(
-                m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr
-            ));
-
-            tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
-
-            tlas->underlying_buffer = MoerNew(VulkanBuffer)(
-                s_tlas_underlying_buffer_name,
-                BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE},
-                *m_device,
-                current_handle,
-                alloc,
-                true,
-                true
-            );
-
-            //create new TLAS
-            VkAccelerationStructureCreateInfoKHR create_info{
-                VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR
-            };
-            create_info.deviceAddress = 0; //for capture replay
-            create_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-            create_info.createFlags =
-                VK_ACCELERATION_STRUCTURE_CREATE_DESCRIPTOR_BUFFER_CAPTURE_REPLAY_BIT_EXT;
-            create_info.buffer = tlas->underlying_buffer->GetHandle();
-            create_info.offset = 0;
-            create_info.size   = tlas->underlying_buffer->GetByteSize();
-            VK_CHECK_RESULT(
-                vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &tlas->handle)
-            );
-
-            // //create previous tlas
-            // if(prev_size_infos.result_size == 0){
-
-            //     VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-            //     prev_tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
-            //     prev_tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
-            //     prev_tlas->underlying_buffer->SetName("TLAS underly buffer Pong");
-            //     create_info.buffer = prev_tlas->underlying_buffer->GetHandle();
-            //     VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &prev_tlas->handle));
-            //     prev_size_infos = build_sizes_info;
-            // }
-        }
-        size_infos = build_sizes_info;
-        return true;
+bool VulkanRaytracingScene::EnsureAccelerationStructureStorage() {
+    const RaytracingSizeInfos required = CalculateSizeInfos();
+    const bool grow_tlas = required.result_size > size_infos.result_size;
+    const bool grow_scratch = required.build_scratch_size > size_infos.build_scratch_size;
+    if (!grow_tlas && !grow_scratch) {
+        return false;
     }
-    return false;
+
+    // Publish replacements only after every allocation and native creation succeeds.
+    VulkanBufferRef next_scratch = scratch_buffer;
+    VulkanAccelRef next_tlas = tlas;
+    if (grow_scratch) {
+        next_scratch = MoerNew(VulkanBuffer)(
+            s_tlas_scratch_buffer_name,
+            BufferInfo{required.build_scratch_size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE},
+            *m_device,
+            VulkanBufferAllocationInfo{
+                .vk_usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                .needs_device_address = true,
+            },
+            true
+        );
+    }
+    if (grow_tlas) {
+        UniquePtr<VulkanAccelerationStructure> replacement = MakeUnique<VulkanAccelerationStructure>(*m_device);
+        replacement->underlying_buffer = MoerNew(VulkanBuffer)(
+            s_tlas_underlying_buffer_name,
+            BufferInfo{required.result_size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE},
+            *m_device,
+            VulkanBufferAllocationInfo{
+                .vk_usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                .needs_device_address = true,
+            },
+            true
+        );
+        const VkAccelerationStructureCreateInfoKHR create_info{
+            .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
+            .createFlags = VK_ACCELERATION_STRUCTURE_CREATE_DESCRIPTOR_BUFFER_CAPTURE_REPLAY_BIT_EXT,
+            .buffer = replacement->underlying_buffer->GetHandle(),
+            .size = replacement->underlying_buffer->GetByteSize(),
+            .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+        };
+        VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(
+            m_device->GetDevice(), &create_info, nullptr, &replacement->handle
+        ));
+        next_tlas = replacement.release();
+    }
+    scratch_buffer = std::move(next_scratch);
+    tlas = std::move(next_tlas);
+    size_infos = required;
+    return true;
 }
 
 } // namespace Moer::Render

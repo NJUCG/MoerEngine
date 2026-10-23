@@ -2,14 +2,12 @@
 
 #include "VulkanDeviceObject.h"
 #include "VulkanRHIResource.h"
-#include "misc/Alignment.h"
 #include "rhi/RHICommand.h"
 
 namespace Moer::Render {
 
-class VulkanRaytracingScene;
 struct VulkanAccelerationStructure : public RaytracingTlas {
-    VulkanAccelerationStructure(VulkanDevice& _device, VulkanRaytracingScene& _src_scene);
+    explicit VulkanAccelerationStructure(VulkanDevice& device);
     virtual ~VulkanAccelerationStructure() override;
     void    Destroy() override;
     Buffer* GetUnderlyingBuffer() const override {
@@ -19,7 +17,6 @@ struct VulkanAccelerationStructure : public RaytracingTlas {
     VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
     VulkanBufferRef            underlying_buffer = nullptr;
     VulkanDevice&              device;
-    VulkanRaytracingScene&     src_scene;
 
 private:
     friend class VulkanDescriptorHeap;
@@ -44,24 +41,21 @@ public:
     VkAccelerationStructureBuildSizesInfoKHR        build_sizes_info{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR
     };
-    uint64 blas_address;
+    uint64 blas_address = 0;
 
 private:
-    VkAccelerationStructureKHR acc;
+    VkAccelerationStructureKHR acc = VK_NULL_HANDLE;
     VulkanBufferRef            underlying_buffer;
 };
 
 class VulkanRaytracingScene final : public RaytracingScene, public VulkanDeviceObject {
 public:
     VulkanRaytracingScene(VulkanDevice* _device);
-    virtual ~VulkanRaytracingScene();
+    ~VulkanRaytracingScene() override = default;
     RaytracingInstance& AddInstance() override;
 
     void MarkModified(uint _array_idx) override;
     void FreeInstance(uint _array_idx) override;
-
-    void RegisterGeometry(RaytracingGeometryRef _geometry) override;
-    void UnregisterGeometry(RaytracingGeometryRef _geometry) override;
 
     RaytracingTlasRef GetTlas() const override;
     RaytracingTlasRef GetPrevTlas() const override;
@@ -69,64 +63,28 @@ public:
     UniquePtr<Command> UpdateScene() override;
     void               AdvanceFrame() override;
 
-public:
-    void                RefitInstanceBuffer();
-    bool                RefitTLASAndScratchBuffer();
+private:
+    VulkanBufferRef CreateInstanceBuffer(uint capacity);
+    void GrowInstanceBuffer();
+    bool EnsureAccelerationStructureStorage();
     RaytracingSizeInfos CalculateSizeInfos();
-    // temperory
-    Array<uint> temp_update_instance_ids;
-    Set<uint>   temp_modified_instance_ids;
 
-    Array<byte> temp_update_instances;
+    // Persistent scene slots and pending edits, consumed by UpdateScene.
+    Array<uint> free_instance_slots;
+    Array<uint> pending_instance_indices;
+    Set<uint> modified_instance_indices;
+    Set<uint> previous_modified_instance_indices;
 
-    Set<uint> prev_modified_instance_ids;
-
-public:
+    // Current/previous TLAS storage follows the existing AdvanceFrame boundary.
+    VulkanAccelRef tlas;
+    VulkanAccelRef prev_tlas;
+    VulkanBufferRef scratch_buffer;
+    VulkanBufferRef instance_buffer;
     RaytracingSizeInfos size_infos{};
     RaytracingSizeInfos prev_size_infos{};
-
-private:
-    VulkanAccelRef  tlas           = nullptr;
-    VulkanAccelRef  prev_tlas      = nullptr;
-    VulkanBufferRef scratch_buffer = nullptr;
-
-    VulkanBufferRef instance_buffer = nullptr;
-
-    // TLAS instance buffer device address must be 16-byte aligned (Vulkan spec)
-    // Store the aligned address to avoid recomputing
-    uint64 aligned_instance_buffer_address = 0;
-
-public:
-    // Get 16-byte aligned device address for TLAS instance data
-    uint64 GetAlignedInstanceBufferAddress() const {
-        constexpr uint64 kAlignment = 256; // Use 256-byte alignment for AMD GPU compatibility
-        if (aligned_instance_buffer_address != 0) {
-            return aligned_instance_buffer_address;
-        }
-        if (!instance_buffer)
-            return 0;
-        uint64 addr = instance_buffer->DeviceAddress();
-        return Moer::AlignUp(addr, kAlignment);
-    }
-
-    void UpdateAlignedInstanceBufferAddress() {
-        constexpr uint64 kAlignment = 256;
-        if (instance_buffer) {
-            aligned_instance_buffer_address = Moer::AlignUp(instance_buffer->DeviceAddress(), kAlignment);
-        }
-    }
-
-    Array<VkAccelerationStructureInstanceKHR> vk_instances;
-
-    Array<uint> free_instance_slots;
-
-    std::mutex                 geom_mutex;
-    UnorderedMap<uint64, uint> related_geometries;
-    bool                       b_current_full_refit = false;
-
-private:
-    uint instance_capacity      = 1000;
+    uint instance_capacity = 1000;
     uint prev_instance_capacity = 1000;
+
 };
 
 inline VulkanRaytracingGeometry* ResourceCast(RaytracingGeometry* resource) {

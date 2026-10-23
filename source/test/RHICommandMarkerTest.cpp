@@ -73,8 +73,6 @@ public:
     void AdvanceFrame() override {
         std::swap(current, previous);
     }
-    void RegisterGeometry(RaytracingGeometryRef) override {}
-    void UnregisterGeometry(RaytracingGeometryRef) override {}
     RaytracingTlasRef GetTlas() const override {
         return current;
     }

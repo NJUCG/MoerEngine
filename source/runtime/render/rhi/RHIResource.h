@@ -1037,8 +1037,6 @@ public:
     virtual UniquePtr<Command>  UpdateScene()                 = 0;
     virtual void                AdvanceFrame()                = 0;
 
-    virtual void RegisterGeometry(RaytracingGeometryRef _geom)   = 0;
-    virtual void UnregisterGeometry(RaytracingGeometryRef _geom) = 0;
 
     virtual RaytracingTlasRef GetTlas() const     = 0;
     virtual RaytracingTlasRef GetPrevTlas() const = 0;
