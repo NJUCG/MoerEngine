@@ -16,6 +16,7 @@
 #include "rhi/vulkan/VulkanDebugCallback.h"
 #include "rhi/vulkan/VulkanDescriptor.h"
 #include "rhi/vulkan/VulkanDeviceFeature.h"
+#include "rhi/vulkan/VulkanDeviceProperty.h"
 #include "rhi/vulkan/VulkanFault.h"
 #include "rhi/vulkan/VulkanMemoryAllocator.h"
 #include "rhi/vulkan/VulkanPlatform.h"

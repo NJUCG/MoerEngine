@@ -1,45 +1,46 @@
 #ifndef VULKAN_DEVICE_PROPERTY_H
 #define VULKAN_DEVICE_PROPERTY_H
 
-#include "VulkanPlatform.h"
+#include "VulkanCommon.h"
 #include "misc/STL.h"
 
+namespace Moer::Render {
 
+// A value snapshot: QueryGpuProperties detaches all temporary pNext links before returning.
 class VulkanCoreDeviceProperties {
 public:
-    VulkanCoreDeviceProperties() : core_1_0(), core_1_1(), core_1_2(), core_1_3() {}
-    VulkanCoreDeviceProperties(const VulkanCoreDeviceProperties& _other) = default;
+    static VulkanCoreDeviceProperties QueryGpuProperties(VkPhysicalDevice _gpu, uint32_t _api_version);
 
-    static VulkanCoreDeviceProperties GetGpuCoreProperties(VkPhysicalDevice _gpu, uint32_t _api_version);
-
-    // core
-    VkPhysicalDeviceProperties         core_1_0;
-    VkPhysicalDeviceVulkan11Properties core_1_1;
-    VkPhysicalDeviceVulkan12Properties core_1_2;
-    VkPhysicalDeviceVulkan13Properties core_1_3;
+    VkPhysicalDeviceProperties         core_1_0{};
+    VkPhysicalDeviceVulkan11Properties core_1_1{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
+    VkPhysicalDeviceVulkan12Properties core_1_2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+    VkPhysicalDeviceVulkan13Properties core_1_3{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
 };
 
 class VulkanOptionalDeviceProperties {
 public:
-    // descriptor buffer
+    // Descriptor binding
     VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_buffer_properties{};
     VkPhysicalDevicePushDescriptorPropertiesKHR   push_descriptor_properties{};
 
-    // ray tracing
+    // Ray tracing
     VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties{};
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR    ray_tracing_pipeline_properties{};
 
-    // mesh shader
+    // Mesh shading
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties{};
-    // memory copy indirect
+
+    // Memory operations
     VkPhysicalDeviceCopyMemoryIndirectPropertiesNV  copy_memory_indirect_properties{};
     VkPhysicalDeviceMemoryDecompressionPropertiesNV memory_decompression_properties{};
 
-    // cooperative
+    // Cooperative operations
     VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperative_matrix_properties{};
     VkPhysicalDeviceCooperativeVectorPropertiesNV  cooperative_vector_properties{};
-    Moer::Array<VkCooperativeMatrixPropertiesKHR>  cooperative_matrix_supports{};
-    Moer::Array<VkCooperativeVectorPropertiesNV>   cooperative_vector_supports{};
+    Array<VkCooperativeMatrixPropertiesKHR>        cooperative_matrix_supports{};
+    Array<VkCooperativeVectorPropertiesNV>         cooperative_vector_supports{};
 };
 
-#endif
+} // namespace Moer::Render
+
+#endif // VULKAN_DEVICE_PROPERTY_H

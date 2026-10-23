@@ -594,6 +594,17 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanDeviceFeaturesContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(VulkanDeviceFeaturesContract PROPERTIES TIMEOUT 60)
 
+# Property query chains are tested with mock Vulkan entry points, without a GPU.
+set(test_target TestVulkanDeviceProperties)
+add_executable(${test_target}
+    "VulkanDevicePropertiesTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanDeviceProperty.cpp"
+)
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanDevicePropertiesContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(VulkanDevicePropertiesContract PROPERTIES TIMEOUT 60)
+
 # Descriptor storage bookkeeping is CPU-only and is exercised on Metal hosts too.
 find_package(Threads REQUIRED)
 set(test_target TestVulkanDescriptorBufferAllocator)

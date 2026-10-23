@@ -416,7 +416,7 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
     }
 
     // Query core properties
-    m_device_info.core_properties = VulkanCoreDeviceProperties::GetGpuCoreProperties(m_gpu, _api_version);
+    m_device_info.core_properties = VulkanCoreDeviceProperties::QueryGpuProperties(m_gpu, _api_version);
     // Query advanced properties.
     {
         VkPhysicalDeviceProperties2 props2{};
