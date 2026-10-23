@@ -3,6 +3,7 @@
 #include "misc/STL.h"
 #include "rhi/RHIResource.h"
 
+#include <memory>
 #include <string>
 
 namespace Moer::Render {
@@ -40,6 +41,11 @@ private:
     static constexpr uint64 small_block_size = 64 * 1024;
     static constexpr uint64 max_block_size   = 1024 * 1024;
 
+    struct TemporaryBufferDeleter {
+        void operator()(VulkanBuffer* buffer) const noexcept;
+    };
+    using TemporaryBufferPtr = std::unique_ptr<VulkanBuffer, TemporaryBufferDeleter>;
+
     struct LinearBufferAllocator {
         struct BufferSlice {
             VulkanBuffer* buffer;
@@ -54,17 +60,16 @@ private:
         );
         BufferSlice Allocate(uint64 _size, uint _alignment);
         void        Reset();
-        void        Dispose();
 
     private:
         struct BufferBlock {
-            VulkanBuffer* buffer;
-            uint64        size_bytes;
-            uint64        used_bytes;
+            TemporaryBufferPtr buffer;
+            uint64             size_bytes;
+            uint64             used_bytes;
         };
 
-        VulkanBuffer* CreateBufferBlock(uint64 _size);
-        std::string   MakeBufferName();
+        TemporaryBufferPtr CreateBufferBlock(uint64 _size);
+        std::string        MakeBufferName();
 
         VulkanDevice&          device;
         EVkInternalBufferUsage buffer_usage;
@@ -74,8 +79,6 @@ private:
         double                 growth_factor;
     };
 
-    void ReleaseTemporaryBuffers();
-
     VulkanDevice& device;
 
     // Linear blocks are retained for reuse across safe recording resets.
@@ -83,7 +86,7 @@ private:
     LinearBufferAllocator readback_allocator;
 
     // Independent buffers are released together when this recording retires.
-    Array<VulkanBuffer*> temporary_buffers;
+    Array<TemporaryBufferPtr> temporary_buffers;
 };
 
 } // namespace Moer::Render

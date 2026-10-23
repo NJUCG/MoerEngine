@@ -84,7 +84,18 @@ MOER_TEMP_BUFFER_NOINLINE VulkanBuffer* CreateTemporaryBuffer(
             EBufferUsageFlags::CPU_VISIBLE :
             EBufferUsageFlags::NONE;
     const BufferInfo info(_size, 1, info_usage);
-    return MoerNew(VulkanBuffer)(_name, info, _device, BuildTemporaryBufferAllocationInfo(_usage), false);
+    // MoerNew's placement delete does not free storage if construction throws.
+    void* storage = Memory::Malloc(sizeof(VulkanBuffer));
+    if (!storage) {
+        throw std::bad_alloc();
+    }
+    try {
+        return MoerPlacementNew(storage)
+            VulkanBuffer(_name, info, _device, BuildTemporaryBufferAllocationInfo(_usage), false);
+    } catch (...) {
+        Memory::Free(storage);
+        throw;
+    }
 }
 
 MOER_TEMP_BUFFER_NOINLINE void DestroyTemporaryBuffer(VulkanBuffer* _buffer) {
@@ -92,6 +103,10 @@ MOER_TEMP_BUFFER_NOINLINE void DestroyTemporaryBuffer(VulkanBuffer* _buffer) {
 }
 
 #undef MOER_TEMP_BUFFER_NOINLINE
+
+void VulkanTemporaryBufferAllocator::TemporaryBufferDeleter::operator()(VulkanBuffer* buffer) const noexcept {
+    DestroyTemporaryBuffer(buffer);
+}
 
 VulkanTemporaryBufferAllocator::LinearBufferAllocator::LinearBufferAllocator(
     VulkanDevice&          _device,
@@ -118,17 +133,16 @@ VulkanTemporaryBufferAllocator::LinearBufferAllocator::Allocate(uint64 _size, ui
         auto offset = Moer::AlignUp(block.used_bytes, align_size);
         if (offset <= block.size_bytes && block.size_bytes - offset >= _size) {
             block.used_bytes = offset + _size;
-            return {block.buffer, offset};
+            return {block.buffer.get(), offset};
         }
     }
 
     const uint64 grown_capacity =
         static_cast<uint64>(std::min<double>(next_block_capacity * growth_factor, max_block_size));
     const uint64 block_capacity = std::max(grown_capacity, required_capacity);
-    auto         buffer         = CreateBufferBlock(block_capacity);
-    allocated_buffers.push_back({buffer, block_capacity, required_capacity});
+    allocated_buffers.push_back({CreateBufferBlock(block_capacity), block_capacity, required_capacity});
     next_block_capacity = block_capacity;
-    return {buffer, 0};
+    return {allocated_buffers.back().buffer.get(), 0};
 }
 
 void VulkanTemporaryBufferAllocator::LinearBufferAllocator::Reset() {
@@ -138,30 +152,22 @@ void VulkanTemporaryBufferAllocator::LinearBufferAllocator::Reset() {
     if (allocated_buffers.size() > 1) {
         // Keep a bounded staging cache for the next recording.
         uint64 total_size_bytes = 0;
-        for (auto& block : allocated_buffers) {
+        for (const auto& block : allocated_buffers) {
             total_size_bytes = std::min(total_size_bytes + block.size_bytes, max_block_size);
-            DestroyTemporaryBuffer(block.buffer);
         }
+        // Preserve the retained blocks if replacement allocation fails.
+        auto replacement = CreateBufferBlock(total_size_bytes);
         allocated_buffers.clear();
-
-        next_buffer_name_id = 0;
-
-        allocated_buffers.push_back({CreateBufferBlock(total_size_bytes), total_size_bytes, 0});
+        allocated_buffers.push_back({std::move(replacement), total_size_bytes, 0});
     }
     next_block_capacity = allocated_buffers.empty() ?
                               small_block_size :
                               std::min(allocated_buffers.front().size_bytes, max_block_size);
 }
 
-void VulkanTemporaryBufferAllocator::LinearBufferAllocator::Dispose() {
-    for (auto& block : allocated_buffers) {
-        DestroyTemporaryBuffer(block.buffer);
-    }
-    allocated_buffers.clear();
-}
-
-VulkanBuffer* VulkanTemporaryBufferAllocator::LinearBufferAllocator::CreateBufferBlock(uint64 _size) {
-    return CreateTemporaryBuffer(device, _size, MakeBufferName(), buffer_usage);
+VulkanTemporaryBufferAllocator::TemporaryBufferPtr
+VulkanTemporaryBufferAllocator::LinearBufferAllocator::CreateBufferBlock(uint64 _size) {
+    return TemporaryBufferPtr{CreateTemporaryBuffer(device, _size, MakeBufferName(), buffer_usage)};
 }
 
 std::string VulkanTemporaryBufferAllocator::LinearBufferAllocator::MakeBufferName() {
@@ -173,11 +179,7 @@ VulkanTemporaryBufferAllocator::VulkanTemporaryBufferAllocator(VulkanDevice& _de
     upload_allocator(_device, EVkInternalBufferUsage::Upload, small_block_size, 1.5),
     readback_allocator(_device, EVkInternalBufferUsage::Readback, small_block_size, 1.5) {}
 
-VulkanTemporaryBufferAllocator::~VulkanTemporaryBufferAllocator() {
-    upload_allocator.Dispose();
-    readback_allocator.Dispose();
-    ReleaseTemporaryBuffers();
-}
+VulkanTemporaryBufferAllocator::~VulkanTemporaryBufferAllocator() = default;
 
 BufferView VulkanTemporaryBufferAllocator::AllocateUploadBuffer(uint64 _size, uint _alignment) {
     _size = std::max<uint64>(_size, _alignment);
@@ -185,11 +187,11 @@ BufferView VulkanTemporaryBufferAllocator::AllocateUploadBuffer(uint64 _size, ui
         const LinearBufferAllocator::BufferSlice slice = upload_allocator.Allocate(_size, _alignment);
         return {slice.buffer, slice.byte_offset, _size, 1u};
     }
-    VulkanBuffer* buffer = CreateTemporaryBuffer(
+    TemporaryBufferPtr buffer{CreateTemporaryBuffer(
         device, _size, std::format("VkBackend::LargeUploadBuffer_{}", _size), EVkInternalBufferUsage::Upload
-    );
-    temporary_buffers.push_back(buffer);
-    return {buffer, 0, _size, 1u};
+    )};
+    temporary_buffers.push_back(std::move(buffer));
+    return {temporary_buffers.back().get(), 0, _size, 1u};
 }
 
 BufferView VulkanTemporaryBufferAllocator::AllocateReadbackBuffer(uint64 _size, uint _alignment) {
@@ -198,41 +200,35 @@ BufferView VulkanTemporaryBufferAllocator::AllocateReadbackBuffer(uint64 _size, 
         const LinearBufferAllocator::BufferSlice slice = readback_allocator.Allocate(_size, _alignment);
         return {slice.buffer, slice.byte_offset, _size, 1u};
     }
-    VulkanBuffer* buffer = CreateTemporaryBuffer(
+    TemporaryBufferPtr buffer{CreateTemporaryBuffer(
         device,
         _size,
         std::format("VkBackend::LargeReadbackBuffer_{}", _size),
         EVkInternalBufferUsage::Readback
-    );
-    temporary_buffers.push_back(buffer);
-
-    return {buffer, 0, _size, 1u};
+    )};
+    temporary_buffers.push_back(std::move(buffer));
+    return {temporary_buffers.back().get(), 0, _size, 1u};
 }
 
 BufferView VulkanTemporaryBufferAllocator::AllocateScratch(uint64 _size) {
-    VulkanBuffer* buffer =
-        CreateTemporaryBuffer(device, _size, "VkBackend::Scratch", EVkInternalBufferUsage::Scratch);
-    temporary_buffers.push_back(buffer);
-    return {buffer, 0, buffer->GetNumElement(), 1u};
+    TemporaryBufferPtr buffer{
+        CreateTemporaryBuffer(device, _size, "VkBackend::Scratch", EVkInternalBufferUsage::Scratch)
+    };
+    temporary_buffers.push_back(std::move(buffer));
+    return {temporary_buffers.back().get(), 0, _size, 1u};
 }
 
 BufferView VulkanTemporaryBufferAllocator::AllocateShaderBuffer(uint64 _size) {
-    VulkanBuffer* buffer =
-        CreateTemporaryBuffer(device, _size, "VkBackend::ShaderBuffer", EVkInternalBufferUsage::ShaderBuffer);
-    temporary_buffers.push_back(buffer);
-    return {buffer, 0, buffer->GetNumElement(), 1u};
+    TemporaryBufferPtr buffer{
+        CreateTemporaryBuffer(device, _size, "VkBackend::ShaderBuffer", EVkInternalBufferUsage::ShaderBuffer)
+    };
+    temporary_buffers.push_back(std::move(buffer));
+    return {temporary_buffers.back().get(), 0, _size, 1u};
 }
 
 void VulkanTemporaryBufferAllocator::Reset() {
     upload_allocator.Reset();
     readback_allocator.Reset();
-    ReleaseTemporaryBuffers();
-}
-
-void VulkanTemporaryBufferAllocator::ReleaseTemporaryBuffers() {
-    for (VulkanBuffer* buffer : temporary_buffers) {
-        DestroyTemporaryBuffer(buffer);
-    }
     temporary_buffers.clear();
 }
 

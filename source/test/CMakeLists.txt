@@ -633,6 +633,19 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanDescriptorBufferAllocatorContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(VulkanDescriptorBufferAllocatorContract PROPERTIES TIMEOUT 30)
 
+# Exercise the real temporary allocator against counted, failing buffer creation.
+# Keep Render out of this target so test doubles never replace runtime symbols.
+set(test_target TestVulkanTemporaryBufferAllocator)
+add_executable(${test_target}
+    "VulkanTemporaryBufferAllocatorTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanTemporaryBufferAllocator.cpp"
+)
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
+target_compile_definitions(${test_target} PRIVATE RENDER_MODULE_SHARED_LIB)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanTemporaryBufferAllocatorContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(VulkanTemporaryBufferAllocatorContract PROPERTIES TIMEOUT 30)
+
 # Vulkan integration seam for ordered multi-primary submission and the
 # recoverable worker-failure path. It is intentionally run explicitly because
 # it requires a Vulkan-capable machine; the CPU-only contracts above remain in
