@@ -1,4 +1,5 @@
 #include "VulkanRaytracingResource.h"
+#include "VulkanRaytracingInstance.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanEnumTranslator.h"
@@ -229,33 +230,14 @@ VulkanRaytracingScene::VulkanRaytracingScene(VulkanDevice* _device) :
 VulkanRaytracingScene::~VulkanRaytracingScene() {}
 
 RaytracingInstance& VulkanRaytracingScene::AddInstance() {
-    // uint idx = instances.size();
-    uint idx = 0;
-    if (free_instance_slots.empty()) {
-        idx = instance_offset++;
-    } else {
-        idx = free_instance_slots.back();
-        free_instance_slots.pop_back();
-    }
-    RaytracingInstance instance{.array_idx = idx - 1, .instance_id = idx - 1};
-    VkAccelerationStructureInstanceKHR vk_instance{
-
-        };
-    instances.emplace_back(instance);
-    vk_instances.emplace_back(vk_instance);
-    MarkModified(idx - 1);
-
-    if (idx >= instance_capacity) {
-        //resize the buffer
-    }
-    return instances.back();
+    auto& instance = VulkanRaytracingDetail::AddInstance(instances, vk_instances, free_instance_slots);
+    MarkModified(instance.array_idx);
+    return instance;
 }
 
-void VulkanRaytracingScene::FreeInstance(uint _array_idx) {
-    instances[_array_idx].visible_mask = RTVM_NONE;
-    MarkModified(_array_idx); //Is not correct, because maybe the instance has invalid BLAS
-    free_instance_slots.push_back(_array_idx + 1);
-    //TODO: use default blas as place holder for invalid rtgeometry
+void VulkanRaytracingScene::FreeInstance(uint array_index) {
+    VulkanRaytracingDetail::FreeInstance(instances, free_instance_slots, array_index);
+    MarkModified(array_index);
 }
 
 void VulkanRaytracingScene::MarkModified(uint _array_idx) {
@@ -362,7 +344,16 @@ UniquePtr<Command> VulkanRaytracingScene::UpdateScene() {
         //update cpu size vk_instance datas
         for (const auto& idx : temp_update_instance_ids) {
             VulkanRaytracingGeometry* geometry = ResourceCast(instances[idx].geom);
-            assert(geometry && "Invalid geometry");
+            if (!geometry) {
+                if (instances[idx].visible_mask != RTVM_NONE) {
+                    throw std::invalid_argument("Visible ray tracing instance has no geometry");
+                }
+                vk_instances[idx] = {};
+                const size_t update_index = &idx - temp_update_instance_ids.data();
+                std::memcpy(temp_update_instances.data() + update_index * sizeof(VkAccelerationStructureInstanceKHR),
+                            &vk_instances[idx], sizeof(VkAccelerationStructureInstanceKHR));
+                continue;
+            }
             const Array<RaytracingSegment>&     segments       = geometry->GetInfo().segments;
             VkAccelerationStructureInstanceKHR& vk_instance    = vk_instances[idx];
             const RaytracingInstance&           instance       = instances[idx];
@@ -446,7 +437,7 @@ void VulkanRaytracingScene::RefitInstanceBuffer() {
     VkBuffer      current_handle = VK_NULL_HANDLE;
     VmaAllocation alloc          = VK_NULL_HANDLE;
 
-    instance_capacity *= exponent;
+    instance_capacity = std::max<size_t>(instances.size(), size_t(instance_capacity) * 2);
 
     // TLAS instance buffer must be 16-byte aligned (Vulkan spec requirement)
     // Add extra padding for alignment and use 256-byte alignment for AMD GPU compatibility

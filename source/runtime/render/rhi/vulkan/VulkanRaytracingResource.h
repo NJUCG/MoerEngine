@@ -127,8 +127,6 @@ public:
 private:
     uint instance_capacity      = 1000;
     uint prev_instance_capacity = 1000;
-    uint exponent               = 2;
-    uint instance_offset        = 1;
 };
 
 inline VulkanRaytracingGeometry* ResourceCast(RaytracingGeometry* resource) {

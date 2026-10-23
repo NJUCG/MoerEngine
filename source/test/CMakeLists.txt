@@ -581,6 +581,12 @@ target_compile_definitions(${test_target} PRIVATE NDEBUG)
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanFailureContract COMMAND $<TARGET_FILE:${test_target}>)
 
+set(test_target TestVulkanRaytracingInstance)
+add_executable(${test_target} "VulkanRaytracingInstanceTest.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders Moer::Render)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanRaytracingInstanceContract COMMAND $<TARGET_FILE:${test_target}>)
+
 set(test_target TestVulkanHeaderContract)
 add_executable(${test_target} "VulkanHeaderContractTest.cpp")
 # Public Render headers contain inline code that references Render symbols.
