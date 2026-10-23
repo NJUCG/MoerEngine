@@ -8,7 +8,6 @@
 #include "rhi/RHIResource.h"
 
 #include <cstdint>
-#include <memory>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -77,7 +76,7 @@ public:
     // Pipeline and shader arguments.
     void BindPipeline(const PipelineHandle& _pipeline_handle);
     void BindShaderArguments(const PipelineHandle& _pipeline_handle, const ArrayArguments& _arguments);
-    void SetDescriptorBufferLease(std::shared_ptr<VulkanDescriptorBufferLeaseState> _lease) {
+    void SetDescriptorBufferLease(VulkanDescriptorBufferLease _lease) {
         descriptor_buffer_lease = std::move(_lease);
     }
 
@@ -202,10 +201,10 @@ public:
     void InsertLabel(std::string_view _label, float4 _color);
 
 private:
-    VkCommandBuffer                                   command_buffer{VK_NULL_HANDLE};
-    VulkanCommandPool&                                command_pool;
-    VkCommandBufferLevel                              level;
-    std::shared_ptr<VulkanDescriptorBufferLeaseState> descriptor_buffer_lease;
+    VkCommandBuffer             command_buffer{VK_NULL_HANDLE};
+    VulkanCommandPool&          command_pool;
+    VkCommandBufferLevel        level;
+    VulkanDescriptorBufferLease descriptor_buffer_lease;
 };
 
 } // namespace Moer::Render

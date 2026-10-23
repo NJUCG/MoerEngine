@@ -347,36 +347,15 @@ struct VulkanBatchCompletionSettlement {
 // partially published completion sequence behind.
 struct VulkanSubmitCompletionBatch {
     VulkanSubmitCompletionBatch(
-        VulkanOperationResult                      _outcome,
-        VulkanOperationContext                     _context,
-        bool                                       _gpu_submitted,
-        bool                                       _owns_queue_timeline,
-        CmdSubmit&&                                _submit,
-        VulkanCommandContextBatch&&                _command_contexts,
-        std::optional<VulkanDescriptorBufferLease>&& _descriptor_lease,
-        Array<RHIResource*>&&                      _deferred_releases,
-        VulkanBatchCompletionTicket                _batch_completion = {}
-    ) noexcept :
-        outcome(_outcome),
-        context(_context),
-        gpu_submitted(_gpu_submitted),
-        owns_queue_timeline(_owns_queue_timeline),
-        submit(std::move(_submit)),
-        command_contexts(std::move(_command_contexts)),
-        descriptor_lease(std::move(_descriptor_lease)),
-        deferred_releases(std::move(_deferred_releases)),
-        batch_completion(std::move(_batch_completion)) {}
-
-    VulkanSubmitCompletionBatch(
-        VulkanOperationResult       _outcome,
-        VulkanOperationContext      _context,
-        bool                        _gpu_submitted,
-        bool                        _owns_queue_timeline,
-        CmdSubmit&&                 _submit,
-        VulkanCommandContextBatch&& _command_contexts,
+        VulkanOperationResult         _outcome,
+        VulkanOperationContext        _context,
+        bool                          _gpu_submitted,
+        bool                          _owns_queue_timeline,
+        CmdSubmit&&                   _submit,
+        VulkanCommandContextBatch&&   _command_contexts,
         VulkanDescriptorBufferLease&& _descriptor_lease,
-        Array<RHIResource*>&&       _deferred_releases,
-        VulkanBatchCompletionTicket _batch_completion = {}
+        Array<RHIResource*>&&         _deferred_releases,
+        VulkanBatchCompletionTicket   _batch_completion = {}
     ) noexcept :
         outcome(_outcome),
         context(_context),
@@ -399,7 +378,7 @@ struct VulkanSubmitCompletionBatch {
     bool                                     owns_queue_timeline{false};
     CmdSubmit                                submit;
     VulkanCommandContextBatch                command_contexts;
-    std::optional<VulkanDescriptorBufferLease> descriptor_lease;
+    VulkanDescriptorBufferLease              descriptor_lease;
     Array<RHIResource*>                      deferred_releases;
     VulkanBatchCompletionTicket              batch_completion{};
 };
@@ -722,7 +701,7 @@ private:
         Array<VkSemaphoreSubmitInfo>             native_waits;
         Array<VkSemaphoreSubmitInfo>             native_signals;
         VulkanCommandContextBatch                command_contexts;
-        std::optional<VulkanDescriptorBufferLease> descriptor_lease;
+        VulkanDescriptorBufferLease            descriptor_lease;
         Array<RHIResource*>                     deferred_releases;
         VulkanBatchCompletionTicket             batch_completion{};
         VulkanPresentationSourceStateProgram    presentation_source_program;

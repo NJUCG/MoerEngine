@@ -83,6 +83,26 @@ void CheckFragmentationAndFailurePreserveState() {
     allocator.Release(*large);
 }
 
+void CheckSharedLeaseHandoff() {
+    Allocator allocator(64 * KiB, 64 * KiB, 32);
+    Moer::Render::VulkanDescriptorBufferLease recording;
+    Check(!recording, "default lease is not empty");
+    recording = allocator.CreateLease();
+    auto recorder = recording;
+    Check(allocator.ReserveRange(*recorder, 32) == 0, "recorder allocation failed");
+
+    auto completion = std::move(recording);
+    Check(!recording, "handoff retained the local retirement handle");
+    auto waiting = allocator.CreateLease();
+    Check(!allocator.ReserveRange(*waiting, 32), "handoff released storage before completion");
+
+    allocator.Release(*completion);
+    completion.reset();
+    CheckRejected([&] { allocator.ReserveRange(*recorder, 32); });
+    Check(allocator.ReserveRange(*waiting, 32) == 0, "completed storage was not reused");
+    allocator.Release(*waiting);
+}
+
 void CheckCheckpointAndWrittenRanges() {
     Allocator  allocator(6 * MiB, 64 * KiB, 32);
     auto       lease            = allocator.CreateLease();
@@ -327,6 +347,7 @@ int main() {
     try {
         CheckLazyAllocationAndRetirement();
         CheckFragmentationAndFailurePreserveState();
+        CheckSharedLeaseHandoff();
         CheckCheckpointAndWrittenRanges();
         CheckConcurrentRecording();
         CheckRandomizedLifetimes();

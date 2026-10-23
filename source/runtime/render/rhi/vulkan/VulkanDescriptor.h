@@ -18,13 +18,10 @@ class BufferView;
 struct TextureView;
 struct Sampler;
 
-// Recorders share allocation state; the completion batch owns retirement.
-struct VulkanDescriptorBufferLease {
-    std::shared_ptr<VulkanDescriptorBufferLeaseState> state;
-
-    bool IsValid() const {
-        return state != nullptr;
-    }
+// Non-owning location in the CPU cache. The resource must outlive every copy.
+struct VulkanCachedDescriptor {
+    VkDescriptorType type       = VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    uint             slot_index = 0;
 };
 
 class VulkanDescriptorHeap {
@@ -41,21 +38,21 @@ public:
     uint            GetDescriptorSize(VkDescriptorType _type) const;
     VkDeviceAddress GetDescriptorBufferAddress() const;
 
-    // GetOrCreate returns a byte offset into the CPU cache. Resource objects
-    // retain slot indices for release; a byte offset is not a slot index.
-    uint GetOrCreateBufferDescriptorOffset(
+    // Resource objects retain slot indices for release. Cache byte offsets
+    // stay internal; GPU destination offsets are supplied only when copying.
+    VulkanCachedDescriptor GetOrCreateBufferDescriptor(
         const BufferView& _buffer,
         VkDescriptorType  _type,
         VkFormat          _format = VK_FORMAT_UNDEFINED
     );
-    uint GetOrCreateImageDescriptorOffset(
+    VulkanCachedDescriptor GetOrCreateImageDescriptor(
         const TextureView* _image,
         VkImageLayout      _layout,
         VkDescriptorType   _descriptor_type = VK_DESCRIPTOR_TYPE_MAX_ENUM
     );
-    uint
-    GetOrCreateAccelerationStructureDescriptorOffset(VulkanAccelerationStructure* _acceleration_structure);
-    uint GetSamplerDescriptorOffset(Sampler _sampler) const;
+    VulkanCachedDescriptor
+    GetOrCreateAccelerationStructureDescriptor(VulkanAccelerationStructure* _acceleration_structure);
+    VulkanCachedDescriptor GetSamplerDescriptor(Sampler _sampler) const;
 
     void FreeBufferDescriptorSlot(uint _slot_index);
     void FreeImageDescriptorSlot(uint _slot_index);
@@ -63,13 +60,8 @@ public:
 
     // Copy one cached descriptor to bindless update data or to a reserved GPU
     // descriptor-buffer range. The owning resource must remain alive.
-    void CopyBufferDescriptorToMemory(uint64 _source_byte_offset, std::span<byte> _destination);
-    void CopyImageDescriptorToMemory(uint64 _source_byte_offset, std::span<byte> _destination);
-    void CopyBufferDescriptorToBuffer(uint64 _source_byte_offset, uint64 _destination_byte_offset);
-    void CopyImageDescriptorToBuffer(uint64 _source_byte_offset, uint64 _destination_byte_offset);
-    void CopySamplerDescriptorToBuffer(uint64 _source_byte_offset, uint64 _destination_byte_offset);
-    void
-    CopyAccelerationStructureDescriptorToBuffer(uint64 _source_byte_offset, uint64 _destination_byte_offset);
+    void CopyDescriptorToMemory(VulkanCachedDescriptor _descriptor, std::span<byte> _destination);
+    void CopyDescriptorToBuffer(VulkanCachedDescriptor _descriptor, uint64 _destination_byte_offset);
 
     // Creation reserves no storage. Flush after recorders join; recycle only
     // after GPU completion or after all referencing commands are discarded.
@@ -79,61 +71,49 @@ public:
 
     // Reserve an immutable range for one pipeline bind. The caller supplies a
     // size aligned for set offsets; concurrent recorders never share a range.
-    std::optional<uint64> ReserveDescriptorRange(
-        const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease,
-        uint64                                                   _byte_size
-    );
-    uint64 GetUsedDescriptorBytes(const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease) const;
+    std::optional<uint64>
+           ReserveDescriptorRange(const VulkanDescriptorBufferLease& _lease, uint64 _byte_size);
+    uint64 GetUsedDescriptorBytes(const VulkanDescriptorBufferLease& _lease) const;
 
     VulkanDescriptorAllocationCheckpoint
-    CreateDescriptorCheckpoint(const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease) const;
+    CreateDescriptorCheckpoint(const VulkanDescriptorBufferLease& _lease) const;
 
     // All recorders using this lease must have joined and discarded their work
     // before restoring allocation state for serial fallback.
     void RewindDescriptorWrites(
-        const std::shared_ptr<VulkanDescriptorBufferLeaseState>& _lease,
-        const VulkanDescriptorAllocationCheckpoint&              _checkpoint
+        const VulkanDescriptorBufferLease&          _lease,
+        const VulkanDescriptorAllocationCheckpoint& _checkpoint
     );
 
 private:
-    void InitializeDescriptorCaches();
+    // Fixed-size CPU slots. All mutations are protected by cache_mutex.
+    struct DescriptorCache {
+        explicit DescriptorCache(uint _slot_stride);
+        uint AllocateSlot();
+
+        uint        slot_stride;
+        Array<byte> bytes;
+        Array<uint> free_slots;
+        uint        next_slot{0};
+    };
+
     void InitializeSamplerDescriptors();
     void CreateDescriptorBuffer();
     void MapDescriptorBuffer();
 
     // Call with cache_mutex held; views never escape the descriptor copy.
-    std::span<const byte> GetCachedBufferDescriptor(uint64 _byte_offset) const;
-    std::span<const byte> GetCachedImageDescriptor(uint64 _byte_offset) const;
-    void                  CopyDescriptorToBuffer(std::span<const byte> _descriptor, uint64 _byte_offset);
+    std::span<const byte> GetCachedDescriptor(VulkanCachedDescriptor _descriptor) const;
 
     VulkanDevice* m_device;
 
-    // Actual descriptor sizes returned by the device.
-    uint storage_buffer_descriptor_size;
-    uint uniform_buffer_descriptor_size;
-    uint storage_texel_buffer_descriptor_size;
-    uint uniform_texel_buffer_descriptor_size;
-    uint sampled_image_descriptor_size;
-    uint storage_image_descriptor_size;
-    uint sampler_descriptor_size;
-    uint acceleration_structure_descriptor_size;
-
-    // CPU caches use fixed-size slots; the slot stride may exceed the size of
-    // a particular descriptor type. Samplers precede images in their cache.
-    uint                    buffer_cache_slot_stride;
-    uint                    image_cache_slot_stride;
-    uint64                  image_cache_base_byte_offset;
-    Array<byte>             buffer_descriptor_cache;
-    Array<byte>             sampler_and_image_descriptor_cache;
-    Array<byte>             acceleration_structure_descriptor_cache;
+    // Resource caches have reusable slots; immutable samplers need no allocator.
+    // Buffer/image slots can contain different descriptor types and sizes.
+    DescriptorCache         buffer_cache;
     Array<VkDescriptorType> buffer_descriptor_types;
+    DescriptorCache         image_cache;
     Array<VkDescriptorType> image_descriptor_types;
-    Array<uint>             free_buffer_slots;
-    Array<uint>             free_image_slots;
-    Array<uint>             free_acceleration_structure_slots;
-    uint64                  next_buffer_cache_byte_offset{0};
-    uint64                  next_image_cache_byte_offset{0};
-    uint64                  next_acceleration_structure_cache_byte_offset{0};
+    DescriptorCache         acceleration_structure_cache;
+    Array<byte>             sampler_descriptors;
     std::mutex              cache_mutex;
 
     // Owned GPU storage; destroyed before the device's VMA allocator.

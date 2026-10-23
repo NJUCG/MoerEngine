@@ -72,7 +72,9 @@ private:
     std::mutex         free_ranges_mutex;
 };
 
-using VulkanDescriptorBufferLeaseState     = VulkanDescriptorBufferAllocator::LeaseState;
+// A null handle means no lease. Sharing keeps bookkeeping alive; only submission
+// completion (or discarded work) may explicitly release its GPU storage.
+using VulkanDescriptorBufferLease          = std::shared_ptr<VulkanDescriptorBufferAllocator::LeaseState>;
 using VulkanDescriptorAllocationCheckpoint = VulkanDescriptorBufferAllocator::Checkpoint;
 
 } // namespace Moer::Render

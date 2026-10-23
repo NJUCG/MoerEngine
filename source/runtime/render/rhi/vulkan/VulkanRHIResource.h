@@ -768,7 +768,7 @@ public:
 private:
     friend class VulkanDescriptorHeap;
 
-    UnorderedMap<VulkanTextureDescriptorKey, uint64, VulkanTextureDescriptorKey::Hasher>
+    UnorderedMap<VulkanTextureDescriptorKey, uint, VulkanTextureDescriptorKey::Hasher>
         m_descriptor_cache_slots;
 
     void Destroy() override;

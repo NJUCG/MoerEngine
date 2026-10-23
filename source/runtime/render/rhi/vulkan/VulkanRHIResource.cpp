@@ -1700,21 +1700,21 @@ void VulkanPipelineState::InitPipelineLayout(
                                     view = view.Slice(_cmd.array_layer, _cmd.array_count);
                                 }
 
-                                uint source_descriptor_byte_offset;
+                                VulkanCachedDescriptor descriptor;
                                 if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
                                     // view.aspect_flags = ETextureAspectFlags::COLOR;
-                                    source_descriptor_byte_offset = heap.GetOrCreateImageDescriptorOffset(
+                                    descriptor = heap.GetOrCreateImageDescriptor(
                                         &view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
                                     );
 
                                 } else {
-                                    source_descriptor_byte_offset = heap.GetOrCreateImageDescriptorOffset(
+                                    descriptor = heap.GetOrCreateImageDescriptor(
                                         &view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                     );
                                 }
 
-                                heap.CopyImageDescriptorToMemory(
-                                    source_descriptor_byte_offset,
+                                heap.CopyDescriptorToMemory(
+                                    descriptor,
                                     std::span<byte>(texture_dat).subspan(
                                         texture_cnt * texture_handle_stride, texture_handle_stride
                                     )
@@ -1737,12 +1737,12 @@ void VulkanPipelineState::InitPipelineLayout(
                                 if(_cmd.format != PF_UNDEFINED){
                                     LOG_WARNING("Bindless buffer with format is not supported yet, current buffer: {}", _cmd.buffer->GetName());
                                 }
-                                uint source_descriptor_byte_offset = heap.GetOrCreateBufferDescriptorOffset(
+                                VulkanCachedDescriptor descriptor = heap.GetOrCreateBufferDescriptor(
                                     vk_buffer->GetView(_cmd.format), type
                                 );
                                 
-                                heap.CopyBufferDescriptorToMemory(
-                                    source_descriptor_byte_offset,
+                                heap.CopyDescriptorToMemory(
+                                    descriptor,
                                     std::span<byte>(buffer_dat).subspan(
                                         buffer_cnt * buffer_handle_stride, buffer_handle_stride
                                     )

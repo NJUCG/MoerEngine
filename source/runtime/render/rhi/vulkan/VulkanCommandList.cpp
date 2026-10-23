@@ -228,8 +228,8 @@ void WriteResourceBindingDescriptors(
             if (_binding.descriptor_count != 1) {
                 throw std::runtime_error("sampler descriptor arrays are not supported by ArrayArguments");
             }
-            _heap.CopySamplerDescriptorToBuffer(
-                _heap.GetSamplerDescriptorOffset(std::get<Sampler>(_argument)), _binding_byte_offset
+            _heap.CopyDescriptorToBuffer(
+                _heap.GetSamplerDescriptor(std::get<Sampler>(_argument)), _binding_byte_offset
             );
             break;
         }
@@ -245,9 +245,9 @@ void WriteResourceBindingDescriptors(
                 [&](const TextureView& texture, uint64 destination_byte_offset) {
                     const VkImageLayout image_layout =
                         is_storage ? VK_IMAGE_LAYOUT_GENERAL : GetSampledImageLayout(texture);
-                    const uint64 source_byte_offset =
-                        _heap.GetOrCreateImageDescriptorOffset(&texture, image_layout, descriptor_type);
-                    _heap.CopyImageDescriptorToBuffer(source_byte_offset, destination_byte_offset);
+                    const VulkanCachedDescriptor descriptor =
+                        _heap.GetOrCreateImageDescriptor(&texture, image_layout, descriptor_type);
+                    _heap.CopyDescriptorToBuffer(descriptor, destination_byte_offset);
                 }
             );
             break;
@@ -263,9 +263,9 @@ void WriteResourceBindingDescriptors(
                 _binding_byte_offset,
                 "buffer",
                 [&](const BufferView& buffer, uint64 destination_byte_offset) {
-                    const uint64 source_byte_offset =
-                        _heap.GetOrCreateBufferDescriptorOffset(buffer, descriptor_type, _buffer_format);
-                    _heap.CopyBufferDescriptorToBuffer(source_byte_offset, destination_byte_offset);
+                    const VulkanCachedDescriptor descriptor =
+                        _heap.GetOrCreateBufferDescriptor(buffer, descriptor_type, _buffer_format);
+                    _heap.CopyDescriptorToBuffer(descriptor, destination_byte_offset);
                 }
             );
             break;
@@ -278,8 +278,8 @@ void WriteResourceBindingDescriptors(
             }
             VulkanAccelerationStructure* acceleration_structure =
                 ResourceCast(std::get<RaytracingTlasRef>(_argument).Get());
-            _heap.CopyAccelerationStructureDescriptorToBuffer(
-                _heap.GetOrCreateAccelerationStructureDescriptorOffset(acceleration_structure),
+            _heap.CopyDescriptorToBuffer(
+                _heap.GetOrCreateAccelerationStructureDescriptor(acceleration_structure),
                 _binding_byte_offset
             );
             break;
