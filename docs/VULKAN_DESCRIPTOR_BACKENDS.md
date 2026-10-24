@@ -10,6 +10,10 @@ GPU 执行晚于 CPU 录制。每次 draw/dispatch 使用的描述符、索引�
 
 设备默认依次选择 `VK_EXT_descriptor_heap`、`VK_EXT_descriptor_buffer`、传统 descriptor sets。Heap 的 binding-mapping 路径还要求启用 maintenance5；本实现不要求 shader 改成 untyped pointers。Push descriptors 是独立能力，不再是 descriptor buffer 可用的前提。
 
+设备后端在初始化时由 `ResolveVulkanDescriptorMode` 统一决定，输入为设备能力和可选的显式请求。`ReadDescriptorModeOverride` 只读取并解析环境变量：未设置或 `auto` 表示没有请求，此时才采用默认优先级；指定后端则必须通过可用性检查，否则报错。请求不作为额外设备状态保存，设备只保存最终选择。这个入口用于在同一设备上验证和比较不同后端，不改变各 pipeline 根据自身限制回退的规则。
+
+Push descriptors 的覆盖入口只允许禁用。`ReadPushDescriptorDisableOverride` 读取禁用请求，初始化时将设备支持与请求合并为最终可用状态：`设备支持 && !请求禁用`。环境变量只有值为 `0` 时禁用，其他值及未设置均沿用设备能力，不能强行启用不支持的功能。
+
 | Pipeline 条件 | 原生实现 |
 |---|---|
 | 设备选择 heap，且 pipeline 没有回退限制 | Native resource/sampler heap，shader set/binding 映射到 heap 偏移，以 push data 传参数和表基址 |

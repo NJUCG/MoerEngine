@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <stdexcept>
 
 namespace Moer::Render {
 
@@ -21,7 +23,20 @@ struct VulkanDescriptorCapabilities {
     uint32_t max_push_data        = 0;
 };
 
-constexpr VulkanDescriptorMode SelectVulkanDescriptorMode(const VulkanDescriptorCapabilities& caps) {
+// No request uses the automatic preference; an explicit request must be available.
+constexpr VulkanDescriptorMode ResolveVulkanDescriptorMode(
+    const VulkanDescriptorCapabilities& caps,
+    std::optional<VulkanDescriptorMode> requested = std::nullopt
+) {
+    if (requested) {
+        if (*requested == VulkanDescriptorMode::Sets ||
+            (*requested == VulkanDescriptorMode::Buffer && caps.buffer) ||
+            (*requested == VulkanDescriptorMode::Heap && caps.heap)) {
+            return *requested;
+        }
+        throw std::runtime_error("Requested Vulkan descriptor backend is unavailable or invalid");
+    }
+
     return caps.heap   ? VulkanDescriptorMode::Heap :
            caps.buffer ? VulkanDescriptorMode::Buffer :
                          VulkanDescriptorMode::Sets;

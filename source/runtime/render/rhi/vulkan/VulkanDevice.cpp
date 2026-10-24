@@ -703,13 +703,42 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
     LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
 }
 
+namespace {
+
+// Override the device preference for backend validation and comparison on the same GPU.
+std::optional<VulkanDescriptorMode> ReadDescriptorModeOverride() {
+    const char* mode = std::getenv("MOER_VULKAN_DESCRIPTORS");
+    if (!mode)
+        return std::nullopt;
+
+    const std::string_view requested(mode);
+    if (requested == "auto")
+        return std::nullopt;
+    if (requested == "sets")
+        return VulkanDescriptorMode::Sets;
+    if (requested == "buffer")
+        return VulkanDescriptorMode::Buffer;
+    if (requested == "heap")
+        return VulkanDescriptorMode::Heap;
+    throw std::runtime_error("Requested Vulkan descriptor backend is unavailable or invalid");
+}
+
+// Only an explicit "0" requests disabling push descriptors for comparison.
+bool ReadPushDescriptorDisableOverride() {
+    const char* push = std::getenv("MOER_VULKAN_PUSH_DESCRIPTORS");
+    return push && std::string_view(push) == "0";
+}
+
+} // namespace
+
 void VulkanDevice::CreateDescriptorHeap() {
     const auto& ext   = GetOptionalExtensions();
     const auto& props = GetOptionalProperties();
     descriptor_caps   = {
           .heap   = ext.m_has_ext_descriptor_heap,
           .buffer = ext.m_has_ext_descriptor_buffer,
-          .push   = HasDeviceExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
+          .push =
+            HasDeviceExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) && !ReadPushDescriptorDisableOverride(),
           .buffer_push =
             ext.m_has_descriptor_buffer_push && props.descriptor_buffer_properties.bufferlessPushDescriptors,
           .max_push_descriptors = props.push_descriptor_properties.maxPushDescriptors,
@@ -734,22 +763,7 @@ void VulkanDevice::CreateDescriptorHeap() {
         descriptor_caps.heap =
             fn.write_resources && fn.write_samplers && fn.bind_resources && fn.bind_samplers && fn.push_data;
     }
-    descriptor_mode = SelectVulkanDescriptorMode(descriptor_caps);
-    if (const char* mode = std::getenv("MOER_VULKAN_DESCRIPTORS")) {
-        const std::string_view requested(mode);
-        if (requested == "sets")
-            descriptor_mode = VulkanDescriptorMode::Sets;
-        else if (requested == "buffer" && descriptor_caps.buffer)
-            descriptor_mode = VulkanDescriptorMode::Buffer;
-        else if (requested == "heap" && descriptor_caps.heap)
-            descriptor_mode = VulkanDescriptorMode::Heap;
-        else if (requested != "auto")
-            throw std::runtime_error("Requested Vulkan descriptor backend is unavailable or invalid");
-    }
-    if (const char* push = std::getenv("MOER_VULKAN_PUSH_DESCRIPTORS");
-        push && std::string_view(push) == "0") {
-        descriptor_caps.push = false;
-    }
+    descriptor_mode = ResolveVulkanDescriptorMode(descriptor_caps, ReadDescriptorModeOverride());
     LOG_INFO(
         "Vulkan descriptors: backend={}, push={}, buffer_push={}",
         VulkanDescriptorModeName(descriptor_mode),
