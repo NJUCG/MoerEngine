@@ -236,48 +236,54 @@ void InitializeDescriptorBufferBindingTemplate(
 
     auto& descriptor_buffers = binding_template.descriptor_buffers;
     descriptor_buffers.clear();
-    auto allocate_buffer_index = [&](uint& buffer_index) {
-        if (buffer_index == invalid_buffer_index) {
-            buffer_index = static_cast<uint>(descriptor_buffers.size());
-            descriptor_buffers.emplace_back();
-        }
-        return buffer_index;
-    };
+
+    constexpr VkBufferUsageFlags resource_usage =
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
+    constexpr VkBufferUsageFlags resource_sampler_usage =
+        resource_usage | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
+    const auto ordinary_buffer_address = device.GetGlobalDescriptorHeap().GetDescriptorBufferAddress();
+    const auto bindless_image_offset   = GetBindlessTextureDescriptorOffset(device);
+
+    auto get_or_create_buffer_index =
+        [&](uint& buffer_index, VkDeviceAddress address, VkBufferUsageFlags usage) {
+            if (buffer_index == invalid_buffer_index) {
+                buffer_index = static_cast<uint>(descriptor_buffers.size());
+                descriptor_buffers.push_back({
+                    .sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
+                    .address = address,
+                    .usage   = usage,
+                });
+            }
+            return buffer_index;
+        };
 
     binding_template.resource_descriptor_allocation_size = 0;
     for (auto& [set_index, set_binding] : binding_template.set_bindings) {
         if (set_binding.push)
             continue;
-        // Ordinary sets share one buffer; bindless images and samplers share another.
-        auto& group_index =
-            std::holds_alternative<VulkanResourceSetBindings>(set_binding.resource_bindings) ?
-                ordinary_buffer_index :
-            std::holds_alternative<VulkanBindlessBufferBinding>(set_binding.resource_bindings) ?
-                bindless_buffer_index :
-                bindless_image_sampler_index;
-        set_binding.buffer_index = allocate_buffer_index(group_index);
-        auto& descriptor_buffer  = descriptor_buffers[set_binding.buffer_index];
         std::visit(
             [&](const auto& resource_bindings) {
-                using ResourceBindings  = std::decay_t<decltype(resource_bindings)>;
-                descriptor_buffer.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT;
-                descriptor_buffer.usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                                          VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
-
+                using ResourceBindings = std::decay_t<decltype(resource_bindings)>;
                 if constexpr (std::is_same_v<ResourceBindings, VulkanResourceSetBindings>) {
+                    set_binding.buffer_index = get_or_create_buffer_index(
+                        ordinary_buffer_index, ordinary_buffer_address, resource_sampler_usage
+                    );
                     set_binding.byte_offset = binding_template.resource_descriptor_allocation_size;
                     binding_template.resource_descriptor_allocation_size += resource_bindings.allocation_size;
-                    descriptor_buffer.address = device.GetGlobalDescriptorHeap().GetDescriptorBufferAddress();
-                    descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
-                } else {
+                } else if constexpr (ResourceBindings::descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
                     // The bindless buffer address is supplied by each draw/dispatch.
-                    descriptor_buffer.address = 0;
-                    if constexpr (ResourceBindings::descriptor_type != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
-                        descriptor_buffer.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
-                    }
-                    if constexpr (ResourceBindings::descriptor_type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
-                        set_binding.byte_offset = GetBindlessTextureDescriptorOffset(device);
-                    }
+                    set_binding.buffer_index =
+                        get_or_create_buffer_index(bindless_buffer_index, 0, resource_usage);
+                    set_binding.byte_offset = 0;
+                } else {
+                    set_binding.buffer_index = get_or_create_buffer_index(
+                        bindless_image_sampler_index, 0, resource_sampler_usage
+                    );
+                    // Samplers start at zero; images follow at an aligned offset.
+                    if constexpr (ResourceBindings::descriptor_type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+                        set_binding.byte_offset = bindless_image_offset;
+                    else
+                        set_binding.byte_offset = 0;
                 }
             },
             set_binding.resource_bindings
