@@ -335,7 +335,7 @@ void WriteShaderArgumentDescriptors(
         std::visit(
             Overload{
                 [&]<VkDescriptorType DescriptorType>(
-                    const VulkanBindlessSetBindings<DescriptorType>& resource_bindings
+                    const VulkanBindlessBinding<DescriptorType>& resource_bindings
                 ) {
                     BindlessArrayRef array =
                         std::get<BindlessArrayRef>(_arguments[resource_bindings.argument_index]);

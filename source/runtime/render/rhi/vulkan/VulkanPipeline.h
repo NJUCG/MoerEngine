@@ -35,7 +35,7 @@ struct VulkanResourceSetBindings {
 };
 
 template<VkDescriptorType DescriptorType>
-struct VulkanBindlessSetBindings {
+struct VulkanBindlessBinding {
     static_assert(
         DescriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
             DescriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ||
@@ -45,17 +45,17 @@ struct VulkanBindlessSetBindings {
     static constexpr VkDescriptorType descriptor_type = DescriptorType;
 
     uint argument_index;   // Index in ArrayArguments.
-    uint descriptor_count; // Count declared by the pipeline layout.
+    uint descriptor_count; // Number of descriptors in this array binding.
 };
-using VulkanBindlessBufferSetBindings  = VulkanBindlessSetBindings<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>;
-using VulkanBindlessImageSetBindings   = VulkanBindlessSetBindings<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>;
-using VulkanBindlessSamplerSetBindings = VulkanBindlessSetBindings<VK_DESCRIPTOR_TYPE_SAMPLER>;
+using VulkanBindlessBufferBinding  = VulkanBindlessBinding<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>;
+using VulkanBindlessImageBinding   = VulkanBindlessBinding<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>;
+using VulkanBindlessSamplerBinding = VulkanBindlessBinding<VK_DESCRIPTOR_TYPE_SAMPLER>;
 
 using VulkanSetResourceBindings = std::variant<
     VulkanResourceSetBindings,
-    VulkanBindlessBufferSetBindings,
-    VulkanBindlessImageSetBindings,
-    VulkanBindlessSamplerSetBindings>;
+    VulkanBindlessBufferBinding,
+    VulkanBindlessImageBinding,
+    VulkanBindlessSamplerBinding>;
 
 struct VulkanDescriptorSetBinding {
     uint buffer_index = 0;
@@ -163,7 +163,7 @@ public:
     UniquePtr<VulkanPipelineBindingTemplate> binding_template;
 
 private:
-    void CreateNativePipelineLayout(
+    UniquePtr<VulkanPipelineBindingTemplate> BuildPipelineBindingTemplate(
         const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
         const std::optional<VkPushConstantRange>&                      push_constant_range
     );

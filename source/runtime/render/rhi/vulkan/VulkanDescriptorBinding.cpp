@@ -157,7 +157,7 @@ void VulkanCommandList::BindLegacyDescriptors(
                     [&](const VulkanResourceSetBindings&) -> VkDescriptorSet {
                         return VK_NULL_HANDLE;
                     },
-                    [&]<VkDescriptorType Type>(const VulkanBindlessSetBindings<Type>& binding) {
+                    [&]<VkDescriptorType Type>(const VulkanBindlessBinding<Type>& binding) {
                         const auto& array = std::get<BindlessArrayRef>(arguments[binding.argument_index]);
                         if (!array)
                             throw std::invalid_argument("Null bindless array");
@@ -361,7 +361,7 @@ void VulkanCommandList::BindHeapDescriptors(
             std::visit(
                 Overload{
                     [&](const VulkanResourceSetBindings&) {},
-                    [&]<VkDescriptorType Type>(const VulkanBindlessSetBindings<Type>& table) {
+                    [&]<VkDescriptorType Type>(const VulkanBindlessBinding<Type>& table) {
                         const auto& array = std::get<BindlessArrayRef>(arguments[table.argument_index]);
                         if (!array)
                             throw std::invalid_argument("Null bindless array");

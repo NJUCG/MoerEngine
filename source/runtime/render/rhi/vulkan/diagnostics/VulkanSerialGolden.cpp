@@ -999,7 +999,7 @@ struct VulkanSerialGoldenTrace::Impl {
             std::visit(
                 Overload{
                     [&]<VkDescriptorType DescriptorType>(
-                        const VulkanBindlessSetBindings<DescriptorType>& set_resource_bindings
+                        const VulkanBindlessBinding<DescriptorType>& set_resource_bindings
                     ) {
                         const TArg* arg = set_resource_bindings.argument_index < arguments.args.size() ?
                                               &arguments.args[set_resource_bindings.argument_index] :

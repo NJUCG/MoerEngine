@@ -87,17 +87,17 @@ void InitializeBindlessSetBindings(
     const auto& vk_binding   = binding_info.vk_binding;
     switch (vk_binding.descriptorType) {
         case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-            resource_bindings.emplace<VulkanBindlessBufferSetBindings>(
+            resource_bindings.emplace<VulkanBindlessBufferBinding>(
                 binding_info.argument_index, vk_binding.descriptorCount
             );
             break;
         case VK_DESCRIPTOR_TYPE_SAMPLER:
-            resource_bindings.emplace<VulkanBindlessSamplerSetBindings>(
+            resource_bindings.emplace<VulkanBindlessSamplerBinding>(
                 binding_info.argument_index, vk_binding.descriptorCount
             );
             break;
         case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-            resource_bindings.emplace<VulkanBindlessImageSetBindings>(
+            resource_bindings.emplace<VulkanBindlessImageBinding>(
                 binding_info.argument_index, vk_binding.descriptorCount
             );
             break;
@@ -111,39 +111,14 @@ void InitializePipelineSetBindings(
     const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
     VulkanPipelineBindingTemplate&                                 binding_template
 ) {
-    constexpr uint invalid_buffer_index         = std::numeric_limits<uint>::max();
-    uint           bindless_buffer_index        = invalid_buffer_index;
-    uint           bindless_image_sampler_index = invalid_buffer_index;
-    uint           resource_buffer_index        = invalid_buffer_index;
-    uint           descriptor_buffer_count      = 0;
-
-    auto allocate_buffer_index = [&](uint& buffer_index) {
-        if (buffer_index == invalid_buffer_index) {
-            buffer_index = descriptor_buffer_count++;
-        }
-        return buffer_index;
-    };
-
     for (const auto& [set_index, layout_info] : set_layout_infos) {
-        auto  binding_it        = binding_template.set_bindings.try_emplace(set_index).first;
-        auto& set_binding       = binding_it->second;
-        auto& resource_bindings = set_binding.resource_bindings;
+        auto& resource_bindings = binding_template.set_bindings[set_index].resource_bindings;
 
-        if (!layout_info.is_bindless) {
+        if (layout_info.is_bindless)
+            InitializeBindlessSetBindings(layout_info, resource_bindings);
+        else
             InitializeNonBindlessSetBindings(layout_info, resource_bindings);
-            if (!set_binding.push)
-                set_binding.buffer_index = allocate_buffer_index(resource_buffer_index);
-            continue;
-        }
-
-        InitializeBindlessSetBindings(layout_info, resource_bindings);
-        // Bindless images and samplers share one descriptor buffer.
-        auto& buffer_index = std::holds_alternative<VulkanBindlessBufferSetBindings>(resource_bindings) ?
-                                 bindless_buffer_index :
-                                 bindless_image_sampler_index;
-        set_binding.buffer_index = allocate_buffer_index(buffer_index);
     }
-    binding_template.descriptor_buffers.resize(descriptor_buffer_count);
 }
 
 void CacheDescriptorSetStorageLayout(
@@ -254,11 +229,34 @@ void InitializeDescriptorBufferBindingTemplate(
     VulkanDevice&                  device,
     VulkanPipelineBindingTemplate& binding_template
 ) {
+    constexpr uint invalid_buffer_index         = std::numeric_limits<uint>::max();
+    uint           ordinary_buffer_index        = invalid_buffer_index;
+    uint           bindless_buffer_index        = invalid_buffer_index;
+    uint           bindless_image_sampler_index = invalid_buffer_index;
+
+    auto& descriptor_buffers = binding_template.descriptor_buffers;
+    descriptor_buffers.clear();
+    auto allocate_buffer_index = [&](uint& buffer_index) {
+        if (buffer_index == invalid_buffer_index) {
+            buffer_index = static_cast<uint>(descriptor_buffers.size());
+            descriptor_buffers.emplace_back();
+        }
+        return buffer_index;
+    };
+
     binding_template.resource_descriptor_allocation_size = 0;
     for (auto& [set_index, set_binding] : binding_template.set_bindings) {
         if (set_binding.push)
             continue;
-        auto& descriptor_buffer = binding_template.descriptor_buffers[set_binding.buffer_index];
+        // Ordinary sets share one buffer; bindless images and samplers share another.
+        auto& group_index =
+            std::holds_alternative<VulkanResourceSetBindings>(set_binding.resource_bindings) ?
+                ordinary_buffer_index :
+            std::holds_alternative<VulkanBindlessBufferBinding>(set_binding.resource_bindings) ?
+                bindless_buffer_index :
+                bindless_image_sampler_index;
+        set_binding.buffer_index = allocate_buffer_index(group_index);
+        auto& descriptor_buffer  = descriptor_buffers[set_binding.buffer_index];
         std::visit(
             [&](const auto& resource_bindings) {
                 using ResourceBindings  = std::decay_t<decltype(resource_bindings)>;
@@ -366,7 +364,7 @@ void InitializeHeapBindings(VulkanDevice& device, VulkanPipelineBindingTemplate&
                         Moer::AlignUp(resources.allocation_size, storage.GetStorageAlignment());
                     result.resource_descriptor_allocation_size += resources.allocation_size;
                 },
-                [&]<VkDescriptorType Type>(const VulkanBindlessSetBindings<Type>&) {
+                [&]<VkDescriptorType Type>(const VulkanBindlessBinding<Type>&) {
                     auto& map                                = make_mapping(0);
                     map.sourceData.pushIndex.heapArrayStride = storage.GetDescriptorSize(Type);
                     if constexpr (Type == VK_DESCRIPTOR_TYPE_SAMPLER) {
@@ -413,11 +411,13 @@ std::optional<uint> SelectPushDescriptorSet(
     return candidate;
 }
 
-UniquePtr<VulkanPipelineBindingTemplate> BuildPipelineBindingTemplate(
-    VulkanDevice&                                                device,
+} // namespace
+
+UniquePtr<VulkanPipelineBindingTemplate> VulkanPipelineState::BuildPipelineBindingTemplate(
     const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
     const std::optional<VkPushConstantRange>&                      push_constant_range
 ) {
+    auto&       device        = *m_device;
     const auto& caps          = device.GetDescriptorCapabilities();
     bool        requires_sets = false;
 
@@ -426,47 +426,33 @@ UniquePtr<VulkanPipelineBindingTemplate> BuildPipelineBindingTemplate(
             requires_sets |= info.vk_binding.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
     }
 
-    auto mode = SelectVulkanPipelineDescriptorMode(device.GetDescriptorMode(), requires_sets);
-    if (mode == VulkanDescriptorMode::Heap) {
-        auto candidate  = MakeUnique<VulkanPipelineBindingTemplate>();
-        candidate->mode = VulkanDescriptorMode::Heap;
-        InitializePipelineSetBindings(set_layout_infos, *candidate);
+    auto result  = MakeUnique<VulkanPipelineBindingTemplate>();
+    result->mode = SelectVulkanPipelineDescriptorMode(device.GetDescriptorMode(), requires_sets);
+    if (result->mode == VulkanDescriptorMode::Heap) {
+        InitializePipelineSetBindings(set_layout_infos, *result);
         InitializeHeapBindings(
             device,
-            *candidate,
+            *result,
             push_constant_range ? push_constant_range->offset + push_constant_range->size : 0
         );
         // Eligibility depends on the complete mapping, including appended push
-        // data and alignment. Keep that mapping on success; discard it on fallback.
-        if (candidate->heap_push_size <= caps.max_push_data)
-            return candidate;
-        // Storage and descriptor encoding follow the device backend. Sets remain
-        // available for fallback; a Heap device does not also prepare Buffer storage.
-        mode = VulkanDescriptorMode::Sets;
+        // data and alignment. Keep that mapping on success; reset it on fallback.
+        if (result->heap_push_size <= caps.max_push_data)
+            return result;
+        *result = VulkanPipelineBindingTemplate{};
     }
 
-    auto result  = MakeUnique<VulkanPipelineBindingTemplate>();
-    result->mode = mode;
-    if (const auto push_set = SelectPushDescriptorSet(set_layout_infos, mode, caps))
+    if (const auto push_set = SelectPushDescriptorSet(set_layout_infos, result->mode, caps))
         result->set_bindings[*push_set].push = true;
     InitializePipelineSetBindings(set_layout_infos, *result);
-    return result;
-}
 
-} // namespace
-
-void VulkanPipelineState::CreateNativePipelineLayout(
-    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
-    const std::optional<VkPushConstantRange>&                      push_constant_range
-) {
-    auto& result = *binding_template;
-    if (result.mode == VulkanDescriptorMode::Heap)
-        return;
-
-    descriptor_set_layouts = CreateDescriptorSetLayouts(*m_device, set_layout_infos, result);
+    // Sets and Buffer share native layouts. Buffer storage offsets are queried
+    // during set-layout creation, then used to complete its binding template.
+    descriptor_set_layouts = CreateDescriptorSetLayouts(device, set_layout_infos, *result);
     CreatePipelineLayout(push_constant_range);
-    if (result.mode == VulkanDescriptorMode::Buffer)
-        InitializeDescriptorBufferBindingTemplate(*m_device, result);
+    if (result->mode == VulkanDescriptorMode::Buffer)
+        InitializeDescriptorBufferBindingTemplate(device, *result);
+    return result;
 }
 
 void VulkanPipelineState::InitPipelineLayout(
@@ -475,8 +461,7 @@ void VulkanPipelineState::InitPipelineLayout(
     uint                                                      user_constant_byte_size,
     std::optional<VulkanBindlessIndexAddressBinding>          bindless_index_address
 ) {
-    binding_template = BuildPipelineBindingTemplate(*m_device, set_layout_infos, push_constant_range);
-    CreateNativePipelineLayout(set_layout_infos, push_constant_range);
+    binding_template = BuildPipelineBindingTemplate(set_layout_infos, push_constant_range);
 
     auto& result = *binding_template;
     InitializePushConstantBindingTemplate(m_pipeline_layout, push_constant_range, result);
