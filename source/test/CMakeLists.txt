@@ -202,7 +202,7 @@ target_link_libraries(${test_target} PRIVATE Moer::Render)
 target_compile_definitions(${test_target} PRIVATE MOER_TEST_WORKSPACE="${BINARY_ROOT_DIR}/bin/$<CONFIG>")
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME ShaderConstantsContract COMMAND $<TARGET_FILE:${test_target}>)
-set_tests_properties(ShaderConstantsContract PROPERTIES TIMEOUT 60)
+set_tests_properties(ShaderConstantsContract PROPERTIES TIMEOUT 120)
 
 set(test_target TestShaderParameterReflection)
 add_executable(${test_target} "ShaderParameterReflectionTest.cpp")

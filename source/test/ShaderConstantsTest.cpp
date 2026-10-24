@@ -4,6 +4,7 @@
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/test/ShaderConstants.h"
 #include "shaderheaders/shared/raster/lighting_pass/Constants.h"
+#include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
 #include <cstring>
 #include <filesystem>
@@ -49,6 +50,13 @@ public:
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANTS(LIGHTING_PASS_CONSTANTS);
     DEFINE_SHADER_ARGS(lighting_data, bdls, param, extra_ambient_intensity);
+};
+class BilateralConstants : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(BilateralConstants);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT(BilateralFilterDenoiserPipelineBindlessParam, param);
+    DEFINE_SHADER_ARGS(bdls, param);
 };
 class MixedConstants : public ComputePipeline {
 public:
@@ -368,6 +376,15 @@ void CheckBindlessAddress(EShaderPlatform platform) {
     };
     Require(ValidatePipelineConstants(lighting_info, 128) == lighting_metadata.GetConstantByteSize(),
             "Lighting pipeline's user constants changed");
+    const auto bilateral_metadata = BilateralConstants::GetArgumentMetadata();
+    const auto bilateral = CompileBindlessTest(
+        bilateral_metadata, platform, ST_FRAGMENT, "main", false, false,
+        "pipelines/postprocess/denoise/BilateralFilterDenoiser.hlsl"
+    );
+    const auto* bilateral_bindings = bilateral.parameter_map.reflect_map.at(std::string(ReflectParamInfo::bdls_name))
+        .GetSpirvReflection().TryGetBindlessArray();
+    Require(bilateral_bindings && (!vulkan || bilateral_bindings->index_table_address),
+            "Bilateral filter lost its bindless index-table address");
 }
 
 } // namespace
