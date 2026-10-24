@@ -34,9 +34,9 @@ resources through the existing submission lifetime.
 
 The shader-facing set/binding interface is preserved. The device selects native
 **descriptor heap > descriptor buffer > descriptor sets** from its capabilities;
-pipeline reflection selects the appropriate binding path. Ordinary pipelines use
-sets with an optional push descriptor set. Bindless pipelines use the selected
-modern backend, with traditional sets available for required fallbacks.
+ordinary and bindless pipelines both use that backend. Pipeline reflection only
+selects traditional sets for concrete fallback constraints: input attachments in
+the current implementation or a complete heap push-data layout over the device limit.
 
 Heap pipelines use shader binding mappings and push data. Buffer pipelines may
 combine descriptor-buffer offsets with one push descriptor set when the device

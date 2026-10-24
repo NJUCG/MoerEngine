@@ -384,7 +384,90 @@ void InitializeHeapBindings(VulkanDevice& device, VulkanPipelineBindingTemplate&
     result.heap_mapping_info.pMappings    = result.heap_mappings.data();
 }
 
+std::optional<uint> SelectPushDescriptorSet(
+    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+    VulkanDescriptorMode                                         mode,
+    const VulkanDescriptorCapabilities&                          caps
+) {
+    if (!caps.push || mode == VulkanDescriptorMode::Heap ||
+        (mode == VulkanDescriptorMode::Buffer && !caps.buffer_push)) {
+        return std::nullopt;
+    }
+
+    // Only one ordinary set can use push descriptors. Prefer the largest eligible
+    // set to avoid the most transient writes; break ties by the lower set index.
+    std::optional<uint> candidate;
+    uint                largest = 0;
+    for (const auto& [set, layout] : set_layout_infos) {
+        if (layout.is_bindless)
+            continue;
+        uint count = 0;
+        for (const auto& [binding, info] : layout.bindings)
+            count += info.vk_binding.descriptorCount;
+        if (count && count <= caps.max_push_descriptors &&
+            (!candidate || count > largest || (count == largest && set < *candidate))) {
+            candidate = set;
+            largest   = count;
+        }
+    }
+    return candidate;
+}
+
+UniquePtr<VulkanPipelineBindingTemplate> BuildPipelineBindingTemplate(
+    VulkanDevice&                                                device,
+    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+    const std::optional<VkPushConstantRange>&                      push_constant_range
+) {
+    const auto& caps          = device.GetDescriptorCapabilities();
+    bool        requires_sets = false;
+
+    for (const auto& [set, layout] : set_layout_infos) {
+        for (const auto& [binding, info] : layout.bindings)
+            requires_sets |= info.vk_binding.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    }
+
+    auto mode = SelectVulkanPipelineDescriptorMode(device.GetDescriptorMode(), requires_sets);
+    if (mode == VulkanDescriptorMode::Heap) {
+        auto candidate  = MakeUnique<VulkanPipelineBindingTemplate>();
+        candidate->mode = VulkanDescriptorMode::Heap;
+        InitializePipelineSetBindings(set_layout_infos, *candidate);
+        InitializeHeapBindings(
+            device,
+            *candidate,
+            push_constant_range ? push_constant_range->offset + push_constant_range->size : 0
+        );
+        // Eligibility depends on the complete mapping, including appended push
+        // data and alignment. Keep that mapping on success; discard it on fallback.
+        if (candidate->heap_push_size <= caps.max_push_data)
+            return candidate;
+        // Storage and descriptor encoding follow the device backend. Sets remain
+        // available for fallback; a Heap device does not also prepare Buffer storage.
+        mode = VulkanDescriptorMode::Sets;
+    }
+
+    auto result  = MakeUnique<VulkanPipelineBindingTemplate>();
+    result->mode = mode;
+    if (const auto push_set = SelectPushDescriptorSet(set_layout_infos, mode, caps))
+        result->set_bindings[*push_set].push = true;
+    InitializePipelineSetBindings(set_layout_infos, *result);
+    return result;
+}
+
 } // namespace
+
+void VulkanPipelineState::CreateNativePipelineLayout(
+    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+    const std::optional<VkPushConstantRange>&                      push_constant_range
+) {
+    auto& result = *binding_template;
+    if (result.mode == VulkanDescriptorMode::Heap)
+        return;
+
+    descriptor_set_layouts = CreateDescriptorSetLayouts(*m_device, set_layout_infos, result);
+    CreatePipelineLayout(push_constant_range);
+    if (result.mode == VulkanDescriptorMode::Buffer)
+        InitializeDescriptorBufferBindingTemplate(*m_device, result);
+}
 
 void VulkanPipelineState::InitPipelineLayout(
     UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
@@ -392,59 +475,10 @@ void VulkanPipelineState::InitPipelineLayout(
     uint                                                      user_constant_byte_size,
     std::optional<VulkanBindlessIndexAddressBinding>          bindless_index_address
 ) {
-    binding_template = MakeUnique<VulkanPipelineBindingTemplate>();
-    auto&       result        = *binding_template;
-    const auto& caps          = m_device->GetDescriptorCapabilities();
-    bool        bindless      = false;
-    bool        requires_sets = false;
-    for (const auto& [set, layout] : set_layout_infos) {
-        bindless |= layout.is_bindless;
-        for (const auto& [binding, info] : layout.bindings)
-            requires_sets |= info.vk_binding.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-    }
-    result.mode = SelectVulkanPipelineDescriptorMode(
-        m_device->GetDescriptorMode(), bindless, requires_sets, 0, caps.max_push_data
-    );
-    InitializePipelineSetBindings(set_layout_infos, result);
-    if (result.mode == VulkanDescriptorMode::Heap) {
-        InitializeHeapBindings(
-            *m_device,
-            result,
-            push_constant_range ? push_constant_range->offset + push_constant_range->size : 0
-        );
-        if (SelectVulkanPipelineDescriptorMode(
-                result.mode, true, false, result.heap_push_size, caps.max_push_data
-            ) == VulkanDescriptorMode::Sets) {
-            result = VulkanPipelineBindingTemplate{};
-            InitializePipelineSetBindings(set_layout_infos, result);
-        }
-    }
-    if (result.mode != VulkanDescriptorMode::Heap) {
-        // Vulkan permits only one push descriptor set in a pipeline layout.
-        // Prefer the largest eligible ordinary set to avoid the most transient writes.
-        uint candidate = UINT32_MAX, largest = 0;
-        if (caps.push && (result.mode == VulkanDescriptorMode::Sets || caps.buffer_push)) {
-            for (const auto& [set, layout] : set_layout_infos) {
-                if (layout.is_bindless)
-                    continue;
-                uint count = 0;
-                for (const auto& [binding, info] : layout.bindings)
-                    count += info.vk_binding.descriptorCount;
-                if (count && count <= caps.max_push_descriptors &&
-                    (count > largest || (count == largest && set < candidate))) {
-                    candidate = set;
-                    largest   = count;
-                }
-            }
-        }
-        if (candidate != UINT32_MAX)
-            result.set_bindings.at(candidate).push = true;
-        InitializePipelineSetBindings(set_layout_infos, result);
-        descriptor_set_layouts = CreateDescriptorSetLayouts(*m_device, set_layout_infos, result);
-        CreatePipelineLayout(push_constant_range);
-        if (result.mode == VulkanDescriptorMode::Buffer)
-            InitializeDescriptorBufferBindingTemplate(*m_device, result);
-    }
+    binding_template = BuildPipelineBindingTemplate(*m_device, set_layout_infos, push_constant_range);
+    CreateNativePipelineLayout(set_layout_infos, push_constant_range);
+
+    auto& result = *binding_template;
     InitializePushConstantBindingTemplate(m_pipeline_layout, push_constant_range, result);
     result.push_constants_info.size = user_constant_byte_size;
     result.bindless_index_address   = bindless_index_address;

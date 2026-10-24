@@ -19,12 +19,9 @@ int main() {
         // Push support changes the binding mechanism, never the storage capability.
         require(SelectVulkanDescriptorMode({.push = true}) == Mode::Sets);
         for (auto mode : {Mode::Sets, Mode::Buffer, Mode::Heap}) {
-            require(SelectVulkanPipelineDescriptorMode(mode, false, false, 0, 256) == Mode::Sets);
-            require(SelectVulkanPipelineDescriptorMode(mode, true, true, 0, 256) == Mode::Sets);
+            require(SelectVulkanPipelineDescriptorMode(mode, true) == Mode::Sets);
+            require(SelectVulkanPipelineDescriptorMode(mode, false) == mode);
         }
-        require(SelectVulkanPipelineDescriptorMode(Mode::Heap, true, false, 256, 256) == Mode::Heap);
-        require(SelectVulkanPipelineDescriptorMode(Mode::Heap, true, false, 260, 256) == Mode::Sets);
-        require(SelectVulkanPipelineDescriptorMode(Mode::Buffer, true, false, 260, 0) == Mode::Buffer);
         std::cout << "[PASS] descriptor capability and pipeline fallback contracts\n";
         return 0;
     } catch (const std::exception& error) {

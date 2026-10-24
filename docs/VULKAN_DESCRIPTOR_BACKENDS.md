@@ -12,10 +12,13 @@ GPU 执行晚于 CPU 录制。每次 draw/dispatch 使用的描述符、索引�
 
 | Pipeline 条件 | 原生实现 |
 |---|---|
-| 普通参数，无 bindless 表 | 传统 set layout；满足条件的一个小 set 使用 push descriptors，其余从 descriptor pool 分配 |
-| 使用 bindless 表，设备选择 heap | Native resource/sampler heap，shader set/binding 映射到 heap 偏移，以 push data 传参数和表基址 |
-| 使用 bindless 表，设备选择 buffer | Descriptor buffers + set offsets；支持 bufferless push descriptors 时，可以把一个普通 set 改为 push descriptors |
-| 设备只有 sets、pipeline 使用 input attachment，或 heap 的完整 push data 超限 | 传统 sets，包括 bindless 的持久化数组 sets |
+| 设备选择 heap，且 pipeline 没有回退限制 | Native resource/sampler heap，shader set/binding 映射到 heap 偏移，以 push data 传参数和表基址 |
+| 设备选择 buffer，且 pipeline 没有回退限制 | Descriptor buffers + set offsets；支持 bufferless push descriptors 时，可以把一个普通 set 改为 push descriptors |
+| 设备选择 sets、pipeline 使用当前实现需回退的 input attachment，或 heap 的完整 push data 超限 | 传统 sets；满足条件的一个普通 set 使用 push descriptors，其余从 descriptor pool 分配，bindless 表使用持久化数组 sets |
+
+普通参数和 bindless 参数都默认使用设备选定的后端，仅因具体限制回退。是否存在 bindless 表决定参数的布局和访问方式，不决定描述符存储后端。未将“普通参数可能更适合 push descriptors”固化为 Sets 偏好；这需要针对实际工作负载的性能证据。Heap 的容量检查使用完整映射计算出的 push data 大小，包含追加的表偏移、地址及对齐。
+
+Heap 超限后直接回退 Sets。设备仅为选定的现代后端准备描述符编码和存储，同时保留传统 Sets 的兼容路径；支持 Buffer 扩展并不代表 Heap 设备已经准备了 Buffer 表示。当前不采用 `Heap → Buffer → Sets` 的逐级回退，避免为少数受限 pipeline 再维护一套描述符存储和更新。
 
 这是创建 pipeline 时根据反射和设备限制确定的规则，不在每次 draw 时猜测访问模式或切换存储。普通 set 中优先选择描述符数最多且不超过 `maxPushDescriptors` 的一个作为 push set；数量相同时选择较小的 set 编号。Vulkan 限制一个 pipeline layout 至多有一个 push descriptor set。
 
@@ -70,7 +73,7 @@ python tools/descriptor_backends/run_matrix.py --validation-layer-dir build/desc
 
 GPU 测试对同一工作负载切换 auto/heap/buffer/sets、开启/关闭 push descriptors、串行/并行录制。每项包含 1,536 次 dispatch、8 批提交、每 4 批一次 GPU 完成等待，检查每个输出值；覆盖 UBO、普通 storage/texel buffer、bindless buffer/image/sampler、真实深度纹理、40 元素数组、binding/set 空洞、模式切换及分配器复用。设备允许 256 B push constants 时还覆盖大常量 pipeline；本机 256 B heap push data 限制使它回退到传统 sets，并验证同一 bindless array 可继续访问。
 
-CPU 合约检查能力缺失、push 独立性、push data 边界回退，以及原有分配器的并发、回滚和回收。Push constant 反射保留完整声明范围，同时只上传活跃参数；shader cache 格式版本已升级，旧反射缓存会重建。Shader constants 合约也编译实际的 BilateralFilterDenoiser，避免它遗留的常量声明漏掉 bindless 索引表地址；该遗漏曾使本机 DXC 在冷编译时崩溃。
+CPU 合约检查能力缺失、push 独立性、pipeline 接口限制，以及原有分配器的并发、回滚和回收；完整 Heap 布局超限后的回退由 GPU 测试覆盖。Push constant 反射保留完整声明范围，同时只上传活跃参数；shader cache 格式版本已升级，旧反射缓存会重建。Shader constants 合约也编译实际的 BilateralFilterDenoiser，避免它遗留的常量声明漏掉 bindless 索引表地址；该遗漏曾使本机 DXC 在冷编译时崩溃。
 
 集成验证同时统一了采样深度图的描述符 layout 与资源屏障规则，并显式声明 Hi-Z、光追后处理和环境图拷贝 storage images 的实际格式。这些约束在三种后端上都成立，不能依赖某一路径恰好容忍不一致。
 

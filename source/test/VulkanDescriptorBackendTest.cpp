@@ -88,10 +88,13 @@ void RunDescriptorReadback() {
     const auto* native_bound    = static_cast<VulkanPipelineState*>(bound.handle.GetState());
     const auto* native_bindless = static_cast<VulkanPipelineState*>(bindless.handle.GetState());
     const auto* native_arrays   = static_cast<VulkanPipelineState*>(arrays.handle.GetState());
-    if (native_bound->GetDescriptorMode() != VulkanDescriptorMode::Sets ||
-        (native_device.GetDescriptorCapabilities().max_push_descriptors < 40 &&
-         native_arrays->binding_template->set_bindings.at(5).push))
-        throw std::runtime_error("Ordinary pipeline or over-limit array did not use the set fallback");
+    if (native_bound->GetDescriptorMode() != native_device.GetDescriptorMode() ||
+        native_arrays->GetDescriptorMode() != native_device.GetDescriptorMode() ||
+        native_bindless->GetDescriptorMode() != native_device.GetDescriptorMode())
+        throw std::runtime_error("Eligible ordinary and bindless pipelines must use the device backend");
+    if (native_device.GetDescriptorCapabilities().max_push_descriptors < 40 &&
+        native_arrays->binding_template->set_bindings.at(5).push)
+        throw std::runtime_error("Over-limit descriptor array must not use push descriptors");
     if (large_constants && native_device.GetDescriptorMode() == VulkanDescriptorMode::Heap &&
         native_device.GetDescriptorCapabilities().max_push_data < 272 &&
         static_cast<VulkanPipelineState*>(fallback.handle.GetState())->GetDescriptorMode() !=
@@ -200,7 +203,9 @@ void RunDescriptorReadback() {
             .count();
     std::cout << "[PASS] descriptor backend="
               << VulkanDescriptorModeName(native_bindless->GetDescriptorMode())
-              << " dispatches=1536 mixed_modes=true arrays=40 batches=8 in_flight=4 large_constants="
+              << " bound_backend=" << VulkanDescriptorModeName(native_bound->GetDescriptorMode())
+              << " array_backend=" << VulkanDescriptorModeName(native_arrays->GetDescriptorMode())
+              << " dispatches=1536 arrays=40 batches=8 in_flight=4 large_constants="
               << large_constants << " elapsed_ms=" << elapsed << '\n';
 }
 

@@ -4,8 +4,8 @@
 
 namespace Moer::Render {
 
-// Device preference and pipeline binding mode are deliberately separate:
-// ordinary shaders can use sets while bindless shaders use the device backend.
+// Pipelines use the device backend unless a concrete binding constraint requires
+// a fallback. Bindless resource access does not determine descriptor storage.
 enum class VulkanDescriptorMode : uint8_t {
     Sets,
     Buffer,
@@ -27,15 +27,13 @@ constexpr VulkanDescriptorMode SelectVulkanDescriptorMode(const VulkanDescriptor
                          VulkanDescriptorMode::Sets;
 }
 
+// Select a candidate from the shader interface; check heap push-data capacity
+// after constructing the complete heap mapping.
 constexpr VulkanDescriptorMode SelectVulkanPipelineDescriptorMode(
     VulkanDescriptorMode preferred,
-    bool                 bindless,
-    bool                 requires_sets,
-    uint32_t             heap_push_bytes,
-    uint32_t             max_push_data
+    bool                 requires_sets
 ) {
-    if (!bindless || requires_sets ||
-        (preferred == VulkanDescriptorMode::Heap && heap_push_bytes > max_push_data)) {
+    if (requires_sets) {
         return VulkanDescriptorMode::Sets;
     }
     return preferred;

@@ -163,6 +163,10 @@ public:
     UniquePtr<VulkanPipelineBindingTemplate> binding_template;
 
 private:
+    void CreateNativePipelineLayout(
+        const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+        const std::optional<VkPushConstantRange>&                      push_constant_range
+    );
     void CreatePipelineLayout(const std::optional<VkPushConstantRange>& push_constant_range);
 
 protected:
