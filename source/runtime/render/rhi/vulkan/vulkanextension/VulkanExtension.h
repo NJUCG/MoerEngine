@@ -171,6 +171,9 @@ public:
     }
 
     // optional extensions
+    bool m_has_ext_descriptor_heap                         = false;
+    bool m_has_khr_maintenance5                            = false;
+    bool m_has_descriptor_buffer_push                      = false;
     bool m_has_ext_descriptor_buffer                       = false;
     bool m_has_khr_acceleration_structure                  = false;
     bool m_has_khr_ray_tracing_pipeline                    = false;

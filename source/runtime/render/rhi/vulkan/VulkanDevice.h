@@ -227,6 +227,19 @@ public:
         EQueueType _queue_type
     ) const;
 
+    VulkanDescriptorMode GetDescriptorMode() const {
+        return descriptor_mode;
+    }
+    const VulkanDescriptorCapabilities& GetDescriptorCapabilities() const {
+        return descriptor_caps;
+    }
+    const VulkanDescriptorHeapFunctions& GetDescriptorHeapFunctions() const {
+        return descriptor_heap_functions;
+    }
+    const VkSamplerCreateInfo& GetSamplerCreateInfo(uint index) const {
+        return immutable_sampler_infos[index];
+    }
+
     // Shared backend resources.
     DeviceInternalShaders& GetInternalShaders() {
         return *m_internal_shaders;
@@ -234,13 +247,13 @@ public:
     VulkanDescriptorHeap& GetGlobalDescriptorHeap() {
         return m_global_descriptor_heap.value();
     }
+    const VulkanDescriptorHeap& GetGlobalDescriptorHeap() const {
+        return m_global_descriptor_heap.value();
+    }
     VmaAllocator GetVmaAllocator() const {
         return m_allocator;
     }
 
-    VkDescriptorSetLayout GetEmptyDescriptorSetLayout() const {
-        return empty_descriptor_set_layout;
-    }
     constexpr uint ImmutableSamplerCount() const {
         return immutable_sampler_count;
     }
@@ -399,7 +412,6 @@ private:
     VkQueue               m_compute_queue_handle      = VK_NULL_HANDLE;
     VkQueue               m_raytracing_queue_handle   = VK_NULL_HANDLE;
     VkQueue               m_transfer_queue_handle     = VK_NULL_HANDLE;
-    VkDescriptorSetLayout empty_descriptor_set_layout = VK_NULL_HANDLE;
 
     // Device properties.
     VulkanDeviceInfo m_device_info{};
@@ -413,6 +425,10 @@ private:
     // Shared resources and command queues.
     VmaAllocator m_allocator = VK_NULL_HANDLE;
     // Construct after the device and samplers; reset before destroying VMA.
+    VulkanDescriptorMode                                    descriptor_mode = VulkanDescriptorMode::Sets;
+    VulkanDescriptorCapabilities                            descriptor_caps;
+    VulkanDescriptorHeapFunctions                           descriptor_heap_functions;
+    std::array<VkSamplerCreateInfo, bindless_sampler_count> immutable_sampler_infos{};
     std::optional<VulkanDescriptorHeap> m_global_descriptor_heap;
     UniquePtr<VkCommandQueue> m_graphics_command_queue{};
     UniquePtr<VkCommandQueue> m_compute_command_queue{};

@@ -803,9 +803,8 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 constant.offset = offset;
                 constant.custom_flag.active = active;
                 if (argument_name == ReflectParamInfo::bindless_index_address_name) {
-                    if (!active) {
-                        return;
-                    }
+                    // Keep the declared extent even when this entry point does not read
+                    // the address. Pipeline layouts must cover the whole SPIR-V block.
                     auto [entry, inserted] = reflect_map.try_emplace(
                         std::string(ReflectParamInfo::bdls_name),
                         ReflectParamInfo{ReflectParamInfo::SpirvParameterReflection{

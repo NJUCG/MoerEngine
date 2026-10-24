@@ -114,6 +114,57 @@ private:
     VkPhysicalDeviceRayQueryFeaturesKHR m_ray_query_features;
 };
 
+class VulkanKHRMaintenance5Extension final : public VulkanDeviceExtension {
+public:
+    explicit VulkanKHRMaintenance5Extension(bool optional) :
+        VulkanDeviceExtension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME, optional) {}
+    void PreGpuFeatures(VkPhysicalDeviceFeatures2& features) override {
+        AddToPNext(features, feature);
+    }
+    void PostGpuFeatures(VulkanOptionalDeviceExtensions& extensions) override {
+        m_is_usable                       = feature.maintenance5;
+        extensions.m_has_khr_maintenance5 = m_is_usable;
+    }
+    void PreCreateDevice(VkDeviceCreateInfo& info) override {
+        if (ShouldEnableDeviceCreate())
+            AddToPNext(info, feature);
+    }
+
+private:
+    VkPhysicalDeviceMaintenance5FeaturesKHR feature{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES_KHR
+    };
+};
+
+class VulkanEXTDescriptorHeapExtension final : public VulkanDeviceExtension {
+public:
+    explicit VulkanEXTDescriptorHeapExtension(bool optional) :
+        VulkanDeviceExtension(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME, optional) {}
+    void PreGpuFeatures(VkPhysicalDeviceFeatures2& features) override {
+        AddToPNext(features, feature);
+    }
+    void PostGpuFeatures(VulkanOptionalDeviceExtensions& extensions) override {
+        m_is_usable                          = feature.descriptorHeap && extensions.m_has_khr_maintenance5;
+        extensions.m_has_ext_descriptor_heap = m_is_usable;
+        feature.descriptorHeapCaptureReplay  = VK_FALSE;
+    }
+    void PreGpuProperties(const VulkanDevice* device, VkPhysicalDeviceProperties2& properties) override {
+        auto& heap = const_cast<VulkanOptionalDeviceProperties&>(device->GetOptionalProperties())
+                         .descriptor_heap_properties;
+        heap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT;
+        AddToPNext(properties, heap);
+    }
+    void PreCreateDevice(VkDeviceCreateInfo& info) override {
+        if (ShouldEnableDeviceCreate())
+            AddToPNext(info, feature);
+    }
+
+private:
+    VkPhysicalDeviceDescriptorHeapFeaturesEXT feature{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT
+    };
+};
+
 class VulkanEXTDescriptorBufferExtension final : public VulkanDeviceExtension {
 public:
     VulkanEXTDescriptorBufferExtension(bool _is_optional = false) :
@@ -126,9 +177,9 @@ public:
     }
 
     void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
-        m_is_usable =
-            (m_descriptor_buffer_features.descriptorBuffer == VK_TRUE &&
-             m_descriptor_buffer_features.descriptorBufferPushDescriptors == VK_TRUE);
+        m_is_usable = m_descriptor_buffer_features.descriptorBuffer == VK_TRUE;
+        _gpu_extensions.m_has_descriptor_buffer_push =
+            m_descriptor_buffer_features.descriptorBufferPushDescriptors == VK_TRUE;
         _gpu_extensions.m_has_ext_descriptor_buffer = m_is_usable;
     }
 
@@ -492,6 +543,13 @@ private:
 };
 
 } // namespace
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRMaintenance5Extension(bool optional) {
+    return std::make_shared<VulkanKHRMaintenance5Extension>(optional);
+}
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTDescriptorHeapExtension(bool optional) {
+    return std::make_shared<VulkanEXTDescriptorHeapExtension>(optional);
+}
 
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRAccelerationStructureExtension(bool _optional) {
     return std::make_shared<VulkanKHRAccelerationStructureExtension>(_optional);

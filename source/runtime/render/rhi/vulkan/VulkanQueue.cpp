@@ -922,16 +922,12 @@ struct VkCmdPreprocessor {
                 tracker.RecordState(i, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
             }
         }
-        tracker.RecordState(
-            vk_bindless_array->GetTextureSamplerDescriptorBuffer(),
-            VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT,
-            _pipeline_stages
-        );
-        tracker.RecordState(
-            vk_bindless_array->GetBufferDescriptorBuffer(),
-            VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT,
-            _pipeline_stages
-        );
+        if (auto* descriptors = vk_bindless_array->GetTextureSamplerDescriptorBuffer()) {
+            tracker.RecordState(descriptors, vk_bindless_array->GetDescriptorReadAccess(), _pipeline_stages);
+        }
+        if (auto* descriptors = vk_bindless_array->GetBufferDescriptorBuffer()) {
+            tracker.RecordState(descriptors, vk_bindless_array->GetDescriptorReadAccess(), _pipeline_stages);
+        }
         tracker.RecordState(
             vk_bindless_array->GetIndexBuffer(), VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages
         );
@@ -964,13 +960,13 @@ struct VkCmdPreprocessor {
         }
     }
 
-    static VkImageLayout GetTextureLayout(const VulkanArgumentInfo& _info) {
+    static VkImageLayout GetTextureLayout(const VulkanArgumentInfo& _info, ETextureAspectFlags aspects) {
         switch (_info.resource_type) {
             // case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
             //     return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             case SRT_SRV: {
                 if (_info.image_sampling != VulkanImageSampling::Unknown)
-                    return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    return ResolveVulkanTextureState(ETextureState::SAMPLE, EPassType::Graphics, false, aspects).layout;
 
                 return VK_IMAGE_LAYOUT_GENERAL;
             }
@@ -1004,7 +1000,7 @@ struct VkCmdPreprocessor {
                     tracker.RecordState(
                         vk_texture,
                         GetTextureAccess(_info),
-                        GetTextureLayout(_info),
+                        GetTextureLayout(_info, vk_texture->GetAspectFlags()),
                         _info.stages,
                         _arg.mip_level,
                         _arg.num_mips,
@@ -3021,7 +3017,7 @@ public:
 
         auto& shuffle_sd = m_device->GetInternalShaders().sd_component_shuffle;
 
-        bool b_array   = !texture_data.empty() || !buffer_data.empty();
+        bool b_array   = !array_data.empty();
         bool b_texture = !texture_data.empty();
         bool b_buffer  = !buffer_data.empty();
 

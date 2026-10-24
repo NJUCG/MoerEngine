@@ -1,8 +1,9 @@
 #pragma once
 
-#include "VulkanRaytracingResource.h"
 #include "VulkanCommon.h"
 #include "VulkanDescriptorBufferAllocator.h"
+#include "VulkanDescriptorMode.h"
+#include "VulkanRaytracingResource.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 
@@ -28,6 +29,14 @@ struct VulkanCachedDescriptor {
     uint             slot_index = 0;
 };
 
+struct VulkanDescriptorHeapFunctions {
+    PFN_vkWriteResourceDescriptorsEXT write_resources = nullptr;
+    PFN_vkWriteSamplerDescriptorsEXT  write_samplers  = nullptr;
+    PFN_vkCmdBindResourceHeapEXT      bind_resources  = nullptr;
+    PFN_vkCmdBindSamplerHeapEXT       bind_samplers   = nullptr;
+    PFN_vkCmdPushDataEXT              push_data       = nullptr;
+};
+
 class VulkanDescriptorHeap {
 public:
     explicit VulkanDescriptorHeap(VulkanDevice& _device);
@@ -41,6 +50,23 @@ public:
     // Native descriptor size and GPU storage address.
     uint            GetDescriptorSize(VkDescriptorType _type) const;
     VkDeviceAddress GetDescriptorBufferAddress() const;
+
+    VulkanBuffer* GetResourceHeapBuffer() const {
+        return descriptor_buffer.get();
+    }
+    const VkBindHeapInfoEXT& GetResourceHeapBinding() const {
+        return resource_heap_binding;
+    }
+    const VkBindHeapInfoEXT& GetSamplerHeapBinding() const {
+        return sampler_heap_binding;
+    }
+    uint64 GetStorageAlignment() const;
+    uint64 GetBindlessSamplerSetSize() const {
+        return bindless_sampler_set_size;
+    }
+    uint64 GetBindlessSamplerBindingOffset() const {
+        return bindless_sampler_binding_offset;
+    }
 
     // Resource objects retain slot indices for release. Cache byte offsets
     // stay internal; GPU destination offsets are supplied only when copying.
@@ -102,6 +128,8 @@ private:
     };
 
     void InitializeSamplerDescriptors();
+    void InitializeSamplerSetLayout();
+    void CreateNativeHeaps();
     void CreateDescriptorBuffer();
     void MapDescriptorBuffer();
 
@@ -118,7 +146,12 @@ private:
     Array<VkDescriptorType> image_descriptor_types;
     DescriptorCache         acceleration_structure_cache;
     Array<byte>             sampler_descriptors;
+    uint64                        bindless_sampler_set_size       = 0;
+    uint64                        bindless_sampler_binding_offset = 0;
     std::mutex              cache_mutex;
+    std::unique_ptr<VulkanBuffer> sampler_heap;
+    VkBindHeapInfoEXT             resource_heap_binding{VK_STRUCTURE_TYPE_BIND_HEAP_INFO_EXT};
+    VkBindHeapInfoEXT             sampler_heap_binding{VK_STRUCTURE_TYPE_BIND_HEAP_INFO_EXT};
 
     // Owned GPU storage; destroyed before the device's VMA allocator.
     std::unique_ptr<VulkanBuffer> descriptor_buffer;

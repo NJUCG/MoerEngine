@@ -633,6 +633,11 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanDescriptorBufferAllocatorContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(VulkanDescriptorBufferAllocatorContract PROPERTIES TIMEOUT 30)
 
+add_executable(TestVulkanDescriptorPolicy "VulkanDescriptorPolicyTest.cpp")
+target_include_directories(TestVulkanDescriptorPolicy PRIVATE "${moer_source_dir}/runtime/render")
+set_target_properties(TestVulkanDescriptorPolicy PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanDescriptorPolicyContract COMMAND $<TARGET_FILE:TestVulkanDescriptorPolicy>)
+
 # Exercise the real temporary allocator against counted, failing buffer creation.
 # Keep Render out of this target so test doubles never replace runtime symbols.
 set(test_target TestVulkanTemporaryBufferAllocator)

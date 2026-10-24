@@ -130,8 +130,14 @@ VulkanBuffer::VulkanBuffer(
         .flags = _allocation_info.allocation_flags,
         .usage = _allocation_info.memory_usage,
     };
-    const VkResult result = vmaCreateBuffer(
-        _device.GetVmaAllocator(), &buffer_info, &allocation_info, &m_alloc.buffer, &m_alloc.alloc, nullptr
+    const VkResult result = vmaCreateBufferWithAlignment(
+        _device.GetVmaAllocator(),
+        &buffer_info,
+        &allocation_info,
+        _allocation_info.min_alignment,
+        &m_alloc.buffer,
+        &m_alloc.alloc,
+        nullptr
     );
     if (result != VK_SUCCESS) {
         throw std::runtime_error(

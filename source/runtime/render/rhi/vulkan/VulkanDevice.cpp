@@ -704,16 +704,59 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
 }
 
 void VulkanDevice::CreateDescriptorHeap() {
-    m_global_descriptor_heap.emplace(*this);
-    //create empty descriptor set layout
-    VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
+    const auto& ext   = GetOptionalExtensions();
+    const auto& props = GetOptionalProperties();
+    descriptor_caps   = {
+          .heap   = ext.m_has_ext_descriptor_heap,
+          .buffer = ext.m_has_ext_descriptor_buffer,
+          .push   = HasDeviceExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
+          .buffer_push =
+            ext.m_has_descriptor_buffer_push && props.descriptor_buffer_properties.bufferlessPushDescriptors,
+          .max_push_descriptors = props.push_descriptor_properties.maxPushDescriptors,
+          .max_push_data        = static_cast<uint32_t>(props.descriptor_heap_properties.maxPushDataSize),
     };
-    descriptor_set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-    VK_CHECK_RESULT(vkCreateDescriptorSetLayout(
-        m_device, &descriptor_set_layout_create_info, VK_NULL_HANDLE, &empty_descriptor_set_layout
-    ));
-
+    if (descriptor_caps.heap) {
+        auto& fn           = descriptor_heap_functions;
+        fn.write_resources = reinterpret_cast<PFN_vkWriteResourceDescriptorsEXT>(
+            vkGetDeviceProcAddr(m_device, "vkWriteResourceDescriptorsEXT")
+        );
+        fn.write_samplers = reinterpret_cast<PFN_vkWriteSamplerDescriptorsEXT>(
+            vkGetDeviceProcAddr(m_device, "vkWriteSamplerDescriptorsEXT")
+        );
+        fn.bind_resources = reinterpret_cast<PFN_vkCmdBindResourceHeapEXT>(
+            vkGetDeviceProcAddr(m_device, "vkCmdBindResourceHeapEXT")
+        );
+        fn.bind_samplers = reinterpret_cast<PFN_vkCmdBindSamplerHeapEXT>(
+            vkGetDeviceProcAddr(m_device, "vkCmdBindSamplerHeapEXT")
+        );
+        fn.push_data =
+            reinterpret_cast<PFN_vkCmdPushDataEXT>(vkGetDeviceProcAddr(m_device, "vkCmdPushDataEXT"));
+        descriptor_caps.heap =
+            fn.write_resources && fn.write_samplers && fn.bind_resources && fn.bind_samplers && fn.push_data;
+    }
+    descriptor_mode = SelectVulkanDescriptorMode(descriptor_caps);
+    if (const char* mode = std::getenv("MOER_VULKAN_DESCRIPTORS")) {
+        const std::string_view requested(mode);
+        if (requested == "sets")
+            descriptor_mode = VulkanDescriptorMode::Sets;
+        else if (requested == "buffer" && descriptor_caps.buffer)
+            descriptor_mode = VulkanDescriptorMode::Buffer;
+        else if (requested == "heap" && descriptor_caps.heap)
+            descriptor_mode = VulkanDescriptorMode::Heap;
+        else if (requested != "auto")
+            throw std::runtime_error("Requested Vulkan descriptor backend is unavailable or invalid");
+    }
+    if (const char* push = std::getenv("MOER_VULKAN_PUSH_DESCRIPTORS");
+        push && std::string_view(push) == "0") {
+        descriptor_caps.push = false;
+    }
+    LOG_INFO(
+        "Vulkan descriptors: backend={}, push={}, buffer_push={}",
+        VulkanDescriptorModeName(descriptor_mode),
+        descriptor_caps.push,
+        descriptor_caps.buffer_push
+    );
+    m_global_descriptor_heap.emplace(*this);
     LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
 }
 
@@ -761,6 +804,7 @@ void VulkanDevice::CreateImmutableSamplers() {
             VulkanEnumTranslator::METoVKCompareOp(ECompareOption(compare_function));
         sampler_create_info.compareEnable = compare_function != SCF_NEVER;
 
+        immutable_sampler_infos[i] = sampler_create_info;
         VK_CHECK_RESULT(vkCreateSampler(m_device, &sampler_create_info, VK_NULL_HANDLE, &immutable_samplers[i]));
     }
 }
@@ -776,10 +820,6 @@ void VulkanDevice::DestroyImmutableSamplers() {
 
 void VulkanDevice::DestroyDescriptorHeap() {
     m_global_descriptor_heap.reset();
-    if (empty_descriptor_set_layout) {
-        vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
-        empty_descriptor_set_layout = VK_NULL_HANDLE;
-    }
 }
 
 void VulkanDevice::Destroy() {

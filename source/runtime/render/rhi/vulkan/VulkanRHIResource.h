@@ -41,6 +41,7 @@ struct VulkanBufferAllocationInfo {
     bool                     needs_device_address{false};
     // Borrowed only during creation. Two or more distinct families use concurrent sharing.
     std::span<const uint32_t> queue_family_indices{};
+    VkDeviceSize              min_alignment = 1;
 };
 
 class VulkanBuffer : public Buffer, VulkanDeviceObject {

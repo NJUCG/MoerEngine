@@ -29,6 +29,14 @@ static constexpr VulkanExtensionDesc vulkan_extension_descs[] = {
         .optional = false,
         .factory  = nullptr,
     },
+    {EVulkanExtensionKind::Device,
+     VK_KHR_MAINTENANCE_5_EXTENSION_NAME,
+     true,
+     &CreateVulkanKHRMaintenance5Extension},
+    {EVulkanExtensionKind::Device,
+     VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
+     true,
+     &CreateVulkanEXTDescriptorHeapExtension},
     {
         .kind     = EVulkanExtensionKind::Device,
         .name     = VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
@@ -38,7 +46,7 @@ static constexpr VulkanExtensionDesc vulkan_extension_descs[] = {
     {
         .kind     = EVulkanExtensionKind::Device,
         .name     = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
-        .optional = false,
+        .optional = true,
         .factory  = &CreateVulkanKHRPushDescriptorExtension,
     },
     {

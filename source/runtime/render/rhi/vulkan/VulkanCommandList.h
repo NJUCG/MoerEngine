@@ -19,6 +19,7 @@ class VulkanBuffer;
 class VulkanTexture;
 struct ArrayArguments;
 class VkNativeQueryPool;
+struct VulkanResourceBinding;
 
 class VulkanCommandPool : public VulkanDeviceObject {
 public:
@@ -208,6 +209,23 @@ private:
     VulkanCommandPool&          command_pool;
     VkCommandBufferLevel        level;
     VulkanDescriptorBufferLease descriptor_buffer_lease;
+    // Same lifetime as this command buffer. Reset only when Begin is legal again.
+    struct DescriptorPoolPage {
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        uint remaining_sets = 64;
+        Array<VkDescriptorPoolSize> remaining_descriptors;
+    };
+    Array<DescriptorPoolPage> descriptor_pools;
+    Array<VkBufferView>     descriptor_buffer_views;
+    void                    ResetTransientDescriptors();
+    VkDescriptorSet
+         AllocateDescriptorSet(VkDescriptorSetLayout layout, std::span<const VulkanResourceBinding> bindings);
+    void BindLegacyDescriptors(const class VulkanPipelineState& pipeline, const ArrayArguments& arguments);
+    void BindHeapDescriptors(
+        const class VulkanPipelineState& pipeline,
+        const ArrayArguments&            arguments,
+        uint64                           allocation_offset
+    );
 };
 
 } // namespace Moer::Render

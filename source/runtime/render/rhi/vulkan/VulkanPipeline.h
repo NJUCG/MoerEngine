@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanCommon.h"
+#include "VulkanDescriptorMode.h"
 #include "VulkanDeviceObject.h"
 #include "VulkanPipelineArgument.h"
 #include "rhi/RHIResource.h"
@@ -25,11 +26,12 @@ struct VulkanResourceBinding {
     uint             argument_index;
     VkDescriptorType descriptor_type;
     uint             descriptor_count;
-    uint64           byte_offset; // Binding offset relative to the set start.
+    uint64           byte_offset      = 0;          // Binding offset relative to the set start.
+    uint             heap_push_offset = UINT32_MAX; // Scalar buffer address or immutable sampler index.
 };
 struct VulkanResourceSetBindings {
     Array<VulkanResourceBinding> bindings;
-    uint64                       allocation_size; // Includes alignment and extra padding.
+    uint64                       allocation_size = 0; // Includes alignment and extra padding.
 };
 
 template<VkDescriptorType DescriptorType>
@@ -57,6 +59,8 @@ using VulkanSetResourceBindings = std::variant<
 
 struct VulkanDescriptorSetBinding {
     uint buffer_index = 0;
+    bool push             = false;
+    uint heap_push_offset = 0;
     // Ordinary sets: relative to the draw's resource allocation.
     // Bindless sets: absolute offset in the bound descriptor buffer.
     uint64                    byte_offset = 0;
@@ -72,7 +76,14 @@ struct VulkanPipelineBindingTemplate {
     // Ordinary resources, bindless buffers, and bindless images/samplers.
     static constexpr size_t descriptor_buffer_capacity = 3;
 
-    UnorderedMap<uint, VulkanDescriptorSetBinding> set_bindings;
+    VulkanDescriptorMode                          mode = VulkanDescriptorMode::Sets;
+    Array<VkDescriptorSetAndBindingMappingEXT>    heap_mappings;
+    VkShaderDescriptorSetAndBindingMappingInfoEXT heap_mapping_info{
+        VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT
+    };
+    uint heap_push_size = 0;
+    // Ascending order prevents lower-set rebinding from disturbing sets just bound above it.
+    Map<uint, VulkanDescriptorSetBinding> set_bindings;
     // Native upload metadata for user bytes; stage visibility covers the whole block.
     VkPushConstantsInfoKHR push_constants_info{};
     // The user upload excludes this backend-owned 64-bit address.
@@ -104,6 +115,13 @@ public:
 
     inline const VkPipelineLayout GetPipelineLayout() const {
         return m_pipeline_layout;
+    }
+
+    VulkanDescriptorMode GetDescriptorMode() const {
+        return binding_template->mode;
+    }
+    VkDescriptorSetLayout GetDescriptorSetLayout(uint set) const {
+        return descriptor_set_layouts.at(set);
     }
 
     bool UsesStencilAttachment() const {

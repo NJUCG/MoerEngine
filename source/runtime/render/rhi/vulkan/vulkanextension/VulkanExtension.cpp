@@ -62,6 +62,10 @@ VulkanDeviceExtension::GetMEEnabledDeviceExtensions(const Set<std::string>& _gpu
     TVulkanDeviceExtensionArray extensions_enabled;
 
     for (const auto& ext : extensions) {
+        if (ext->GetExtensionName() == VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME &&
+            !_gpu_extensions.contains(VK_KHR_MAINTENANCE_5_EXTENSION_NAME)) {
+            continue;
+        }
         if (_gpu_extensions.contains(ext->GetExtensionName().data())) {
             ext->Enable();
             extensions_enabled.emplace_back(ext);

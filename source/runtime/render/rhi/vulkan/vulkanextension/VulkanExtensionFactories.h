@@ -9,6 +9,8 @@ namespace Moer::Render {
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRAccelerationStructureExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayTracingPipelineExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayQueryExtension(bool _optional);
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTDescriptorHeapExtension(bool _optional);
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRMaintenance5Extension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTDescriptorBufferExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRPushDescriptorExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTMemoryDecompressionExtension(bool _optional);

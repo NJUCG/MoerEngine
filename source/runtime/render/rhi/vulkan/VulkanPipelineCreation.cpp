@@ -150,7 +150,8 @@ void RecordResourceUsage(
     auto& info          = out_binding_info.argument_infos[argument_index];
     info.resource_type  = static_cast<EShaderResourceType>(resource.resource_type);
     info.image_sampling = static_cast<VulkanImageSampling>(resource.sampled);
-    info.texel_format   = resource.format;
+    info.texel_format = resource.desc_type == VDT_UNIFORM_TEXEL_BUFFER || resource.desc_type == VDT_STORAGE_TEXEL_BUFFER ?
+        resource.format : PF_UNDEFINED;
     info.stages |= ToVulkanPipelineStageFlags(shader_stage);
     MarkShaderArgumentActive(argument_index, resource.custom_flag.active, out_binding_info);
 }
@@ -330,12 +331,27 @@ VulkanPipelineBindingInfo BuildVulkanPipelineBindingInfo(
             VulkanEnumTranslator::METoVKShaderStageFlags(shader->shader_type)
         );
         AccumulateShaderPipelineBindings(*shader, arguments, shader_stage, binding_info);
+        for (const auto& [name, parameter] : shader->shader_param_map->reflect_map) {
+            const auto& reflection = parameter.GetSpirvReflection();
+            const auto* constant   = reflection.TryGetConstant();
+            if (const auto* bindless = reflection.TryGetBindlessArray();
+                bindless && bindless->index_table_address)
+                constant = &*bindless->index_table_address;
+            if (constant) {
+                binding_info.push_constant_range.size =
+                    std::max(binding_info.push_constant_range.size, constant->offset + constant->size);
+                binding_info.push_constant_range.stageFlags |= shader_stage;
+            }
+        }
     }
-    binding_info.push_constant_range.size = binding_info.user_constant_byte_size;
+    binding_info.push_constant_range.size =
+        std::max(binding_info.push_constant_range.size, binding_info.user_constant_byte_size);
     if (binding_info.bindless_index_address) {
         binding_info.push_constant_range.size =
-            binding_info.bindless_index_address->byte_offset + sizeof(VkDeviceAddress);
+            std::max(binding_info.push_constant_range.size, uint(binding_info.bindless_index_address->byte_offset + sizeof(VkDeviceAddress)));
     }
+    if (binding_info.push_constant_range.size > max_push_constant_size)
+        throw std::invalid_argument("Declared push constant block exceeds the device limit");
     return binding_info;
 }
 
@@ -683,7 +699,7 @@ void InitializeGraphicsPipelineCreateData(
     );
     VkGraphicsPipelineCreateInfo& info = create_data.vk_create_info;
     info.pNext               = &create_data.rendering;
-    info.flags               = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    info.flags                         = 0;
     info.stageCount          = static_cast<uint32_t>(shader_stages.size());
     info.pStages             = shader_stages.data();
     info.pVertexInputState   = &create_data.vertex_input;
@@ -730,6 +746,16 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     InitializeGraphicsPipelineCreateData(
         _create_info, shader_stages, vk_pso->GetPipelineLayout(), create_data
     );
+    VkPipelineCreateFlags2CreateInfoKHR flags2{VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO_KHR};
+    if (vk_pso->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+        for (auto& stage : shader_stages)
+            stage.pNext = &vk_pso->binding_template->heap_mapping_info;
+        flags2.flags                     = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+        flags2.pNext                     = create_data.vk_create_info.pNext;
+        create_data.vk_create_info.pNext = &flags2;
+    } else if (vk_pso->GetDescriptorMode() == VulkanDescriptorMode::Buffer) {
+        create_data.vk_create_info.flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    }
     vk_pso->b_uses_stencil_attachment = create_data.uses_stencil_attachment;
     vk_pso->view_mask                 = _create_info.view_mask;
     VK_CHECK_RESULT(vkCreateGraphicsPipelines(
@@ -761,10 +787,18 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
 
     VkComputePipelineCreateInfo pipeline_create_info{};
     pipeline_create_info.sType             = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_create_info.flags             = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    pipeline_create_info.flags             = 0;
     pipeline_create_info.stage             = shader_stages.front();
     pipeline_create_info.layout            = vk_pso->GetPipelineLayout();
     pipeline_create_info.basePipelineIndex = -1;
+    VkPipelineCreateFlags2CreateInfoKHR flags2{VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO_KHR};
+    if (vk_pso->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+        pipeline_create_info.stage.pNext = &vk_pso->binding_template->heap_mapping_info;
+        flags2.flags                     = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+        pipeline_create_info.pNext       = &flags2;
+    } else if (vk_pso->GetDescriptorMode() == VulkanDescriptorMode::Buffer) {
+        pipeline_create_info.flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    }
     VK_CHECK_RESULT(vkCreateComputePipelines(
         m_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &vk_pso->m_pipeline
     ));

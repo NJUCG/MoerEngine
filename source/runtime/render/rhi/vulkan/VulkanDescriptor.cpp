@@ -3,9 +3,11 @@
 #include "VulkanDescriptor.h"
 
 #include "VulkanDevice.h"
+#include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 
 #include "misc/Alignment.h"
+#include "misc/RAII.h"
 #include "rhi/RHIResource.h"
 
 #include <algorithm>
@@ -18,10 +20,13 @@
 namespace Moer::Render {
 
 uint64 GetBindlessTextureDescriptorOffset(const VulkanDevice& device) {
+    if (device.GetDescriptorMode() != VulkanDescriptorMode::Buffer)
+        return 0;
     const auto& properties = device.GetOptionalProperties().descriptor_buffer_properties;
-    const uint64 sampler_bytes =
-        static_cast<uint64>(properties.samplerDescriptorSize) * VulkanDevice::bindless_sampler_count;
-    return Moer::AlignUp(sampler_bytes, properties.descriptorBufferOffsetAlignment);
+    return Moer::AlignUp(
+        device.GetGlobalDescriptorHeap().GetBindlessSamplerSetSize(),
+        properties.descriptorBufferOffsetAlignment
+    );
 }
 
 namespace {
@@ -29,11 +34,33 @@ namespace {
 static constexpr std::string_view s_descriptor_buffer_name         = "VulkanDescriptorHeap::DescriptorBuffer";
 static constexpr uint32           s_descriptor_cache_slot_capacity = 10086;
 static constexpr uint64           s_descriptor_buffer_capacity     = 6 * 1024 * 1024;
+static constexpr uint64           s_heap_capacity                  = 64 * 1024 * 1024;
 static constexpr uint64           s_descriptor_block_size          = 64 * 1024;
+
+uint64 GetDescriptorBlockSize(const VulkanDevice& device);
+
+uint64 GetDescriptorCapacity(const VulkanDevice& device) {
+    if (device.GetDescriptorMode() != VulkanDescriptorMode::Heap)
+        return s_descriptor_buffer_capacity;
+    const auto& p = device.GetOptionalProperties().descriptor_heap_properties;
+    if (p.maxResourceHeapSize <= p.minResourceHeapReservedRange)
+        throw std::runtime_error("No usable resource heap memory");
+    const uint64 block = GetDescriptorBlockSize(device);
+    return std::min<uint64>(s_heap_capacity, p.maxResourceHeapSize - p.minResourceHeapReservedRange) / block *
+           block;
+}
 
 uint64 GetDescriptorBlockSize(const VulkanDevice& _device) {
     const uint64 alignment = std::max<uint64>(
-        _device.GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment,
+        _device.GetDescriptorMode() == VulkanDescriptorMode::Heap ?
+            std::max(
+                _device.GetOptionalProperties().descriptor_heap_properties.imageDescriptorAlignment,
+                _device.GetOptionalProperties().descriptor_heap_properties.bufferDescriptorAlignment
+            ) :
+            std::max<uint64>(
+                1,
+                _device.GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment
+            ),
         _device.GetCoreProperties().core_1_0.limits.nonCoherentAtomSize
     );
     return Moer::AlignUp(s_descriptor_block_size, alignment);
@@ -43,7 +70,11 @@ uint64 GetDescriptorBlockSize(const VulkanDevice& _device) {
 
 VulkanDescriptorHeap::DescriptorCache::DescriptorCache(uint _slot_stride) :
     slot_stride(_slot_stride),
-    bytes(static_cast<size_t>(_slot_stride) * s_descriptor_cache_slot_capacity) {}
+    bytes(static_cast<size_t>(_slot_stride) * s_descriptor_cache_slot_capacity) {
+    // Releasing a slot, including rollback after a failed native encode, must not allocate.
+    if (_slot_stride)
+        free_slots.reserve(s_descriptor_cache_slot_capacity);
+}
 
 uint VulkanDescriptorHeap::DescriptorCache::AllocateSlot() {
     if (!free_slots.empty()) {
@@ -62,52 +93,145 @@ uint VulkanDescriptorHeap::DescriptorCache::AllocateSlot() {
 
 VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     m_device(&_device),
-    buffer_cache(
-        std::max(
-            {GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-             GetDescriptorSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER),
-             GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER),
-             GetDescriptorSize(VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER)}
-        )
-    ),
+    buffer_cache(std::max(
+        {GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+         GetDescriptorSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER),
+         GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER),
+         GetDescriptorSize(VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER)}
+    )),
     buffer_descriptor_types(s_descriptor_cache_slot_capacity, VK_DESCRIPTOR_TYPE_MAX_ENUM),
-    image_cache(
-        std::max(
-            GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-            GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-        )
-    ),
+    image_cache(std::max(
+        GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+    )),
     image_descriptor_types(s_descriptor_cache_slot_capacity, VK_DESCRIPTOR_TYPE_MAX_ENUM),
     acceleration_structure_cache(GetDescriptorSize(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)),
     sampler_descriptors(VulkanDevice::bindless_sampler_count * GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLER)),
     descriptor_allocator(
-        s_descriptor_buffer_capacity,
+        GetDescriptorCapacity(_device),
         GetDescriptorBlockSize(_device),
-        _device.GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment
+        GetStorageAlignment()
     ) {
+    if (_device.GetDescriptorMode() == VulkanDescriptorMode::Sets)
+        return;
     InitializeSamplerDescriptors();
+    if (_device.GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+        CreateNativeHeaps();
+        MapDescriptorBuffer();
+        return;
+    }
+    InitializeSamplerSetLayout();
     CreateDescriptorBuffer();
     // Map last: no potentially throwing initialization remains after success.
     MapDescriptorBuffer();
 }
 
+void VulkanDescriptorHeap::InitializeSamplerSetLayout() {
+    VkDescriptorSetLayoutBinding binding{
+        0, VK_DESCRIPTOR_TYPE_SAMPLER, VulkanDevice::bindless_sampler_count, VK_SHADER_STAGE_ALL
+    };
+    const VkDescriptorBindingFlags flags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
+                                           VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                                           VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO
+    };
+    binding_flags.bindingCount  = 1;
+    binding_flags.pBindingFlags = &flags;
+    VkDescriptorSetLayoutCreateInfo info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    info.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    info.pNext        = &binding_flags;
+    info.bindingCount = 1;
+    info.pBindings    = &binding;
+    VkDescriptorSetLayout layout;
+    VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_device->GetDevice(), &info, nullptr, &layout));
+    auto release = OnScopeExit([&] {
+        vkDestroyDescriptorSetLayout(m_device->GetDevice(), layout, nullptr);
+    });
+    vkGetDescriptorSetLayoutSizeEXT(m_device->GetDevice(), layout, &bindless_sampler_set_size);
+    vkGetDescriptorSetLayoutBindingOffsetEXT(
+        m_device->GetDevice(), layout, 0, &bindless_sampler_binding_offset
+    );
+}
+
 void VulkanDescriptorHeap::InitializeSamplerDescriptors() {
     const uint sampler_descriptor_size = GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLER);
     for (uint32_t i = 0; i < VulkanDevice::bindless_sampler_count; ++i) {
-        VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
-        if (i >= m_device->ImmutableSamplerCount()) {
-            break;
+        const uint source      = i < m_device->ImmutableSamplerCount() ? i : 0;
+        auto*      destination = sampler_descriptors.data() + i * sampler_descriptor_size;
+        if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+            VkHostAddressRangeEXT      range{destination, sampler_descriptor_size};
+            const VkSamplerCreateInfo& info = m_device->GetSamplerCreateInfo(source);
+            VK_CHECK_RESULT(
+                m_device->GetDescriptorHeapFunctions().write_samplers(m_device->GetDevice(), 1, &info, &range)
+            );
+        } else {
+            VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+            VkSampler              sampler = m_device->GetImmutableSamplers()[source];
+            desc_info.type                 = VK_DESCRIPTOR_TYPE_SAMPLER;
+            desc_info.data.pSampler        = &sampler;
+            vkGetDescriptorEXT(m_device->GetDevice(), &desc_info, sampler_descriptor_size, destination);
         }
-        VkSampler sampler       = m_device->GetImmutableSamplers()[i];
-        desc_info.data.pSampler = &sampler;
-        desc_info.type          = VK_DESCRIPTOR_TYPE_SAMPLER;
-        vkGetDescriptorEXT(
-            m_device->GetDevice(),
-            &desc_info,
-            sampler_descriptor_size,
-            sampler_descriptors.data() + i * sampler_descriptor_size
-        );
     }
+}
+
+uint64 VulkanDescriptorHeap::GetStorageAlignment() const {
+    if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+        const auto& p = m_device->GetOptionalProperties().descriptor_heap_properties;
+        return std::max(p.imageDescriptorAlignment, p.bufferDescriptorAlignment);
+    }
+    return std::max<uint64>(
+        1, m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment
+    );
+}
+
+void VulkanDescriptorHeap::CreateNativeHeaps() {
+    const auto&    p          = m_device->GetOptionalProperties().descriptor_heap_properties;
+    const uint32_t families[] = {
+        m_device->GetQueueFamilyIndex(EQueueType::Graphics),
+        m_device->GetQueueFamilyIndex(EQueueType::Compute)
+    };
+    auto create = [&](std::string_view name, uint64 bytes, uint64 alignment) {
+        return std::make_unique<VulkanBuffer>(
+            name,
+            BufferInfo(bytes, 1, EBufferUsageFlags::UNORDERED_ACCESS),
+            *m_device,
+            VulkanBufferAllocationInfo{
+                .vk_usage = VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .allocation_flags     = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .needs_device_address = true,
+                .queue_family_indices = std::span(families, families[0] == families[1] ? 1 : 2),
+                .min_alignment        = alignment,
+            },
+            false
+        );
+    };
+    const uint64 resource_reserved = Moer::AlignUp(GetDescriptorCapacity(*m_device), GetStorageAlignment());
+    const uint64 resource_size     = resource_reserved + p.minResourceHeapReservedRange;
+    const uint64 sampler_reserved =
+        Moer::AlignUp<uint64>(sampler_descriptors.size(), p.samplerDescriptorAlignment);
+    const uint64 sampler_size = sampler_reserved + p.minSamplerHeapReservedRange;
+    if (resource_size > p.maxResourceHeapSize || sampler_size > p.maxSamplerHeapSize) {
+        throw std::runtime_error("Vulkan descriptor heap capacity exceeds device limits");
+    }
+    descriptor_buffer               = create("Vulkan resource heap", resource_size, p.resourceHeapAlignment);
+    sampler_heap                    = create("Vulkan sampler heap", sampler_size, p.samplerHeapAlignment);
+    resource_heap_binding.heapRange = {descriptor_buffer->DeviceAddress(), resource_size};
+    resource_heap_binding.reservedRangeOffset = resource_reserved;
+    resource_heap_binding.reservedRangeSize   = p.minResourceHeapReservedRange;
+    sampler_heap_binding.heapRange            = {sampler_heap->DeviceAddress(), sampler_size};
+    sampler_heap_binding.reservedRangeOffset  = sampler_reserved;
+    sampler_heap_binding.reservedRangeSize    = p.minSamplerHeapReservedRange;
+    void* mapped                              = nullptr;
+    VK_CHECK_RESULT(vmaMapMemory(m_device->GetVmaAllocator(), sampler_heap->GetAllocation(), &mapped));
+    memcpy(mapped, sampler_descriptors.data(), sampler_descriptors.size());
+    const VkResult flushed = vmaFlushAllocation(
+        m_device->GetVmaAllocator(), sampler_heap->GetAllocation(), 0, sampler_descriptors.size()
+    );
+    vmaUnmapMemory(m_device->GetVmaAllocator(), sampler_heap->GetAllocation());
+    VK_CHECK_RESULT(flushed);
 }
 
 void VulkanDescriptorHeap::CreateDescriptorBuffer() {
@@ -148,6 +272,23 @@ VulkanDescriptorHeap::~VulkanDescriptorHeap() {
 }
 
 uint VulkanDescriptorHeap::GetDescriptorSize(VkDescriptorType _type) const {
+    if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Sets)
+        return 0;
+    if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+        const auto& p = m_device->GetOptionalProperties().descriptor_heap_properties;
+        switch (_type) {
+            case VK_DESCRIPTOR_TYPE_SAMPLER:
+                return static_cast<uint>(p.samplerDescriptorSize);
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+            case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+                return static_cast<uint>(p.imageDescriptorSize);
+            default:
+                return static_cast<uint>(p.bufferDescriptorSize);
+        }
+    }
     const auto& properties = m_device->GetOptionalProperties().descriptor_buffer_properties;
     const bool  robust     = m_device->GetCoreFeatures().GetCore10Features().robustBufferAccess == VK_TRUE;
     switch (_type) {
@@ -183,7 +324,7 @@ uint VulkanDescriptorHeap::GetDescriptorSize(VkDescriptorType _type) const {
 }
 
 VkDeviceAddress VulkanDescriptorHeap::GetDescriptorBufferAddress() const {
-    return descriptor_buffer->DeviceAddress();
+    return descriptor_buffer ? descriptor_buffer->DeviceAddress() : 0;
 }
 
 VulkanCachedDescriptor VulkanDescriptorHeap::GetOrCreateBufferDescriptor(
@@ -239,15 +380,35 @@ VulkanCachedDescriptor VulkanDescriptorHeap::GetOrCreateBufferDescriptor(
     }
     const uint slot_index = buffer_cache.AllocateSlot();
 
-    cache_slots[key]                    = slot_index;
-    buffer_descriptor_types[slot_index] = _type;
+    bool published = false;
+    auto rollback  = OnScopeExit([&] {
+        if (!published)
+            buffer_cache.free_slots.push_back(slot_index);
+    });
 
-    vkGetDescriptorEXT(
-        m_device->GetDevice(),
-        &buffer_desc_info,
-        desc_size,
-        buffer_cache.bytes.data() + slot_index * buffer_cache.slot_stride
-    );
+    void* destination = buffer_cache.bytes.data() + slot_index * buffer_cache.slot_stride;
+    if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+        VkResourceDescriptorInfoEXT info{VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT};
+        info.type = _type;
+        VkDeviceAddressRangeEXT        address{buffer_info.address, buffer_info.range};
+        VkTexelBufferDescriptorInfoEXT texel{VK_STRUCTURE_TYPE_TEXEL_BUFFER_DESCRIPTOR_INFO_EXT};
+        texel.format       = _format;
+        texel.addressRange = address;
+        if (_type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER ||
+            _type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER)
+            info.data.pTexelBuffer = &texel;
+        else
+            info.data.pAddressRange = &address;
+        VkHostAddressRangeEXT range{destination, desc_size};
+        VK_CHECK_RESULT(
+            m_device->GetDescriptorHeapFunctions().write_resources(m_device->GetDevice(), 1, &info, &range)
+        );
+    } else {
+        vkGetDescriptorEXT(m_device->GetDevice(), &buffer_desc_info, desc_size, destination);
+    }
+    cache_slots.emplace(key, slot_index);
+    buffer_descriptor_types[slot_index] = _type;
+    published                           = true;
     return {_type, slot_index};
 }
 
@@ -298,14 +459,44 @@ VulkanCachedDescriptor VulkanDescriptorHeap::GetOrCreateImageDescriptor(
         desc_info.data.pSampledImage = &image_info;
     }
     const uint slot_index = image_cache.AllocateSlot();
+    bool       published   = false;
+    auto       rollback    = OnScopeExit([&] {
+        if (!published)
+            image_cache.free_slots.push_back(slot_index);
+    });
+    void*      destination = image_cache.bytes.data() + slot_index * image_cache.slot_stride;
+    if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+        VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        view.image            = texture->GetHandle();
+        view.viewType         = texture->GetDimension() == ETextureDimension::TEX_CUBE && array_count == 1 ?
+                                    VK_IMAGE_VIEW_TYPE_2D :
+                                    VulkanEnumTranslator::METoVKImageViewType(texture->GetDimension());
+        view.format           = VulkanEnumTranslator::METoVKFormat(texture->GetFormat());
+        view.subresourceRange = {
+            VulkanEnumTranslator::METoVKImageAspectFlags(texture->GetAspectFlags()),
+            _image->mip_level,
+            _image->num_mips,
+            _image->array_layer,
+            array_count
+        };
+        VkImageDescriptorInfoEXT image{VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT};
+        image.pView  = &view;
+        image.layout = _layout;
+        VkResourceDescriptorInfoEXT info{VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT};
+        info.type        = _descriptor_type;
+        info.data.pImage = &image;
+        VkHostAddressRangeEXT range{destination, GetDescriptorSize(_descriptor_type)};
+        VK_CHECK_RESULT(
+            m_device->GetDescriptorHeapFunctions().write_resources(m_device->GetDevice(), 1, &info, &range)
+        );
+    } else {
+        vkGetDescriptorEXT(
+            m_device->GetDevice(), &desc_info, GetDescriptorSize(_descriptor_type), destination
+        );
+    }
     texture->m_descriptor_cache_slots.emplace(key, slot_index);
     image_descriptor_types[slot_index] = _descriptor_type;
-    vkGetDescriptorEXT(
-        m_device->GetDevice(),
-        &desc_info,
-        GetDescriptorSize(_descriptor_type),
-        image_cache.bytes.data() + slot_index * image_cache.slot_stride
-    );
+    published                          = true;
     return {_descriptor_type, slot_index};
 }
 
@@ -330,14 +521,30 @@ VulkanCachedDescriptor VulkanDescriptorHeap::GetOrCreateAccelerationStructureDes
     desc_info.data.accelerationStructure =
         vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &address_info);
     const uint slot_index                            = acceleration_structure_cache.AllocateSlot();
-    _acceleration_structure->m_descriptor_cache_slot = slot_index;
-    vkGetDescriptorEXT(
-        m_device->GetDevice(),
-        &desc_info,
-        acceleration_structure_cache.slot_stride,
-        acceleration_structure_cache.bytes.data() + slot_index * acceleration_structure_cache.slot_stride
-    );
+    bool       published                             = false;
+    auto       rollback                              = OnScopeExit([&] {
+        if (!published)
+            acceleration_structure_cache.free_slots.push_back(slot_index);
+    });
+    void*      destination =
+        acceleration_structure_cache.bytes.data() + slot_index * acceleration_structure_cache.slot_stride;
+    if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+        VkDeviceAddressRangeEXT     address{desc_info.data.accelerationStructure, 0};
+        VkResourceDescriptorInfoEXT info{VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT};
+        info.type               = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        info.data.pAddressRange = &address;
+        VkHostAddressRangeEXT range{destination, acceleration_structure_cache.slot_stride};
+        VK_CHECK_RESULT(
+            m_device->GetDescriptorHeapFunctions().write_resources(m_device->GetDevice(), 1, &info, &range)
+        );
+    } else {
+        vkGetDescriptorEXT(
+            m_device->GetDevice(), &desc_info, acceleration_structure_cache.slot_stride, destination
+        );
+    }
 
+    _acceleration_structure->m_descriptor_cache_slot = slot_index;
+    published                                        = true;
     return {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, slot_index};
 }
 

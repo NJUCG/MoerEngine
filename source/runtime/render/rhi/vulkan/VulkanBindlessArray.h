@@ -1,5 +1,6 @@
 #pragma once
 
+#include "VulkanDescriptorBufferAllocator.h"
 #include "VulkanDeviceObject.h"
 #include "VulkanRHIResource.h"
 #include "misc/LockFree.h"
@@ -86,11 +87,14 @@ public:
         return m_index_buffer.get();
     }
     VulkanBuffer* GetBufferDescriptorBuffer() const {
-        return m_buffer_descriptors.get();
+        return heap_buffer ? heap_buffer : m_buffer_descriptors.get();
     }
     VulkanBuffer* GetTextureSamplerDescriptorBuffer() const {
-        return m_texture_sampler_descriptors.get();
+        return heap_buffer ? heap_buffer : m_texture_sampler_descriptors.get();
     }
+
+    VkDescriptorSet GetLegacySet(VkDescriptorType type) const;
+    VkAccessFlags2  GetDescriptorReadAccess() const;
 
     void Lock() {
         mtx.lock();
@@ -108,6 +112,12 @@ public:
     Array<Handle> handles;
 
 private:
+    struct LegacyDescriptorSets;
+    std::unique_ptr<LegacyDescriptorSets> legacy_sets;
+    void                                  CreateLegacySets(uint max_size);
+    // Persistent ranges share the existing lease allocator; the array owns them.
+    VulkanDescriptorBufferLease heap_lease;
+    VulkanBuffer*               heap_buffer = nullptr;
     // Plain uint index table, read by device address from push constants.
     std::unique_ptr<VulkanBuffer> m_index_buffer;
     // Descriptor storage bound through vkCmdBindDescriptorBuffersEXT.

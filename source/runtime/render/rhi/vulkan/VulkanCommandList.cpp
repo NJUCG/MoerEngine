@@ -13,6 +13,7 @@
 #include "VulkanDevice.h"
 #include "VulkanFault.h"
 #include "VulkanRHIResource.h"
+#include "VulkanResourceState.h"
 #include <string_view>
 
 #include "shader/ShaderPipeline.h"
@@ -121,12 +122,14 @@ VulkanCommandList::VulkanCommandList(VulkanCommandPool& _command_pool, VkCommand
 }
 
 VulkanCommandList::~VulkanCommandList() {
+    ResetTransientDescriptors();
     vkFreeCommandBuffers(command_pool.GetDevice().GetDevice(), command_pool.GetHandle(), 1, &command_buffer);
 }
 
 // Recording lifecycle.
 VkResult VulkanCommandList::Begin() {
     assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+    ResetTransientDescriptors();
     VkCommandBufferBeginInfo begin_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext            = nullptr,
@@ -141,6 +144,7 @@ VkResult VulkanCommandList::BeginSecondary(
     VkCommandBufferUsageFlags             _flags
 ) {
     assert(level == VK_COMMAND_BUFFER_LEVEL_SECONDARY);
+    ResetTransientDescriptors();
     VkCommandBufferBeginInfo begin_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext            = nullptr,
@@ -182,9 +186,7 @@ void VulkanCommandList::BindPipeline(const PipelineHandle& _pipeline_handle) {
 namespace {
 
 VkImageLayout GetSampledImageLayout(const TextureView& _view) {
-    return uint(_view.GetTexture()->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) ?
-               VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
-               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    return ResolveVulkanTextureState(ETextureState::SAMPLE, EPassType::Graphics, false, _view.GetTexture()->GetAspectFlags()).layout;
 }
 
 template<typename View, typename WriteDescriptor>
@@ -305,12 +307,14 @@ void WriteResourceSetDescriptors(
     const uint64 active_argument_bits = _pipeline.GetActiveArgumentBits();
     for (const auto& binding : _resource_bindings.bindings) {
         const uint argument_index = binding.argument_index;
-        if (binding.descriptor_count == 0 || argument_index >= 64 ||
+        if (binding.heap_push_offset != UINT32_MAX || binding.descriptor_count == 0 || argument_index >= 64 ||
             !(active_argument_bits & (uint64(1) << argument_index))) {
             continue;
         }
-        const VkFormat buffer_format =
-            VulkanEnumTranslator::METoVKFormat(_pipeline.GetArgumentInfo(argument_index).texel_format);
+        const bool is_texel = binding.descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER ||
+                              binding.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+        const VkFormat buffer_format = is_texel ?
+            VulkanEnumTranslator::METoVKFormat(_pipeline.GetArgumentInfo(argument_index).texel_format) : VK_FORMAT_UNDEFINED;
         WriteResourceBindingDescriptors(
             _heap, binding, _arguments[argument_index], buffer_format, _set_byte_offset + binding.byte_offset
         );
@@ -325,6 +329,8 @@ void WriteShaderArgumentDescriptors(
     uint64                                      _resource_byte_offset
 ) {
     for (const auto& [set_index, set_binding] : _pipeline.binding_template->set_bindings) {
+        if (set_binding.push)
+            continue;
         auto& descriptor_buffer = _descriptor_buffers[set_binding.buffer_index];
         std::visit(
             Overload{
@@ -367,6 +373,8 @@ void BindDescriptorBufferSets(
         );
     }
     for (const auto& [set_index, set_binding] : _pipeline.binding_template->set_bindings) {
+        if (set_binding.push)
+            continue;
         const VkDeviceSize byte_offset =
             set_binding.byte_offset +
             (std::holds_alternative<VulkanResourceSetBindings>(set_binding.resource_bindings) ?
@@ -438,6 +446,12 @@ void VulkanCommandList::BindShaderArguments(
     const VulkanPipelineBindingTemplate& binding_template = *pipeline->binding_template;
     VulkanDescriptorHeap&                descriptor_heap = command_pool.GetDevice().GetGlobalDescriptorHeap();
 
+    if (pipeline->GetDescriptorMode() == VulkanDescriptorMode::Sets) {
+        BindLegacyDescriptors(*pipeline, _arguments);
+        PushShaderConstants(command_buffer, binding_template.push_constants_info, _arguments.constants);
+        PushBindlessIndexAddress(command_buffer, binding_template, _arguments);
+        return;
+    }
     const std::optional<uint64> allocation_offset = descriptor_heap.ReserveDescriptorRange(
         descriptor_buffer_lease, binding_template.resource_descriptor_allocation_size
     );
@@ -447,6 +461,17 @@ void VulkanCommandList::BindShaderArguments(
         );
     }
 
+    if (pipeline->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
+        for (const auto& [set_index, set] : binding_template.set_bindings) {
+            if (const auto* resources = std::get_if<VulkanResourceSetBindings>(&set.resource_bindings)) {
+                WriteResourceSetDescriptors(
+                    descriptor_heap, *pipeline, *resources, _arguments, *allocation_offset + set.byte_offset
+                );
+            }
+        }
+        BindHeapDescriptors(*pipeline, _arguments, *allocation_offset);
+        return;
+    }
     // Only addresses are mutable per recording. The backend binds at most three
     // buffer categories, so this scratch storage does not need a heap allocation.
     std::array<VkDescriptorBufferBindingInfoEXT, VulkanPipelineBindingTemplate::descriptor_buffer_capacity>
@@ -464,6 +489,7 @@ void VulkanCommandList::BindShaderArguments(
         descriptor_heap, *pipeline, _arguments, descriptor_buffers, *allocation_offset
     );
     BindDescriptorBufferSets(command_buffer, *pipeline, descriptor_buffers, *allocation_offset);
+    BindLegacyDescriptors(*pipeline, _arguments);
     PushShaderConstants(command_buffer, binding_template.push_constants_info, _arguments.constants);
     PushBindlessIndexAddress(command_buffer, binding_template, _arguments);
 }

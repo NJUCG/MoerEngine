@@ -19,6 +19,7 @@ public:
 
 class VulkanOptionalDeviceProperties {
 public:
+    VkPhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties{};
     // Descriptor binding
     VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_buffer_properties{};
     VkPhysicalDevicePushDescriptorPropertiesKHR   push_descriptor_properties{};
