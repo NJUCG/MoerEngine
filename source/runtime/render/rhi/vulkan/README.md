@@ -32,32 +32,27 @@ resources through the existing submission lifetime.
 
 ## Descriptor storage and binding
 
-The native RHI binding path uses `VK_EXT_descriptor_buffer`. It does not
-allocate, update, or bind `VkDescriptorSet` objects. `VkDescriptorSetLayout`
-and `VkPipelineLayout` still define the shader's set/binding interface and
-the layout of descriptors in memory.
+The shader-facing set/binding interface is preserved. The device selects native
+**descriptor heap > descriptor buffer > descriptor sets** from its capabilities;
+pipeline reflection selects the appropriate binding path. Ordinary pipelines use
+sets with an optional push descriptor set. Bindless pipelines use the selected
+modern backend, with traditional sets available for required fallbacks.
+
+Heap pipelines use shader binding mappings and push data. Buffer pipelines may
+combine descriptor-buffer offsets with one push descriptor set when the device
+supports bufferless push descriptors. Pass authors do not select these APIs.
 
 | Owner | Responsibility |
 |---|---|
-| `VulkanDescriptorHeap` | Cache native descriptor bytes on the CPU; own the mapped GPU descriptor buffer used for pipeline argument bindings. |
-| `VulkanDescriptorBufferAllocator` | Reserve buffer ranges on demand and recycle them after submission completion or discarded recording. |
-| `VulkanBindlessArray` | Own the bindless index table and the buffer, image, and sampler descriptor storage; track resource membership and updates. |
-| `VulkanPipelineState` | Retain set layouts, binding offsets, argument mappings, and push constant metadata. |
-| `VulkanCommandList` | Copy argument descriptors into reserved ranges, bind descriptor buffers, set per-set offsets, and push constants. |
+| `VulkanDescriptorHeap` | Encode/cache native descriptors and own the selected backend's GPU storage; no descriptor byte storage in sets mode. |
+| `VulkanDescriptorBufferAllocator` | Reserve byte ranges and recycle them under existing submission or persistent-array lifetime guarantees. |
+| `VulkanBindlessArray` | Own the index table and persistent descriptors; maintain compatible traditional sets for pipeline fallback. |
+| `VulkanPipelineState` | Retain backend choice, layouts or heap mappings, binding offsets, and immediate-data metadata. |
+| `VulkanCommandList` / `VulkanDescriptorBinding.cpp` | Write/bind descriptors and immediate data; own transient native pools and texel views until context completion. |
 
-CPU descriptor caches are shared by ordinary argument binding and bindless
-updates. Cache slot indices are independent of shader binding numbers and
-GPU byte offsets. Native descriptor sizes come from device properties;
-binding offsets come from the descriptor set layout queries.
-
-Bindless resources use three GPU buffers:
-
-- A plain index table, read by device address passed through push constants.
-- A buffer descriptor array.
-- Image and sampler descriptor regions in a shared descriptor buffer.
-
-Only the latter two contain descriptors and are bound as descriptor buffers.
-The index table maps shader handles to descriptor slots and sampler indices.
+See [Vulkan descriptor backends](../../../../../docs/VULKAN_DESCRIPTOR_BACKENDS.md)
+for selection rules, lifetime guarantees, the cost of maintaining fallback sets,
+and the reproducible GPU readback matrix.
 
 ## Lifetime boundaries
 

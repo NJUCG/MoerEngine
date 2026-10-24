@@ -656,6 +656,10 @@ set_tests_properties(VulkanTemporaryBufferAllocatorContract PROPERTIES TIMEOUT 3
 # it requires a Vulkan-capable machine; the CPU-only contracts above remain in
 # the default CTest suite.
 if (NOT APPLE)
+    add_executable(TestVulkanDescriptorBackend "VulkanDescriptorBackendTest.cpp")
+    target_link_libraries(TestVulkanDescriptorBackend PRIVATE Moer::Render)
+    set_target_properties(TestVulkanDescriptorBackend PROPERTIES FOLDER ${moer_test_folder})
+
     set(test_target TestRHIParallelRecordVulkan)
     add_executable(${test_target} "RHIParallelRecordVulkanTest.cpp")
     target_link_libraries(${test_target}
