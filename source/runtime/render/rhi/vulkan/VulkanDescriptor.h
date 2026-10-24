@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanCommon.h"
+#include "RenderAPI.h"
 #include "VulkanDescriptorBufferAllocator.h"
 #include "VulkanDescriptorMode.h"
 #include "VulkanRaytracingResource.h"
@@ -60,7 +61,7 @@ public:
     const VkBindHeapInfoEXT& GetSamplerHeapBinding() const {
         return sampler_heap_binding;
     }
-    uint64 GetStorageAlignment() const;
+    RENDER_API uint64 GetStorageAlignment() const;
     uint64 GetBindlessSamplerSetSize() const {
         return bindless_sampler_set_size;
     }
@@ -95,24 +96,19 @@ public:
 
     // Creation reserves no storage. Flush after recorders join; recycle only
     // after GPU completion or after all referencing commands are discarded.
-    VulkanDescriptorBufferLease CreateDescriptorBufferLease();
+    RENDER_API VulkanDescriptorBufferLease CreateDescriptorBufferLease();
     void                        FlushDescriptorWrites(const VulkanDescriptorBufferLease& _lease);
-    void                        RecycleDescriptorBufferLease(VulkanDescriptorBufferLease _lease);
+    RENDER_API void RecycleDescriptorBufferLease(VulkanDescriptorBufferLease _lease);
 
-    // Reserve an immutable range for one pipeline bind. The caller supplies a
-    // size aligned for set offsets; concurrent recorders never share a range.
-    std::optional<uint64>
+    // Persistent bindless tables retain a contiguous range until their own
+    // lease retires. Transient binds use PrepareDescriptorRecordings instead.
+    RENDER_API std::optional<uint64>
            ReserveDescriptorRange(const VulkanDescriptorBufferLease& _lease, uint64 _byte_size);
     uint64 GetUsedDescriptorBytes(const VulkanDescriptorBufferLease& _lease) const;
 
-    VulkanDescriptorAllocationCheckpoint
-    CreateDescriptorCheckpoint(const VulkanDescriptorBufferLease& _lease) const;
-
-    // All recorders using this lease must have joined and discarded their work
-    // before restoring allocation state for serial fallback.
-    void RewindDescriptorWrites(
-        const VulkanDescriptorBufferLease&          _lease,
-        const VulkanDescriptorAllocationCheckpoint& _checkpoint
+    RENDER_API std::optional<std::vector<VulkanDescriptorBufferAllocator::Recording>> PrepareDescriptorRecordings(
+        const VulkanDescriptorBufferLease& _lease,
+        std::span<const std::vector<uint64_t>> _requests
     );
 
 private:

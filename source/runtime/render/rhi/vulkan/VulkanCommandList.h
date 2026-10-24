@@ -1,7 +1,7 @@
 #pragma once
 
 #include "VulkanCommon.h"
-#include "VulkanDescriptorBufferAllocator.h"
+#include "VulkanDescriptorRecordingPlan.h"
 #include "VulkanDeviceObject.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
@@ -80,8 +80,21 @@ public:
     // Pipeline and shader arguments.
     void BindPipeline(const PipelineHandle& _pipeline_handle);
     void BindShaderArguments(const PipelineHandle& _pipeline_handle, const ArrayArguments& _arguments);
-    void SetDescriptorBufferLease(VulkanDescriptorBufferLease _lease) {
-        descriptor_buffer_lease = std::move(_lease);
+    void SetDescriptorRecordingPlan(std::shared_ptr<const VulkanDescriptorRecordingPlan> _plan) {
+        descriptor_cursor = {};
+        descriptor_recording_plan = std::move(_plan);
+    }
+    void BeginDescriptorCommand(const Command* _command) {
+        descriptor_cursor = {};
+        if (descriptor_recording_plan) {
+            const auto it = descriptor_recording_plan->commands.find(_command);
+            if (it != descriptor_recording_plan->commands.end()) {
+                descriptor_cursor = VulkanDescriptorBufferAllocator::Cursor(it->second);
+            }
+        }
+    }
+    uint64 GetUsedDescriptorBytes() const {
+        return used_descriptor_bytes;
     }
 
     // Vertex input and dynamic state.
@@ -208,7 +221,9 @@ private:
     VkCommandBuffer             command_buffer{VK_NULL_HANDLE};
     VulkanCommandPool&          command_pool;
     VkCommandBufferLevel        level;
-    VulkanDescriptorBufferLease descriptor_buffer_lease;
+    std::shared_ptr<const VulkanDescriptorRecordingPlan> descriptor_recording_plan;
+    VulkanDescriptorBufferAllocator::Cursor descriptor_cursor;
+    uint64 used_descriptor_bytes{0};
     // Same lifetime as this command buffer. Reset only when Begin is legal again.
     struct DescriptorPoolPage {
         VkDescriptorPool pool = VK_NULL_HANDLE;

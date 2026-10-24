@@ -83,9 +83,9 @@ bool VulkanCommandContext::ResetCommandPool() {
         }
     );
     if (result == VK_SUCCESS) {
-        cmd_list.SetDescriptorBufferLease({});
+        cmd_list.SetDescriptorRecordingPlan({});
         if (secondary_cmd_list.has_value()) {
-            secondary_cmd_list->SetDescriptorBufferLease({});
+            secondary_cmd_list->SetDescriptorRecordingPlan({});
         }
         return true;
     }

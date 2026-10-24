@@ -22,18 +22,19 @@ std::optional<uint64_t> AlignSize(uint64_t _size, uint64_t _alignment) {
 VulkanDescriptorBufferAllocator::VulkanDescriptorBufferAllocator(
     uint64_t _capacity,
     uint64_t _block_size,
-    uint64_t _range_alignment
+    uint64_t _range_alignment,
+    uint64_t _allocation_alignment
 ) :
     capacity(_capacity),
     block_size(_block_size),
-    range_alignment(_range_alignment) {
+    range_alignment(_range_alignment),
+    allocation_alignment(_allocation_alignment ? _allocation_alignment : _block_size) {
     if (capacity == 0 || block_size == 0 || range_alignment == 0 || capacity % block_size != 0 ||
-        block_size % range_alignment != 0) {
+        block_size % range_alignment != 0 || allocation_alignment % range_alignment != 0 ||
+        block_size % allocation_alignment != 0) {
         throw std::invalid_argument("invalid descriptor buffer capacity or alignment");
     }
-    // At most one free range per block, plus an insertion slot while coalescing.
-    // Retirement and failed-recording cleanup must not allocate CPU memory.
-    free_ranges.reserve(capacity / block_size + 1);
+    free_ranges.reserve(1);
     free_ranges.push_back({0, capacity});
 }
 
@@ -93,16 +94,112 @@ VulkanDescriptorBufferAllocator::TakeRange(uint64_t _byte_size) {
     if (it == free_ranges.end()) {
         return std::nullopt;
     }
-    const Range result{it->byte_offset, _byte_size};
-    it->byte_offset += _byte_size;
-    it->byte_size -= _byte_size;
-    if (it->byte_size == 0) {
-        free_ranges.erase(it);
+    // Reserve before mutation. Any later ordering of releases has enough
+    // insertion slots, so retirement never allocates CPU memory.
+    const size_t index = static_cast<size_t>(it - free_ranges.begin());
+    free_ranges.reserve(free_ranges.size() + live_range_count + 2);
+    auto range_it = free_ranges.begin() + index;
+    const Range result{range_it->byte_offset, _byte_size};
+    range_it->byte_offset += _byte_size;
+    range_it->byte_size -= _byte_size;
+    if (range_it->byte_size == 0) {
+        free_ranges.erase(range_it);
     }
+    ++live_range_count;
     return result;
 }
 
+VulkanDescriptorBufferAllocator::Cursor::Cursor(const Recording& _recording) :
+    ranges(_recording.ranges), alignment(_recording.alignment) {}
+
+std::optional<uint64_t> VulkanDescriptorBufferAllocator::Cursor::Allocate(uint64_t _byte_size) {
+    if (_byte_size == 0) {
+        return 0;
+    }
+    const auto size = AlignSize(_byte_size, alignment);
+    if (!size) {
+        return std::nullopt;
+    }
+    // Do not consume cursor state on failure.
+    for (size_t next = index; next < ranges.size(); ++next) {
+        const uint64_t offset = next == index ? used : 0;
+        if (*size <= ranges[next].byte_size - offset) {
+            index = next;
+            used = offset + *size;
+            return ranges[next].byte_offset + offset;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::vector<VulkanDescriptorBufferAllocator::Recording>>
+VulkanDescriptorBufferAllocator::PrepareRecordings(
+    LeaseState& _lease, std::span<const std::vector<uint64_t>> _requests
+) {
+    std::lock_guard lease_lock(_lease.mutex);
+    ValidateLease(_lease);
+    std::lock_guard pool_lock(free_ranges_mutex);
+
+    // Work on a candidate free list. Each entry only loses a prefix, allowing
+    // multiple commands to share an atom within this lease, but never across
+    // submissions. Only the final prefix is rounded to the flush boundary.
+    auto candidate = free_ranges;
+    std::vector<Recording> recordings;
+    recordings.reserve(_requests.size());
+    for (const auto& requests : _requests) {
+        auto& recording = recordings.emplace_back();
+        recording.alignment = range_alignment;
+        for (const auto request : requests) {
+            if (request == 0) {
+                continue;
+            }
+            const auto size = AlignSize(request, range_alignment);
+            if (!size || *size > capacity) {
+                return std::nullopt;
+            }
+            auto it = std::find_if(candidate.begin(), candidate.end(), [&](const Range& range) {
+                return range.byte_size >= *size;
+            });
+            if (it == candidate.end()) {
+                return std::nullopt;
+            }
+            if (!recording.ranges.empty() &&
+                recording.ranges.back().byte_offset + recording.ranges.back().byte_size == it->byte_offset) {
+                recording.ranges.back().byte_size += *size;
+            } else {
+                recording.ranges.push_back({it->byte_offset, *size});
+            }
+            it->byte_offset += *size;
+            it->byte_size -= *size;
+        }
+    }
+    std::vector<LeaseState::Block> blocks;
+    for (size_t index = 0; index < candidate.size(); ++index) {
+        const auto& original = free_ranges[index];
+        auto& remaining = candidate[index];
+        const uint64_t used = remaining.byte_offset - original.byte_offset;
+        if (used == 0) {
+            continue;
+        }
+        const uint64_t reserved = *AlignSize(used, allocation_alignment);
+        // Original ranges have atom-aligned boundaries, so rounding fits.
+        assert(reserved <= original.byte_size);
+        blocks.push_back({{original.byte_offset, reserved}, used});
+        remaining = {original.byte_offset + reserved, original.byte_size - reserved};
+    }
+    std::erase_if(candidate, [](const Range& range) { return range.byte_size == 0; });
+    candidate.reserve(candidate.size() + live_range_count + blocks.size() + 1);
+    _lease.blocks.reserve(_lease.blocks.size() + blocks.size());
+    // Commit only after all potentially throwing allocations have succeeded.
+    _lease.blocks.insert(_lease.blocks.end(), blocks.begin(), blocks.end());
+    free_ranges.swap(candidate);
+    live_range_count += blocks.size();
+    return recordings;
+}
+
 void VulkanDescriptorBufferAllocator::ReturnRange(Range _range) {
+    assert(live_range_count != 0);
+    --live_range_count;
     auto it = std::lower_bound(
         free_ranges.begin(), free_ranges.end(), _range.byte_offset, [](const Range& range, uint64_t offset) {
             return range.byte_offset < offset;

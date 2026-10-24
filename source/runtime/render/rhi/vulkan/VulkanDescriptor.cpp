@@ -110,7 +110,8 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     descriptor_allocator(
         GetDescriptorCapacity(_device),
         GetDescriptorBlockSize(_device),
-        GetStorageAlignment()
+        GetStorageAlignment(),
+        std::max<uint64>(GetStorageAlignment(), _device.GetCoreProperties().core_1_0.limits.nonCoherentAtomSize)
     ) {
     if (_device.GetDescriptorMode() == VulkanDescriptorMode::Sets)
         return;
@@ -637,18 +638,15 @@ uint64 VulkanDescriptorHeap::GetUsedDescriptorBytes(const VulkanDescriptorBuffer
     return descriptor_allocator.GetUsage(*_lease).used_bytes;
 }
 
-VulkanDescriptorAllocationCheckpoint
-VulkanDescriptorHeap::CreateDescriptorCheckpoint(const VulkanDescriptorBufferLease& _lease) const {
-    assert(_lease != nullptr && "descriptor checkpoint has no submission lease");
-    return descriptor_allocator.CreateCheckpoint(*_lease);
-}
-
-void VulkanDescriptorHeap::RewindDescriptorWrites(
-    const VulkanDescriptorBufferLease&          _lease,
-    const VulkanDescriptorAllocationCheckpoint& _checkpoint
+std::optional<std::vector<VulkanDescriptorBufferAllocator::Recording>>
+VulkanDescriptorHeap::PrepareDescriptorRecordings(
+    const VulkanDescriptorBufferLease& _lease,
+    std::span<const std::vector<uint64_t>> _requests
 ) {
-    assert(_lease != nullptr && "descriptor rewind has no submission lease");
-    descriptor_allocator.Rewind(*_lease, _checkpoint);
+    if (!_lease || m_device->IsFaulted()) {
+        return std::nullopt;
+    }
+    return descriptor_allocator.PrepareRecordings(*_lease, _requests);
 }
 
 std::span<const byte> VulkanDescriptorHeap::GetCachedDescriptor(VulkanCachedDescriptor _descriptor) const {

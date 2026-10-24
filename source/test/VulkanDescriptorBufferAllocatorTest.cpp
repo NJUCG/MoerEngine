@@ -341,6 +341,168 @@ void CheckAlignmentAndFailedAppend() {
     allocator.Release(*first);
     allocator.Release(*second);
 }
+void CheckPreparedRecordings() {
+    // Eight occupied pages, then release alternate pages. A 512-byte recording
+    // fits across four holes although no contiguous 512-byte range exists.
+    Allocator allocator(1024, 128, 16, 32);
+    std::vector<Moer::Render::VulkanDescriptorBufferLease> blockers;
+    for (int i = 0; i < 8; ++i) {
+        auto lease = allocator.CreateLease();
+        Check(allocator.ReserveRange(*lease, 128).has_value(), "blocker allocation failed");
+        blockers.push_back(std::move(lease));
+    }
+    for (int i = 0; i < 8; i += 2) {
+        allocator.Release(*blockers[i]);
+    }
+    auto batch = allocator.CreateLease();
+    const std::vector<std::vector<uint64_t>> too_large{{128, 128, 128, 128, 16}};
+    Check(!allocator.PrepareRecordings(*batch, too_large), "oversized batch succeeded");
+    Check(allocator.GetUsage(*batch).reserved_bytes == 0, "failed prepare leaked reservations");
+    const std::vector<std::vector<uint64_t>> requests{{64, 64, 64, 64}, {128, 128}};
+    auto recordings = allocator.PrepareRecordings(*batch, requests);
+    Check(recordings.has_value(), "fragmented recording reservation failed");
+    Check((*recordings)[0].ranges.size() == 2, "recording should span two holes");
+    Check((*recordings)[1].ranges.size() == 2, "second recording should span two holes");
+    Allocator::Cursor first((*recordings)[0]);
+    Check(first.Allocate(64) == 0, "first cursor offset mismatch");
+    Check(!first.Allocate(256), "cursor crossed an unowned gap");
+    Check(first.Allocate(64) == 64, "failed allocation advanced cursor");
+    Check(first.Allocate(64) == 256, "cursor did not switch segments");
+    Check(first.Allocate(64) == 320, "cursor tail mismatch");
+    Check(!first.Allocate(1), "cursor exceeded its budget");
+    Check(first.Allocate(0) == 0, "zero bind required capacity");
+    // After discarding failed recording, a fresh cursor replays the same ranges.
+    Allocator::Cursor replay((*recordings)[0]);
+    Check(replay.Allocate(128) == 0, "fallback did not reuse prepared range");
+    allocator.Release(*batch);
+    for (int i = 1; i < 8; i += 2) {
+        allocator.Release(*blockers[i]);
+    }
+    auto full = allocator.CreateLease();
+    Check(allocator.ReserveRange(*full, 1024) == 0, "prepared retirement lost space");
+    allocator.Release(*full);
+}
+
+void CheckPreparedAtomIsolationAndConcurrency() {
+    Allocator allocator(4096, 256, 16, 64);
+    auto first = allocator.CreateLease();
+    const std::vector<std::vector<uint64_t>> requests{{1, 1}, {1}};
+    auto recordings = allocator.PrepareRecordings(*first, requests);
+    Check(recordings.has_value(), "atom reservation failed");
+    const auto usage = allocator.GetUsage(*first);
+    Check(usage.used_bytes == 48 && usage.reserved_bytes == 64, "batch padding is not atom granular");
+    auto second = allocator.CreateLease();
+    const std::vector<std::vector<uint64_t>> next{{1}};
+    auto next_recording = allocator.PrepareRecordings(*second, next);
+    Allocator::Cursor next_cursor(next_recording->front());
+    Check(next_cursor.Allocate(1) == 64, "leases share a flush atom");
+    std::vector<std::jthread> workers;
+    std::array<uint64_t, 2> offsets{};
+    for (size_t i = 0; i < 2; ++i) {
+        workers.emplace_back([&, i] {
+            Allocator::Cursor cursor((*recordings)[i]);
+            offsets[i] = cursor.Allocate(1).value();
+        });
+    }
+    workers.clear();
+    Check(offsets[0] == 0 && offsets[1] == 32, "parallel cursors overlap");
+    const auto before = allocator.GetUsage(*first);
+    const std::vector<std::vector<uint64_t>> overflow{{std::numeric_limits<uint64_t>::max()}};
+    Check(!allocator.PrepareRecordings(*first, overflow), "overflow request succeeded");
+    Check(allocator.GetUsage(*first).reserved_bytes == before.reserved_bytes, "failed append changed lease");
+    allocator.Release(*second);
+    allocator.Release(*first);
+    auto full = allocator.CreateLease();
+    Check(allocator.ReserveRange(*full, 4096) == 0, "mixed atom and block retirement lost space");
+    allocator.Release(*full);
+}
+
+void CheckPreparedRandomLifetimes() {
+    constexpr uint64_t capacity = 16 * KiB;
+    Allocator allocator(capacity, 256, 16, 64);
+    struct Live {
+        std::shared_ptr<Allocator::LeaseState> lease;
+        std::vector<size_t> atoms;
+    };
+    std::vector<bool> owned(capacity / 64);
+    std::vector<Live> live;
+    std::mt19937 random(147);
+    auto retire = [&](size_t index) {
+        for (const auto atom : live[index].atoms) owned[atom] = false;
+        allocator.Release(*live[index].lease);
+        live.erase(live.begin() + index);
+    };
+    for (size_t step = 0; step < 4000; ++step) {
+        if (!live.empty() && (random() % 3 == 0 || live.size() > 20)) {
+            retire(random() % live.size());
+            continue;
+        }
+        auto lease = allocator.CreateLease();
+        std::vector<std::vector<uint64_t>> requests(1 + random() % 5);
+        for (auto& command : requests) {
+            for (size_t bind = 0, count = 1 + random() % 7; bind < count; ++bind) {
+                command.push_back(random() % 193);
+            }
+        }
+        auto prepared = allocator.PrepareRecordings(*lease, requests);
+        if (!prepared) {
+            Check(allocator.GetUsage(*lease).reserved_bytes == 0, "random failure leaked storage");
+            allocator.Release(*lease);
+            continue;
+        }
+        Live entry{lease, {}};
+        std::vector<bool> written(capacity / 16);
+        for (size_t i = 0; i < requests.size(); ++i) {
+            Allocator::Cursor cursor((*prepared)[i]);
+            for (auto bytes : requests[i]) {
+                auto offset = cursor.Allocate(bytes);
+                Check(offset.has_value(), "prepared bind could not be replayed");
+                if (!bytes) continue;
+                Check(*offset % 16 == 0 && *offset + bytes <= capacity, "invalid cursor address");
+                for (size_t unit = *offset / 16; unit < (*offset + bytes + 15) / 16; ++unit) {
+                    Check(!written[unit], "commands in a batch overlap");
+                    written[unit] = true;
+                }
+            }
+        }
+        for (const auto range : allocator.GetWrittenRanges(*lease)) {
+            Check(range.byte_offset % 64 == 0, "flush range does not start on an atom");
+            for (size_t atom = range.byte_offset / 64;
+                 atom < (range.byte_offset + range.byte_size + 63) / 64; ++atom) {
+                Check(!owned[atom], "concurrent submissions share a flush atom");
+                owned[atom] = true;
+                entry.atoms.push_back(atom);
+            }
+        }
+        live.push_back(std::move(entry));
+    }
+    while (!live.empty()) retire(random() % live.size());
+    auto full = allocator.CreateLease();
+    Check(allocator.ReserveRange(*full, capacity) == 0, "random retirement lost capacity");
+    allocator.Release(*full);
+}
+
+void CheckPreparedCapacityImprovement() {
+    Allocator legacy(64 * KiB, 64 * KiB, 32);
+    Allocator prepared(64 * KiB, 64 * KiB, 32, 256);
+    auto old_first = legacy.CreateLease();
+    auto old_second = legacy.CreateLease();
+    Check(legacy.ReserveRange(*old_first, 32).has_value(), "legacy allocation failed");
+    Check(!legacy.ReserveRange(*old_second, 32), "legacy capacity comparison changed");
+    std::vector<std::shared_ptr<Allocator::LeaseState>> leases;
+    const std::vector<std::vector<uint64_t>> request{{32}};
+    for (size_t i = 0; i < 256; ++i) {
+        auto lease = prepared.CreateLease();
+        Check(prepared.PrepareRecordings(*lease, request).has_value(), "small batch wasted a whole page");
+        leases.push_back(std::move(lease));
+    }
+    auto extra = prepared.CreateLease();
+    Check(!prepared.PrepareRecordings(*extra, request), "prepared capacity exceeded buffer");
+    for (auto& lease : leases) prepared.Release(*lease);
+    prepared.Release(*extra);
+    legacy.Release(*old_second);
+    legacy.Release(*old_first);
+}
 } // namespace
 
 int main() {
@@ -353,6 +515,10 @@ int main() {
         CheckRandomizedLifetimes();
         CheckConcurrentLeaseRetirement();
         CheckAlignmentAndFailedAppend();
+        CheckPreparedRecordings();
+        CheckPreparedAtomIsolationAndConcurrency();
+        CheckPreparedRandomLifetimes();
+        CheckPreparedCapacityImprovement();
         std::cout << "Vulkan descriptor buffer allocator checks passed\n";
         return 0;
     } catch (const std::exception& error) {

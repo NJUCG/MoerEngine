@@ -761,6 +761,8 @@ private:
     ) noexcept;
     bool                       TryExecuteParallel(
         CmdSubmit&                    _submit,
+        VulkanDescriptorBufferLease&  descriptor_lease,
+        const std::shared_ptr<const VulkanDescriptorRecordingPlan>& descriptor_plan,
         uint64                        _timeline,
         uint64                        _serial,
         const VulkanOperationContext& _context,

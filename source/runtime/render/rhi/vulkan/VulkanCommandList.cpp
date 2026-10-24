@@ -129,6 +129,8 @@ VulkanCommandList::~VulkanCommandList() {
 // Recording lifecycle.
 VkResult VulkanCommandList::Begin() {
     assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+    used_descriptor_bytes = 0;
+    descriptor_cursor = {};
     ResetTransientDescriptors();
     VkCommandBufferBeginInfo begin_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -144,6 +146,8 @@ VkResult VulkanCommandList::BeginSecondary(
     VkCommandBufferUsageFlags             _flags
 ) {
     assert(level == VK_COMMAND_BUFFER_LEVEL_SECONDARY);
+    used_descriptor_bytes = 0;
+    descriptor_cursor = {};
     ResetTransientDescriptors();
     VkCommandBufferBeginInfo begin_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -155,6 +159,8 @@ VkResult VulkanCommandList::BeginSecondary(
 }
 
 VkResult VulkanCommandList::End() {
+    descriptor_cursor = {};
+    descriptor_recording_plan.reset();
     return vkEndCommandBuffer(command_buffer);
 }
 
@@ -452,14 +458,15 @@ void VulkanCommandList::BindShaderArguments(
         PushBindlessIndexAddress(command_buffer, binding_template, _arguments);
         return;
     }
-    const std::optional<uint64> allocation_offset = descriptor_heap.ReserveDescriptorRange(
-        descriptor_buffer_lease, binding_template.resource_descriptor_allocation_size
+    const std::optional<uint64> allocation_offset = descriptor_cursor.Allocate(
+        binding_template.resource_descriptor_allocation_size
     );
     if (!allocation_offset.has_value()) {
-        throw std::runtime_error(
-            "descriptor buffer allocation failed: capacity exhausted, fragmented, or device faulted"
+        throw std::logic_error(
+            "descriptor recording exceeded its prepared budget"
         );
     }
+    used_descriptor_bytes += binding_template.resource_descriptor_allocation_size;
 
     if (pipeline->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
         for (const auto& [set_index, set] : binding_template.set_bindings) {

@@ -52,7 +52,7 @@ Heap 模式使用一块 resource heap 和一块 sampler heap，预留驱动要�
 
 为了让同一 bindless array 同时服务现代路径和传统回退，每个 array 都维护一套持久化传统 sets。现代路径因此额外承担一份驱动描述符存储和相应更新。这里明确选择了直接可用的 fallback；尚未引入按首次使用延迟构建副本的额外状态和同步。
 
-CPU 描述符字节缓存、固定资源表容量和原来的提交分配器继续保留。此次改造不是“heap 消除所有 CPU 副本”，也不意味着无需容量规划。普通 sets 的临时 pools 按 command context 回收，没有再加入全局 set 缓存或独立完成队列。每个 pool 记录剩余 set 数和各类型描述符数量，只有完整 layout 能容纳时才从中分配，不能根据本次活跃写入数量推断 pool 消耗。
+CPU 描述符字节缓存和固定资源表容量继续保留。临时资源表采用[提交前批量预留、录制时本地游标](VULKAN_DESCRIPTOR_RESERVATION.md)，GPU 完成后的 lease 回收继续复用提交系统。Heap 不会消除所有 CPU 副本，也不意味着无需容量规划。普通 sets 的临时 pools 按 command context 回收，没有再加入全局 set 缓存或独立完成队列。每个 pool 记录剩余 set 数和各类型描述符数量，只有完整 layout 能容纳时才从中分配，不能根据本次活跃写入数量推断 pool 消耗。
 
 默认选择 heap 是能力策略，不是跨硬件的性能结论。实际成本取决于 descriptor 编码、拷贝、pool 分配、pipeline 切换以及 shader 访问方式；须在相同场景和构建配置下测量。
 

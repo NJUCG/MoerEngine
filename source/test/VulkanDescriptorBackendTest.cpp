@@ -5,12 +5,16 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
 #include "rhi/vulkan/VulkanDescriptorMode.h"
+#include "rhi/vulkan/VulkanDescriptor.h"
 #include "rhi/vulkan/VulkanDevice.h"
 #include "rhi/vulkan/VulkanPipeline.h"
+#include "rhi/vulkan/VulkanTimeline.h"
+#include "misc/RAII.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -72,13 +76,13 @@ std::span<const Moer::byte> Bytes(const T& value) {
     return {reinterpret_cast<const Moer::byte*>(&value), sizeof(value)};
 }
 
-void RunDescriptorReadback() {
+void RunDescriptorReadback(bool test_reservation_pressure) {
     auto& device   = RenderDevice::Get();
     auto& shaders  = ShaderManager::Get();
     auto  bound    = shaders.Compute<DescriptorBoundTest>("test/DescriptorBackend.hlsl", "BoundMain");
     auto  bindless = shaders.Compute<DescriptorBindlessTest>("test/DescriptorBackend.hlsl", "BindlessMain");
     auto  arrays   = shaders.Compute<DescriptorArrayTest>("test/DescriptorBackend.hlsl", "ArrayMain");
-    const auto& native_device = *static_cast<VulkanDevice*>(device.GetImpl());
+    auto& native_device = *static_cast<VulkanDevice*>(device.GetImpl());
     const bool  large_constants =
         native_device.GetCoreProperties().core_1_0.limits.maxPushConstantsSize >= 256;
     auto fallback =
@@ -136,6 +140,38 @@ void RunDescriptorReadback() {
     upload.UpdateBindlessArray(table);
     RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit(), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (test_reservation_pressure && native_bindless->GetDescriptorMode() != VulkanDescriptorMode::Sets &&
+        native_bindless->binding_template->resource_descriptor_allocation_size != 0) {
+        auto& heap = native_device.GetGlobalDescriptorHeap();
+        auto occupied = heap.CreateDescriptorBufferLease();
+        auto release = OnScopeExit([&] { heap.RecycleDescriptorBufferLease(std::move(occupied)); });
+        while (heap.ReserveDescriptorRange(occupied, 64 * 1024)) {}
+        // Also consume any sub-page holes left by atom-granular reservations.
+        const std::vector<std::vector<uint64_t>> atom{{heap.GetStorageAlignment()}};
+        while (heap.PrepareDescriptorRecordings(occupied, atom)) {}
+        std::atomic<uint> completed{0}, succeeded{0};
+        auto done = device.CreateFence();
+        CommandList rejected;
+        const uint poison = 999;
+        rejected.CopyFrom(Bytes(poison), input->GetView());
+        rejected.Compute(bindless, uniform, output, input_views[0], depth->GetView(), table, input_index, 0u)
+            .Dispatch(uint3(1, 1, 1));
+        rejected.AddCallback([&] { ++completed; });
+        rejected.AddSuccessCallback([&] { ++succeeded; });
+        auto submit = rejected.Submit();
+        submit.Signal(done.Get(), 1);
+        RHIExecutor::Get().Submit(EQueueType::Graphics, std::move(submit), ERHIExecSubmitFlags::FlushGPU);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        auto* native_done = ResourceCast(done.Get());
+        if (!native_done->IsRejected(1) || native_done->IsFailed() ||
+            completed != 1 || succeeded != 0) {
+            throw std::runtime_error("Descriptor capacity rejection was not recoverable and exactly once");
+        }
+        std::cout << "[PASS] descriptor reservation pressure rejected exactly once without failing the fence\n";
+        // The readback workload below must still see 23, proving that the
+        // poisoned upload in the rejected transaction never reached the GPU.
+    }
 
     const auto        start = std::chrono::steady_clock::now();
     DescriptorPadding padding{};
@@ -209,10 +245,19 @@ void RunDescriptorReadback() {
               << large_constants << " elapsed_ms=" << elapsed << '\n';
 }
 
-int main(int argc, char**) {
+int main(int argc, char** argv) {
     bool tasks = false, device = false, shaders = false;
     int  result = 0;
     try {
+        bool parallel = false, pressure = false, worker_failure = false;
+        for (int i = 1; i < argc; ++i) {
+            const std::string_view arg(argv[i]);
+            if (arg == "--parallel") parallel = true;
+            else if (arg == "--reservation-pressure") pressure = true;
+            else if (arg == "--inject-worker-failure") worker_failure = true;
+            else throw std::invalid_argument("Unknown test argument");
+        }
+        if (worker_failure && !parallel) throw std::invalid_argument("Worker failure requires --parallel");
         LogSystem::Init();
         ConfigManager::GetInstance().Init(std::filesystem::current_path());
         TaskSystem::Init();
@@ -223,14 +268,15 @@ int main(int argc, char**) {
             .rhi_api_version                        = "1.3",
             .rhi_thread                             = true,
             .rhi_bypass                             = false,
-            .parallel_recording                     = argc > 1,
+            .parallel_recording                     = parallel,
             .parallel_record_workers                = 4,
-            .parallel_record_verify                 = argc > 1,
+            .parallel_record_verify                 = parallel,
             .parallel_record_min_work_units_per_job = 1,
+            .parallel_record_worker_throw_trigger   = worker_failure ? 1u : 0u,
         });
         device  = true;
         shaders = true;
-        RunDescriptorReadback();
+        RunDescriptorReadback(pressure);
     } catch (const std::exception& error) {
         std::cerr << "[FAIL] " << error.what() << '\n';
         result = 1;
