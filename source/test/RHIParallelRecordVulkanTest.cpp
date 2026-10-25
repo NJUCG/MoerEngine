@@ -5,6 +5,7 @@
 #include "platform/Platform.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
+#include "rendergraph/RenderGraphPassParameters.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
@@ -58,6 +59,29 @@ class MultiviewLayerPipeline final : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(MultiviewLayerPipeline);
     DEFINE_SHADER_ARGS();
+};
+
+class CompiledBindlessPipeline final : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(CompiledBindlessPipeline);
+    DEFINE_SHADER_BUFFER(result);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT(uint, index);
+    DEFINE_SHADER_CONSTANT(float, scale);
+    DEFINE_SHADER_ARGS(result, bdls, index, scale);
+};
+
+struct CompiledBindlessParameters {
+    RGBufferAccess<RenderGraph::AccessMode::Read, RenderGraph::BufferState::ShaderResource>   input;
+    RGTextureAccess<RenderGraph::AccessMode::Read, RenderGraph::TextureState::Sampled>        texture;
+    RGBufferAccess<RenderGraph::AccessMode::Write, RenderGraph::BufferState::UnorderedAccess> output;
+    uint                                                                                      index = 0;
+
+    void DeclareRGAccess(RGParameterAccessCollector& accesses) const {
+        accesses.Add(input);
+        accesses.Add(texture);
+        accesses.Add(output);
+    }
 };
 
 bool IsExpectedZeroOcclusionResult(
@@ -1703,6 +1727,126 @@ void RunCompiledSubrangeSubmission(EQueueType queue) {
     );
 }
 
+void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel) {
+    auto& device = RenderDevice::Get();
+    auto pipeline = manager.Compute<CompiledBindlessPipeline>("test/ShaderBindlessAddress.hlsl", "ComputeMain");
+    const auto buffer_usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
+                              EBufferUsageFlags::TRANSFER_SRC;
+    auto input   = device.CreateBuffer<uint>("compiled_bindless_input", 1, buffer_usage);
+    auto output  = device.CreateBuffer<float>("compiled_bindless_output", 1, buffer_usage);
+    auto texture = device.CreateTexture(
+        "compiled_bindless_texture",
+        Extent3D(1, 1, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+    );
+    auto       table = device.CreateBindlessArray();
+    const uint index = table->AllocateBuffer(input->GetView());
+    if (table->AllocateTexture(texture->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)) != index + 1) {
+        throw std::runtime_error("bindless address fixture requires consecutive buffer/texture handles");
+    }
+    // Publish only the table using the existing update protocol. It stays
+    // immutable through graph completion; target contents are produced below,
+    // so their upload-to-shader dependencies must come from RDG declarations.
+    CommandList publish;
+    publish.UpdateBindlessArray(table);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, publish.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    RenderGraph graph("CompiledKnownBindlessAccess");
+    const auto  input_handle   = graph.ImportBuffer("Input", input, {.byte_size = input->GetByteSize()});
+    const auto  output_handle  = graph.ImportBuffer("Output", output, {.byte_size = output->GetByteSize()});
+    const auto  texture_handle = graph.ImportTexture("Texture", texture, {});
+    for (auto handle : {input_handle, output_handle}) {
+        graph.SetInitialState(
+            handle,
+            RenderGraph::BufferState::Undefined,
+            RenderGraph::QueueRole::None,
+            RenderGraph::AccessMode::None
+        );
+    }
+    graph.SetInitialState(
+        texture_handle,
+        RenderGraph::TextureState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.AddRecordPass(
+        "ProduceTargets",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Write(input_handle, RenderGraph::BufferState::TransferDestination)
+                .Write(texture_handle, RenderGraph::TextureState::TransferDestination);
+        },
+        [=](CommandList& commands) {
+            commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{41}), input->GetView());
+            commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{0xffffffffu}), texture->GetView());
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "ReadKnownBindlessTargets",
+        CompiledBindlessParameters{input_handle, texture_handle, output_handle, index},
+        [](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute);
+        },
+        [=, &pipeline](CommandList& commands, const CompiledBindlessParameters& parameters) {
+            commands.Compute(pipeline, output, table, parameters.index, 2.0f).Dispatch(uint3(1, 1, 1));
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    ReadbackFuture readback;
+    graph.AddRecordPass(
+        "Readback",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Read(output_handle, RenderGraph::BufferState::TransferSource)
+                .SideEffect();
+        },
+        [&](CommandList& commands) {
+            readback = commands.Readback(output->GetView());
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        input_handle,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        texture_handle,
+        RenderGraph::TextureState::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        output_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    if (!graph.Compile() || !graph.ExecuteFrontendRecordingPlan(
+                                {},
+                                {},
+                                parallel,
+                                {},
+                                RenderGraph::ActiveRecordingOptions{
+                                    .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled
+                                }
+                            )) {
+        throw std::runtime_error("known bindless graph failed: " + graph.GetCompileError());
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const auto result = readback.Get().CopyAs<float>();
+    if (!result || result->size() != 1 || result->front() != 84.0f) {
+        throw std::runtime_error("compiled bindless targets were not synchronized by their typed declarations"
+        );
+    }
+    LOG_INFO("[TESTCASE][PASS] name=CompiledKnownBindlessAccess targets=buffer,texture "
+             "table=published-readonly result=84");
+}
+
 void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
     using namespace Moer::Render::Raster;
     auto& device = RenderDevice::Get();
@@ -1811,7 +1955,7 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
         );
         graph.Export(
             resources.input,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureState::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -16308,6 +16452,7 @@ int main(int argc, const char** argv) {
             ShaderManager& manager = ShaderManager::Get();
             shader_manager_initialized = true;
             RunCompiledTonemapping(manager, parallel);
+            RunCompiledKnownBindlessAccess(manager, parallel);
             ShaderManager::ShutDown();
             shader_manager_initialized = false;
             RenderDevice::Dispose();

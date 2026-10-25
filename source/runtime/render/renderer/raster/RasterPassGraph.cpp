@@ -675,7 +675,7 @@ RenderGraph::PassHandle TonemappingPass::AddRecordPasses(
         "Tonemapping.BuildHistogram",
         [resources](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                .Read(resources.input, RenderGraph::TextureState::ShaderResource)
+                .Read(resources.input, RenderGraph::TextureState::Sampled)
                 .ReadWrite(resources.histogram, RenderGraph::BufferState::UnorderedAccess);
         },
         [this, prepared](CommandList& cmd_list) {
@@ -703,7 +703,7 @@ RenderGraph::PassHandle TonemappingPass::AddRecordPasses(
         "Tonemapping.Apply",
         [resources](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
-                .Read(resources.input, RenderGraph::TextureState::ShaderResource)
+                .Read(resources.input, RenderGraph::TextureState::Sampled)
                 .Read(resources.histogram, RenderGraph::BufferState::ShaderResource)
                 .Read(resources.exposure, RenderGraph::BufferState::ShaderResource)
                 .Write(resources.tonemapping_output, RenderGraph::TextureState::RenderTarget);
