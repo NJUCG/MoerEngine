@@ -1072,7 +1072,7 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
                      BarrierState::Buffer(scope.stages, scope.access);
 }
 
-[[nodiscard]] bool MaterializeInstruction(
+bool RenderGraphLowering::MaterializeInstruction(
     const RenderGraphLowering::LoweredInstruction& instruction,
     BarrierCreateInfo&                             output,
     std::string&                                   error
@@ -1977,7 +1977,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 std::string_view                                placement) {
                 BarrierCreateInfo barrier{};
                 std::string       materialization_error{};
-                if (!MaterializeInstruction(instruction, barrier, materialization_error)) {
+                if (!RenderGraphLowering::MaterializeInstruction(instruction, barrier, materialization_error)) {
                     compile_error =
                         "RenderGraph active lowering " + std::string(placement) +
                         " instruction " + std::to_string(instruction.correlation_id) +

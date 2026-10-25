@@ -2079,7 +2079,7 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
             pixels[y * width + x] = float4(2.0f + 10.0f * (x % 8), 1.0f + 3.0f * y, 12.0f, 1.0f);
         }
     }
-    auto run = [&](uint32 mip_count, bool compiled) {
+    auto run = [&](uint32 mip_count, bool compiled, bool merge = false) {
         const auto usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
                            ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC;
         auto input =
@@ -2176,17 +2176,20 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
                     Graph::TextureRange::Mips(0, mip_count - 1)
                 );
             }
-            if (!graph.Compile() ||
-                graph.GetCompiledPlan().frontend_record_units.size() != 2 * mip_count + 2 ||
-                !graph.ExecuteFrontendRecordingPlan(
-                    {},
-                    {},
-                    parallel,
-                    {},
-                    Graph::ActiveRecordingOptions{
-                        .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled
-                    }
-                )) {
+            if (!graph.Compile() || graph.GetCompiledPlan().frontend_record_units.size() != 2 * mip_count + 2) {
+                throw std::runtime_error("compiled bloom graph failed: " + graph.GetCompileError());
+            }
+            if (merge) {
+                CommandList commands;
+                commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+                if (!graph.RecordAndMergeFrontendCommands(commands, parallel)) {
+                    throw std::runtime_error("merged bloom graph failed: " + graph.GetCompileError());
+                }
+                RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+            } else if (!graph.ExecuteFrontendRecordingPlan(
+                           {}, {}, parallel, {},
+                           Graph::ActiveRecordingOptions{
+                               .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled})) {
                 throw std::runtime_error("compiled bloom graph failed: " + graph.GetCompileError());
             }
         }
@@ -2216,11 +2219,12 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
     for (const uint32 mip_count : {1u, 6u}) {
         const auto reference = run(mip_count, false);
         const auto compiled  = run(mip_count, true);
-        if (reference != compiled) {
+        const auto merged = run(mip_count, true, true);
+        if (reference != compiled || reference != merged) {
             throw std::runtime_error("compiled Bloom differs from the legacy image or pyramid mips");
         }
         LOG_INFO(
-            "[TESTCASE][PASS] name=CompiledBloom mips={} stages={} pyramid=matched scene=matched",
+            "[TESTCASE][PASS] name=CompiledBloom mips={} stages={} pyramid=matched scene=matched merged=matched",
             mip_count,
             2 * mip_count
         );

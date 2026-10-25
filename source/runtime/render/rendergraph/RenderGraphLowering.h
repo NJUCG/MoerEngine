@@ -151,6 +151,10 @@ public:
         [[nodiscard]] std::string Dump() const;
     };
 
+    /** Converts a compiler instruction to the backend-independent explicit RHI contract. */
+    [[nodiscard]] static bool MaterializeInstruction(
+        const LoweredInstruction& instruction, BarrierCreateInfo& output, std::string& error);
+
     /**
      * Produces a complete plan or no plan. On failure output is cleared and
      * error contains the first deterministic unsupported-condition diagnostic.

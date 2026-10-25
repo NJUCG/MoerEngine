@@ -163,7 +163,7 @@ private:
     return static_cast<const ProbeCommand*>(command.get());
 }
 
-void TestRecordPassMaterializesExplicitBeforeBodyAfter(TestSuite& suite) {
+void TestRecordPassMaterializesExplicitBeforeBodyAfter(TestSuite& suite, bool merge = false) {
     constexpr std::string_view test_name =
         "record pass materializes explicit before-body-after";
 
@@ -227,29 +227,32 @@ void TestRecordPassMaterializesExplicitBeforeBodyAfter(TestSuite& suite) {
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     Moer::Array<RHIRecordingSource> published{};
-    const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
-        {},
-        false,
-        [&](Moer::Array<RHIRecordingSource>&& sources) {
-            for (auto& source : sources) {
-                published.emplace_back(std::move(source));
-            }
-        },
-        RenderGraph::ActiveRecordingOptions{.enabled = true}
-    );
-    suite.Check(executed, test_name, graph.GetCompileError());
-    suite.Check(
-        published.size() == 1 &&
-            published.front().completion.Status() == ERHIRecordingStatus::Succeeded,
-        test_name,
-        "one completed recording source must be published"
-    );
-    if (published.size() != 1) {
-        return;
+    CommandList merged;
+    merged.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    bool executed = false;
+    if (merge) {
+        executed = graph.RecordAndMergeFrontendCommands(merged, false);
+    } else {
+        executed = graph.ExecuteFrontendRecordingPlan(
+            {}, {}, false,
+            [&](Moer::Array<RHIRecordingSource>&& sources) {
+                for (auto& source : sources) { published.emplace_back(std::move(source)); }
+            },
+            RenderGraph::ActiveRecordingOptions{.enabled = true});
     }
-
-    CmdSubmit submit = published.front().command_list->Submit();
+    suite.Check(executed, test_name, graph.GetCompileError());
+    if (!executed) { return; }
+    if (!merge) {
+        suite.Check(published.size() == 1 &&
+                        published.front().completion.Status() == ERHIRecordingStatus::Succeeded,
+                    test_name, "one completed recording source must be published");
+        if (published.size() != 1) { return; }
+    }
+    CmdSubmit submit = merge ? merged.Submit() : published.front().command_list->Submit();
+    if (merge) {
+        suite.Check(submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled,
+                    test_name, "merged submission must preserve Compiled ownership");
+    }
     suite.Check(
         submit.HasExplicitResourceStateOwnership(),
         test_name,
@@ -1872,6 +1875,7 @@ void TestMainThreadPhysicalPassRequiresAndUsesCallerList(TestSuite& suite) {
 int main() {
     TestSuite suite;
     TestRecordPassMaterializesExplicitBeforeBodyAfter(suite);
+    TestRecordPassMaterializesExplicitBeforeBodyAfter(suite, true);
     TestSameStateSecondReadMaterializesStateSeed(suite);
     TestUnsupportedInputsFailBeforeCallbacksOrPublish(suite);
     TestRecordingSourceSetupCannotCompleteProducerGate(suite);

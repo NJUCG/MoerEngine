@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraphLowering.h"
 
 #include "profile/ProfileScope.h"
 #include "rhi/RHIThreadOwnership.h"
@@ -86,6 +87,7 @@ struct FrontendRecordJob {
     std::string                 pass_name{};
     RenderGraph::RecordCallback record_callback{};
     SharedPtr<CommandList>      frontend_command_list{};
+    ERHIResourceStateOwnership state_ownership = ERHIResourceStateOwnership::BackendTracked;
     bool                        gpu_profile_requested = false;
     bool                        gpu_profile_bound     = false;
     ERHITranslateExecutionClass native_translate_class{
@@ -261,10 +263,9 @@ private:
                 "RecordAndMergeFrontendCommands requires a Graphics CommandList"
             );
         }
-        if (destination.HasExplicitResourceStateOwnership()) {
+        if (destination.GetResourceStateOwnership() == ERHIResourceStateOwnership::Explicit) {
             return Fail(
-                "RecordAndMergeFrontendCommands requires a backend-tracked "
-                "destination CommandList"
+                "merged recording requires Compiled or BackendTracked ownership"
             );
         }
 
@@ -290,7 +291,34 @@ private:
                 return false;
             }
         }
-        return ValidateDispatchGroups();
+        if (!ValidateDispatchGroups()) { return false; }
+        if (destination.GetResourceStateOwnership() == ERHIResourceStateOwnership::Compiled) {
+            if (!RenderGraphLowering::Lower(graph, lowered, graph.compile_error)) { return false; }
+            if (!lowered.queue_syncs.empty()) { return Fail("merged recording cannot execute queue synchronization"); }
+            // Materialize before launching workers so invalid bindings cannot leave a partial frame.
+            before.resize(graph.passes.size());
+            after.resize(graph.passes.size());
+            const auto append = [&](const auto& instruction, auto& barriers) {
+                BarrierCreateInfo barrier{};
+                if (!RenderGraphLowering::MaterializeInstruction(instruction, barrier, graph.compile_error)) {
+                    return false;
+                }
+                barriers.push_back(std::move(barrier));
+                return true;
+            };
+            for (const auto& instruction : lowered.prologue) {
+                if (!append(instruction, before.at(instruction.dst_pass.index))) { return false; }
+            }
+            for (const auto& pass : lowered.passes) {
+                for (const auto& instruction : pass.before) {
+                    if (!append(instruction, before.at(pass.pass.index))) { return false; }
+                }
+                for (const auto& instruction : pass.after) {
+                    if (!append(instruction, after.at(pass.pass.index))) { return false; }
+                }
+            }
+        }
+        return true;
     }
 
     [[nodiscard]] bool ValidateRecordUnit(
@@ -369,6 +397,21 @@ private:
                     unit.native_translate_class
                 );
 
+                const auto ownership = destination.GetResourceStateOwnership();
+                pass_command_list->SetResourceStateOwnership(ownership);
+                auto record_callback = pass.record;
+                if (ownership == ERHIResourceStateOwnership::Compiled) {
+                    const auto keepalive = lowered.Keepalive(pass_handle);
+                    record_callback = [record = pass.record,
+                                       prologue = before.at(pass_handle.index),
+                                       epilogue = after.at(pass_handle.index),
+                                       resources = std::vector<RenderGraphLowering::PhysicalBinding>(
+                                           keepalive.begin(), keepalive.end())](CommandList& commands) {
+                        if (!prologue.empty()) { commands.Barriers(prologue); }
+                        record(commands);
+                        if (!epilogue.empty()) { commands.Barriers(epilogue); }
+                    };
+                }
                 bool gpu_profile_bound = false;
                 if (gpu_profiling.try_bind_source) {
                     const GpuProfileBindOutcome bind_outcome =
@@ -390,8 +433,9 @@ private:
                 frontend_streams_by_unit[unit_index] = pass_command_list;
                 jobs.emplace_back(FrontendRecordJob{
                     .pass_name       = pass.name,
-                    .record_callback = pass.record,
+                    .record_callback = std::move(record_callback),
                     .frontend_command_list = std::move(pass_command_list),
+                    .state_ownership = ownership,
                     .gpu_profile_requested =
                         static_cast<bool>(gpu_profiling.try_bind_source),
                     .gpu_profile_bound = gpu_profile_bound,
@@ -457,7 +501,7 @@ private:
                     "record callback sealed its CommandList"
                 );
             }
-            if (job.frontend_command_list->HasExplicitResourceStateOwnership()) {
+            if (job.frontend_command_list->GetResourceStateOwnership() != job.state_ownership) {
                 throw std::logic_error(
                     "record callback changed resource-state ownership"
                 );
@@ -589,6 +633,8 @@ private:
     bool                       parallel_recording_enabled = true;
     const GpuProfilingOptions& gpu_profiling;
     Array<SharedPtr<CommandList>> frontend_streams_by_unit{};
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::vector<std::vector<BarrierCreateInfo>> before{}, after{};
 };
 
 bool RenderGraph::RecordAndMergeFrontendCommands(

@@ -1177,6 +1177,9 @@ public:
      * do so concurrently), joins all producers, then appends those frontend
      * streams to one caller-owned Graphics CommandList in compiled order.
      * The destination's later Submit() is the only native submission boundary.
+     * A Compiled destination consumes the full lowered barrier plan, including
+     * import/export boundaries, and bypasses backend dependency inference.
+     * BackendTracked remains available only for unmigrated callers.
      *
      * This is the direct path for record-class Graphics passes backed by
      * already-created resources. It uses the compiler's frontend dispatch

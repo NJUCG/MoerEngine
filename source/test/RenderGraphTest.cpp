@@ -346,7 +346,7 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
     );
 }
 
-void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite) {
+void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite, bool compiled_ownership = false) {
     constexpr std::string_view test_name =
         "merged recording failure leaves destination untouched";
     RenderGraph graph("MergedRecordingFailure");
@@ -377,6 +377,9 @@ void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite) {
     Moer::Render::CommandList destination(
         Moer::Render::EQueueType::Graphics
     );
+    if (compiled_ownership) {
+        destination.SetResourceStateOwnership(Moer::Render::ERHIResourceStateOwnership::Compiled);
+    }
     const bool executed =
         compiled && graph.RecordAndMergeFrontendCommands(destination);
     suite.Check(
@@ -7627,6 +7630,7 @@ int main() {
     TestStableSerialCallbackOrder(suite);
     TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(suite);
     TestMergedRecordingFailureLeavesDestinationUntouched(suite);
+    TestMergedRecordingFailureLeavesDestinationUntouched(suite, true);
     TestFrontendCommandListMergeRebasesCachedArguments(suite);
     TestPassCompletionObserverRunsAfterEachCallback(suite);
     TestUiDrawablePresentationContracts(suite);
