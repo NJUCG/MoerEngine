@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -47,6 +48,16 @@
 #include <variant>
 namespace Moer::Render {
 namespace {
+
+// Validation runs can require the production contract without removing the
+// legacy reference recorder used by low-level RHI comparison tests.
+bool RequiresCompiledCommands() {
+    static const bool required = [] {
+        const char* value = std::getenv("MOER_VULKAN_REQUIRE_COMPILED");
+        return value && std::string_view(value) == "1";
+    }();
+    return required;
+}
 
 void ValidateTextureTransferDataSize(const VulkanTexture& _texture, uint3 _extent, uint64 _byte_size) {
     const uint64 expected_byte_size = GetSizeFromImageFormat(_texture.GetFormat(), _extent);
@@ -3752,6 +3763,10 @@ void RecordVulkanCopyCommands(
     CmdSubmit&            submit,
     bool                  suppress_timestamp_queries
 ) {
+    if (RequiresCompiledCommands() && !submit.cmds.empty() &&
+        submit.resource_state_ownership != ERHIResourceStateOwnership::Compiled) {
+        throw std::invalid_argument("Copy submission did not provide a compiled resource plan");
+    }
     if (submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled) {
         if (!SupportsCompiledCommands(submit, EQueueType::Copy)) {
             throw std::invalid_argument("compiled Copy submission contains an unsupported command");
@@ -7656,6 +7671,13 @@ void VkCommandQueue::ExecuteNow(
         .unlock_bdls_array       = &UnlockBindlessArray
     };
     const bool compiled_commands = _submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled;
+    if (RequiresCompiledCommands() && !compiled_commands && !_submit.cmds.empty()) {
+        reject_before_native_record(
+            {EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT},
+            "submission did not provide a compiled resource plan"
+        );
+        return;
+    }
     if (compiled_commands && !SupportsCompiledCommands(_submit, queue.GetType())) {
         reject_before_native_record(
             {EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT},

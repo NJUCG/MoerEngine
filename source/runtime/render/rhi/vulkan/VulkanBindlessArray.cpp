@@ -149,10 +149,17 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
             std::span(sampler_data).subspan(i * sampler_stride, sampler_stride)
         );
     CommandList cmd;
-    cmd.CopyFrom(
-        std::span(sampler_data),
-        m_texture_sampler_descriptors->GetView(g_heap.GetBindlessSamplerBindingOffset(), sampler_data.size())
-    );
+    cmd.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const auto sampler_view =
+        m_texture_sampler_descriptors->GetView(g_heap.GetBindlessSamplerBindingOffset(), sampler_data.size());
+    cmd.CopyFrom(std::span(sampler_data), sampler_view);
+    // This is backend-owned descriptor storage. Publish the upload directly
+    // to descriptor fetch; app resource dependencies remain the graph's job.
+    cmd.Barriers({BarrierCreateInfo::Transition(
+        sampler_view,
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE),
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_ALL_COMMANDS, ERHIAccessFlags::MEMORY_READ)
+    )});
     RHIExecutor::Get().Submit(EQueueType::Graphics, cmd.Submit(), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 }
