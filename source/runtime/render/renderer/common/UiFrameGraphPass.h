@@ -120,6 +120,14 @@ public:
         const TextureRef&       main_output
     );
 
+    static void RecordCompiledDraw(
+        CommandList&                  commands,
+        const UiCompositionFrameData& composition,
+        const UiDrawFramePacket&      draw_frame,
+        const TextureRef&             main_output,
+        EUiDrawExecutionThread        execution_thread
+    );
+
     /**
      * Records the terminal BackendTracked export used by UI paths whose draw
      * commands live outside an explicit RenderGraph packet. Every main,

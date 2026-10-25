@@ -217,6 +217,9 @@ private:
 class RENDER_API UiDrawFrameBackend {
 public:
     virtual ~UiDrawFrameBackend() = default;
+    virtual Array<TextureRef> CollectSampledTextures(const UiDrawFramePacket&) const {
+        return {};
+    }
 
     virtual void RenderGUI(
         CommandList&           _cmd_list,

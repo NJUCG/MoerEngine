@@ -1,4 +1,5 @@
 #include "UiFrameGraphPass.h"
+#include "GraphResourceBoundary.h"
 
 #include "rhi/RHICommand.h"
 
@@ -572,6 +573,56 @@ bool UiFrameGraphPass::ProcessLinearWithComposeRecorder(
     } catch (...) {
         frame->Abandon();
         throw;
+    }
+}
+
+void UiFrameGraphPass::RecordCompiledDraw(
+    CommandList&                  commands,
+    const UiCompositionFrameData& composition,
+    const UiDrawFramePacket&      draw_frame,
+    const TextureRef&             main_output,
+    EUiDrawExecutionThread        execution_thread
+) {
+    RenderGraph       graph("UI.FrameTail", RenderGraph::QueueTopology::FromRHI());
+    Array<TextureRef> targets;
+    if (!CollectValidatedPresentationTargets(composition, draw_frame, main_output, targets)) {
+        throw std::runtime_error("invalid UI presentation targets");
+    }
+    Array<RenderGraph::TextureHandle> outputs, samples;
+    const auto                        import = [&](const TextureRef& texture, const char* name) {
+        const auto handle = ImportUiGraphTexture(
+            graph, std::format("{}@{:x}", name, reinterpret_cast<uintptr_t>(texture.Get())), texture
+        );
+        const auto state = GraphicsTextureBoundary(*texture);
+        graph.SetInitialState(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        graph.Export(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        return handle;
+    };
+    for (const auto& target : targets) {
+        outputs.push_back(import(target, "Output"));
+    }
+    if (draw_frame.backend) {
+        for (const auto& texture : draw_frame.backend->CollectSampledTextures(draw_frame)) {
+            samples.push_back(import(texture, "Sample"));
+        }
+    }
+    graph.AddRecordPass(
+        "UI.DrawCopiedFrame",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().TranslateSerialControl();
+            for (auto target : outputs) {
+                builder.ReadWrite(target, RenderGraph::TextureState::RenderTarget);
+            }
+            for (auto sample : samples) {
+                builder.Read(sample, RenderGraph::TextureState::Sampled);
+            }
+        },
+        [&](CommandList& list) {
+            RenderUiDrawFrame(list, main_output->GetView(), draw_frame, execution_thread);
+        }
+    );
+    if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
+        throw std::runtime_error("UI frame graph failed: " + graph.GetCompileError());
     }
 }
 

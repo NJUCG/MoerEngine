@@ -29,6 +29,7 @@ public:
     [[nodiscard]] const WindowInputSourceSnapshot& GetInputSnapshot() const noexcept;
 
     UiDrawFramePacket CaptureDrawFrame();
+    Array<TextureRef> CollectSampledTextures(const UiDrawFramePacket& frame) const override;
 
     void RenderGUI(
         CommandList&           _cmd_list,

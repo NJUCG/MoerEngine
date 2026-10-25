@@ -1,6 +1,7 @@
 // 负责 Dear ImGui 上下文、GPU 资源、绘制数据复制以及多视口交换链的完整后端流程。
 
 #include "DearImGuiRenderer.h"
+#include "rendergraph/RenderGraph.h"
 
 #include "GLFW/glfw3.h"
 #include "IconsFontAwesome6.h"
@@ -644,6 +645,33 @@ UiDrawFramePacket ImGuiRenderBackend::CaptureDrawFrame() {
     return frame;
 }
 
+Array<TextureRef> ImGuiRenderBackend::CollectSampledTextures(const UiDrawFramePacket& frame) const {
+    Array<TextureRef> textures;
+    const auto        collect = [&](const UiViewportDrawPacket& viewport) {
+        for (const auto& command : viewport.commands) {
+            const auto found =
+                std::find_if(registered_images.begin(), registered_images.end(), [&](const auto& image) {
+                    return image.second == command.texture_handle;
+                });
+            if (found == registered_images.end()) {
+                throw std::logic_error("UI draw references an unregistered image");
+            }
+            if (std::none_of(textures.begin(), textures.end(), [&](const auto& texture) {
+                    return texture.Get() == found->first;
+                })) {
+                textures.emplace_back(found->first);
+            }
+        }
+    };
+    collect(frame.main_viewport);
+    for (const auto& viewport : frame.platform_viewports) {
+        if (IsUiViewportPresentationCurrent(viewport)) {
+            collect(viewport);
+        }
+    }
+    return textures;
+}
+
 void ImGuiRenderBackend::RenderGUI(
     CommandList&           _cmd_list,
     const TextureView&     _main_framebuffer,
@@ -897,23 +925,66 @@ void RenderGuiDrawPacket(
     Array<MeshDrawData> draw_meshes;
     BuildGuiDrawBatch(_draw_packet, render_buffers, arguments, draw_meshes);
     auto constant = CreateGuiProjection(_draw_packet);
-    UploadGuiDrawData(_cmd_list, _draw_packet, arguments, render_buffers);
-
-    assert(_backend_data.pipelines_by_format.contains(_framebuffer.format) && "Unsupported GUI format");
-    _cmd_list
-        .Gfx(
-            _backend_data.pipelines_by_format[_framebuffer.format],
-            render_buffers.argument_buffer,
-            _render_backend.bindless_array,
-            constant
-        )
-        .Draw(
-            "ImGui Draws",
-            {0, 0, draw_width, draw_height},
-            std::move(draw_meshes),
-            ColorAttachment(_framebuffer.GetTexture(), EAttachmentAction::AC_LOAD_STORE)
-        );
-
+    auto record_draw = [&](CommandList& commands) {
+        assert(_backend_data.pipelines_by_format.contains(_framebuffer.format) && "Unsupported GUI format");
+        commands
+            .Gfx(
+                _backend_data.pipelines_by_format[_framebuffer.format],
+                render_buffers.argument_buffer,
+                _render_backend.bindless_array,
+                constant
+            )
+            .Draw(
+                "ImGui Draws",
+                {0, 0, draw_width, draw_height},
+                std::move(draw_meshes),
+                ColorAttachment(_framebuffer.GetTexture(), EAttachmentAction::AC_LOAD_STORE)
+            );
+    };
+    if (_cmd_list.GetResourceStateOwnership() != ERHIResourceStateOwnership::Compiled) {
+        UploadGuiDrawData(_cmd_list, _draw_packet, arguments, render_buffers);
+        record_draw(_cmd_list);
+        return;
+    }
+    // The parent pass owns image access. This small graph owns only the UI's
+    // private upload-ring buffers and leaves them at their documented read states.
+    RenderGraph graph("UI.PrivateBuffers", RenderGraph::QueueTopology::FromRHI());
+    const auto  import = [&](const char* name, const BufferRef& buffer, RenderGraph::BufferState state) {
+        auto handle = graph.ImportBuffer(name, buffer, {.byte_size = buffer->GetByteSize()});
+        graph.SetInitialState(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        graph.Export(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        return handle;
+    };
+    const auto vertex =
+        import("Vertices", render_buffers.vertex_buffer, RenderGraph::BufferState::VertexBuffer);
+    const auto index = import("Indices", render_buffers.index_buffer, RenderGraph::BufferState::IndexBuffer);
+    const auto args =
+        import("Arguments", render_buffers.argument_buffer, RenderGraph::BufferState::ShaderResource);
+    graph.AddRecordPass(
+        "UI.Upload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Write(vertex, RenderGraph::BufferState::TransferDestination)
+                .Write(index, RenderGraph::BufferState::TransferDestination)
+                .Write(args, RenderGraph::BufferState::TransferDestination);
+        },
+        [&](CommandList& commands) {
+            UploadGuiDrawData(commands, _draw_packet, arguments, render_buffers);
+        }
+    );
+    graph.AddRecordPass(
+        "UI.Draw",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(vertex, RenderGraph::BufferState::VertexBuffer)
+                .Read(index, RenderGraph::BufferState::IndexBuffer)
+                .Read(args, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        record_draw
+    );
+    if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(_cmd_list, false)) {
+        throw std::runtime_error("UI private graph failed: " + graph.GetCompileError());
+    }
 }
 
 void GuiCreateWindow(ImGuiViewport* _viewport);

@@ -1,4 +1,5 @@
 #include "renderer/common/PresentationSurface.h"
+#include "GraphResourceBoundary.h"
 
 #include "RenderThread.h"
 #include "rhi/RHIExecutor.h"
@@ -225,6 +226,7 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
             return EPresentationSurfaceEnsureResult::RetryPending;
         }
         committed_frame_buffer->SetName(desc_.debug_name);
+        InitializeGraphicsTexture(committed_frame_buffer);
     }
 
     if (!state_.Commit(window_frame, actual_extent)) {
