@@ -2,6 +2,7 @@
 
 #include "DearImGuiRenderer.h"
 #include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraphUpload.h"
 
 #include "GLFW/glfw3.h"
 #include "IconsFontAwesome6.h"
@@ -352,7 +353,9 @@ static uint UploadFontAtlasAndCreatePipelines(
                 Extent2D(_width, _height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED
             );
             CommandList cmd_list;
-            cmd_list.CopyFrom(std::move(font_pixels), font_texture);
+            RecordNewGraphicsTextureUpload(
+                cmd_list, std::span<const byte>(font_pixels.data(), font_pixels.size()), font_texture
+            );
 
             RHIExecutor::Get().Submit(
                 EQueueType::Graphics,

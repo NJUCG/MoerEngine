@@ -1,9 +1,10 @@
 #pragma once
 
+#include "rendergraph/RenderGraphUpload.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "scene/Scene.h"
 #include "scene/RenderScene.h"
+#include "scene/Scene.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -170,7 +171,12 @@ private:
         int                height,
         const std::string& debug_name
     ) const {
-        cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * 4), target, debug_name);
+        RecordNewGraphicsTextureUpload(
+            cmd_list,
+            std::span<const Moer::byte>((const Moer::byte*)data, width * height * 4),
+            target,
+            debug_name
+        );
         cmd_list.AddCallback([data]() {
             stbi_image_free(data);
         });

@@ -197,23 +197,15 @@ bool RaytracingFrameSetupPass::AddPasses(
         );
     }
 
-    const bool current_tlas_accepted =
-        accepted_tlas_buffers.contains(payload->destination_tlas_buffer.Get());
+    const bool current_tlas_accepted = payload->external_tlas_built ||
+                                       accepted_tlas_buffers.contains(payload->destination_tlas_buffer.Get());
     graph.SetInitialState(
         graph_resources.current_tlas,
-        payload->external_tlas_built ?
-            RenderGraph::BufferState::AccelerationStructureWrite :
-            (current_tlas_accepted ?
-                 RenderGraph::BufferState::AccelerationStructureRead :
-                 RenderGraph::BufferState::Undefined),
-        payload->external_tlas_built || current_tlas_accepted ?
-            RenderGraph::QueueRole::Graphics :
-            RenderGraph::QueueRole::None,
-        payload->external_tlas_built ?
-            RenderGraph::AccessMode::Write :
-            (current_tlas_accepted ?
-                 RenderGraph::AccessMode::Read :
-                 RenderGraph::AccessMode::None)
+        (current_tlas_accepted ? RenderGraph::BufferState::AccelerationStructureRead :
+                                 RenderGraph::BufferState::Undefined),
+        payload->external_tlas_built || current_tlas_accepted ? RenderGraph::QueueRole::Graphics :
+                                                                RenderGraph::QueueRole::None,
+        (current_tlas_accepted ? RenderGraph::AccessMode::Read : RenderGraph::AccessMode::None)
     );
 
     Array<RenderGraph::BufferHandle> unique_scene_buffers;

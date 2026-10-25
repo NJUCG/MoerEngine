@@ -1,4 +1,5 @@
 #include "RaytracingRenderer.h"
+#include "rendergraph/RenderGraphUpload.h"
 
 #include "RTResource.h"
 #include "RaytracingExportSubmission.h"
@@ -93,17 +94,36 @@ bool RaytracingRenderer::DumpTextureToFile(
                 EGpuMarkerMode::Timestamp :
                 EGpuMarkerMode::Label
         );
-        if (config.output_texture == EOT_LDR) {
-            readback = command_list.Readback(
-                frame_resources.ldr_color->GetView(),
-                "RaytracingExportLdrReadback"
-            );
-        } else {
-            readback = command_list.Readback(
-                frame_resources.resolved_color->GetView(),
-                "RaytracingExportHdrReadback"
-            );
-        }
+        const TextureRef texture =
+            config.output_texture == EOT_LDR ? frame_resources.ldr_color : frame_resources.resolved_color;
+        RenderGraph graph("Raytracing.Export", RenderGraph::QueueTopology::FromRHI());
+        const auto  image = graph.ImportTexture("Source", texture, {});
+        graph.SetInitialState(
+            image,
+            RenderGraph::TextureState::Sampled,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        graph.Export(
+            image,
+            RenderGraph::TextureState::Sampled,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        graph.AddRecordPass(
+            "Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                    .Read(image, RenderGraph::TextureState::TransferSource)
+                    .SideEffect()
+                    .TranslateSerialControl();
+            },
+            [texture, &readback](CommandList& list) {
+                readback = list.Readback(texture->GetView(), "RaytracingExportReadback");
+            },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+        RecordGraphicsUploadGraph(graph, command_list);
     }
     if (!readback.Valid()) {
         return false;

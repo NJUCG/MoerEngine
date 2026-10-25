@@ -196,88 +196,6 @@ nrd::Denoiser ResolveNrdDenoiser(int denoiser_mode) {
 }
 #endif
 
-void RecordGpuSceneReadBoundary(
-    CommandList&         cmd_list,
-    const GpuScene::Res& resources
-) {
-    Array<ReadBuffer>    buffer_reads;
-    Array<const Buffer*> seen_buffers;
-    const auto append_buffer = [&](const BufferWithHandle& resource) {
-        if (!resource.buf ||
-            std::find(
-                seen_buffers.begin(),
-                seen_buffers.end(),
-                resource.buf.Get()
-            ) != seen_buffers.end()) {
-            return;
-        }
-        seen_buffers.emplace_back(resource.buf.Get());
-        buffer_reads.emplace_back(
-            ReadBuffer{
-                resource.buf->GetView(),
-                EBufferState::SHADER_RESOURCE
-            }
-        );
-    };
-    for (const BufferWithHandle* resource : {
-             &resources.light_buf,
-             &resources.material_buf,
-             &resources.primitive_buf,
-             &resources.instance_buf,
-             &resources.position_buf,
-             &resources.packed_normal_buf,
-             &resources.packed_tangent_buf,
-             &resources.texcoord0_buf,
-             &resources.index_buf,
-             &resources.rt_instance_buf,
-             &resources.rt_primitive_table_buf,
-         }) {
-        append_buffer(*resource);
-    }
-    if (!buffer_reads.empty()) {
-        cmd_list.BufferBarriers(
-            EQueueType::Graphics,
-            EQueueType::Graphics,
-            EPassType::Compute,
-            std::move(buffer_reads),
-            Array<WriteBuffer>{}
-        );
-    }
-
-    Array<ReadTexture>    texture_reads;
-    Array<const Texture*> seen_textures;
-    for (const TextureWithHandle& resource : resources.texture_array) {
-        if (!resource.tex ||
-            std::find(
-                seen_textures.begin(),
-                seen_textures.end(),
-                resource.tex.Get()
-            ) != seen_textures.end()) {
-            continue;
-        }
-        seen_textures.emplace_back(resource.tex.Get());
-        const auto usage = resource.tex->GetUsage();
-        const bool supports_uav =
-            (usage & ETextureUsageFlags::UNORDERED_ACCESS) ==
-            ETextureUsageFlags::UNORDERED_ACCESS;
-        texture_reads.emplace_back(
-            ReadTexture{
-                resource.tex->GetView(0, resource.tex->GetNumMips()),
-                supports_uav ? ETextureState::SHADER_RESOURCE :
-                               ETextureState::SAMPLE
-            }
-        );
-    }
-    if (!texture_reads.empty()) {
-        cmd_list.TextureBarriers(
-            EQueueType::Graphics,
-            EQueueType::Graphics,
-            EPassType::Compute,
-            std::move(texture_reads)
-        );
-    }
-}
-
 void ExecuteSceneUpdate(
     RenderScene&     render_scene,
     GpuSceneUpdate&& update,
@@ -290,14 +208,7 @@ void ExecuteSceneUpdate(
     auto scene_cmd_list = render_scene.ApplyUpdate(
         std::move(update), setup_command_lists
     );
-    // GpuScene uploads may finish as transfer writes while untouched aliases
-    // retain their previous read state. Publish one deterministic SRV/Sampled
-    // boundary on the same graphics stream so the following managed RT graph
-    // never has to guess per-resource backend state.
-    RecordGpuSceneReadBoundary(
-        scene_cmd_list.gfx_queue_cmd_list,
-        render_scene.GetGpuSceneRes()
-    );
+    // Upload graphs publish SRV/Sampled/ASRead boundaries before returning.
     const bool modern_graphics_profiling =
         scene_cmd_list.gfx_queue_cmd_list.HasGpuScopeRecorder() ||
         scene_cmd_list.gfx_queue_cmd_list

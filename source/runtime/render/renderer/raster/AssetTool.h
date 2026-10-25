@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendergraph/RenderGraphUpload.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 #include <config/ConfigManager.h>
@@ -356,7 +357,12 @@ private:
         int                height,
         const std::string& debug_name
     ) {
-        cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * 4), target, debug_name);
+        RecordNewGraphicsTextureUpload(
+            cmd_list,
+            std::span<const Moer::byte>((const Moer::byte*)data, width * height * 4),
+            target,
+            debug_name
+        );
         cmd_list.AddCallback([data]() {
             stbi_image_free(data);
         });

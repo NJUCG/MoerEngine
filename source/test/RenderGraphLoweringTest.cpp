@@ -521,6 +521,49 @@ void TestUntouchedImportedRangesNeedNoCommands(TestSuite& suite) {
     }
 }
 
+void TestAccelerationBuildInputScopes(TestSuite& suite) {
+    constexpr std::string_view name   = "build input covers geometry and referenced BLAS reads";
+    BufferRef                  buffer = MoerNew(FakeBuffer)(256);
+    RenderGraph                graph(name);
+    const auto                 input = graph.ImportBuffer("Input", buffer, {.byte_size = 256});
+    graph.SetInitialState(
+        input,
+        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    graph.AddPass(
+        "Build",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                .Read(input, RenderGraph::BufferState::AccelerationStructureBuildInput)
+                .SideEffect();
+        },
+        [] {}
+    );
+    graph.Export(
+        input,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(graph.Compile(), name, graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan plan{};
+    std::string                      error;
+    suite.Check(RenderGraphLowering::Lower(graph, plan, error), name, error);
+    suite.Check(
+        plan.prologue.size() == 1 &&
+            plan.prologue.front().destination.stages ==
+                ERHIPipelineStageFlags::PS_ACCELERATION_STRUCTURE_BUILD &&
+            HasFlag(plan.prologue.front().destination.access, ERHIAccessFlags::SHADER_READ) &&
+            HasFlag(
+                plan.prologue.front().destination.access, ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT
+            ),
+        name,
+        "transfer writes must become visible to both raw geometry and AS build reads"
+    );
+}
+
 void TestSameStateReadGetsStateSeed(TestSuite& suite) {
     constexpr std::string_view test_name = "same-state read receives explicit state seed";
     BufferRef buffer = MoerNew(FakeBuffer)(256);
@@ -1616,6 +1659,7 @@ int main() {
     TestDepthAttachmentReadUsesBackendAttachmentLayout(suite);
     TestPresentationSourceLowersToCommonTransferRead(suite);
     TestUntouchedImportedRangesNeedNoCommands(suite);
+    TestAccelerationBuildInputScopes(suite);
     TestSameStateReadGetsStateSeed(suite);
     TestCrossNativeTokenSynchronization(suite);
     TestSameNativeTokenSynchronizationNeedsNoGpuSync(suite);

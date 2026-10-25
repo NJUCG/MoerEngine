@@ -259,7 +259,10 @@ template<typename Enum>
                 return true;
             case BufferState::AccelerationStructureBuildInput:
                 scope.stages = ERHIPipelineStageFlags::PS_ACCELERATION_STRUCTURE_BUILD;
-                scope.access = ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT;
+                // Builds read raw geometry/instance data as shader reads and
+                // referenced acceleration structures as AS reads.
+                scope.access =
+                    Or(ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT, ERHIAccessFlags::SHADER_READ);
                 return true;
             case BufferState::AccelerationStructureRead:
                 if (!ShaderStages(domain.pipeline, scope.stages, error)) {

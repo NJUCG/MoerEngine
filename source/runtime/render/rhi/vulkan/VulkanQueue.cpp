@@ -1288,7 +1288,7 @@ struct VkCmdPreprocessor {
     // }
     // void Visit(const SetConstantCmd* _cmd) {
     // }
-    void Visit(const BuildAccelerationStructuresCmd* _cmd) {
+    void Visit(const BuildAccelerationStructuresCmd* _cmd, bool infer_resources = true) {
         const Array<AccelerationStructureBuildParam>& params  = _cmd->Params();
         BufferView&                                   scratch = _cmd->Scratch();
         if (!scratch.GetBuffer()) {
@@ -1305,6 +1305,9 @@ struct VkCmdPreprocessor {
             scratch_size += scratch_alignment;
 
             scratch = temporary_buffer_allocator.AllocateScratch(scratch_size);
+        }
+        if (!infer_resources) {
+            return;
         }
         tracker.RecordState(
             ResourceCast(scratch.GetBuffer()),
@@ -3554,6 +3557,7 @@ bool SupportsCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
             case Command::EType::Query:
             case Command::EType::Scope:
                 break;
+            case Command::EType::BuildAccel:
             case Command::EType::BuildTLAS:
             case Command::EType::UpdateBindlessArray:
                 // The update command and its private storage currently belong
@@ -3687,6 +3691,27 @@ void RecordCompiledCommands(
         if (command->Type() == Command::EType::UpdateBindlessArray) {
             RecordCompiledBindlessUpdate(device, context.GetCommandList(), visitor,
                                         static_cast<const UpdateBindlessArrayCmd&>(*command));
+            continue;
+        }
+        if (command->Type() == Command::EType::BuildAccel) {
+            const auto* build = static_cast<const BuildAccelerationStructuresCmd*>(command.get());
+            preparation.Visit(build, false);
+            // Scratch is backend-private. Vertex/index inputs and BLAS output
+            // are exclusively synchronized by the graph's declared resources.
+            VulkanResolvedBarrierBatch before;
+            VkBufferMemoryBarrier2     barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+            barrier.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            barrier.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+            barrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                    VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+            barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.buffer = ResourceCast(build->Scratch().GetBuffer())->GetHandle();
+            barrier.offset = build->Scratch().byte_offset;
+            barrier.size   = build->Scratch().GetByteSize();
+            before.buffer_barriers.push_back(barrier);
+            before.Record(context.GetCommandList());
+            visitor.VisitCmd(command.get());
             continue;
         }
         if (command->Type() == Command::EType::BuildTLAS) {

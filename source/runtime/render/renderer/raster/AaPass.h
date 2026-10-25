@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "math/Function.h"
+#include "rendergraph/RenderGraphUpload.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -244,7 +245,8 @@ public:
             PF_R8G8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
-        context.cmd_list.CopyFrom(
+        RecordNewGraphicsTextureUpload(
+            context.cmd_list,
             std::span<byte>(
                 (byte*)&SmaaPrecomputedTextures::areaTexBytes, sizeof(SmaaPrecomputedTextures::areaTexBytes)
             ),
@@ -259,7 +261,8 @@ public:
             PF_R8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
-        context.cmd_list.CopyFrom(
+        RecordNewGraphicsTextureUpload(
+            context.cmd_list,
             std::span<byte>(
                 (byte*)&SmaaPrecomputedTextures::searchTexBytes,
                 sizeof(SmaaPrecomputedTextures::searchTexBytes)

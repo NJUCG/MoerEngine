@@ -1,4 +1,6 @@
 #include "GpuScene.h"
+#include "rendergraph/RenderGraphUpload.h"
+#include "rhi/RHIImpl.h"
 
 #include "RenderThread.h"
 #include "log/LogSystem.h"
@@ -54,7 +56,8 @@ void UploadByteBuffer(
 
     const bool need_bindless_update =
         RecreateByteBufferIfNeeded(bindless_array, target, name, required_byte_size, usage);
-    cmd_list.CopyFrom(
+    RecordGraphicsBufferUpload(
+        cmd_list,
         std::span<byte>(static_cast<byte*>(const_cast<void*>(data)), required_byte_size),
         target.buf->GetView(),
         name
@@ -63,6 +66,101 @@ void UploadByteBuffer(
     if (need_bindless_update) {
         cmd_list.UpdateBindlessArray(bindless_array);
     }
+}
+
+RenderGraph::BufferHandle
+ImportSceneBuffer(RenderGraph& graph, const BufferRef& buffer, RenderGraph::BufferState boundary) {
+    const auto handle = graph.ImportBuffer(
+        std::format("Resource.{}", reinterpret_cast<uintptr_t>(buffer.Get())),
+        buffer,
+        {.byte_size = buffer->GetByteSize()}
+    );
+    graph.SetInitialState(handle, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.Export(handle, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    return handle;
+}
+
+void RecordSceneBlasBuild(CommandList& commands, Array<AccelerationStructureBuildParam> params) {
+    RenderGraph                      graph("Scene.BuildBLAS", RenderGraph::QueueTopology::FromRHI());
+    Array<RenderGraph::BufferHandle> inputs, outputs;
+    for (const auto& param : params) {
+        outputs.push_back(ImportSceneBuffer(
+            graph,
+            BufferRef(param.geometry->GetUnderlyingBuffer()),
+            RenderGraph::BufferState::AccelerationStructureRead
+        ));
+        for (const auto& segment : param.geometry->GetInfo().segments) {
+            if (segment.vertex_buffer) {
+                inputs.push_back(
+                    ImportSceneBuffer(graph, segment.vertex_buffer, RenderGraph::BufferState::ShaderResource)
+                );
+            }
+            if (segment.index_buffer) {
+                inputs.push_back(
+                    ImportSceneBuffer(graph, segment.index_buffer, RenderGraph::BufferState::ShaderResource)
+                );
+            }
+        }
+    }
+    graph.AddRecordPass(
+        "Build",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                .TranslateSerialControl();
+            for (auto input : inputs) {
+                builder.Read(input, RenderGraph::BufferState::AccelerationStructureBuildInput);
+            }
+            for (auto output : outputs) {
+                builder.Write(output, RenderGraph::BufferState::AccelerationStructureWrite)
+                    .TranslateSerialControl();
+            }
+        },
+        [params = std::move(params)](CommandList& list) mutable {
+            list.BuildAccelerationStructures(std::move(params));
+        },
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    RecordGraphicsUploadGraph(graph, commands);
+}
+
+void RecordSceneTlasBuild(CommandList& commands, const RaytracingSceneRef& scene) {
+    auto command = scene->UpdateScene();
+    if (!command) {
+        return;
+    }
+    auto*       build = static_cast<const UpdateRaytracingSceneCmd*>(command.get());
+    RenderGraph graph("Scene.BuildTLAS", RenderGraph::QueueTopology::FromRHI());
+    const auto  output = ImportSceneBuffer(
+        graph,
+        BufferRef(build->Tlas()->GetUnderlyingBuffer()),
+        RenderGraph::BufferState::AccelerationStructureRead
+    );
+    Array<RenderGraph::BufferHandle> inputs;
+    for (const auto& geometry : build->GeometryRefs()) {
+        inputs.push_back(ImportSceneBuffer(
+            graph,
+            BufferRef(geometry->GetUnderlyingBuffer()),
+            RenderGraph::BufferState::AccelerationStructureRead
+        ));
+    }
+    auto retained_command = MakeShared<UniquePtr<Command>>(std::move(command));
+    graph.AddRecordPass(
+        "Build",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                .Write(output, RenderGraph::BufferState::AccelerationStructureWrite)
+                .TranslateSerialControl();
+            for (auto input : inputs) {
+                builder.Read(input, RenderGraph::BufferState::AccelerationStructureBuildInput);
+            }
+        },
+        [retained_command, scene](CommandList& list) {
+            list.UpdateRaytracingScene(std::move(*retained_command));
+            list.AddCallback([scene]() {});
+        },
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    RecordGraphicsUploadGraph(graph, commands);
 }
 
 static constexpr std::string_view s_rt_scene_build_blas_scope_name  = "RTScene BuildBLAS";
@@ -81,6 +179,8 @@ void GpuScene::ApplyUpdate(
     assert(update.HasWork());
 
     m_pending_cmd_lists = PendingCommandList{};
+    m_pending_cmd_lists.gfx_queue_cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    m_pending_cmd_lists.copy_queue_cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     if (setup_command_lists) {
         setup_command_lists(
             m_pending_cmd_lists, update.full_rebuild
@@ -177,7 +277,7 @@ void GpuScene::ApplyUpdate(
         graphics_profile_root->Close();
     }
 
-    // CopyFrom(span) stores a non-owning pointer. Keep the snapshot alive through each relevant submit.
+    // Retain the scene update snapshot until the corresponding submission completes.
     if (!m_pending_cmd_lists.copy_queue_cmd_list.IsEmpty()) {
         m_pending_cmd_lists.copy_queue_cmd_list.AddCallback([update_data]() {});
     }
@@ -240,14 +340,16 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
         for (uint subresource = 0;
              subresource < texture.mip_level_count * texture.array_layer_count;
              ++subresource) {
-            const uint mip_byte_size = gpu_texture.tex->GetMipByteSize(subresource);
+            const uint mip           = subresource % texture.mip_level_count;
+            const uint layer         = subresource / texture.mip_level_count;
+            const uint mip_byte_size = gpu_texture.tex->GetMipByteSize(mip);
             assert(offset + mip_byte_size <= texture.data.size());
-            m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
+            RecordNewGraphicsTextureUpload(
+                m_pending_cmd_lists.gfx_queue_cmd_list,
                 std::span<byte>(
-                    reinterpret_cast<byte*>(const_cast<uint8*>(texture.data.data())) + offset,
-                    mip_byte_size
+                    reinterpret_cast<byte*>(const_cast<uint8*>(texture.data.data())) + offset, mip_byte_size
                 ),
-                gpu_texture.tex->GetView(subresource, 1)
+                gpu_texture.tex->GetView(mip, 1).Slice(layer)
             );
             offset += mip_byte_size;
         }
@@ -345,10 +447,10 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
         if (source.empty()) {
             return;
         }
-        m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
+        RecordGraphicsBufferUpload(
+            m_pending_cmd_lists.gfx_queue_cmd_list,
             std::span<byte>(
-                reinterpret_cast<byte*>(const_cast<Element*>(source.data())),
-                source.size() * sizeof(Element)
+                reinterpret_cast<byte*>(const_cast<Element*>(source.data())), source.size() * sizeof(Element)
             ),
             target.buf->GetView(),
             name
@@ -398,32 +500,6 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
     }
     m_pending_cmd_lists.gfx_queue_cmd_list.UpdateBindlessArray(bdls);
 
-    Array<ExportTexture> export_textures;
-    Array<ImportTexture> import_textures;
-    export_textures.reserve(m_res.texture_array.size());
-    import_textures.reserve(m_res.texture_array.size());
-    for (const TextureWithHandle& texture : m_res.texture_array) {
-        export_textures.push_back({texture.tex->GetView(), ETextureState::SAMPLE});
-        import_textures.push_back(
-            {texture.tex->GetView(0, texture.tex->GetNumMips()), ETextureState::SAMPLE}
-        );
-    }
-
-    Array<ExportBuffer> export_buffers;
-    Array<ImportBuffer> import_buffers;
-    export_buffers.reserve(buffers.size());
-    import_buffers.reserve(buffers.size());
-    for (const BufferWithHandle* buffer : buffers) {
-        export_buffers.push_back({buffer->buf->GetView(), EBufferState::UNORDERED_ACCESS});
-        import_buffers.push_back({buffer->buf->GetView(), EBufferState::UNORDERED_ACCESS});
-    }
-
-    m_pending_cmd_lists.copy_queue_cmd_list.ExportResourcesToQueue(
-        EQueueType::Graphics, std::move(export_textures), std::move(export_buffers)
-    );
-    m_pending_cmd_lists.gfx_queue_cmd_list.ImportResourcesFromQueue(
-        EQueueType::Copy, std::move(import_textures), std::move(import_buffers)
-    );
     if (device.SupportsRaytracingAccelerationStructures()) {
         InitRaytracingScene(
             m_pending_cmd_lists.gfx_queue_cmd_list, update.rt_meshes, update.rt_instances
@@ -484,7 +560,8 @@ void GpuScene::UpdateDrawCommandBuffer(
         need_bindless_update = true;
     }
 
-    cmd_list.CopyFrom(
+    RecordGraphicsBufferUpload(
+        cmd_list,
         std::span<byte>(
             reinterpret_cast<byte*>(const_cast<DrawIndexedCmdData*>(draw_commands.data())),
             draw_commands.size() * sizeof(DrawIndexedCmdData)
@@ -728,11 +805,11 @@ void GpuScene::InitRaytracingScene(
 
     if (!build_params.empty()) {
         cmd_list.PushScopeWithTimeScope(s_rt_scene_build_blas_scope_name);
-        cmd_list.BuildAccelerationStructures(std::move(build_params));
+        RecordSceneBlasBuild(cmd_list, std::move(build_params));
         cmd_list.PopScopeWithTimeScope();
     }
     cmd_list.PushScopeWithTimeScope(s_rt_scene_build_tlas_scope_name);
-    cmd_list.UpdateRaytracingScene(m_res.rt_scene);
+    RecordSceneTlasBuild(cmd_list, m_res.rt_scene);
     cmd_list.PopScopeWithTimeScope();
 
     LOG_DEBUG(
@@ -789,7 +866,7 @@ void GpuScene::RebuildRaytracingSceneTlas(
         EBufferUsageFlags::UNORDERED_ACCESS
     );
     cmd_list.PushScopeWithTimeScope(s_rt_scene_build_tlas_scope_name);
-    cmd_list.UpdateRaytracingScene(m_res.rt_scene);
+    RecordSceneTlasBuild(cmd_list, m_res.rt_scene);
     cmd_list.PopScopeWithTimeScope();
 }
 
@@ -835,7 +912,7 @@ void GpuScene::UpdateRaytracingScene(
         EBufferUsageFlags::UNORDERED_ACCESS
     );
     cmd_list.PushScopeWithTimeScope(s_rt_scene_update_tlas_scope_name);
-    cmd_list.UpdateRaytracingScene(m_res.rt_scene);
+    RecordSceneTlasBuild(cmd_list, m_res.rt_scene);
     cmd_list.PopScopeWithTimeScope();
 }
 
@@ -843,7 +920,8 @@ void GpuScene::RestoreDrawCommands(CommandList& cmd_list) {
     if (m_draw_commands.empty() || m_res.draw_cmd_buf.buf == nullptr) {
         return;
     }
-    cmd_list.CopyFrom(
+    RecordGraphicsBufferUpload(
+        cmd_list,
         std::span<byte>(
             reinterpret_cast<byte*>(m_draw_commands.data()),
             m_draw_commands.size() * sizeof(DrawIndexedCmdData)
