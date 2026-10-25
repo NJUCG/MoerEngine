@@ -19,6 +19,7 @@
 #include "rhi/vulkan/diagnostics/VulkanSubmissionDiagnostics.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
 #include "renderer/raster/TonemappingPass.h"
+#include "renderer/raster/BloomPass.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 
@@ -2066,7 +2067,167 @@ void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
              "results=86,88 slots=recycled");
 }
 
-void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
+void RunCompiledBloom(ShaderManager& manager, bool parallel) {
+    using namespace Moer::Render::Raster;
+    using Graph                               = RenderGraph;
+    auto&                              device = RenderDevice::Get();
+    BloomPass                          bloom(manager, PF_R32G32B32A32_SFLOAT);
+    constexpr uint32                   width = 64, height = 32;
+    std::array<float4, width * height> pixels{};
+    for (uint32 y = 0; y < height; ++y) {
+        for (uint32 x = 0; x < width; ++x) {
+            pixels[y * width + x] = float4(2.0f + 10.0f * (x % 8), 1.0f + 3.0f * y, 12.0f, 1.0f);
+        }
+    }
+    auto run = [&](uint32 mip_count, bool compiled) {
+        const auto usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
+                           ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC;
+        auto input =
+            device.CreateTexture("bloom_scene", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, usage);
+        auto down = device.CreateTexture(
+            "bloom_down", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
+        );
+        auto up = device.CreateTexture(
+            "bloom_up", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
+        );
+        auto                  params = bloom.Prepare(true, {input, 0, {}}, {down, 0, {}}, {up, 0, {}});
+        Array<ReadbackFuture> readbacks;
+        auto                  readback = [&](CommandList& commands) {
+            readbacks.push_back(commands.Readback(input->GetView()));
+            for (uint32 mip = 0; mip < mip_count; ++mip)
+                readbacks.push_back(commands.Readback(down->GetView(mip, 1)));
+            // The last upsample mip is never produced or consumed.
+            for (uint32 mip = 0; mip + 1 < mip_count; ++mip)
+                readbacks.push_back(commands.Readback(up->GetView(mip, 1)));
+        };
+        if (!compiled) {
+            CommandList commands;
+            commands.CopyFrom(OwnedBytes(pixels), input->GetView());
+            bloom.Record(commands, params);
+            // The legacy reorderer groups read-only uses without considering
+            // layout compatibility. Keep readback in a following submit so it
+            // cannot move a TransferSource transition ahead of a sampled read.
+            RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+            readback(commands);
+            RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        } else {
+            Graph                     graph("CompiledBloom");
+            BloomPass::GraphResources resources{
+                .input            = graph.ImportTexture("Scene", input, {}),
+                .downsample_chain = graph.ImportTexture("Down", down, {.mip_count = mip_count}),
+                .upsample_chain   = graph.ImportTexture("Up", up, {.mip_count = mip_count})
+            };
+            for (auto resource : {resources.input, resources.downsample_chain, resources.upsample_chain}) {
+                graph.SetInitialState(
+                    resource, Graph::TextureState::Undefined, Graph::QueueRole::None, Graph::AccessMode::None
+                );
+            }
+            graph.AddRecordPass(
+                "Upload",
+                [=](Graph::PassBuilder& builder) {
+                    builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Copy)
+                        .Write(resources.input, Graph::TextureState::TransferDestination);
+                },
+                [=](CommandList& commands) {
+                    commands.CopyFrom(OwnedBytes(pixels), input->GetView());
+                },
+                Graph::PassExecutionClass::ParallelRecordEligible
+            );
+            auto prepared = graph.AddSetupPass("Bloom.Prepare", params, [](const auto& value) {
+                return value;
+            });
+            bloom.AddRecordPasses(graph, resources, prepared, mip_count);
+            graph.AddRecordPass(
+                "Readback",
+                [=](Graph::PassBuilder& builder) {
+                    builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Copy)
+                        .Read(resources.input, Graph::TextureState::TransferSource)
+                        .Read(resources.downsample_chain, Graph::TextureState::TransferSource)
+                        .SideEffect();
+                    if (mip_count > 1) {
+                        builder.Read(
+                            resources.upsample_chain,
+                            Graph::TextureState::TransferSource,
+                            Graph::TextureRange::Mips(0, mip_count - 1)
+                        );
+                    }
+                },
+                readback,
+                Graph::PassExecutionClass::ParallelRecordEligible
+            );
+            graph.Export(
+                resources.input,
+                Graph::TextureState::TransferSource,
+                Graph::QueueRole::Graphics,
+                Graph::AccessMode::Read
+            );
+            graph.Export(
+                resources.downsample_chain,
+                Graph::TextureState::TransferSource,
+                Graph::QueueRole::Graphics,
+                Graph::AccessMode::Read
+            );
+            if (mip_count > 1) {
+                graph.Export(
+                    resources.upsample_chain,
+                    Graph::TextureState::TransferSource,
+                    Graph::QueueRole::Graphics,
+                    Graph::AccessMode::Read,
+                    Graph::TextureRange::Mips(0, mip_count - 1)
+                );
+            }
+            if (!graph.Compile() ||
+                graph.GetCompiledPlan().frontend_record_units.size() != 2 * mip_count + 2 ||
+                !graph.ExecuteFrontendRecordingPlan(
+                    {},
+                    {},
+                    parallel,
+                    {},
+                    Graph::ActiveRecordingOptions{
+                        .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled
+                    }
+                )) {
+                throw std::runtime_error("compiled bloom graph failed: " + graph.GetCompileError());
+            }
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        const auto scene        = readbacks.front().Get().CopyAs<float>();
+        bool       added_energy = false;
+        if (scene && scene->size() == width * height * 4) {
+            for (size_t i = 0; i < pixels.size(); ++i) {
+                added_energy |= (*scene)[i * 4] > pixels[i].x + 0.001f;
+            }
+        }
+        if (!scene || scene->size() != width * height * 4 || !added_energy ||
+            !std::all_of(scene->begin(), scene->end(), [](float value) {
+                return std::isfinite(value);
+            })) {
+            throw std::runtime_error("bloom did not add finite highlight energy to the scene");
+        }
+        Array<Array<uint32>> snapshot;
+        for (auto& future : readbacks) {
+            auto data = future.Get().CopyAs<uint32>();
+            if (!data || data->empty())
+                throw std::runtime_error("bloom subresource readback failed");
+            snapshot.push_back(std::move(*data));
+        }
+        return snapshot;
+    };
+    for (const uint32 mip_count : {1u, 6u}) {
+        const auto reference = run(mip_count, false);
+        const auto compiled  = run(mip_count, true);
+        if (reference != compiled) {
+            throw std::runtime_error("compiled Bloom differs from the legacy image or pyramid mips");
+        }
+        LOG_INFO(
+            "[TESTCASE][PASS] name=CompiledBloom mips={} stages={} pyramid=matched scene=matched",
+            mip_count,
+            2 * mip_count
+        );
+    }
+}
+
+void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_bloom = false) {
     using namespace Moer::Render::Raster;
     auto& device = RenderDevice::Get();
     constexpr uint32 width = 16;
@@ -2077,7 +2238,7 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
             "tonemap_test_input",
             Extent3D(width, height, 1),
             PF_R32G32B32A32_SFLOAT,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_DST
         );
         auto output = device.CreateTexture(
             "tonemap_test_output",
@@ -2086,7 +2247,7 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
             ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
         );
         std::array<float4, width * height> pixels{};
-        pixels.fill(float4(0.25f, 0.5f, 0.75f, 1.0f));
+        pixels.fill(with_bloom ? float4(32.0f, 24.0f, 12.0f, 1.0f) : float4(0.25f, 0.5f, 0.75f, 1.0f));
         TonemappingPass::RecordParameters params{};
         params.input                 = {input, 0, {}};
         params.output                = {output, 0, {}};
@@ -2151,6 +2312,52 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
             },
             RenderGraph::PassExecutionClass::ParallelRecordEligible
         );
+        UniquePtr<BloomPass> bloom;
+        if (with_bloom) {
+            constexpr uint32 mip_count = 4;
+            bloom                      = MakeUnique<BloomPass>(manager, PF_R32G32B32A32_SFLOAT);
+            const auto usage           = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT;
+            auto       down            = device.CreateTexture(
+                "bloom_tonemap_down", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
+            );
+            auto up = device.CreateTexture(
+                "bloom_tonemap_up", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
+            );
+            BloomPass::GraphResources bloom_resources{
+                .input            = resources.input,
+                .downsample_chain = graph.ImportTexture("BloomDown", down, {.mip_count = mip_count}),
+                .upsample_chain   = graph.ImportTexture("BloomUp", up, {.mip_count = mip_count})
+            };
+            for (const auto chain : {bloom_resources.downsample_chain, bloom_resources.upsample_chain}) {
+                graph.SetInitialState(
+                    chain,
+                    RenderGraph::TextureState::Undefined,
+                    RenderGraph::QueueRole::None,
+                    RenderGraph::AccessMode::None
+                );
+            }
+            graph.Export(
+                bloom_resources.downsample_chain,
+                RenderGraph::TextureState::Sampled,
+                RenderGraph::QueueRole::Graphics,
+                RenderGraph::AccessMode::Read
+            );
+            graph.Export(
+                bloom_resources.upsample_chain,
+                RenderGraph::TextureState::Sampled,
+                RenderGraph::QueueRole::Graphics,
+                RenderGraph::AccessMode::Read,
+                RenderGraph::TextureRange::Mips(0, mip_count - 1)
+            );
+            auto bloom_prepared = graph.AddSetupPass(
+                "Bloom.Prepare",
+                bloom->Prepare(true, params.input, {down, 0, {}}, {up, 0, {}}),
+                [](const auto& parameters) {
+                    return parameters;
+                }
+            );
+            bloom->AddRecordPasses(graph, bloom_resources, bloom_prepared, mip_count);
+        }
         auto prepared = graph.AddSetupPass("Prepare", params, [](const auto& parameters) {
             return parameters;
         });
@@ -2230,8 +2437,8 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
             throw std::runtime_error("compiled tonemapping differs from the tracked reference");
         }
     }
-    LOG_INFO("[TESTCASE][PASS] name=CompiledTonemapping stages=4 histogram=verified exposure=verified "
-             "image=matched");
+    LOG_INFO("[TESTCASE][PASS] name={} histogram=verified exposure=verified image=matched",
+             with_bloom ? "CompiledBloomTonemapping" : "CompiledTonemapping");
 }
 
 void RunActiveRdgExplicitBarrierReadback(
@@ -16671,6 +16878,8 @@ int main(int argc, const char** argv) {
             ShaderManager& manager = ShaderManager::Get();
             shader_manager_initialized = true;
             RunCompiledTonemapping(manager, parallel);
+            RunCompiledBloom(manager, parallel);
+            RunCompiledTonemapping(manager, parallel, true);
             RunCompiledKnownBindlessAccess(manager, parallel);
             RunCompiledKnownBindlessAccess(manager, parallel, true);
             RunCompiledBindlessCandidates(manager, parallel);
