@@ -25,7 +25,7 @@ namespace Moer::Render::Raster {
 struct CudaResource {
 
     UniquePtr<CudaTexture>   cuda_texture;
-    UniquePtr<CudaSemaphore> cuda_semaphore;
+    UniquePtr<CudaInteropBoundary> cuda_boundary;
 
     // no RAII
     CudaResource()  = default;
@@ -40,13 +40,15 @@ struct CudaResource {
         LOG_INFO("CudaPass: Created CUDA Kernel Vulkan image buffer");
 
         // MARK: semaphore
-        cuda_semaphore = MakeUnique<CudaSemaphore>(context);
+        cuda_boundary = MakeUnique<CudaInteropBoundary>(
+            context, std::initializer_list<TextureRef>{_previousPassOutputTexture}
+        );
         LOG_INFO("CudaPass: Created CUDA Imported Vulkan semaphore");
     }
 
     void Free(RasterContext& context) {
+        cuda_boundary.reset();
         cuda_texture.reset();
-        cuda_semaphore.reset();
     }
 };
 
@@ -75,10 +77,13 @@ public:
     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
         if (ui_config.ai_is_cuda_enabled == false)
             return input_image;
+        if (!context.cmd_list.IsEmpty()) {
+            throw std::logic_error("CUDA requires a submitted compiled graphics prefix");
+        }
 
         // signal
 
-        cuda_res.cuda_semaphore->Signal();
+        cuda_res.cuda_boundary->ReleaseToCuda();
 
         // cuda
 
@@ -92,7 +97,7 @@ public:
         Moer::Cuda::d_test_2(
             blocksPerGrid,
             threadsPerBlock,
-            cuda_res.cuda_semaphore->stream_to_run,
+            cuda_res.cuda_boundary->stream_to_run,
             cuda_res.cuda_texture->GetSurfaceObjectList(),
             cuda_res.cuda_texture->width,
             cuda_res.cuda_texture->height,
@@ -102,7 +107,7 @@ public:
 
         // wait
 
-        cuda_res.cuda_semaphore->Wait();
+        cuda_res.cuda_boundary->AcquireFromCuda();
 
         // return
 

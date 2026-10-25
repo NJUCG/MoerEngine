@@ -326,5 +326,13 @@ NRD 的公共纹理依赖也由图声明：RELAX 读取 motion，REBLUR 还可�
 低层 RHI 的 legacy recorder 暂留作兼容和对照测试，不属于渲染器执行分支。
 验证完整运行路径时可设置 `MOER_VULKAN_REQUIRE_COMPILED=1`：任何包含命令的非 compiled
 提交都会被拒绝。新增入口应补充资源声明或后端私有协议，不能通过关闭此检查掩盖遗漏。
-未接入托管队列协议的外部执行（例如 CUDA/TensorRT 的 `ExternalControl`）仍会明确拒绝，
-不能假装是普通 pass，也不能让旧 recorder 代替外部同步契约。
+
+CUDA/TensorRT 使用两个 compiled 图之间的显式交接，不在 RDG 录制回调内提交队列。
+前图先导出固定边界并提交；interop owner 把具体共享纹理从 `Sampled` 转为 `GENERAL`、
+交给 external queue family，并通过导出的 RHI timeline 让 CUDA 等待。
+CUDA stream 完成后，后续 RHI 提交等待 CUDA 的 timeline，收回纹理并恢复 `Sampled`，然后录制后图。
+这些 Vulkan 提交也采用 `Compiled`；不存在 native queue 的旁路提交或资源推断。
+这是 [Vulkan 外部资源所有权与同步](https://docs.vulkan.org/spec/latest/chapters/synchronization.html#synchronization-queue-transfers)
+所需的交接。当前实现选择在此边界等待 CUDA 和收回提交完成，以统一临时映射、推理 buffer 和 semaphore 的复用条件；
+代价是启用 CUDA 时增加提交及 CPU 等待，暂不追求 Vulkan/CUDA 重叠。
+未声明这些交接条件的通用 `ExternalControl` 仍会被 lowering 拒绝。

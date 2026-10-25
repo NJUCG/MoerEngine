@@ -9,16 +9,18 @@
 #error "This header requires WITH_CUDA=1"
 #endif
 
-#include "rhi/vulkan/VulkanTimeline.h"
 #include "log/LogSystem.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "platform/Platform.h"
 #include "rhi/RHIExecutor.h"
 #include "rhi/vulkan/VulkanDevice.h"
-#include "rhi/vulkan/VulkanQueue.h"
+#include "rhi/vulkan/VulkanTimeline.h"
 #include <cuda_runtime.h>
 #include <cusolverDn.h>
+#include <initializer_list>
+#include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 #include "RasterResource.h"
@@ -69,34 +71,10 @@ public:
         return *dynamic_cast<VulkanTimeline*>(fence.Get());
     }
 
-    static VkCommandQueue& getVulkanQueue(CommandQueue& queue) {
-        return *dynamic_cast<VkCommandQueue*>(&queue);
-    }
-
     static VkDeviceMemory getVkDeviceMemory(VulkanDevice& vulkan_device, VulkanTexture& vulkan_texture) {
         VmaAllocationInfo info;
         vmaGetAllocationInfo(vulkan_device.GetVmaAllocator(), vulkan_texture.GetAllocation(), &info);
         return info.deviceMemory;
-    }
-
-    static VkSemaphore createSemaphoreWithoutRHI(VulkanDevice& vulkan_device) {
-        VkSemaphore semaphore;
-
-        VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-
-        VkExportSemaphoreCreateInfoKHR vulkanExportSemaphoreCreateInfo = {};
-        vulkanExportSemaphoreCreateInfo.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO_KHR;
-        vulkanExportSemaphoreCreateInfo.pNext       = nullptr;
-        vulkanExportSemaphoreCreateInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-        create_info.pNext = &vulkanExportSemaphoreCreateInfo;
-
-        VkResult result = vkCreateSemaphore(vulkan_device.GetDevice(), &create_info, nullptr, &semaphore);
-        if (result != VK_SUCCESS) {
-            LOG_WARNING("CudaPass: vkCreateSemaphore Failed. VkResult = {}", static_cast<int32>(result));
-        }
-
-        return semaphore;
     }
 
     static void CloseWin32Handle(HANDLE& handle) {
@@ -415,181 +393,170 @@ private:
     }
 }; // namespace Moer::Render::Raster
 
-struct CudaSemaphore {
+// A synchronous interop boundary between two compiled graphics graphs.
+// Public images enter and leave in Sampled; CUDA owns them in GENERAL while
+// its stream runs. RHI owns every Vulkan submit, including semaphore waits.
+struct CudaInteropBoundary {
+    cudaStream_t stream_to_run{};
 
-    // non-cuda objects
-
-    VkSemaphore before_semaphore;
-    VkSemaphore after_semaphore;
-
-    // PFN
-    PFN_vkGetSemaphoreWin32HandleKHR pfnGetSemaphoreWin32HandleKHR = nullptr;
-
-    // cuda objects
-
-    // semaphore
-    cudaExternalSemaphore_t cuda_before_semaphore;
-    cudaExternalSemaphore_t cuda_after_semaphore;
-    cudaStream_t            stream_to_run;
-
-    // win32 objects
-    HANDLE win32_handle_before_semaphore;
-    HANDLE win32_handle_after_semaphore;
-
-    // others
-    VulkanDevice&             vulkan_device;
-    VkNativeQueue&            vk_native_queue;
-    std::function<void(void)> pfn_sync_vk;
-
-    CudaSemaphore(RasterContext& context) :
+    CudaInteropBoundary(RasterContext& context, std::initializer_list<TextureRef> resources) :
         vulkan_device(CudaVulkanTools::getVulkanDevice(context.device)),
-        vk_native_queue(CudaVulkanTools::getVulkanQueue(context.gfx_queue).GetVkNativeQueue()) {
-
-        pfn_sync_vk = [&]() {
-            RHIExecutor::Get().Submit(
-                EQueueType::Graphics,
-                context.cmd_list.Submit(),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-        };
-
-        LoadVulkanWin32PFN();
-
-        before_semaphore = CudaVulkanTools::createSemaphoreWithoutRHI(vulkan_device);
-        after_semaphore  = CudaVulkanTools::createSemaphoreWithoutRHI(vulkan_device);
-
-        {
-            VkSemaphoreGetWin32HandleInfoKHR info = {};
-
-            info.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR;
-            info.pNext      = NULL;
-            info.semaphore  = before_semaphore;
-            info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-            VkResult result = pfnGetSemaphoreWin32HandleKHR(
-                vulkan_device.GetDevice(), &info, &win32_handle_before_semaphore
-            );
-            if (result != VK_SUCCESS || win32_handle_before_semaphore == INVALID_HANDLE_VALUE ||
-                win32_handle_before_semaphore == nullptr) {
-                LOG_WARNING(
-                    "CudaPass: vkGetSemaphoreWin32HandleKHR Failed. VkResult = {}", static_cast<int32>(result)
-                );
+        before(context.device.CreateFence()),
+        after(context.device.CreateFence()),
+        acquired(context.device.CreateFence()) {
+        std::unordered_set<Texture*> unique;
+        for (const auto& texture : resources) {
+            if (!texture) {
+                throw std::invalid_argument("CUDA interop requires physical textures");
             }
-
-            cudaExternalSemaphoreHandleDesc desc = {};
-
-            desc.type                = cudaExternalSemaphoreHandleTypeOpaqueWin32;
-            desc.handle.win32.handle = win32_handle_before_semaphore;
-            desc.flags               = 0;
-
-            checkCudaErrors(cudaImportExternalSemaphore(&cuda_before_semaphore, &desc));
-        }
-        {
-            VkSemaphoreGetWin32HandleInfoKHR info = {};
-
-            info.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR;
-            info.pNext      = NULL;
-            info.semaphore  = after_semaphore;
-            info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-            VkResult result = pfnGetSemaphoreWin32HandleKHR(
-                vulkan_device.GetDevice(), &info, &win32_handle_after_semaphore
-            );
-            if (result != VK_SUCCESS || win32_handle_after_semaphore == INVALID_HANDLE_VALUE ||
-                win32_handle_after_semaphore == nullptr) {
-                LOG_WARNING(
-                    "CudaPass: vkGetSemaphoreWin32HandleKHR Failed. VkResult = {}", static_cast<int32>(result)
-                );
+            if (unique.emplace(texture.Get()).second) {
+                textures.push_back(texture);
             }
-
-            cudaExternalSemaphoreHandleDesc desc = {};
-
-            desc.type                = cudaExternalSemaphoreHandleTypeOpaqueWin32;
-            desc.handle.win32.handle = win32_handle_after_semaphore;
-            desc.flags               = 0;
-
-            checkCudaErrors(cudaImportExternalSemaphore(&cuda_after_semaphore, &desc));
         }
-        {
-            checkCudaErrors(cudaStreamCreate(&stream_to_run));
+        if (textures.empty()) {
+            throw std::invalid_argument("CUDA interop requires a nonempty resource set");
+        }
+        try {
+            ImportTimeline(before, cuda_before);
+            ImportTimeline(after, cuda_after);
+            Require(cudaStreamCreate(&stream_to_run));
+        } catch (...) {
+            if (cuda_before) {
+                cudaDestroyExternalSemaphore(cuda_before);
+            }
+            if (cuda_after) {
+                cudaDestroyExternalSemaphore(cuda_after);
+            }
+            throw;
         }
     }
-    ~CudaSemaphore() {
-        // destroy cuda objects
-        checkCudaErrors(cudaDestroyExternalSemaphore(cuda_before_semaphore));
-        checkCudaErrors(cudaDestroyExternalSemaphore(cuda_after_semaphore));
 
-        // destroy non-cuda objects
-        vkDestroySemaphore(vulkan_device.GetDevice(), before_semaphore, nullptr);
-        vkDestroySemaphore(vulkan_device.GetDevice(), after_semaphore, nullptr);
-
-        // destroy win32 handles
-        CudaVulkanTools::CloseWin32Handle(win32_handle_before_semaphore);
-        CudaVulkanTools::CloseWin32Handle(win32_handle_after_semaphore);
-    }
-
-    CudaSemaphore(const CudaSemaphore&)            = delete;
-    CudaSemaphore& operator=(const CudaSemaphore&) = delete;
-
-    void Signal() {
-        // TODO: 这里默认为 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT，有优化空间
-        vk_native_queue.Signal(before_semaphore);
-        pfn_sync_vk();
-
-        cudaVkSemaphoreWait(cuda_before_semaphore);
-    }
-
-    void Wait() {
-        cudaVkSemaphoreSignal(cuda_after_semaphore);
-        {
-            auto result = cudaGetLastError();
-            if (result != cudaSuccess) {
-                printf("CUDA kernel error: %s\n", cudaGetErrorString(result));
-            }
-            // cudaStreamSynchronize(cuda_res.stream_to_run); // +50fps
+    ~CudaInteropBoundary() {
+        // AcquireFromCuda() normally drains the boundary. Also drain on exceptional exit
+        // before imported textures or CUDA engine buffers can be destroyed.
+        if (stream_to_run) {
+            cudaStreamSynchronize(stream_to_run);
         }
+        if (cuda_before) {
+            cudaDestroyExternalSemaphore(cuda_before);
+        }
+        if (cuda_after) {
+            cudaDestroyExternalSemaphore(cuda_after);
+        }
+        if (stream_to_run) {
+            cudaStreamDestroy(stream_to_run);
+        }
+    }
 
-        // TODO: 这里默认为 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT，有优化空间
-        vk_native_queue.Wait(after_semaphore);
-        pfn_sync_vk();
+    CudaInteropBoundary(const CudaInteropBoundary&)            = delete;
+    CudaInteropBoundary& operator=(const CudaInteropBoundary&) = delete;
+
+    void ReleaseToCuda() {
+        ++value;
+        CommandList commands(EQueueType::Graphics);
+        RecordTransfer(commands, true);
+        commands.Signal(before, value);
+        RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (!before->WaitSubmitted(value)) {
+            throw std::runtime_error("CUDA release submission was rejected");
+        }
+        cudaExternalSemaphoreWaitParams wait{};
+        wait.params.fence.value = value;
+        Require(cudaWaitExternalSemaphoresAsync(&cuda_before, &wait, 1, stream_to_run));
+    }
+
+    void AcquireFromCuda() {
+        cudaExternalSemaphoreSignalParams signal{};
+        signal.params.fence.value = value;
+        Require(cudaSignalExternalSemaphoresAsync(&cuda_after, &signal, 1, stream_to_run));
+        // A failed CUDA operation must not publish a Vulkan wait on a signal
+        // that will never execute. This also bounds reuse of TensorRT buffers.
+        Require(cudaStreamSynchronize(stream_to_run));
+        auto& external_timeline = CudaVulkanTools::getVulkanTimeline(after);
+        external_timeline.Notify(value);
+
+        CommandList commands(EQueueType::Graphics);
+        RecordTransfer(commands, false);
+        commands.Signal(acquired, value);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics, commands.Submit().Wait(after.Get(), value), ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (!acquired->WaitSubmitted(value) ||
+            CudaVulkanTools::getVulkanTimeline(acquired).HostWait(value) != VK_SUCCESS) {
+            throw std::runtime_error("CUDA acquire submission did not complete");
+        }
     }
 
 private:
-    void LoadVulkanWin32PFN() {
-        pfnGetSemaphoreWin32HandleKHR = (PFN_vkGetSemaphoreWin32HandleKHR)vkGetDeviceProcAddr(
-            vulkan_device.GetDevice(), "vkGetSemaphoreWin32HandleKHR"
-        );
+    VulkanDevice&           vulkan_device;
+    FenceRef                before;
+    FenceRef                after;
+    FenceRef                acquired;
+    std::vector<TextureRef> textures;
+    cudaExternalSemaphore_t cuda_before{};
+    cudaExternalSemaphore_t cuda_after{};
+    uint64                  value{};
 
-        if (!pfnGetSemaphoreWin32HandleKHR) {
-            LOG_WARNING("CudaPass: Failed to load vkGetSemaphoreWin32HandleKHR");
+    static void Require(cudaError_t result) {
+        if (result != cudaSuccess) {
+            throw std::runtime_error(std::string("CUDA interop failed: ") + cudaGetErrorString(result));
         }
     }
 
-    void cudaVkSemaphoreSignal(cudaExternalSemaphore_t& extSemaphore) {
-        cudaExternalSemaphoreSignalParams extSemaphoreSignalParams;
-        memset(&extSemaphoreSignalParams, 0, sizeof(extSemaphoreSignalParams));
-
-        extSemaphoreSignalParams.params.fence.value = 0;
-        extSemaphoreSignalParams.flags              = 0;
-        checkCudaErrors(
-            cudaSignalExternalSemaphoresAsync(&extSemaphore, &extSemaphoreSignalParams, 1, stream_to_run)
+    void ImportTimeline(const FenceRef& fence, cudaExternalSemaphore_t& imported) {
+        const auto get_handle = reinterpret_cast<PFN_vkGetSemaphoreWin32HandleKHR>(
+            vkGetDeviceProcAddr(vulkan_device.GetDevice(), "vkGetSemaphoreWin32HandleKHR")
         );
+        if (!get_handle) {
+            throw std::runtime_error("Vulkan external timeline export is unavailable");
+        }
+        VkSemaphoreGetWin32HandleInfoKHR info{VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR};
+        info.semaphore  = CudaVulkanTools::getVulkanTimeline(fence).GetSemaphore();
+        info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        HANDLE handle{};
+        if (get_handle(vulkan_device.GetDevice(), &info, &handle) != VK_SUCCESS) {
+            throw std::runtime_error("Vulkan timeline export failed");
+        }
+        cudaExternalSemaphoreHandleDesc desc{};
+        desc.type                = cudaExternalSemaphoreHandleTypeTimelineSemaphoreWin32;
+        desc.handle.win32.handle = handle;
+        const auto result        = cudaImportExternalSemaphore(&imported, &desc);
+        CudaVulkanTools::CloseWin32Handle(handle);
+        Require(result);
     }
 
-    void cudaVkSemaphoreWait(cudaExternalSemaphore_t& extSemaphore) {
-        cudaExternalSemaphoreWaitParams extSemaphoreWaitParams;
-
-        memset(&extSemaphoreWaitParams, 0, sizeof(extSemaphoreWaitParams));
-
-        extSemaphoreWaitParams.params.fence.value = 0;
-        extSemaphoreWaitParams.flags              = 0;
-
-        assert(extSemaphore != nullptr);
-
-        checkCudaErrors(
-            cudaWaitExternalSemaphoresAsync(&extSemaphore, &extSemaphoreWaitParams, 1, stream_to_run)
+    void RecordTransfer(CommandList& commands, bool release) const {
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        const auto sampled = BarrierState::Texture(
+            ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+            // Export all preceding Vulkan writes, including writes made
+            // available by the graph's transition back to Sampled.
+            release ? ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE :
+                      ERHIAccessFlags::SHADER_READ,
+            ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         );
+        const auto external = BarrierState::Texture(
+            ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+            ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE,
+            ETextureLayout::TEXTURE_LAYOUT_COMMON
+        );
+        std::vector<BarrierCreateInfo> barriers;
+        for (const auto& texture : textures) {
+            TextureView view(texture);
+            view.num_mips  = texture->GetNumMips();
+            view.num_array = texture->GetNumArray();
+            auto barrier   = BarrierCreateInfo::Transition(
+                view, release ? sampled : external, release ? external : sampled, texture->GetAspectFlags()
+            );
+            barrier.queue_transfer = release ?
+                                         BarrierQueueTransfer::ReleaseToExternal(EQueueType::Graphics) :
+                                         BarrierQueueTransfer::AcquireFromExternal(EQueueType::Graphics);
+            barriers.push_back(barrier);
+        }
+        commands.Barriers(barriers);
+        commands.AddCallback([owners = textures, incoming = before, outgoing = after] {});
     }
 };
 
