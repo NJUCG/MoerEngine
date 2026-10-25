@@ -556,7 +556,7 @@ void TestSameStateReadGetsStateSeed(TestSuite& suite) {
             seed->range.buffer.offset == 0 &&
             seed->range.buffer.size == 256 &&
             seed->source.stages == ERHIPipelineStageFlags::PS_ALL_GRAPHICS &&
-            seed->source.access == ERHIAccessFlags::SHADER_READ &&
+            seed->source.access == (ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::UNIFORM_READ) &&
             seed->source.stages == seed->destination.stages &&
             seed->source.access == seed->destination.access,
         test_name,
@@ -817,7 +817,7 @@ void TestSameFamilyQueueBarrierLowersToAcquire(TestSuite& suite) {
             acquire->source.stages == ERHIPipelineStageFlags::PS_NONE &&
             acquire->source.access == ERHIAccessFlags::UNDEFINED &&
             acquire->destination.stages == ERHIPipelineStageFlags::PS_COMPUTE_SHADER &&
-            acquire->destination.access == ERHIAccessFlags::SHADER_READ,
+            acquire->destination.access == (ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::UNIFORM_READ),
         test_name,
         "the GPU wait must be paired with a destination-local acquire whose source scope is empty"
     );
@@ -916,7 +916,7 @@ void TestMixedQueueFanInRetainsLocalSourceScope(TestSuite& suite) {
                 barrier->source.stages,
                 ERHIPipelineStageFlags::PS_COMPUTE_SHADER
             ) &&
-            barrier->source.access == ERHIAccessFlags::SHADER_READ,
+            barrier->source.access == (ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::UNIFORM_READ),
         test_name,
         "the semaphore covers the remote source while the barrier retains "
         "the same-native graphics source"

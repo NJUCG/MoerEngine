@@ -182,7 +182,7 @@ void LegacyVulkanStateMappingIsStageCompatible() {
     Expect(
         copy_buffer_src.access == VK_ACCESS_2_TRANSFER_READ_BIT &&
             copy_buffer_src.stages == VK_PIPELINE_STAGE_2_TRANSFER_BIT &&
-            raytracing_buffer_srv.access == VK_ACCESS_2_SHADER_READ_BIT &&
+            raytracing_buffer_srv.access == (VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT) &&
             raytracing_buffer_srv.stages == VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR &&
             graphics_buffer_srv.stages ==
                 (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT),

@@ -67,7 +67,7 @@ VulkanBufferAccessState ResolveVulkanBufferState(EBufferState _state, EPassType 
             if (_is_write || _pass_type == EPassType::Copy) {
                 RejectLegacyResourceState("Shader-resource buffers are read-only non-copy resources");
             }
-            return {VK_ACCESS_2_SHADER_READ_BIT, LegacyShaderStagesForPass(_pass_type)};
+            return {VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT, LegacyShaderStagesForPass(_pass_type)};
         case EBufferState::UNORDERED_ACCESS:
             if (_pass_type == EPassType::Copy) {
                 RejectLegacyResourceState("Copy pass cannot use an unordered-access buffer state");

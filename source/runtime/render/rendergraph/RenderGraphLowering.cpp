@@ -242,9 +242,9 @@ template<typename Enum>
                 if (!ShaderStages(domain.pipeline, scope.stages, error)) {
                     return false;
                 }
-                // VkCmdPreprocessor records CBV/SRV buffers with the generic
-                // shader-read access bit.
-                scope.access = ERHIAccessFlags::SHADER_READ;
+                // ShaderResource covers both uniform and storage-buffer reads.
+                // Vulkan's SHADER_READ does not include UNIFORM_READ.
+                scope.access = Or(ERHIAccessFlags::SHADER_READ, ERHIAccessFlags::UNIFORM_READ);
                 return true;
             case BufferState::UnorderedAccess:
                 if (!ShaderStages(domain.pipeline, scope.stages, error)) {

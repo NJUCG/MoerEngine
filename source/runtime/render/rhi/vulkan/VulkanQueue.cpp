@@ -936,7 +936,7 @@ struct VkCmdPreprocessor {
     static VkAccessFlags2 GetBufferAccess(const VulkanArgumentInfo& _info) {
         switch (_info.resource_type) {
             case SRT_CBV:
-                return VK_ACCESS_2_SHADER_READ_BIT;
+                return VK_ACCESS_2_UNIFORM_READ_BIT;
             case SRT_SRV:
                 return VK_ACCESS_2_SHADER_READ_BIT;
             case SRT_UAV:
@@ -1354,7 +1354,7 @@ struct VkCmdPreprocessor {
         if (_cmd->ForceUpdate() && _cmd->InstancesToUpdate().empty()) {
             tracker.RecordState(
                 instance_buffer,
-                {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+                {VK_ACCESS_2_SHADER_READ_BIT,
                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
             );
         } else {
@@ -3384,7 +3384,7 @@ public:
 
             VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
             barrier.srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT;
-            barrier.dstAccessMask       = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+            barrier.dstAccessMask       = VK_ACCESS_2_SHADER_READ_BIT;
             barrier.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
             barrier.dstStageMask        = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
             barrier.buffer              = instance_buffer->GetHandle();
@@ -3400,7 +3400,7 @@ public:
             vkCmdPipelineBarrier2(cmd_list.GetHandle(), &dependency);
             tracker.AdoptExternalState(
                 instance_buffer,
-                VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+                VK_ACCESS_2_SHADER_READ_BIT,
                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
             );
             // tracker.RecordState(instance_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
