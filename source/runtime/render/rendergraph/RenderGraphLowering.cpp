@@ -1600,7 +1600,19 @@ bool RenderGraphLowering::Lower(
                 }
             }
             if (!found_source) {
-                return fail("epilogue barrier has no managed source pass");
+                // An imported range that no surviving pass touches already
+                // satisfies an unchanged read boundary. It needs no command.
+                if (instruction.before_state == instruction.after_state &&
+                    instruction.before_access == RenderGraph::AccessMode::Read &&
+                    instruction.after_access == RenderGraph::AccessMode::Read && !barrier.queue_ownership &&
+                    !barrier.queue_dependency && !instruction.state_transition &&
+                    !instruction.memory_dependency && !instruction.execution_dependency) {
+                    continue;
+                }
+                return fail(
+                    "epilogue barrier has no managed source pass on resource '" +
+                    graph.resources[instruction.resource.index].name + "'"
+                );
             }
             auto* pass = find_mutable_pass(latest);
             if (pass == nullptr) {

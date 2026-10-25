@@ -159,7 +159,7 @@ void LegacyVulkanStateMappingIsStageCompatible() {
     );
     Expect(
         sampled_depth.access == VK_ACCESS_2_SHADER_SAMPLED_READ_BIT &&
-            sampled_depth.layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL &&
+            sampled_depth.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
             sampled_depth.stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         "sampled depth-stencil texture mapping lost depth layout or compute scope"
     );

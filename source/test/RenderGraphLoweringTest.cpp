@@ -483,6 +483,44 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
     );
 }
 
+void TestUntouchedImportedRangesNeedNoCommands(TestSuite& suite) {
+    constexpr std::string_view name    = "untouched imported ranges preserve read boundary";
+    TextureRef                 texture = MoerNew(FakeTexture)(2, 1, ETextureAspectFlags::COLOR);
+    RenderGraph                graph(name);
+    const auto                 image = graph.ImportTexture("Image", texture, {.mip_count = 2});
+    graph.SetInitialState(
+        image,
+        RenderGraph::TextureState::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        image,
+        RenderGraph::TextureState::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    const auto pass = graph.AddPass(
+        "ReadMip0",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(image, RenderGraph::TextureState::Sampled, RenderGraph::TextureRange::Mips(0, 1))
+                .SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(graph.Compile(), name, graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan plan;
+    std::string                      error;
+    suite.Check(RenderGraphLowering::Lower(graph, plan, error), name, error);
+    for (const auto& instruction : plan.After(pass)) {
+        suite.Check(
+            instruction.range.texture.mip_first == 0,
+            name,
+            "untouched mip must not be attached to an unrelated pass"
+        );
+    }
+}
+
 void TestSameStateReadGetsStateSeed(TestSuite& suite) {
     constexpr std::string_view test_name = "same-state read receives explicit state seed";
     BufferRef buffer = MoerNew(FakeBuffer)(256);
@@ -1577,6 +1615,7 @@ int main() {
     TestShaderResourceAndSampledLayoutsRemainDistinct(suite);
     TestDepthAttachmentReadUsesBackendAttachmentLayout(suite);
     TestPresentationSourceLowersToCommonTransferRead(suite);
+    TestUntouchedImportedRangesNeedNoCommands(suite);
     TestSameStateReadGetsStateSeed(suite);
     TestCrossNativeTokenSynchronization(suite);
     TestSameNativeTokenSynchronizationNeedsNoGpuSync(suite);

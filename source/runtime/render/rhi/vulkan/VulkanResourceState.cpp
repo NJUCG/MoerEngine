@@ -107,8 +107,9 @@ VulkanTextureAccessState ResolveVulkanTextureState(
             return {
                 _state == ETextureState::SAMPLE ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT :
                                                   VK_ACCESS_2_SHADER_READ_BIT,
-                is_depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
-                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                is_depth && _state != ETextureState::SAMPLE ?
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 LegacyShaderStagesForPass(_pass_type)
             };
         case ETextureState::RENDER_TARGET:
