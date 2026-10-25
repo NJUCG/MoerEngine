@@ -33,7 +33,7 @@ Renderer::Renderer(
     main_window_surface(std::move(_main_window_surface)),
     scene(),
     cmd_list() {
-
+    cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     {
         main_presentation_surface = MakeUnique<PresentationSurface>(
             device,
@@ -155,6 +155,7 @@ void Renderer::ReleaseResources() {
     device.WaitIdle();
 
     render_scene.reset();
+    cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     cmd_list.UpdateBindlessArray(bindless_array);
     RHIExecutor::Get().Submit(
         EQueueType::Graphics,

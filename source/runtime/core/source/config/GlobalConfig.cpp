@@ -82,14 +82,10 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         toml_config.at_path("engine.render.raster.enable_shadow").value_or(true);
     loaded_config.engine.render.raster.low_quality_mode =
         toml_config.at_path("engine.render.raster.low_quality_mode").value_or(false);
-    loaded_config.engine.render.raster.render_graph =
-        toml_config.at_path("engine.render.raster.render_graph").value_or(false);
     loaded_config.engine.render.raster.render_graph_debug_dump =
         toml_config.at_path("engine.render.raster.render_graph_debug_dump").value_or(false);
     loaded_config.engine.render.raster.render_graph_parallel_recording =
         toml_config.at_path("engine.render.raster.render_graph_parallel_recording").value_or(false);
-    loaded_config.engine.render.raytracing.render_graph =
-        toml_config.at_path("engine.render.raytracing.render_graph").value_or(false);
     loaded_config.engine.render.raytracing.render_graph_debug_dump =
         toml_config.at_path("engine.render.raytracing.render_graph_debug_dump").value_or(false);
     loaded_config.engine.render.raytracing.render_graph_parallel_recording =

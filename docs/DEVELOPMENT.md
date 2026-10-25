@@ -287,3 +287,39 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
 顶点声明和光追几何的 `vertex_format` 使用 `EVertexFormat`（`rhi/VertexFormat.h`），纹理和 texel buffer 使用 `EPixelFormat`。两者不能隐式转换，避免将深度、压缩或 sRGB 像素格式误用于顶点输入。
 
 `Float1`～`Float4` 表示 32 位浮点分量，`UInt` 表示一个 32 位无符号整数，`UByte4Normalized` 表示四个 8 位无符号分量，读取时归一化到 `[0, 1]`。通过 `GetVertexFormatByteSize()` 计算顶点属性的字节数，由 Metal / Vulkan 各自映射到原生顶点格式；新增格式时同步补充这两处映射。
+
+## 8. RDG 编译执行与资源边界
+
+GPU 真正要求的是访问顺序、内存可见性、图像布局、队列所有权与使用期间的资源存活。
+Vulkan 渲染路径由 RDG 根据显式声明生成这些依赖，RHI 按编译顺序执行命令和 barrier。
+Raster、Raytracing、UI、场景上传、环境贴图处理和导出读回都采用 `Compiled`；编译或录制失败不会回退到 reorderer。
+串行/并行录制只改变 CPU 调度，不改变这个契约。
+
+| 责任 | 保证者 |
+| --- | --- |
+| pass 访问哪些资源、读写方式、mip/layer 范围 | pass 声明；多阶段算法按依赖拆成节点 |
+| pass 顺序、barrier、托管队列间等待与所有权转移 | RDG 编译与 lowering |
+| bindless 实际可能访问的目标集合 | 场景/资源所有者提供候选集合；绑定整个 heap 不等于声明目标访问 |
+| bindless 索引、descriptor 存储的更新与发布 | Vulkan 内部固定协议，不扫描应用目标资源 |
+| BLAS 顶点/索引输入、BLAS/TLAS 公共输出 | RDG 声明 |
+| AS scratch、TLAS instance 上传及其内部依赖 | Vulkan 构建命令的私有协议 |
+| 资源保活、提交接受、GPU 完成与回收 | 沿用 RHI 提交/完成机制；三者不混为一项状态 |
+
+跨图资源采用固定边界：普通图像为 `Sampled`，presentation source 为
+`PresentationSource`，普通场景 buffer 为 `ShaderResource`，加速结构为
+`AccelerationStructureRead`。所有者在新图像分配时建立布局；每张图导出约定状态。
+这把跨图协调放到明确的边界，省去另一份后端 preferred-state 表和 TLAS 地址登记表，
+代价是图之间可能增加状态转换。图内仍按实际依赖同步。
+
+新图像只建立布局，不因此获得有效内容。TAA、ReSTIR、NRD 的历史有效性仍由
+实际接受的帧推进；录制成功不代表 native submit 已接受，更不代表 GPU 已完成。
+
+场景上传与后续 AS 构建合为一个 Graphics 命令流，避免额外的场景 Copy 提交与手工交接。
+这放弃初始场景上传的独立 Copy 重叠。独立运行时贴图加载仍由一张 RDG 图执行
+Copy → Graphics 交接，跨队列依赖由编译结果生成。
+
+低层 RHI 的 legacy recorder 暂留作兼容和对照测试，不属于渲染器执行分支。
+验证完整运行路径时可设置 `MOER_VULKAN_REQUIRE_COMPILED=1`：任何包含命令的非 compiled
+提交都会被拒绝。新增入口应补充资源声明或后端私有协议，不能通过关闭此检查掩盖遗漏。
+未接入托管队列协议的外部执行（例如 CUDA/TensorRT 的 `ExternalControl`）仍会明确拒绝，
+不能假装是普通 pass，也不能让旧 recorder 代替外部同步契约。

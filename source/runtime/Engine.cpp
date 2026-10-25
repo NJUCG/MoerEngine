@@ -256,10 +256,8 @@ EngineConsoleStartupConfig MakeConsoleStartupConfig(const Config::GlobalConfig& 
         .rhi_heartbeat_poll_interval_ms = config.engine.threading.rhi_heartbeat_poll_interval_ms,
         .max_frame_lag = config.engine.threading.max_frame_lag,
         .max_frames_in_flight = config.engine.rhi.max_frame_in_flight,
-        .raster_rdg_enabled = config.engine.render.raster.render_graph,
         .raster_rdg_debug_dump = config.engine.render.raster.render_graph_debug_dump,
         .raster_rdg_parallel_recording = config.engine.render.raster.render_graph_parallel_recording,
-        .raytracing_rdg_enabled = config.engine.render.raytracing.render_graph,
         .raytracing_rdg_debug_dump = config.engine.render.raytracing.render_graph_debug_dump,
         .raytracing_rdg_parallel_recording =
             config.engine.render.raytracing.render_graph_parallel_recording,
@@ -1314,12 +1312,10 @@ void Engine::Init(
     startup_config = m_console_control->CaptureStartupConfig();
     m_thread_profile_logging = startup_config.profile_logging;
     m_raster_graph_config = {
-        .enabled            = startup_config.raster_rdg_enabled,
         .debug_dump         = startup_config.raster_rdg_debug_dump,
         .parallel_recording = startup_config.raster_rdg_parallel_recording,
     };
     m_raytracing_graph_config = {
-        .enabled            = startup_config.raytracing_rdg_enabled,
         .debug_dump         = startup_config.raytracing_rdg_debug_dump,
         .parallel_recording = startup_config.raytracing_rdg_parallel_recording,
     };

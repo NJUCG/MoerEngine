@@ -178,13 +178,10 @@ void GpuScene::ApplyUpdate(
     assert(IsCurrentlyGameThread() || IsCurrentlyRenderThread());
     assert(update.HasWork());
 
-    m_pending_cmd_lists = PendingCommandList{};
-    m_pending_cmd_lists.gfx_queue_cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    m_pending_cmd_lists.copy_queue_cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    m_pending_commands = PendingCommandList{};
+    m_pending_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     if (setup_command_lists) {
-        setup_command_lists(
-            m_pending_cmd_lists, update.full_rebuild
-        );
+        setup_command_lists(m_pending_commands);
     }
 
     auto begin_profile_root =
@@ -207,18 +204,9 @@ void GpuScene::ApplyUpdate(
                     EGpuMarkerMode::Label
             );
         };
-    auto copy_profile_root = begin_profile_root(
-        m_pending_cmd_lists.copy_queue_cmd_list,
-        update.full_rebuild ?
-            "GpuScene Initial Copy Update" :
-            "GpuScene Copy Update",
-        GpuMarkerPalette::Transfer()
-    );
     auto graphics_profile_root = begin_profile_root(
-        m_pending_cmd_lists.gfx_queue_cmd_list,
-        update.full_rebuild ?
-            "GpuScene Initial Graphics Update" :
-            "GpuScene Graphics Update",
+        m_pending_commands,
+        update.full_rebuild ? "GpuScene Initial Graphics Update" : "GpuScene Graphics Update",
         GpuMarkerPalette::Renderer()
     );
 
@@ -228,7 +216,7 @@ void GpuScene::ApplyUpdate(
     if (pending_update.full_rebuild) {
         InitializeResources(pending_update);
     } else {
-        auto& gfx_cmd_list = m_pending_cmd_lists.gfx_queue_cmd_list;
+        auto& gfx_cmd_list = m_pending_commands;
         if (pending_update.update_lights) {
             UpdateLightBuffer(gfx_cmd_list, pending_update.lights);
         }
@@ -270,19 +258,13 @@ void GpuScene::ApplyUpdate(
         }
     }
 
-    if (copy_profile_root) {
-        copy_profile_root->Close();
-    }
     if (graphics_profile_root) {
         graphics_profile_root->Close();
     }
 
     // Retain the scene update snapshot until the corresponding submission completes.
-    if (!m_pending_cmd_lists.copy_queue_cmd_list.IsEmpty()) {
-        m_pending_cmd_lists.copy_queue_cmd_list.AddCallback([update_data]() {});
-    }
-    if (!m_pending_cmd_lists.gfx_queue_cmd_list.IsEmpty()) {
-        m_pending_cmd_lists.gfx_queue_cmd_list.AddCallback([update_data]() {});
+    if (!m_pending_commands.IsEmpty()) {
+        m_pending_commands.AddCallback([update_data]() {});
     }
 }
 
@@ -345,7 +327,7 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
             const uint mip_byte_size = gpu_texture.tex->GetMipByteSize(mip);
             assert(offset + mip_byte_size <= texture.data.size());
             RecordNewGraphicsTextureUpload(
-                m_pending_cmd_lists.gfx_queue_cmd_list,
+                m_pending_commands,
                 std::span<byte>(
                     reinterpret_cast<byte*>(const_cast<uint8*>(texture.data.data())) + offset, mip_byte_size
                 ),
@@ -448,7 +430,7 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
             return;
         }
         RecordGraphicsBufferUpload(
-            m_pending_cmd_lists.gfx_queue_cmd_list,
+            m_pending_commands,
             std::span<byte>(
                 reinterpret_cast<byte*>(const_cast<Element*>(source.data())), source.size() * sizeof(Element)
             ),
@@ -498,12 +480,10 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
     for (BufferWithHandle* buffer : buffers) {
         buffer->hdl = bdls->AllocateBuffer(buffer->buf->GetView());
     }
-    m_pending_cmd_lists.gfx_queue_cmd_list.UpdateBindlessArray(bdls);
+    m_pending_commands.UpdateBindlessArray(bdls);
 
     if (device.SupportsRaytracingAccelerationStructures()) {
-        InitRaytracingScene(
-            m_pending_cmd_lists.gfx_queue_cmd_list, update.rt_meshes, update.rt_instances
-        );
+        InitRaytracingScene(m_pending_commands, update.rt_meshes, update.rt_instances);
     }
 }
 

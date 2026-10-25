@@ -40,12 +40,8 @@ public:
         const RTContext&             rt_ctx
     );
 
-    static bool AddPasses(
-        RenderGraph&                graph,
-        RTGraphFrameResources&      graph_resources,
-        const PreparedCommand&      command,
-        bool                        outputs_initialized
-    );
+    static bool
+    AddPasses(RenderGraph& graph, RTGraphFrameResources& graph_resources, const PreparedCommand& command);
 
     static void Process(
         CommandList&           cmd_list,

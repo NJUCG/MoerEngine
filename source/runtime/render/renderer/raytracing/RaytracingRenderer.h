@@ -53,8 +53,6 @@ public:
 private:
     struct RuntimeState;
     struct SceneUpdateResult {
-        bool gpu_resources_updated = false;
-        bool tlas_built             = false;
         bool rt_scene_replaced      = false;
     };
 

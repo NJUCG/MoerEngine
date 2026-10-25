@@ -11,13 +11,6 @@ namespace Moer::Render::Raytracing {
 
 namespace {
 
-RenderGraph::TextureState PreferredReadState(const TextureRef& texture) {
-    const auto usage = texture->GetUsage();
-    const bool supports_uav =
-        (usage & ETextureUsageFlags::UNORDERED_ACCESS) == ETextureUsageFlags::UNORDERED_ACCESS;
-    return supports_uav ? RenderGraph::TextureState::Sampled :
-                          RenderGraph::TextureState::Sampled;
-}
 
 template<typename RefType>
 void AppendUnique(Array<RefType>& refs, RefType ref) {
@@ -77,18 +70,12 @@ RaytracingFrameSetupPass::PreparedCommand RaytracingFrameSetupPass::Prepare(
     const RTContext&   rt_ctx,
     RaytracingSceneRef scene,
     BindlessArrayRef   bindless_array,
-    uint64             target_revision,
-    bool               build_tlas,
-    bool               scene_resources_refreshed,
-    bool               external_tlas_built
+    bool               build_tlas
 ) {
     auto payload = MakeShared<RecordPayload>();
     payload->bindless_array       = std::move(bindless_array);
     payload->scene                = std::move(scene);
-    payload->target_revision      = target_revision;
     payload->build_tlas           = build_tlas;
-    payload->scene_resources_refreshed = scene_resources_refreshed;
-    payload->external_tlas_built  = external_tlas_built;
 
     if (!payload->bindless_array || !payload->scene) {
         return PreparedCommand{.record = std::move(payload)};
@@ -197,15 +184,14 @@ bool RaytracingFrameSetupPass::AddPasses(
         );
     }
 
-    const bool current_tlas_accepted = payload->external_tlas_built ||
-                                       accepted_tlas_buffers.contains(payload->destination_tlas_buffer.Get());
+    // Every accepted scene/frame build exports ASRead. A new buffer has no
+    // image layout and no prior accesses, so it uses the same boundary without
+    // a separate allocation-address registry.
     graph.SetInitialState(
         graph_resources.current_tlas,
-        (current_tlas_accepted ? RenderGraph::BufferState::AccelerationStructureRead :
-                                 RenderGraph::BufferState::Undefined),
-        payload->external_tlas_built || current_tlas_accepted ? RenderGraph::QueueRole::Graphics :
-                                                                RenderGraph::QueueRole::None,
-        (current_tlas_accepted ? RenderGraph::AccessMode::Read : RenderGraph::AccessMode::None)
+        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
     );
 
     Array<RenderGraph::BufferHandle> unique_scene_buffers;
@@ -318,14 +304,12 @@ bool RaytracingFrameSetupPass::AddPasses(
         if (first_import) {
             graph.SetInitialState(
                 handle,
-                PreferredReadState(texture),
+                RenderGraph::TextureState::Sampled,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read
             );
             unique_scene_textures.emplace_back(handle);
-            unique_scene_texture_states.emplace_back(
-                PreferredReadState(texture)
-            );
+            unique_scene_texture_states.emplace_back(RenderGraph::TextureState::Sampled);
         }
     }
 
@@ -515,86 +499,6 @@ bool RaytracingFrameSetupPass::AddPasses(
         }
     }
     return graph_resources.IsValid();
-}
-
-bool RaytracingFrameSetupPass::ProcessLinear(
-    CommandList&           cmd_list,
-    const PreparedCommand& command
-) const {
-    const SharedPtr<RecordPayload> payload = command.record;
-    if (!payload || !payload->bindless_array || !payload->destination_tlas ||
-        !payload->destination_tlas_buffer) {
-        return false;
-    }
-    if (payload->build_tlas &&
-        (!payload->build_tlas_command || !payload->instance_buffer ||
-         !payload->scratch_buffer || payload->geometry_buffers.empty())) {
-        return false;
-    }
-    cmd_list.UpdateBindlessArray(payload->bindless_array);
-    if (!payload->build_tlas || !payload->build_tlas_command) {
-        return true;
-    }
-
-    bool expected = false;
-    if (!payload->build_tlas_recorded.compare_exchange_strong(expected, true)) {
-        throw std::logic_error("RT FrameSetup BuildTLAS command was recorded more than once");
-    }
-    ScopedGpuMarker marker(
-        cmd_list,
-        "Pass: Scene Acceleration Structure",
-        GpuMarkerPalette::Pass()
-    );
-    cmd_list.PushScopeWithTimeScope("RTScene RendererTLAS");
-    cmd_list.UpdateRaytracingScene(std::move(payload->build_tlas_command));
-    cmd_list.PopScopeWithTimeScope();
-    return true;
-}
-
-void RaytracingFrameSetupPass::CommitAccepted(
-    const PreparedCommand& command
-) noexcept {
-    const SharedPtr<RecordPayload> payload = command.record;
-    if (!payload) {
-        return;
-    }
-
-    for (const BufferRef& buffer : {
-             payload->scene_resources.light_buf,
-             payload->scene_resources.material_buf,
-             payload->scene_resources.primitive_buf,
-             payload->scene_resources.instance_buf,
-             payload->scene_resources.position_buf,
-             payload->scene_resources.packed_normal_buf,
-             payload->scene_resources.packed_tangent_buf,
-             payload->scene_resources.texcoord0_buf,
-             payload->scene_resources.index_buf,
-             payload->scene_resources.rt_instance_buf,
-             payload->scene_resources.rt_primitive_table_buf,
-         }) {
-        if (buffer) {
-            accepted_scene_buffers.emplace(buffer.Get());
-        }
-    }
-    if (payload->destination_tlas_buffer) {
-        accepted_tlas_buffers.emplace(payload->destination_tlas_buffer.Get());
-    }
-    if (payload->previous_tlas_buffer) {
-        accepted_tlas_buffers.emplace(payload->previous_tlas_buffer.Get());
-    }
-    if (payload->instance_buffer) {
-        accepted_instance_buffers.emplace(payload->instance_buffer.Get());
-    }
-    if (payload->scratch_buffer) {
-        accepted_scratch_buffers.emplace(payload->scratch_buffer.Get());
-    }
-}
-
-void RaytracingFrameSetupPass::ResetAcceptedResources() noexcept {
-    accepted_tlas_buffers.clear();
-    accepted_instance_buffers.clear();
-    accepted_scratch_buffers.clear();
-    accepted_scene_buffers.clear();
 }
 
 } // namespace Moer::Render::Raytracing

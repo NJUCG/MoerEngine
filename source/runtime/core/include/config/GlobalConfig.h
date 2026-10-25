@@ -66,13 +66,11 @@ struct CORE_API GlobalConfig {
             struct Raster {
                 bool enable_shadow;
                 bool low_quality_mode;
-                bool render_graph;
                 bool render_graph_debug_dump;
                 bool render_graph_parallel_recording;
             } raster;
 
             struct Raytracing {
-                bool render_graph;
                 bool render_graph_debug_dump;
                 bool render_graph_parallel_recording;
             } raytracing;

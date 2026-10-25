@@ -13,6 +13,7 @@
 #include <source_location>
 #include <span>
 #include <sstream>
+#include <stdexcept>
 
 namespace Moer::Render::Raster {
 
@@ -243,15 +244,12 @@ void RasterTool::ExecuteScenePendingCommands(
     assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
     (void)gfx_queue;
 
-    (void)device;
+    auto accepted = device.CreateFence();
+    commands.Signal(accepted, 1);
     const bool modern_graphics_profiling =
-        commands.gfx_queue_cmd_list.HasGpuScopeRecorder() ||
-        commands.gfx_queue_cmd_list
-            .IsLegacyGpuProfilingSuppressedForGeneration();
+        commands.HasGpuScopeRecorder() || commands.IsLegacyGpuProfilingSuppressedForGeneration();
     Array<RHIBackendSubmissionBatchEntry> submissions{};
-    submissions.emplace_back(EQueueType::Copy, commands.copy_queue_cmd_list.Submit());
-    CmdSubmit graphics_submit =
-        commands.gfx_queue_cmd_list.Submit();
+    CmdSubmit                             graphics_submit = commands.Submit();
     if (!modern_graphics_profiling) {
         graphics_submit.TickProfiling();
     }
@@ -263,6 +261,9 @@ void RasterTool::ExecuteScenePendingCommands(
         ERHIExecSubmitFlags::FlushGPU
     );
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!accepted->WaitSubmitted(1)) {
+        throw std::runtime_error("Compiled scene update was rejected before native submission");
+    }
 }
 
 } // namespace Moer::Render::Raster

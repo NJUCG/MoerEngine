@@ -204,18 +204,16 @@ void ExecuteSceneUpdate(
     const GpuScene::PendingCommandListSetupCallback& setup_command_lists
 ) {
     (void)gfx_queue;
-    (void)device;
     auto scene_cmd_list = render_scene.ApplyUpdate(
         std::move(update), setup_command_lists
     );
+    auto accepted = device.CreateFence();
+    scene_cmd_list.Signal(accepted, 1);
     // Upload graphs publish SRV/Sampled/ASRead boundaries before returning.
     const bool modern_graphics_profiling =
-        scene_cmd_list.gfx_queue_cmd_list.HasGpuScopeRecorder() ||
-        scene_cmd_list.gfx_queue_cmd_list
-            .IsLegacyGpuProfilingSuppressedForGeneration();
+        scene_cmd_list.HasGpuScopeRecorder() || scene_cmd_list.IsLegacyGpuProfilingSuppressedForGeneration();
     Array<RHIBackendSubmissionBatchEntry> submissions{};
-    submissions.emplace_back(EQueueType::Copy, scene_cmd_list.copy_queue_cmd_list.Submit());
-    CmdSubmit graphics_submit = scene_cmd_list.gfx_queue_cmd_list.Submit();
+    CmdSubmit                             graphics_submit = scene_cmd_list.Submit();
     if (!modern_graphics_profiling) {
         graphics_submit.TickProfiling();
     }
@@ -224,6 +222,9 @@ void ExecuteSceneUpdate(
     );
     RHIExecutor::Get().Submit(std::move(submissions), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!accepted->WaitSubmitted(1)) {
+        throw std::runtime_error("Compiled scene update was rejected before native submission");
+    }
 }
 
 } // namespace
@@ -289,7 +290,6 @@ struct RaytracingRenderer::RuntimeState {
     uint64                        nrd_time       = 0ull;
     int                           nrd_mode       = -1;
     bool                          nrd_was_active = false;
-    bool                          nrd_outputs_initialized = false;
     Ext::NRDPlugin*               nrd_plugin     = nullptr;
     SharedPtr<Ext::NRDInterface>  nrd_interface;
 #endif
@@ -583,8 +583,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     }
     const RHIQueueBinding graphics_profile_binding =
         device.GetQueueTopology().Resolve(EQueueType::Graphics);
-    const RHIQueueBinding copy_profile_binding =
-        device.GetQueueTopology().Resolve(EQueueType::Copy);
     auto try_bind_profile_source =
         [&](CommandList&    command_list,
             RHIQueueBinding queue_binding,
@@ -820,26 +818,11 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             state.first_load || state.b_new_env_map || scene_resources_recreated ||
             output_resources_recreated || ui_config.export_cfg.b_export;
         const bool nrd_active_this_frame = IsNrdDenoiserActive(ui_config.denoiser_cfg.denoiser_type);
-        const auto setup_scene_update_profiling =
-            [&](GpuScene::PendingCommandList& commands,
-                bool                          full_rebuild) {
-                if (full_rebuild) {
-                    const uint64 copy_source_order =
-                        next_profile_source_order++;
-                    static_cast<void>(ensure_profile_source(
-                        commands.copy_queue_cmd_list,
-                        copy_profile_binding,
-                        copy_source_order
-                    ));
-                }
-                const uint64 graphics_source_order =
-                    next_profile_source_order++;
-                static_cast<void>(ensure_profile_source(
-                    commands.gfx_queue_cmd_list,
-                    graphics_profile_binding,
-                    graphics_source_order
-                ));
-            };
+        const auto setup_scene_update_profiling = [&](GpuScene::PendingCommandList& commands) {
+            const uint64 graphics_source_order = next_profile_source_order++;
+            static_cast<void>(ensure_profile_source(commands, graphics_profile_binding, graphics_source_order)
+            );
+        };
         const SceneUpdateResult scene_update =
             ExecuteSceneUpdates(
                 frame_packet.scene_updates,
@@ -853,12 +836,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 state.nrd_mode != nrd_mode_this_frame) {
                 state.nrd_interface->ResetAcceptedHistory();
                 state.nrd_time = 0;
-                if (!state.nrd_outputs_initialized) {
-                    LOG_INFO(
-                        "[NRD] Warming denoised output state on the linear "
-                        "path before managed graph activation."
-                    );
-                }
             }
             state.nrd_was_active = true;
             state.nrd_mode       = nrd_mode_this_frame;
@@ -1099,12 +1076,11 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             state.lighting_working_set                 = lighting_working_set;
             state.lighting_reservoir_block_array_pitch = lighting_reservoir_block_array_pitch;
             // ReSTIR DI rotates three logical reservoir slices. Track the
-            // slices actually written by accepted linear frames rather than
-            // coupling graph eligibility to an implicit frame countdown.
+            // slices written by accepted frames before temporal sampling.
             state.lighting_initialized_reservoir_mask = 0;
             LOG_INFO(
                 "[RenderGraph][Raytracing] Lighting working set changed; "
-                "warming reservoir slices linearly (reservoir block pitch={}).",
+                "resetting reservoir content validity (reservoir block pitch={}).",
                 lighting_reservoir_block_array_pitch
             );
         }
@@ -1128,13 +1104,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 IsLegacyTlasUpdateEnabled() ||
                 state.current_tlas_revision != state.rt_instance_revision;
             prepared_frame_setup.emplace(state.frame_setup_pass->Prepare(
-                *state.rt_ctx,
-                state.rt_scene,
-                bindless_array,
-                state.rt_instance_revision,
-                needs_tlas_build,
-                scene_update.gpu_resources_updated,
-                scene_update.tlas_built
+                *state.rt_ctx, state.rt_scene, bindless_array, needs_tlas_build
             ));
         }
 #if WITH_NRD
@@ -1203,14 +1173,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             bool nrd_added = true;
 #if WITH_NRD
             if (nrd_active_this_frame) {
-                nrd_added =
-                    lighting_added && prepared_nrd &&
-                    NrdDenoisePass::AddPasses(
-                        graph,
-                        graph_resources,
-                        *prepared_nrd,
-                        state.nrd_outputs_initialized
-                    );
+                nrd_added = lighting_added && prepared_nrd &&
+                            NrdDenoisePass::AddPasses(graph, graph_resources, *prepared_nrd);
             }
 #endif
             const bool composition_in_graph = true;
@@ -1407,8 +1371,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     gpu_profiling.source_order_base =
                         graph_source_order_base;
                 }
-                // Initial Metal raster bring-up does not use this raytracing
-                // graph's active lowering; port its explicit barriers separately.
                 if (graph.ExecuteFrontendRecordingPlan(
                         {},
                         configure_recording_source,
@@ -1450,7 +1412,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             }
         }
         if (!graph_recording_failed) {
-            // Every linear suffix after a managed graph belongs to one fresh
+            // The final tail after the compiled graph belongs to one fresh
             // persistent-list generation. Repeated calls below reuse this
             // recorder until export or the final tail seals the generation.
             static_cast<void>(ensure_next_profile_source(
@@ -1562,7 +1524,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 );
             }
         }
-        // Keep the long linear renderer root inside the scene-rendering
+        // Keep the renderer profiling root inside the scene-rendering
         // generation. The UI/present tail below owns a separate central root
         // and may belong to a fresh generation after export.
         close_renderer_marker();
@@ -1660,7 +1622,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     if (split_graph_profiling_frame) {
         frame_submit.SetProfilingPhase(ERHIProfilingPhase::End);
     } else {
-        // The final tail remains the one legacy Complete boundary for linear
+        // The final tail remains the profiling Complete boundary for
         // and boundary frames. Modern per-scope queries coexist with this
         // submit-level phase; omitting it would freeze GetProfilerEntry().
         frame_submit.TickProfiling();
@@ -1807,15 +1769,13 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             frame_native_accepted && nrd_submission_accepted;
         if (nrd_submission_accepted) {
             ++state.nrd_time;
-            state.nrd_outputs_initialized = true;
         } else {
             // NRD NewFrame/Denoise may already have translated before a later
             // graph source or the final tail was rejected. Renderer temporal
             // state must not pretend that partial frame was accepted; force
-            // the next linear frame to CLEAR_AND_RESTART.
+            // the next accepted frame to CLEAR_AND_RESTART.
             prepared_nrd->interface->ResetAcceptedHistory();
             state.nrd_time                = 0;
-            state.nrd_outputs_initialized = false;
             if (upstream_sources_accepted) {
                 LOG_CRITICAL(
                     "[NRD] Native submission rejected the NRD source or the "
@@ -1869,7 +1829,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             // native acceptance is known. A recoverably rejected export frame
             // must not let the next retry treat that planned slice as accepted
             // temporal history. Keep the GBuffer history, but conservatively
-            // warm the reservoir ring again on the linear path.
+            // warm the reservoir ring again before temporal reuse.
             state.lighting_initialized_reservoir_mask = 0;
             LOG_WARNING(
                 "[Raytracing][Export] Export prefix and its dependent tail "
@@ -1883,7 +1843,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         frame_native_accepted &&
         frame_setup_graph_recorded;
     if (frame_setup_accepted && prepared_frame_setup) {
-        state.frame_setup_pass->CommitAccepted(*prepared_frame_setup);
         if (prepared_frame_setup->BuildsTlas()) {
             state.current_tlas_revision = state.rt_instance_revision;
             ++state.renderer_tlas_build_count;
@@ -2081,7 +2040,6 @@ bool RaytracingRenderer::RefreshSceneRuntimeRefs() {
         state.previous_tlas_revision              = RuntimeState::invalid_tlas_revision;
         state.gbuffer_initialized_history_mask    = 0;
         state.lighting_initialized_reservoir_mask = 0;
-        state.frame_setup_pass->ResetAcceptedResources();
 #if WITH_NRD
         if (state.nrd_interface) {
             state.nrd_interface->ResetAcceptedHistory();
@@ -2142,8 +2100,6 @@ RaytracingRenderer::SceneUpdateResult RaytracingRenderer::ExecuteSceneUpdates(
         state.current_tlas_revision = state.rt_instance_revision;
     }
     return SceneUpdateResult{
-        .gpu_resources_updated = updated,
-        .tlas_built             = rt_scene_updated,
         .rt_scene_replaced      = rt_scene_replaced
     };
 }
@@ -2179,7 +2135,6 @@ bool RaytracingRenderer::RecreateSceneResources(uint2 new_extent) {
     state.nrd_time       = 0;
     state.nrd_mode       = -1;
     state.nrd_was_active = false;
-    state.nrd_outputs_initialized = false;
 #endif
 
     state.antialias_pass_info.motion              = state.rt_ctx->frame_rt.motion;

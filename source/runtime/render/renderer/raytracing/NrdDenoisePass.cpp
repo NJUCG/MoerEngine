@@ -75,8 +75,7 @@ NrdDenoisePass::PreparedCommand NrdDenoisePass::Prepare(
 bool NrdDenoisePass::AddPasses(
     RenderGraph&           graph,
     RTGraphFrameResources& graph_resources,
-    const PreparedCommand& command,
-    bool                   outputs_initialized
+    const PreparedCommand& command
 ) {
     if (!command.IsValid() ||
         !graph_resources.frame_setup.ready.IsValid() ||

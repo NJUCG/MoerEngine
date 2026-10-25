@@ -26,7 +26,6 @@ namespace Moer::Render {
 class RenderProfileCapture;
 
 struct RenderGraphExecutionConfig {
-    bool enabled            = false;
     bool debug_dump         = false;
     bool parallel_recording = false;
 };

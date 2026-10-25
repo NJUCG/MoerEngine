@@ -47,9 +47,7 @@ int main() {
         .rhi_heartbeat_enabled                  = true,
         .rhi_heartbeat_stall_timeout_ms         = 7000,
         .rhi_heartbeat_poll_interval_ms         = 750,
-        .raster_rdg_enabled                     = true,
         .raster_rdg_parallel_recording          = true,
-        .raytracing_rdg_enabled                 = true,
         .raytracing_rdg_debug_dump              = true,
     };
 

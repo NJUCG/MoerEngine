@@ -30,10 +30,8 @@ struct EngineConsoleStartupConfig {
     std::uint32_t max_frame_lag                          = 0;
     std::uint32_t max_frames_in_flight                   = 0;
 
-    bool raster_rdg_enabled                = false;
     bool raster_rdg_debug_dump             = false;
     bool raster_rdg_parallel_recording     = false;
-    bool raytracing_rdg_enabled            = false;
     bool raytracing_rdg_debug_dump         = false;
     bool raytracing_rdg_parallel_recording = false;
 };

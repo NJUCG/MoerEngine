@@ -573,8 +573,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     }
     const RHIQueueBinding graphics_profile_binding =
         device.GetQueueTopology().Resolve(EQueueType::Graphics);
-    const RHIQueueBinding copy_profile_binding =
-        device.GetQueueTopology().Resolve(EQueueType::Copy);
     auto try_bind_profile_source =
         [&](CommandList&    command_list,
             RHIQueueBinding queue_binding,
@@ -774,26 +772,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     if (frame_packet.scene_updates.scene_ready) {
         // 处理场景加载过程中遗留的命令
         auto& scene_updates = frame_packet.scene_updates;
-        const auto setup_scene_update_profiling =
-            [&](GpuScene::PendingCommandList& commands,
-                bool                          full_rebuild) {
-                if (full_rebuild) {
-                    const uint64 copy_source_order =
-                        next_profile_source_order++;
-                    static_cast<void>(ensure_profile_source(
-                        commands.copy_queue_cmd_list,
-                        copy_profile_binding,
-                        copy_source_order
-                    ));
-                }
-                const uint64 graphics_source_order =
-                    next_profile_source_order++;
-                static_cast<void>(ensure_profile_source(
-                    commands.gfx_queue_cmd_list,
-                    graphics_profile_binding,
-                    graphics_source_order
-                ));
-            };
+        const auto setup_scene_update_profiling = [&](GpuScene::PendingCommandList& commands) {
+            const uint64 graphics_source_order = next_profile_source_order++;
+            static_cast<void>(ensure_profile_source(commands, graphics_profile_binding, graphics_source_order)
+            );
+        };
         if (scene_updates.initial_gpu_update) {
             auto commands = render_scene->ApplyUpdate(
                 std::move(*scene_updates.initial_gpu_update),

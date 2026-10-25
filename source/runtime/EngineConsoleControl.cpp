@@ -235,15 +235,9 @@ struct EngineConsoleControl::Impl {
         const auto register_rdg =
             [&register_bool](
                 std::string_view prefix,
-                bool EngineConsoleStartupConfig::* enabled,
                 bool EngineConsoleStartupConfig::* debug_dump,
                 bool EngineConsoleStartupConfig::* parallel_recording
             ) {
-                register_bool(
-                    std::string(prefix) + ".Enabled",
-                    "Configured request for the compiled Render Dependency Graph path.",
-                    enabled
-                );
                 register_bool(
                     std::string(prefix) + ".DebugDump",
                     "Whether the renderer emits compiled RDG diagnostic dumps.",
@@ -257,13 +251,11 @@ struct EngineConsoleControl::Impl {
             };
         register_rdg(
             "Render.Raster.RDG",
-            &EngineConsoleStartupConfig::raster_rdg_enabled,
             &EngineConsoleStartupConfig::raster_rdg_debug_dump,
             &EngineConsoleStartupConfig::raster_rdg_parallel_recording
         );
         register_rdg(
             "Render.Raytracing.RDG",
-            &EngineConsoleStartupConfig::raytracing_rdg_enabled,
             &EngineConsoleStartupConfig::raytracing_rdg_debug_dump,
             &EngineConsoleStartupConfig::raytracing_rdg_parallel_recording
         );

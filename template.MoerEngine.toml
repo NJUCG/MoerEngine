@@ -57,8 +57,8 @@ default_render_method = "Raster"
 # default_render_method = "Raytracing"
 
 [engine.render.raster]
+# RDG compilation is mandatory; parallel recording only changes CPU scheduling.
 enable_shadow = true
-render_graph = false
 render_graph_debug_dump = false
 render_graph_parallel_recording = false
 
@@ -71,7 +71,6 @@ render_graph_parallel_recording = false
 low_quality_mode = false
 
 [engine.render.raytracing]
-render_graph = false
 render_graph_debug_dump = false
 render_graph_parallel_recording = false
 
@@ -96,13 +95,10 @@ websocket_port = 18081
 # "RHI.CommandRecording.Parallel.Workers" = 0
 # "RHI.CommandRecording.Parallel.MinWorkUnitsPerJob" = 64
 # "RHI.Submission.BatchWindow" = 2
-# "Render.Raster.RDG.Enabled" = true
 # "Render.Raster.RDG.ParallelRecording" = true
 
 # Named profiles are inactive unless selected with `--profile <name>`.
 [profiles.rdg-parallel.cvars]
 "RHI.CommandRecording.Parallel" = true
-"Render.Raster.RDG.Enabled" = true
 "Render.Raster.RDG.ParallelRecording" = true
-"Render.Raytracing.RDG.Enabled" = true
 "Render.Raytracing.RDG.ParallelRecording" = true

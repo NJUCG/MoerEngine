@@ -24,15 +24,6 @@ float FiniteOr(float value, float fallback) {
     return std::isfinite(value) ? value : fallback;
 }
 
-RenderGraph::TextureState PreferredReadState(const TextureRef& texture) {
-    const auto usage = texture->GetUsage();
-    const bool supports_uav =
-        (usage & ETextureUsageFlags::UNORDERED_ACCESS) ==
-        ETextureUsageFlags::UNORDERED_ACCESS;
-    return supports_uav ?
-               RenderGraph::TextureState::Sampled :
-               RenderGraph::TextureState::Sampled;
-}
 
 } // namespace
 
@@ -392,7 +383,7 @@ bool ToneMappingPass::AddPasses(
     if (!lut_is_source) {
         graph.SetInitialState(
             lut,
-            PreferredReadState(resources.color_lut),
+            RenderGraph::TextureState::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -612,7 +603,7 @@ bool ToneMappingPass::AddPasses(
     if (!lut_is_source) {
         graph.Export(
             lut,
-            PreferredReadState(resources.color_lut),
+            RenderGraph::TextureState::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
