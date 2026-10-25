@@ -1,6 +1,7 @@
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
 
+#include "log/LogSystem.h"
 #include "profile/ProfileScope.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "taskgraph/TaskGraph.h"
@@ -602,6 +603,16 @@ private:
         // Join at the compiler-defined CPU recording boundary before continuing.
         if (!group_completion->Wait(group_error)) {
             return Fail(std::move(group_error));
+        }
+        if (can_dispatch_parallel) {
+            static std::once_flag logged_parallel_merge;
+            std::call_once(logged_parallel_merge, [&] {
+                LOG_INFO(
+                    "[RenderGraph][CompiledMerge] graph={} dispatch=task-graph worker_jobs={} completed=true",
+                    graph.name,
+                    jobs.size()
+                );
+            });
         }
         return true;
     }

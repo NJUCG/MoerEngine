@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -20,7 +21,6 @@ class Scenario:
     rhi_thread: bool
     rhi_bypass: bool
     max_frame_lag: int
-    render_graph: bool = False
     render_graph_debug_dump: bool = False
     render_graph_parallel_recording: bool = False
     window_stress: bool = False
@@ -59,7 +59,6 @@ RENDERGRAPH_SCENARIOS = (
         False,
         True,
         0,
-        render_graph=True,
         render_graph_debug_dump=True,
     ),
     Scenario(
@@ -69,7 +68,6 @@ RENDERGRAPH_SCENARIOS = (
         True,
         True,
         0,
-        render_graph=True,
         render_graph_debug_dump=True,
     ),
     Scenario(
@@ -79,7 +77,6 @@ RENDERGRAPH_SCENARIOS = (
         True,
         False,
         0,
-        render_graph=True,
         render_graph_debug_dump=True,
         window_stress=True,
     ),
@@ -90,7 +87,6 @@ RENDERGRAPH_SCENARIOS = (
         True,
         False,
         0,
-        render_graph=True,
         render_graph_debug_dump=True,
     ),
     Scenario(
@@ -100,7 +96,6 @@ RENDERGRAPH_SCENARIOS = (
         True,
         False,
         1,
-        render_graph=True,
         render_graph_debug_dump=True,
         window_stress=True,
     ),
@@ -111,7 +106,6 @@ RENDERGRAPH_SCENARIOS = (
         False,
         False,
         1,
-        render_graph=True,
         render_graph_debug_dump=True,
     ),
     Scenario(
@@ -121,7 +115,6 @@ RENDERGRAPH_SCENARIOS = (
         True,
         False,
         1,
-        render_graph=True,
         render_graph_debug_dump=True,
         editor_args=("--threading-renderer-switch-validation",),
         renderer_switch_validation=True,
@@ -147,7 +140,6 @@ RENDERGRAPH_RESOURCE_SCENARIOS = (
         False,
         True,
         0,
-        render_graph=True,
         render_graph_debug_dump=True,
         framebuffer_validation="base_color",
     ),
@@ -167,7 +159,6 @@ RENDERGRAPH_RESOURCE_SCENARIOS = (
         True,
         False,
         1,
-        render_graph=True,
         render_graph_debug_dump=True,
         framebuffer_validation="base_color",
     ),
@@ -187,7 +178,6 @@ RENDERGRAPH_RESOURCE_SCENARIOS = (
         False,
         True,
         0,
-        render_graph=True,
         render_graph_debug_dump=True,
         framebuffer_validation="normal",
     ),
@@ -207,7 +197,6 @@ RENDERGRAPH_RESOURCE_SCENARIOS = (
         False,
         True,
         0,
-        render_graph=True,
         render_graph_debug_dump=True,
         framebuffer_validation="depth_linear_sampler",
     ),
@@ -248,7 +237,6 @@ FEATURE_VALIDATION_SCENARIOS = (
         True,
         False,
         1,
-        render_graph=True,
         render_graph_debug_dump=True,
         editor_args=("--threading-raster-lifecycle-validation", "--no-splash"),
         raster_lifecycle_validation=True,
@@ -263,7 +251,6 @@ FEATURE_VALIDATION_SCENARIOS = (
         True,
         False,
         1,
-        render_graph=True,
         render_graph_debug_dump=True,
         render_graph_parallel_recording=True,
         editor_args=("--threading-raster-lifecycle-validation", "--no-splash"),
@@ -279,7 +266,6 @@ FEATURE_VALIDATION_SCENARIOS = (
         True,
         False,
         0,
-        render_graph=True,
         render_graph_debug_dump=True,
         render_graph_parallel_recording=True,
         editor_args=("--threading-raster-lifecycle-validation", "--no-splash"),
@@ -295,7 +281,6 @@ FEATURE_VALIDATION_SCENARIOS = (
         True,
         False,
         1,
-        render_graph=True,
         render_graph_debug_dump=True,
         render_graph_parallel_recording=True,
         editor_args=("--threading-renderer-switch-validation", "--no-splash"),
@@ -307,21 +292,9 @@ FEATURE_VALIDATION_SCENARIOS = (
 )
 
 UPPER_PARALLEL_RECORD_GATES = (
-    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[HiZBuild\]",
-    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[DirectionalShadowMask\]",
-    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[Lighting\]",
-    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[Skybox\]",
-    (
-        r"\[RenderGraph\]\[ParallelRecordDispatch\] graph=RasterFrame "
-        r"passes=\[HiZBuild,DirectionalShadowMask\] dispatch=task-graph "
-        r"worker_jobs=2 completed=true"
-    ),
-    (
-        r"\[RenderGraph\]\[ParallelRecordDispatch\] graph=RasterFrame "
-        r"passes=\[Lighting,Skybox\] dispatch=task-graph "
-        r"worker_jobs=2 completed=true"
-    ),
+    r"\[RenderGraph\]\[CompiledMerge\] graph=RasterFrame dispatch=task-graph worker_jobs=(?:[2-9]|[1-9][0-9]+) completed=true",
 )
+
 
 SCENARIOS = {
     scenario.name: scenario
@@ -368,7 +341,6 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
         ("engine.threading", "max_frame_lag"): scenario.max_frame_lag,
         ("engine.threading", "profile_logging"): True,
         ("engine.render", "default_render_method"): scenario.renderer,
-        ("engine.render.raster", "render_graph"): scenario.render_graph,
         (
             "engine.render.raster",
             "render_graph_debug_dump",
@@ -420,7 +392,6 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
         ("engine.threading", "max_frame_lag"): threading["max_frame_lag"],
         ("engine.threading", "profile_logging"): threading["profile_logging"],
         ("engine.render", "default_render_method"): render["default_render_method"],
-        ("engine.render.raster", "render_graph"): raster["render_graph"],
         ("engine.render.raster", "render_graph_debug_dump"): raster[
             "render_graph_debug_dump"
         ],
@@ -456,15 +427,12 @@ def required_patterns(scenario: Scenario) -> list[str]:
             f"{execution_thread} thread id ="
         ),
     ]
-    if scenario.require_profile_logs:
-        patterns.append("[ThreadingProfile][RHI]")
-        if not scenario.fault_validation:
-            patterns.extend(
-                [
-                    "[ThreadingProfile][Prepare]",
-                    "[ThreadingProfile][RHIRecord]",
-                ]
-            )
+    # Layer-based RHI/RHIRecord samples belong to the legacy recorder. Compiled
+    # runs validate the selected path, actual frame work and native rejection
+    # diagnostics instead of requiring an unused recorder to produce samples.
+    patterns.append(f"[RenderGraph] {scenario.renderer} execution mode: compiled")
+    if scenario.require_profile_logs and not scenario.fault_validation:
+        patterns.append("[ThreadingProfile][Prepare]")
     if scenario.effective_rhi_thread:
         patterns.append("[Threading] RHIThread id =")
     if scenario.render_thread and scenario.max_frame_lag == 1:
@@ -473,17 +441,16 @@ def required_patterns(scenario: Scenario) -> list[str]:
         patterns.append("[ThreadingProfile][RT]")
     if scenario.renderer == "Raster":
         patterns.append(
-            "[RenderGraph] Raster execution mode: "
-            + ("graph" if scenario.render_graph else "linear")
+            "[RenderGraph] Raster execution mode: compiled"
         )
-        if scenario.render_graph:
+        if scenario.render_graph_debug_dump:
             patterns.append("[RenderGraph][DebugDump]")
             patterns.append(
                 "upper recording: "
                 + (
-                    "parallel-eligible"
+                    "parallel-frontend/merged-submit"
                     if scenario.render_graph_parallel_recording
-                    else "serial-fallback"
+                    else "serial-frontend/merged-submit"
                 )
             )
     if scenario.renderer_switch_validation:
@@ -562,6 +529,7 @@ def build_verifier_command(
         )
     if scenario.expect_exit_after_ready:
         command.append("--expect-exit-after-ready")
+    command.extend(["--forbid-log-pattern", "did not provide a compiled resource plan"])
     for pattern in required_patterns(scenario):
         command.extend(["--require-log-pattern", pattern])
     if scenario.render_graph_parallel_recording:
@@ -569,8 +537,7 @@ def build_verifier_command(
             command.extend(["--require-log-min-count", pattern, "1"])
     if scenario.renderer == "Raster":
         raster_mode_marker = (
-            "[RenderGraph] Raster execution mode: "
-            + ("graph" if scenario.render_graph else "linear")
+            "[RenderGraph] Raster execution mode: compiled"
         )
         expected_raster_instances = 3 if scenario.renderer_switch_validation else 1
         command.extend(
@@ -580,7 +547,7 @@ def build_verifier_command(
                 str(expected_raster_instances),
             ]
         )
-        if scenario.render_graph:
+        if scenario.render_graph_debug_dump:
             command.extend(
                 ["--forbid-log-pattern", r"\[RenderGraph\]\[Fallback\]"]
             )
@@ -1090,10 +1057,10 @@ def write_markdown_summary(path: Path, summary: dict[str, object]) -> None:
     lines.extend(
         [
             "",
-            "## RHI Serial Recording Diagnostics",
+            "## Legacy RHI Recording Diagnostics",
             "",
-            "Averages are weighted by each selected `RHIRecord` window's `samples` count. "
-            "The net percentage is derived from the weighted net-saving and serial-wall totals.",
+            "Compiled renderer runs do not use the layer recorder. Its metrics below are unavailable "
+            "when no `RHIRecord` samples exist; zero entries do not mean zero GPU work.",
             "",
             "| Scenario | Iteration | Mode | Workers | Samples/s | Layers avg/max | Commands avg/max | Candidate avg | Safe avg | Parallel layers avg/max | Serial wall avg/max | Command sum avg | Eligible avg | Predicted critical | Dispatch/join | Predicted net | Net % |",
             "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -1299,6 +1266,11 @@ def parse_args(repo_root: Path) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
+    if args.strict_serial_golden:
+        parser.error(
+            "--strict-serial-golden requires the retired renderer layer recorder; "
+            "use TestRHIParallelRecordVulkan --compiled-commands for GPU output comparisons"
+        )
     if args.repeat < 1:
         parser.error("--repeat must be at least 1")
     if args.soak_seconds is None:
@@ -1319,7 +1291,7 @@ def main() -> int:
             print(
                 f"{name}: renderer={scenario.renderer}, rt={scenario.render_thread}, "
                 f"rhi={scenario.rhi_thread}, bypass={scenario.rhi_bypass}, "
-                f"lag={scenario.max_frame_lag}, graph={scenario.render_graph}, "
+                f"lag={scenario.max_frame_lag}, execution=compiled, "
                 f"graph_dump={scenario.render_graph_debug_dump}, "
                 f"graph_parallel_record={scenario.render_graph_parallel_recording}, "
                 f"stress={scenario.window_stress}"
@@ -1407,7 +1379,10 @@ def main() -> int:
                 )
                 continue
 
-            completed = subprocess.run(command, capture_output=True, text=True)
+            completed = subprocess.run(
+                command, capture_output=True, text=True,
+                env={**os.environ, "MOER_VULKAN_REQUIRE_COMPILED": "1"},
+            )
             report_path = run_dir / "report.json"
             report = (
                 json.loads(report_path.read_text(encoding="utf-8"))
