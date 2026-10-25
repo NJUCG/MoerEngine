@@ -28,6 +28,14 @@ void ComputeMain(uint3 id : SV_DispatchThreadID) {
     result[id.x] = TEST_SCALE * ReadBindless(TEST_INDEX + id.x);
 }
 
+// The selector is itself a GPU buffer. The graph declares all reachable
+// candidates; it does not need to know which index the shader will load.
+[numthreads(1, 1, 1)]
+void IndirectMain() {
+    uint selected = ArrayBuffer(TEST_INDEX).Load<uint>(0);
+    result[0] = TEST_SCALE * ReadBindless(selected);
+}
+
 float4 VertexMain(uint id : SV_VertexID) : SV_Position {
     return float4(TEST_SCALE * ReadBindless(TEST_INDEX + id), 0, 0, 1);
 }

@@ -1863,6 +1863,209 @@ void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel, bool 
              "publication={} result=84", publish_in_graph ? "graph-token" : "completed-before-graph");
 }
 
+void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
+    using Graph = RenderGraph;
+    struct Parameters {
+        RGAccessArray<RGBufferAccess<Graph::AccessMode::Read, Graph::BufferState::ShaderResource>> buffers;
+        RGAccessArray<RGTextureAccess<Graph::AccessMode::Read, Graph::TextureState::Sampled>>      textures;
+        RGBufferAccess<Graph::AccessMode::Read, Graph::BufferState::ShaderResource>                selector;
+        RGBufferAccess<Graph::AccessMode::Write, Graph::BufferState::UnorderedAccess>              output;
+        RGTokenAccess<Graph::AccessMode::Read> publication;
+
+        void DeclareRGAccess(RGParameterAccessCollector& accesses) const {
+            accesses.Add(buffers);
+            accesses.Add(textures);
+            accesses.Add(selector);
+            accesses.Add(output);
+            accesses.Add(publication);
+        }
+    };
+    auto& device = RenderDevice::Get();
+    auto  pipeline =
+        manager.Compute<CompiledBindlessPipeline>("test/ShaderBindlessAddress.hlsl", "IndirectMain");
+    const auto usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
+                       EBufferUsageFlags::TRANSFER_SRC;
+    auto                          table          = device.CreateBindlessArray();
+    auto                          selector       = device.CreateBuffer<uint32>("bindless_selector", 1, usage);
+    const uint                    selector_index = table->AllocateBuffer(selector->GetView());
+    Array<BufferRef>              buffers;
+    Array<TextureRef>             textures;
+    Array<uint>                   indices;
+    std::array<ReadbackFuture, 2> readbacks;
+    size_t                        previous_count = 0;
+    for (uint generation = 0; generation < readbacks.size(); ++generation) {
+        // Publish two candidates, then extend that same table while the first
+        // graph may still be on the GPU. No host completion wait separates them.
+        const uint additions = generation == 0 ? 2 : 1;
+        for (uint i = 0; i < additions; ++i) {
+            buffers.push_back(device.CreateBuffer<uint32>("bindless_candidate", 1, usage));
+            textures.push_back(device.CreateTexture(
+                "bindless_candidate_texture",
+                Extent3D(1, 1, 1),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+            ));
+            const auto index = table->AllocateBuffer(buffers.back()->GetView());
+            if (table->AllocateTexture(textures.back()->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)) !=
+                index + 1) {
+                throw std::runtime_error("candidate fixture requires adjacent buffer/texture handles");
+            }
+            indices.push_back(index);
+        }
+        auto       output = device.CreateBuffer<float>("bindless_candidate_output", 1, usage);
+        Graph      graph("CompiledBindlessCandidates");
+        Parameters params;
+        params.selector    = graph.ImportBuffer("Selector", selector, {.byte_size = selector->GetByteSize()});
+        params.output      = graph.ImportBuffer("Output", output, {.byte_size = output->GetByteSize()});
+        params.publication = graph.ImportToken("TablePublication", table.Get());
+        auto initial_buffer = [&](Graph::BufferHandle handle, bool existing) {
+            graph.SetInitialState(
+                handle,
+                existing ? Graph::BufferState::ShaderResource : Graph::BufferState::Undefined,
+                existing ? Graph::QueueRole::Graphics : Graph::QueueRole::None,
+                existing ? Graph::AccessMode::Read : Graph::AccessMode::None
+            );
+        };
+        initial_buffer(params.selector.resource, generation != 0);
+        initial_buffer(params.output.resource, false);
+        for (size_t i = 0; i < buffers.size(); ++i) {
+            const auto buffer = graph.ImportBuffer(
+                std::format("Candidate{}", i), buffers[i], {.byte_size = buffers[i]->GetByteSize()}
+            );
+            const auto texture  = graph.ImportTexture(std::format("CandidateTexture{}", i), textures[i], {});
+            const bool existing = i < previous_count;
+            initial_buffer(buffer, existing);
+            graph.SetInitialState(
+                texture,
+                existing ? Graph::TextureState::Sampled : Graph::TextureState::Undefined,
+                existing ? Graph::QueueRole::Graphics : Graph::QueueRole::None,
+                existing ? Graph::AccessMode::Read : Graph::AccessMode::None
+            );
+            params.buffers.emplace_back(buffer);
+            params.textures.emplace_back(texture);
+            graph.Export(
+                buffer,
+                Graph::BufferState::ShaderResource,
+                Graph::QueueRole::Graphics,
+                Graph::AccessMode::Read
+            );
+            graph.Export(
+                texture, Graph::TextureState::Sampled, Graph::QueueRole::Graphics, Graph::AccessMode::Read
+            );
+        }
+        graph.AddRecordPass(
+            "ProduceCandidates",
+            [=](Graph::PassBuilder& builder) {
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Copy)
+                    .Write(params.selector.resource, Graph::BufferState::TransferDestination);
+                for (const auto& access : params.buffers)
+                    builder.Write(access.resource, Graph::BufferState::TransferDestination);
+                for (const auto& access : params.textures)
+                    builder.Write(access.resource, Graph::TextureState::TransferDestination);
+            },
+            [=](CommandList& commands) {
+                commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{indices.back()}), selector->GetView());
+                for (size_t i = 0; i < buffers.size(); ++i) {
+                    commands.CopyFrom(
+                        OwnedBytes(std::array<uint32, 1>{41 + static_cast<uint32>(i)}), buffers[i]->GetView()
+                    );
+                    commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{0xffffffffu}), textures[i]->GetView());
+                }
+            },
+            Graph::PassExecutionClass::ParallelRecordEligible
+        );
+        graph.AddRecordPass(
+            "PublishCandidates",
+            [=](Graph::PassBuilder& builder) {
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Compute)
+                    .Write(params.publication.resource)
+                    .TranslateSerialControl();
+            },
+            [=](CommandList& commands) {
+                commands.UpdateBindlessArray(table);
+            },
+            Graph::PassExecutionClass::ParallelRecordEligible
+        );
+        graph.AddRecordPass(
+            "ReadGpuSelectedCandidate",
+            params,
+            [](Graph::PassBuilder& builder) {
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Compute);
+            },
+            [=, &pipeline](CommandList& commands, const Parameters&) {
+                commands.Compute(pipeline, output, table, selector_index, 2.0f).Dispatch(uint3(1, 1, 1));
+            },
+            Graph::PassExecutionClass::ParallelRecordEligible
+        );
+        graph.AddRecordPass(
+            "Readback",
+            [=](Graph::PassBuilder& builder) {
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Copy)
+                    .Read(params.output.resource, Graph::BufferState::TransferSource)
+                    .SideEffect();
+            },
+            [&, output, generation](CommandList& commands) {
+                readbacks[generation] = commands.Readback(output->GetView());
+            },
+            Graph::PassExecutionClass::ParallelRecordEligible
+        );
+        graph.Export(
+            params.selector.resource,
+            Graph::BufferState::ShaderResource,
+            Graph::QueueRole::Graphics,
+            Graph::AccessMode::Read
+        );
+        graph.Export(
+            params.output.resource,
+            Graph::BufferState::TransferSource,
+            Graph::QueueRole::Graphics,
+            Graph::AccessMode::Read
+        );
+        if (!graph.Compile() ||
+            !graph.ExecuteFrontendRecordingPlan(
+                {},
+                {},
+                parallel,
+                {},
+                Graph::ActiveRecordingOptions{
+                    .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled
+                }
+            )) {
+            throw std::runtime_error("compiled bindless candidate graph failed: " + graph.GetCompileError());
+        }
+        previous_count = buffers.size();
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    for (size_t i = 0; i < readbacks.size(); ++i) {
+        const auto actual = readbacks[i].Get().CopyAs<float>();
+        if (!actual || actual->size() != 1 || actual->front() != 86.0f + 2.0f * i) {
+            throw std::runtime_error("GPU-selected bindless candidate readback mismatch");
+        }
+    }
+    // Free-only updates have no shuffle payload but must still finalize through
+    // the existing completion protocol on the compiled path.
+    table->UnbindBuffer(selector_index);
+    for (const auto index : indices) {
+        table->UnbindBuffer(index);
+        table->UnbindTexture(index + 1);
+    }
+    CommandList retire;
+    retire.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    retire.UpdateBindlessArray(table);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, retire.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const auto recycled = table->AllocateBuffer(buffers.front()->GetView());
+    if (recycled == 0 || recycled > indices.back() + 1) {
+        throw std::runtime_error("compiled free-only update did not retire its bindless slots");
+    }
+    table->UnbindBuffer(recycled);
+    // Destroying an unpublished update uses the existing discard path.
+    CommandList discard;
+    discard.UpdateBindlessArray(table);
+    LOG_INFO("[TESTCASE][PASS] name=CompiledBindlessCandidates graphs=2 gpu-indexed=true "
+             "results=86,88 slots=recycled");
+}
+
 void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
     using namespace Moer::Render::Raster;
     auto& device = RenderDevice::Get();
@@ -16470,6 +16673,7 @@ int main(int argc, const char** argv) {
             RunCompiledTonemapping(manager, parallel);
             RunCompiledKnownBindlessAccess(manager, parallel);
             RunCompiledKnownBindlessAccess(manager, parallel, true);
+            RunCompiledBindlessCandidates(manager, parallel);
             ShaderManager::ShutDown();
             shader_manager_initialized = false;
             RenderDevice::Dispose();
