@@ -9,7 +9,12 @@ struct DescriptorPadding { uint4 values[14]; };
 DEFINE_SHADER_CONSTANTS(TEST_CONSTANTS)
 
 struct TestParameters { uint4 value; };
+#ifdef TEST_SEPARATE_UNIFORM_SET
+// Only the UB is live in set 5 for BindlessMain; gaps must not disqualify it.
+[[vk::binding(2, 5)]] ConstantBuffer<TestParameters> parameters;
+#else
 [[vk::binding(0, 0)]] ConstantBuffer<TestParameters> parameters;
+#endif
 // A gap in binding numbers exercises empty layout entries.
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint> result;
 [[vk::binding(0, 5)]] Buffer<uint> sources[40];

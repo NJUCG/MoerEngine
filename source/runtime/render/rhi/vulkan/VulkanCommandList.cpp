@@ -367,37 +367,6 @@ void WriteShaderArgumentDescriptors(
     }
 }
 
-void BindDescriptorBufferSets(
-    VkCommandBuffer                                   _command_buffer,
-    const VulkanPipelineState&                        _pipeline,
-    std::span<const VkDescriptorBufferBindingInfoEXT> _descriptor_buffers,
-    uint64                                            _resource_byte_offset
-) {
-    if (!_descriptor_buffers.empty()) {
-        vkCmdBindDescriptorBuffersEXT(
-            _command_buffer, _descriptor_buffers.size(), _descriptor_buffers.data()
-        );
-    }
-    for (const auto& [set_index, set_binding] : _pipeline.binding_template->set_bindings) {
-        if (set_binding.push)
-            continue;
-        const VkDeviceSize byte_offset =
-            set_binding.byte_offset +
-            (std::holds_alternative<VulkanResourceSetBindings>(set_binding.resource_bindings) ?
-                 _resource_byte_offset :
-                 0);
-        vkCmdSetDescriptorBufferOffsetsEXT(
-            _command_buffer,
-            _pipeline.GetPipelineBindPoint(),
-            _pipeline.GetPipelineLayout(),
-            set_index,
-            1,
-            &set_binding.buffer_index,
-            &byte_offset
-        );
-    }
-}
-
 void PushShaderConstants(
     VkCommandBuffer               _command_buffer,
     const VkPushConstantsInfoKHR& _push_constants_info,
@@ -453,7 +422,7 @@ void VulkanCommandList::BindShaderArguments(
     VulkanDescriptorHeap&                descriptor_heap = command_pool.GetDevice().GetGlobalDescriptorHeap();
 
     if (pipeline->GetDescriptorMode() == VulkanDescriptorMode::Sets) {
-        BindLegacyDescriptors(*pipeline, _arguments);
+        BindPipelineDescriptorSets(*pipeline, _arguments);
         PushShaderConstants(command_buffer, binding_template.push_constants_info, _arguments.constants);
         PushBindlessIndexAddress(command_buffer, binding_template, _arguments);
         return;
@@ -495,8 +464,12 @@ void VulkanCommandList::BindShaderArguments(
     WriteShaderArgumentDescriptors(
         descriptor_heap, *pipeline, _arguments, descriptor_buffers, *allocation_offset
     );
-    BindDescriptorBufferSets(command_buffer, *pipeline, descriptor_buffers, *allocation_offset);
-    BindLegacyDescriptors(*pipeline, _arguments);
+    if (!descriptor_buffers.empty()) {
+        vkCmdBindDescriptorBuffersEXT(
+            command_buffer, descriptor_buffers.size(), descriptor_buffers.data()
+        );
+    }
+    BindPipelineDescriptorSets(*pipeline, _arguments, *allocation_offset);
     PushShaderConstants(command_buffer, binding_template.push_constants_info, _arguments.constants);
     PushBindlessIndexAddress(command_buffer, binding_template, _arguments);
 }

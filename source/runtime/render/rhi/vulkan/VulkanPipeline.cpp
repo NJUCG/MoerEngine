@@ -388,7 +388,7 @@ void InitializeHeapBindings(VulkanDevice& device, VulkanPipelineBindingTemplate&
     result.heap_mapping_info.pMappings    = result.heap_mappings.data();
 }
 
-std::optional<uint> SelectPushDescriptorSet(
+std::optional<uint> SelectPushUniformBufferSet(
     const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
     VulkanDescriptorMode                                         mode,
     const VulkanDescriptorCapabilities&                          caps
@@ -398,16 +398,26 @@ std::optional<uint> SelectPushDescriptorSet(
         return std::nullopt;
     }
 
-    // Only one ordinary set can use push descriptors. Prefer the largest eligible
-    // set to avoid the most transient writes; break ties by the lower set index.
+    // Push descriptors own transient storage only for explicit uniform-buffer
+    // bindings. Mixed sets keep the backend's ordinary storage path. Vulkan allows
+    // one push set; prefer the most UBs, then the lower set index.
     std::optional<uint> candidate;
     uint                largest = 0;
     for (const auto& [set, layout] : set_layout_infos) {
         if (layout.is_bindless)
             continue;
         uint count = 0;
-        for (const auto& [binding, info] : layout.bindings)
-            count += info.vk_binding.descriptorCount;
+        for (const auto& [binding, info] : layout.bindings) {
+            const auto& vk_binding = info.vk_binding;
+            // Reflection fills binding-number gaps with zero-count placeholders.
+            if (vk_binding.descriptorCount == 0)
+                continue;
+            if (vk_binding.descriptorType != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+                count = 0;
+                break;
+            }
+            count += vk_binding.descriptorCount;
+        }
         if (count && count <= caps.max_push_descriptors &&
             (!candidate || count > largest || (count == largest && set < *candidate))) {
             candidate = set;
@@ -448,7 +458,7 @@ UniquePtr<VulkanPipelineBindingTemplate> VulkanPipelineState::BuildPipelineBindi
         *result = VulkanPipelineBindingTemplate{};
     }
 
-    if (const auto push_set = SelectPushDescriptorSet(set_layout_infos, result->mode, caps))
+    if (const auto push_set = SelectPushUniformBufferSet(set_layout_infos, result->mode, caps))
         result->set_bindings[*push_set].push = true;
     InitializePipelineSetBindings(set_layout_infos, *result);
 

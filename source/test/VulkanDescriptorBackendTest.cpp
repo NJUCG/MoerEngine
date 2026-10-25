@@ -81,6 +81,7 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
     auto& shaders  = ShaderManager::Get();
     auto  bound    = shaders.Compute<DescriptorBoundTest>("test/DescriptorBackend.hlsl", "BoundMain");
     auto  bindless = shaders.Compute<DescriptorBindlessTest>("test/DescriptorBackend.hlsl", "BindlessMain");
+    auto  uniform_push = shaders.Compute<DescriptorBindlessTest>("test/DescriptorUniformPush.hlsl", "BindlessMain");
     auto  arrays   = shaders.Compute<DescriptorArrayTest>("test/DescriptorBackend.hlsl", "ArrayMain");
     auto& native_device = *static_cast<VulkanDevice*>(device.GetImpl());
     const bool  large_constants =
@@ -92,13 +93,37 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
     const auto* native_bound    = static_cast<VulkanPipelineState*>(bound.handle.GetState());
     const auto* native_bindless = static_cast<VulkanPipelineState*>(bindless.handle.GetState());
     const auto* native_arrays   = static_cast<VulkanPipelineState*>(arrays.handle.GetState());
+    const auto* native_uniform_push = static_cast<VulkanPipelineState*>(uniform_push.handle.GetState());
     if (native_bound->GetDescriptorMode() != native_device.GetDescriptorMode() ||
         native_arrays->GetDescriptorMode() != native_device.GetDescriptorMode() ||
+        native_uniform_push->GetDescriptorMode() != native_device.GetDescriptorMode() ||
         native_bindless->GetDescriptorMode() != native_device.GetDescriptorMode())
         throw std::runtime_error("Eligible ordinary and bindless pipelines must use the device backend");
-    if (native_device.GetDescriptorCapabilities().max_push_descriptors < 40 &&
-        native_arrays->binding_template->set_bindings.at(5).push)
-        throw std::runtime_error("Over-limit descriptor array must not use push descriptors");
+    const auto find_push_set = [](const VulkanPipelineState& pipeline) {
+        std::optional<uint> pushed_set;
+        for (const auto& [set, binding] : pipeline.binding_template->set_bindings) {
+            if (!binding.push)
+                continue;
+            if (pushed_set)
+                throw std::runtime_error("Only one set may use push descriptors");
+            pushed_set = set;
+            const auto& resources = std::get<VulkanResourceSetBindings>(binding.resource_bindings);
+            for (const auto& resource : resources.bindings) {
+                if (resource.descriptor_count && resource.descriptor_type != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                    throw std::runtime_error("Only uniform buffers may use push descriptors");
+            }
+        }
+        return pushed_set;
+    };
+    if (find_push_set(*native_bound) || find_push_set(*native_bindless) || find_push_set(*native_arrays))
+        throw std::runtime_error("Mixed UB/SSBO, texture and texel-buffer sets must use ordinary storage");
+    const auto& caps = native_device.GetDescriptorCapabilities();
+    const bool expect_uniform_push = caps.push && caps.max_push_descriptors >= 1 &&
+        (native_uniform_push->GetDescriptorMode() == VulkanDescriptorMode::Sets ||
+         (native_uniform_push->GetDescriptorMode() == VulkanDescriptorMode::Buffer && caps.buffer_push));
+    const auto uniform_push_set = find_push_set(*native_uniform_push);
+    if (uniform_push_set != (expect_uniform_push ? std::optional<uint>{5} : std::nullopt))
+        throw std::runtime_error("A pure UB set with binding gaps must use push descriptors when supported");
     if (large_constants && native_device.GetDescriptorMode() == VulkanDescriptorMode::Heap &&
         native_device.GetDescriptorCapabilities().max_push_data < 272 &&
         static_cast<VulkanPipelineState*>(fallback.handle.GetState())->GetDescriptorMode() !=
@@ -196,6 +221,10 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
                         padding
                     )
                     .Dispatch(uint3(1, 1, 1));
+            else if (i % 5 == 4)
+                commands
+                    .Compute(uniform_push, uniform, output, input_views[0], depth->GetView(), table, input_index, iteration)
+                    .Dispatch(uint3(1, 1, 1));
             else if (i % 3 == 0)
                 commands.Compute(bound, uniform, output, depth->GetView(), input_index, iteration)
                     .Dispatch(uint3(1, 1, 1));
@@ -224,6 +253,7 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         for (uint i = 0; i < readback.size(); ++i) {
             const uint expected = batch * uint(readback.size()) + i +
                                   (large_constants && i % 4 == 3 ? 409 :
+                                   i % 5 == 4                    ? 402 :
                                    i % 3 == 0                    ? 101 :
                                    i % 3 == 1                    ? 402 :
                                                                    23);
@@ -241,6 +271,7 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
               << VulkanDescriptorModeName(native_bindless->GetDescriptorMode())
               << " bound_backend=" << VulkanDescriptorModeName(native_bound->GetDescriptorMode())
               << " array_backend=" << VulkanDescriptorModeName(native_arrays->GetDescriptorMode())
+              << " uniform_push=" << uniform_push_set.has_value()
               << " dispatches=1536 arrays=40 batches=8 in_flight=4 large_constants="
               << large_constants << " elapsed_ms=" << elapsed << '\n';
 }

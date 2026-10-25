@@ -235,7 +235,11 @@ private:
     void                    ResetTransientDescriptors();
     VkDescriptorSet
          AllocateDescriptorSet(VkDescriptorSetLayout layout, std::span<const VulkanResourceBinding> bindings);
-    void BindLegacyDescriptors(const class VulkanPipelineState& pipeline, const ArrayArguments& arguments);
+    void BindPipelineDescriptorSets(
+        const class VulkanPipelineState& pipeline,
+        const ArrayArguments& arguments,
+        uint64 resource_byte_offset = 0
+    );
     void BindHeapDescriptors(
         const class VulkanPipelineState& pipeline,
         const ArrayArguments&            arguments,

@@ -142,14 +142,30 @@ VkDescriptorSet VulkanCommandList::AllocateDescriptorSet(
     return set;
 }
 
-void VulkanCommandList::BindLegacyDescriptors(
+void VulkanCommandList::BindPipelineDescriptorSets(
     const VulkanPipelineState& pipeline,
-    const ArrayArguments&      arguments
+    const ArrayArguments&      arguments,
+    uint64                     resource_byte_offset
 ) {
     auto& device = command_pool.GetDevice();
+    // Bind every set in ascending order, including push UBs. Binding lower sets
+    // after higher ones can disturb the latter when pipeline layouts change.
     for (const auto& [set_index, set] : pipeline.binding_template->set_bindings) {
-        if (pipeline.GetDescriptorMode() == VulkanDescriptorMode::Buffer && !set.push)
+        if (pipeline.GetDescriptorMode() == VulkanDescriptorMode::Buffer && !set.push) {
+            const VkDeviceSize byte_offset = set.byte_offset +
+                (std::holds_alternative<VulkanResourceSetBindings>(set.resource_bindings) ?
+                     resource_byte_offset : 0);
+            vkCmdSetDescriptorBufferOffsetsEXT(
+                command_buffer,
+                pipeline.GetPipelineBindPoint(),
+                pipeline.GetPipelineLayout(),
+                set_index,
+                1,
+                &set.buffer_index,
+                &byte_offset
+            );
             continue;
+        }
         const auto* resources = std::get_if<VulkanResourceSetBindings>(&set.resource_bindings);
         if (!resources) {
             VkDescriptorSet native_set = std::visit(

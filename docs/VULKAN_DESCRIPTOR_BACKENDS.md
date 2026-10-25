@@ -17,14 +17,20 @@ Push descriptors 的覆盖入口只允许禁用。`ReadPushDescriptorDisableOver
 | Pipeline 条件 | 原生实现 |
 |---|---|
 | 设备选择 heap，且 pipeline 没有回退限制 | Native resource/sampler heap，shader set/binding 映射到 heap 偏移，以 push data 传参数和表基址 |
-| 设备选择 buffer，且 pipeline 没有回退限制 | Descriptor buffers + set offsets；支持 bufferless push descriptors 时，可以把一个普通 set 改为 push descriptors |
-| 设备选择 sets、pipeline 使用当前实现需回退的 input attachment，或 heap 的完整 push data 超限 | 传统 sets；满足条件的一个普通 set 使用 push descriptors，其余从 descriptor pool 分配，bindless 表使用持久化数组 sets |
+| 设备选择 buffer，且 pipeline 没有回退限制 | Descriptor buffers + set offsets；支持 bufferless push descriptors 时，可以把一个纯 UB 的普通 set 改为 push descriptors |
+| 设备选择 sets、pipeline 使用当前实现需回退的 input attachment，或 heap 的完整 push data 超限 | 传统 sets；满足条件的一个纯 UB 普通 set 使用 push descriptors，其余从 descriptor pool 分配，bindless 表使用持久化数组 sets |
 
 普通参数和 bindless 参数都默认使用设备选定的后端，仅因具体限制回退。是否存在 bindless 表决定参数的布局和访问方式，不决定描述符存储后端。未将“普通参数可能更适合 push descriptors”固化为 Sets 偏好；这需要针对实际工作负载的性能证据。Heap 的容量检查使用完整映射计算出的 push data 大小，包含追加的表偏移、地址及对齐。
 
 Heap 超限后直接回退 Sets。设备仅为选定的现代后端准备描述符编码和存储，同时保留传统 Sets 的兼容路径；支持 Buffer 扩展并不代表 Heap 设备已经准备了 Buffer 表示。当前不采用 `Heap → Buffer → Sets` 的逐级回退，避免为少数受限 pipeline 再维护一套描述符存储和更新。
 
-这是创建 pipeline 时根据反射和设备限制确定的规则，不在每次 draw 时猜测访问模式或切换存储。普通 set 中优先选择描述符数最多且不超过 `maxPushDescriptors` 的一个作为 push set；数量相同时选择较小的 set 编号。Vulkan 限制一个 pipeline layout 至多有一个 push descriptor set。
+Push descriptors 只负责少量显式 UB 绑定的临时描述符存储，将这部分分配和回收交给命令缓冲区及驱动；UB 数据的上传、资源存活和 GPU 使用结束仍由已有资源与提交机制保证。这是引擎的用途约束，不是 Vulkan 只支持推送 UB，也不以 UB 是否持久化作为条件。
+
+`SelectPushUniformBufferSet` 在创建 pipeline 时检查反射结果：只有非 bindless、所有非空 binding 均为 `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER` 的 set 才是候选。反射补齐 binding 编号产生的零数量占位不参与判断。候选中选择 UB 描述符数最多且不超过 `maxPushDescriptors` 的一个；数量相同时选择较小的 set 编号。Vulkan 限制一个 pipeline layout 至多有一个 push descriptor set。
+
+包含 SSBO、纹理、sampler 等资源的混合 set 整体沿用所选后端的普通存储，不为启用 push 拆分或重映射 shader 接口。关闭或不支持 push 时，UB 同样使用这条已有路径；Buffer 的 lease 和 Sets 的 command context 继续保证描述符活到 GPU 使用结束。该策略不改变 pipeline 的后端选择，也不改变 Heap 的 push data 映射。
+
+Sets 和 Buffer 共用按 set 编号升序的绑定过程，统一处理 UB push、普通 sets 与 descriptor buffer offsets。布局切换时，低编号 set 的重新绑定可能使高编号 set 失效，因此不能先绑定全部 buffer sets，再回头推送低编号 UB set。
 
 Heap 路径通过 `VkShaderDescriptorSetAndBindingMappingInfoEXT` 保留现有 SPIR-V 的 set/binding 接口，原生 pipeline 不创建 `VkPipelineLayout`。Push data 包含用户常量、bindless 索引表地址和资源表字节偏移。启用 robust buffer access 时仍编码 buffer descriptor，保留范围语义；只有未启用该保证时，单个普通 buffer 才可以使用 push address 映射。
 
@@ -75,7 +81,7 @@ python tools/descriptor_backends/run_matrix.py --validation-layer-dir build/desc
 
 矩阵需要本机安装支持对应扩展的 Vulkan 驱动，以及能理解 heap 扩展的验证层。`--validation-layer-dir` 可省略以使用系统配置；它不下载或安装验证层。不要在 editor 或测试进程仍运行时构建：项目构建步骤会覆盖进程正在加载的 DXC DLL。
 
-GPU 测试对同一工作负载切换 auto/heap/buffer/sets、开启/关闭 push descriptors、串行/并行录制。每项包含 1,536 次 dispatch、8 批提交、每 4 批一次 GPU 完成等待，检查每个输出值；覆盖 UBO、普通 storage/texel buffer、bindless buffer/image/sampler、真实深度纹理、40 元素数组、binding/set 空洞、模式切换及分配器复用。设备允许 256 B push constants 时还覆盖大常量 pipeline；本机 256 B heap push data 限制使它回退到传统 sets，并验证同一 bindless array 可继续访问。
+GPU 测试对同一工作负载切换 auto/heap/buffer/sets、开启/关闭 push descriptors、串行/并行录制。每项包含 1,536 次 dispatch、8 批提交、每 4 批一次 GPU 完成等待，检查每个输出值；覆盖 UBO、普通 storage/texel buffer、bindless buffer/image/sampler、真实深度纹理、40 元素数组、binding/set 空洞、模式切换及分配器复用。纯 UB set 与 UB/SSBO 混合 set 在同一命令缓冲区中交替使用，检查只有前者按能力启用 push，并验证包含更高编号 buffer sets 的布局切换。设备允许 256 B push constants 时还覆盖大常量 pipeline；本机 256 B heap push data 限制使它回退到传统 sets，并验证同一 bindless array 可继续访问。
 
 CPU 合约检查能力缺失、push 独立性、pipeline 接口限制，以及原有分配器的并发、回滚和回收；完整 Heap 布局超限后的回退由 GPU 测试覆盖。Push constant 反射保留完整声明范围，同时只上传活跃参数；shader cache 格式版本已升级，旧反射缓存会重建。Shader constants 合约也编译实际的 BilateralFilterDenoiser，避免它遗留的常量声明漏掉 bindless 索引表地址；该遗漏曾使本机 DXC 在冷编译时崩溃。
 
