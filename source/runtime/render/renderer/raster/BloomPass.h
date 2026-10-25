@@ -47,7 +47,7 @@ public:
     DEFINE_SHADER_ARGS(bloom_tex, linear_sampler, param);
 };
 
-class BloomPass {
+class RENDER_API BloomPass {
 public:
     struct GraphResources {
         RenderGraph::TextureHandle input{};
@@ -59,7 +59,7 @@ public:
         TextureView          source{};
         Rect2D               render_area{};
         BloomDownsampleParam shader{};
-        uint32                mip{0};
+        uint32               mip{0};
     };
 
     struct UpsampleDispatch {
@@ -83,19 +83,31 @@ public:
     };
 
     BloomPass(RasterContext& context);
+    BloomPass(ShaderManager& manager, EPixelFormat scene_format);
 
-    [[nodiscard]] RecordParameters Prepare(
+    [[nodiscard]] RecordParameters
+    Prepare(const RasterContext& context, const RasterConfig& raster_config, TextureWithHandle input_texture)
+        const;
+    [[nodiscard]] RecordParameters
+    Prepare(bool enabled, TextureWithHandle input, TextureWithHandle downsample, TextureWithHandle upsample)
+        const;
+    void RecordPrefilter(CommandList& cmd_list, const RecordParameters& parameters);
+    void RecordDownsample(CommandList& cmd_list, const RecordParameters& parameters, uint32 mip);
+    void RecordUpsample(CommandList& cmd_list, const RecordParameters& parameters, uint32 mip);
+    void RecordApply(CommandList& cmd_list, const RecordParameters& parameters);
+    void Record(CommandList& cmd_list, const RecordParameters& parameters);
+    RenderGraph::PassHandle AddRecordPasses(
+        RenderGraph&                      graph,
+        GraphResources                    resources,
+        RGPreparedValue<RecordParameters> prepared,
+        uint32                            mip_count
+    );
+    RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph&         graph,
         const RasterContext& context,
         const RasterConfig&  raster_config,
-        TextureWithHandle    input_texture
-    ) const;
-    void Record(CommandList& cmd_list, const RecordParameters& parameters);
-    RenderGraph::PreparedPassHandle AddToGraph(
-        RenderGraph& graph,
-        const RasterContext& context,
-        const RasterConfig& raster_config,
-        TextureWithHandle input_texture,
-        GraphResources resources
+        TextureWithHandle    input_texture,
+        GraphResources       resources
     );
 
     TextureWithHandle

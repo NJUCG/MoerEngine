@@ -606,6 +606,9 @@ RenderGraph::PreparedPassHandle BloomPass::AddToGraph(
     TextureWithHandle input_texture,
     GraphResources resources
 ) {
+    if (!raster_config.bloom_enabled) {
+        return {};
+    }
     auto prepared = graph.AddSetupPass(
         "Bloom.Prepare",
         std::move(input_texture),
@@ -617,21 +620,70 @@ RenderGraph::PreparedPassHandle BloomPass::AddToGraph(
         return {};
     }
 
-    auto pass = graph.AddRecordPass(
-        "Bloom",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.input)
-                .Write(resources.downsample_chain)
-                .Write(resources.upsample_chain);
+    auto pass = AddRecordPasses(graph, resources, prepared,
+                               context.textures.bloom_downsample_chain.tex->GetNumMips());
+    return {prepared.GetSetupPass(), pass};
+}
+
+RenderGraph::PassHandle BloomPass::AddRecordPasses(
+    RenderGraph& graph, GraphResources resources, RGPreparedValue<RecordParameters> prepared, uint32 mip_count
+) {
+    using Range = RenderGraph::TextureRange;
+    using State = RenderGraph::TextureState;
+    if (mip_count == 0) {
+        throw std::invalid_argument("Bloom graph requires at least one mip");
+    }
+    // Every draw is one synchronization boundary. Different mips of the same
+    // image can be sampled and written concurrently; never declare whole-chain writes.
+    graph.AddRecordPass(
+        "Bloom.Prefilter",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                .Read(resources.input, State::Sampled, Range::Mips(0, 1))
+                .Write(resources.downsample_chain, State::RenderTarget, Range::Mips(0, 1));
         },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "Bloom", [&] {
-                Record(cmd_list, prepared.Get());
-            });
-        },
+        [this, prepared](CommandList& commands) { RecordPrefilter(commands, prepared.Get()); },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
+    for (uint32 mip = 1; mip < mip_count; ++mip) {
+        graph.AddRecordPass(
+            std::format("Bloom.Downsample{}", mip),
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                    .Read(resources.downsample_chain, State::Sampled, Range::Mips(mip - 1, 1))
+                    .Write(resources.downsample_chain, State::RenderTarget, Range::Mips(mip, 1));
+            },
+            [this, prepared, mip](CommandList& commands) { RecordDownsample(commands, prepared.Get(), mip); },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+    }
+    for (uint32 source_mip = mip_count - 1; source_mip > 0; --source_mip) {
+        const uint32 mip = source_mip - 1;
+        const auto source = source_mip == mip_count - 1 ? resources.downsample_chain : resources.upsample_chain;
+        graph.AddRecordPass(
+            std::format("Bloom.Upsample{}", mip),
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                    .Read(source, State::Sampled, Range::Mips(source_mip, 1))
+                    .Read(resources.downsample_chain, State::Sampled, Range::Mips(mip, 1))
+                    .Write(resources.upsample_chain, State::RenderTarget, Range::Mips(mip, 1));
+            },
+            [this, prepared, mip](CommandList& commands) { RecordUpsample(commands, prepared.Get(), mip); },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+    }
+    return graph.AddRecordPass(
+        "Bloom.Apply",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                .Read(mip_count == 1 ? resources.downsample_chain : resources.upsample_chain,
+                      State::Sampled, Range::Mips(0, 1))
+                // Additive blending loads the existing scene color.
+                .ReadWrite(resources.input, State::RenderTarget, Range::Mips(0, 1));
+        },
+        [this, prepared](CommandList& commands) { RecordApply(commands, prepared.Get()); },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
 }
 
 RenderGraph::PreparedPassHandle TonemappingPass::AddToGraph(
