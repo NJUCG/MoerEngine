@@ -1704,7 +1704,9 @@ void CommandList::Barriers(
     commands.push_back(std::move(barrier_cmd));
     // Recording an authoritative src/dst dependency opts this submit out of
     // the backend's legacy restore-to-preferred-state epilogue.
-    resource_state_ownership = ERHIResourceStateOwnership::Explicit;
+    if (!HasExplicitResourceStateOwnership()) {
+        resource_state_ownership = ERHIResourceStateOwnership::Explicit;
+    }
 }
 
 void CommandList::AddCallback(std::function<void()>&& _callback) {

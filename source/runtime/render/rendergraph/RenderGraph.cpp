@@ -1879,6 +1879,11 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
     bool active_async_multiqueue          = false;
     RenderGraphTransientAllocator* active_transient_allocator = nullptr;
     if (active_recording.enabled) {
+        if (active_recording.state_ownership != ERHIResourceStateOwnership::Explicit &&
+            active_recording.state_ownership != ERHIResourceStateOwnership::Compiled) {
+            compile_error = "active RDG recording requires explicit or compiled state ownership";
+            return false;
+        }
         active_transient_allocator =
             active_recording.transient_allocator != nullptr ?
                 active_recording.transient_allocator :
@@ -2527,7 +2532,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     auto& command_list =
                         *active_recording.main_thread_command_list;
                     command_list.SetResourceStateOwnership(
-                        ERHIResourceStateOwnership::Explicit
+                        active_recording.state_ownership
                     );
                     if (!pass_state.before.empty()) {
                         command_list.Barriers(
@@ -2808,7 +2813,8 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
 
         const auto error = std::make_shared<RecordingError>();
         auto run_job =
-            [error, store_error, attach_recording_lifetime](RecordingJob job) mutable {
+            [error, store_error, attach_recording_lifetime,
+             state_ownership = active_recording.state_ownership](RecordingJob job) mutable {
             RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
             ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Record", job.pass_name);
             ProducerGateGuard producer_gate_guard{.gate = job.completion};
@@ -2856,7 +2862,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 const bool owns_explicit_state = !job.keepalive.empty();
                 if (owns_explicit_state || !job.before.empty() || !job.after.empty()) {
                     job.command_list->SetResourceStateOwnership(
-                        ERHIResourceStateOwnership::Explicit
+                        state_ownership
                     );
                 }
                 if (!job.before.empty()) {

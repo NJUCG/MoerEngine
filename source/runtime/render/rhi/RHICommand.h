@@ -288,6 +288,10 @@ enum class ERHIProfilingPhase : uint8 {
 enum class ERHIResourceStateOwnership : uint8 {
     BackendTracked,
     Explicit,
+    // Migration endpoint: command order and resource dependencies are fully
+    // compiled. The backend must neither reorder nor infer resource barriers.
+    // Explicit retains the legacy tracker bridge until its callers migrate.
+    Compiled,
 };
 
 struct CmdSubmit {
@@ -354,7 +358,7 @@ struct CmdSubmit {
     }
 
     bool HasExplicitResourceStateOwnership() const noexcept {
-        return resource_state_ownership == ERHIResourceStateOwnership::Explicit;
+        return resource_state_ownership != ERHIResourceStateOwnership::BackendTracked;
     }
 
     CmdSubmit&& DeleteResources() {
@@ -2042,7 +2046,7 @@ public:
     }
 
     bool HasExplicitResourceStateOwnership() const noexcept {
-        return resource_state_ownership == ERHIResourceStateOwnership::Explicit;
+        return resource_state_ownership != ERHIResourceStateOwnership::BackendTracked;
     }
 
     ERHITranslateExecutionClass GetTranslateExecutionClass() const noexcept {

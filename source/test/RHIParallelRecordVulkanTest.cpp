@@ -1440,7 +1440,7 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--timestamp-query-mid-failure" &&
             argument != "--timestamp-query-record-failure" &&
             argument != "--gpu-scope-stream" &&
-            argument != "--multiview") {
+            argument != "--multiview" && argument != "--compiled-commands") {
             throw std::invalid_argument("unsupported argument: " + std::string(argument));
         }
     }
@@ -1650,11 +1650,65 @@ void RunOrderedReadback(
     );
 }
 
-void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
-    auto& device = RenderDevice::Get();
-    const EBufferUsageFlags usage =
-        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
-    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+void RunCompiledSubrangeSubmission(EQueueType queue) {
+    auto&                  device      = RenderDevice::Get();
+    const auto             usage       = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    auto                   source      = device.CreateBuffer<uint32>("compiled_source", 64, usage);
+    auto                   destination = device.CreateBuffer<uint32>("compiled_destination", 64, usage);
+    std::array<uint32, 16> values{};
+    for (uint32 i = 0; i < values.size(); ++i) {
+        values[i] = 0xC0110000u + i * 17u;
+    }
+    BufferView source_range(source.Get(), 32, values.size(), sizeof(uint32));
+    BufferView destination_range(destination.Get(), 96, values.size(), sizeof(uint32));
+    const auto undefined = BarrierState::Buffer(ERHIPipelineStageFlags::PS_NONE, ERHIAccessFlags::UNDEFINED);
+    const auto write =
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE);
+    const auto read =
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ);
+
+    CommandList upload(queue);
+    upload.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    upload.Barriers(std::array{BarrierCreateInfo::Transition(source_range, undefined, write)}, queue, queue);
+    upload.CopyFrom(OwnedBytes(values), source_range, "CompiledPartialUpload");
+    upload.Barriers(std::array{BarrierCreateInfo::Transition(source_range, write, read)}, queue, queue);
+    auto first = upload.Submit();
+    if (first.resource_state_ownership != ERHIResourceStateOwnership::Compiled) {
+        throw std::runtime_error("explicit barriers downgraded compiled ownership");
+    }
+    RHIExecutor::Get().Submit(queue, std::move(first), ERHIExecSubmitFlags::FlushGPU);
+
+    // The second submit consumes the first one's exported state without a host
+    // wait. Partial barriers also make any accidental legacy inference fail.
+    CommandList consume(queue);
+    consume.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    consume.Barriers(
+        std::array{BarrierCreateInfo::Transition(destination_range, undefined, write)}, queue, queue
+    );
+    consume.CopyFrom(source_range, destination_range, "CompiledPartialCopy");
+    consume.Barriers(std::array{BarrierCreateInfo::Transition(destination_range, write, read)}, queue, queue);
+    auto future = consume.Readback(destination_range);
+    RHIExecutor::Get().Submit(queue, consume.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    const auto result = future.Get();
+    const auto actual = result.CopyAs<uint32>();
+    if (result.status != ReadbackStatus::Ready || !actual || actual->size() != values.size() ||
+        !std::equal(actual->begin(), actual->end(), values.begin())) {
+        throw std::runtime_error("compiled cross-submit subrange readback mismatch");
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    LOG_INFO(
+        "[TESTCASE][PASS] name=CompiledSubrangeSubmission queue={} submits=2 readback=verified",
+        static_cast<uint32>(queue)
+    );
+}
+
+void RunActiveRdgExplicitBarrierReadback(
+    bool                       _parallel,
+    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Explicit
+) {
+    auto&                   device    = RenderDevice::Get();
+    const EBufferUsageFlags usage     = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    constexpr uint64_t      byte_size = sizeof(uint32) * kElementCount;
 
     BufferRef source =
         device.CreateBuffer<uint32>("active_rdg_source", kElementCount, usage);
@@ -1779,7 +1833,7 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
             {},
             _parallel,
             {},
-            RenderGraph::ActiveRecordingOptions{.enabled = true}
+            RenderGraph::ActiveRecordingOptions{.enabled = true, .state_ownership = ownership}
         )) {
         throw std::runtime_error(
             "active RDG execution failed: " + graph.GetCompileError()
@@ -1794,8 +1848,9 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
     }
     LOG_INFO(
         "[TESTCASE][PASS] name=ActiveRdgExplicitBarrier mode={} "
-        "passes=3 state_owner=rdg readback=verified",
-        _parallel ? "parallel" : "serial"
+        "passes=3 state_owner=rdg compiled={} readback=verified",
+        _parallel ? "parallel" : "serial",
+        ownership == ERHIResourceStateOwnership::Compiled
     );
 }
 
@@ -16078,6 +16133,17 @@ int main(int argc, const char** argv) {
             .parallel_record_worker_throw_trigger   = inject_worker_failure ? 1u : 0u,
         });
         render_device_initialized = true;
+
+        if (HasArgument(argc, argv, "--compiled-commands")) {
+            RunCompiledSubrangeSubmission(EQueueType::Graphics);
+            RunCompiledSubrangeSubmission(EQueueType::Copy);
+            RunActiveRdgExplicitBarrierReadback(parallel, ERHIResourceStateOwnership::Compiled);
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
 
         if (multiview_mode) {
             if (RenderDevice::Get().SupportsMultiview(6u)) {

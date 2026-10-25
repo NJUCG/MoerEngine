@@ -1113,14 +1113,16 @@ struct VkCmdPreprocessor {
         return false;
     }
 
-    void Visit(const UploadBufferCmd* _cmd) {
+    void Visit(const UploadBufferCmd* _cmd, bool infer_resource_state = true) {
         auto data_span  = _cmd->Data();
         auto tmp_buffer = temporary_buffer_allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
         device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
         _cmd->staging_buffer = tmp_buffer;
 
         auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
-        tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+        if (infer_resource_state) {
+            tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+        }
         //Register Inner Buffer Ranges for queue execution sync
         tracker.RecordInternalBufferRange(
             _cmd->staging_buffer,
@@ -1130,27 +1132,28 @@ struct VkCmdPreprocessor {
             VK_PIPELINE_STAGE_2_HOST_BIT
         );
     }
-    void Visit(const UploadTextureCmd* _cmd) {
+    void Visit(const UploadTextureCmd* _cmd, bool infer_resource_state = true) {
         const auto data_span  = _cmd->Data();
         auto*      vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
         // The staging buffer can be larger than this upload's slice. Validate
         // the supplied data before allocating or copying into that slice.
         ValidateTextureTransferDataSize(*vk_texture, _cmd->Size(), data_span.size_bytes());
-        auto tmp_buffer =
-            temporary_buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
+        auto tmp_buffer = temporary_buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
         device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
         _cmd->staging_buffer = tmp_buffer;
 
-        tracker.RecordState(
-            vk_texture,
-            VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel(),
-            1,                 // mip_count
-            _cmd->array_layer, // array_layer
-            1                  // array_count
-        );
+        if (infer_resource_state) {
+            tracker.RecordState(
+                vk_texture,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                _cmd->MipLevel(),
+                1,                 // mip_count
+                _cmd->array_layer, // array_layer
+                1                  // array_count
+            );
+        }
         tracker.RecordInternalBufferRange(
             _cmd->staging_buffer,
             VK_ACCESS_2_TRANSFER_READ_BIT,
@@ -1210,38 +1213,42 @@ struct VkCmdPreprocessor {
             _cmd->MipLevel(),
             1, // mip_count
             _cmd->ArrayLayer(),
-            1  // array_count
+            1 // array_count
         );
         tracker.RecordState(vk_dst_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
     }
 
-    void Visit(const CopyBackBufferCmd* _cmd) {
-        auto tmp_buffer = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+    void Visit(const CopyBackBufferCmd* _cmd, bool infer_resource_state = true) {
+        auto tmp_buffer      = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
         auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
-        tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+        if (infer_resource_state) {
+            tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+        }
         tracker.RecordInternalBufferRange(
             _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
         );
     }
 
-    void Visit(const CopyBackTextureCmd* _cmd) {
+    void Visit(const CopyBackTextureCmd* _cmd, bool infer_resource_state = true) {
         auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
         ValidateTextureTransferDataSize(*vk_texture, _cmd->Size(), _cmd->ByteSize());
-        auto tmp_buffer = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        auto tmp_buffer      = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
-        tracker.RecordState(
-            vk_texture,
-            VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel(),
-            1,
-            _cmd->ArrayLayer(),
-            1
-        );
+        if (infer_resource_state) {
+            tracker.RecordState(
+                vk_texture,
+                VK_ACCESS_2_TRANSFER_READ_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                _cmd->MipLevel(),
+                1,
+                _cmd->ArrayLayer(),
+                1
+            );
+        }
         tracker.RecordInternalBufferRange(
             _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
         );
@@ -3523,19 +3530,115 @@ public:
 
 #pragma endregion
 
-void RecordVulkanCopyCommands(
-    VulkanDevice& device, VulkanCommandContext& vk_command_context,
-    CmdSubmit& submit, bool suppress_timestamp_queries
+// Validate before native recording or consuming command payloads. Commands
+// with backend-private build/update protocols migrate separately; never fall
+// back to inferred barriers for a partially compiled submission.
+bool SupportsCompiledCommands(const CmdSubmit& submit) {
+    for (const auto& command : submit.cmds) {
+        if (!command) {
+            return false;
+        }
+        switch (command->Type()) {
+            case Command::EType::UploadBuffer:
+            case Command::EType::UploadTexture:
+            case Command::EType::BufferToBuffer:
+            case Command::EType::BufferToTexture:
+            case Command::EType::TextureToBuffer:
+            case Command::EType::TextureToTexture:
+            case Command::EType::CopyBackBuffer:
+            case Command::EType::CopyBackTexture:
+            case Command::EType::ShaderDispatch:
+            case Command::EType::SetDrawState:
+            case Command::EType::MultiDraw:
+            case Command::EType::ClearResource:
+            case Command::EType::Query:
+            case Command::EType::Scope:
+                break;
+            case Command::EType::Barrier:
+                if (!static_cast<const BarrierCmd&>(*command).HasExplicitBarriers()) {
+                    return false;
+                }
+                break;
+            default:
+                return false;
+        }
+    }
+    return true;
+}
+
+void RecordCompiledCommands(
+    VulkanDevice&         device,
+    VulkanCommandContext& context,
+    CmdSubmit&            submit,
+    VkCmdVisitor&         visitor,
+    EQueueType            queue,
+    bool                  suppress_timestamp_queries = false
 ) {
+    auto&             tracker = context.GetTracker();
+    VkCmdPreprocessor preparation(
+        device, tracker, context.GetTemporaryBufferAllocator(), {}, submit.cached_args, queue
+    );
+    for (const auto& command : submit.cmds) {
+        if (suppress_timestamp_queries && command->Type() == Command::EType::Query) {
+            continue;
+        }
+        // Only private staging allocations and explicit barriers are prepared.
+        // Shader arguments, attachments and bindless membership are not scanned.
+        switch (command->Type()) {
+            case Command::EType::UploadBuffer:
+                preparation.Visit(static_cast<const UploadBufferCmd*>(command.get()), false);
+                break;
+            case Command::EType::UploadTexture:
+                preparation.Visit(static_cast<const UploadTextureCmd*>(command.get()), false);
+                break;
+            case Command::EType::CopyBackBuffer:
+                preparation.Visit(static_cast<const CopyBackBufferCmd*>(command.get()), false);
+                break;
+            case Command::EType::CopyBackTexture:
+                preparation.Visit(static_cast<const CopyBackTextureCmd*>(command.get()), false);
+                break;
+            case Command::EType::Barrier:
+                preparation.Visit(static_cast<const BarrierCmd*>(command.get()));
+                break;
+            default:
+                break;
+        }
+        tracker.ResolveBarriers();
+        tracker.DispatchBarriers(context.GetCommandList());
+        visitor.VisitCmd(command.get());
+    }
+}
+
+void RecordVulkanCopyCommands(
+    VulkanDevice&         device,
+    VulkanCommandContext& vk_command_context,
+    CmdSubmit&            submit,
+    bool                  suppress_timestamp_queries
+) {
+    if (submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled) {
+        if (!SupportsCompiledCommands(submit)) {
+            throw std::invalid_argument("compiled Copy submission contains an unsupported command");
+        }
+        auto&        native  = vk_command_context.GetCommandList();
+        auto&        tracker = vk_command_context.GetTracker();
+        VkCmdVisitor visitor(device, vk_command_context, tracker, native, submit.cached_args);
+        VK_CHECK_RESULT(native.Begin());
+        native.BeginLabel("Compiled Copy", {0.0f, 1.0f, 1.0f, 1.0f});
+        RecordCompiledCommands(
+            device, vk_command_context, submit, visitor, EQueueType::Copy, suppress_timestamp_queries
+        );
+        native.EndLabel();
+        VK_CHECK_RESULT(native.End());
+        tracker.Reset();
+        return;
+    }
     FunctionTable function_table{
         .get_argument_access     = &GetArgumentAccess,
         .is_resource_in_bindless = &IsResourceInBindlessArray,
         .lock_bdls_array         = &LockBindlessArray,
         .unlock_bdls_array       = &UnlockBindlessArray
     };
-    CmdReorderer reorderer{
-        function_table, submit.cached_args
-    };
+    CmdReorderer reorderer{function_table, submit.cached_args};
 
     auto& vk_cmd_list        = vk_command_context.GetCommandList();
     auto& vk_tracker         = vk_command_context.GetTracker();
@@ -7415,19 +7518,30 @@ void VkCommandQueue::ExecuteNow(
         .lock_bdls_array         = &LockBindlessArray,
         .unlock_bdls_array       = &UnlockBindlessArray
     };
-    CmdReorderer reorderer{function_table, _submit.cached_args};
+    const bool compiled_commands = _submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled;
+    if (compiled_commands && !SupportsCompiledCommands(_submit)) {
+        reject_before_native_record(
+            {EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT},
+            "compiled submission contains an unsupported command or inferred barrier"
+        );
+        return;
+    }
+    UniquePtr<CmdReorderer> reorderer;
     // Prepare the dependency layers exactly once. A profitability fallback
     // reuses this immutable reorder result on the serial recorder.
     reorder_timer.Start();
-    for (const auto& cmd : _submit.cmds) {
-        reorderer.AcceptCmd(cmd.get());
+    if (!compiled_commands) {
+        reorderer = MakeUnique<CmdReorderer>(function_table, _submit.cached_args);
+        for (const auto& cmd : _submit.cmds) {
+            reorderer->AcceptCmd(cmd.get());
+        }
     }
     reorder_timer.Stop();
     const double reorder_time = reorder_timer.ElapsedMilliseconds();
 
-    VulkanDescriptorBufferLease descriptor_lease;
+    VulkanDescriptorBufferLease                          descriptor_lease;
     std::shared_ptr<const VulkanDescriptorRecordingPlan> descriptor_plan;
-    auto release_unsubmitted_descriptors = OnScopeExit([&] {
+    auto                                                 release_unsubmitted_descriptors = OnScopeExit([&] {
         // Parallel joins finish before this guard. Moving the lease into a
         // recorded packet transfers retirement to existing Completion handling.
         if (descriptor_lease) {
@@ -7456,7 +7570,7 @@ void VkCommandQueue::ExecuteNow(
         }
     }
 
-    if (TryExecuteParallel(
+    if (reorderer && TryExecuteParallel(
             _submit,
             descriptor_lease,
             descriptor_plan,
@@ -7464,7 +7578,7 @@ void VkCommandQueue::ExecuteNow(
             _serial,
             context,
             function_table,
-            reorderer,
+            *reorderer,
             reorder_time,
             parallel_profile_started,
             presentation_source_program,
@@ -7480,7 +7594,7 @@ void VkCommandQueue::ExecuteNow(
     UniquePtr<RhiRecordExecuteSample> record_sample;
     UniquePtr<VulkanSerialGoldenTrace> serial_golden;
     UnorderedMap<const Command*, uint32_t> original_ordinals;
-    if (thread_profile && queue.GetType() == EQueueType::Graphics) {
+    if (!compiled_commands && thread_profile && queue.GetType() == EQueueType::Graphics) {
         EnsureRecordCalibration();
         record_sample = MakeUnique<RhiRecordExecuteSample>();
         serial_golden = MakeUnique<VulkanSerialGoldenTrace>();
@@ -7587,8 +7701,9 @@ void VkCommandQueue::ExecuteNow(
     );
 
     // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
-    const auto& cmd_lists = reorderer.m_cmd_lists;
-    bool        has_cmd   = !reorderer.m_cmd_lists.empty();
+    const Array<CmdReorderer::LinkedCommandList> no_layers;
+    const auto& cmd_lists = reorderer ? reorderer->m_cmd_lists : no_layers;
+    bool        has_cmd = !_submit.cmds.empty();
 
     if (record_sample) {
         RecordTopologyBuilder topology_builder;
@@ -7744,7 +7859,9 @@ void VkCommandQueue::ExecuteNow(
     }
 
     uint layer = 0;
-    if (record_sample) {
+    if (compiled_commands) {
+        RecordCompiledCommands(vk_device, vk_command_context, _submit, visitor, queue.GetType());
+    } else if (record_sample) {
         uint32 raw_layer_index = 0;
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
             const uint32 current_raw_layer = raw_layer_index++;

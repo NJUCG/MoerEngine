@@ -846,6 +846,8 @@ public:
         CommandList* main_thread_command_list = nullptr;
         /** Defaults to the global completion-safe pool/allocator. */
         RenderGraphTransientAllocator* transient_allocator = nullptr;
+        /** Compiled bypasses the legacy backend tracker/reorderer bridge. */
+        ERHIResourceStateOwnership state_ownership = ERHIResourceStateOwnership::Explicit;
     };
 
     /**
