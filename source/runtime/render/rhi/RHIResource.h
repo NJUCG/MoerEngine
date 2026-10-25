@@ -416,7 +416,7 @@ struct Sampler {
 class BufferView {
 public:
     BufferView() = default;
-    BufferView(Buffer* _buffer, EPixelFormat _fmt = PF_UNDEFINED);
+    RENDER_API BufferView(Buffer* _buffer, EPixelFormat _fmt = PF_UNDEFINED);
 
     BufferView(
         Buffer*      _buffer,

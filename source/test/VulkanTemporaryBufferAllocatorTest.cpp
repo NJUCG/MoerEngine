@@ -37,6 +37,12 @@ void RHIResource::Destroy() {
 namespace Moer::Render {
 class VulkanDevice {};
 
+// MSVC emits the exported inline DepthBuffer::GetView even though this
+// buffer-only fixture never calls it. Keep the fixture independent of Render.
+TextureView Texture::GetView(uint8, uint8) {
+    throw std::logic_error("texture access is outside the temporary-buffer fixture");
+}
+
 VulkanBuffer::VulkanBuffer(
     std::string_view, const BufferInfo& info, VulkanDevice& device,
     const VulkanBufferAllocationInfo&, bool
