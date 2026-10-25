@@ -3554,6 +3554,7 @@ bool SupportsCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
             case Command::EType::Query:
             case Command::EType::Scope:
                 break;
+            case Command::EType::BuildTLAS:
             case Command::EType::UpdateBindlessArray:
                 // The update command and its private storage currently belong
                 // to Graphics. A copy queue cannot execute the shuffle shader.
@@ -3561,6 +3562,14 @@ bool SupportsCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
                     return false;
                 }
                 break;
+            case Command::EType::Custom: {
+                const auto& custom = static_cast<const VkCustomDispatchCmd&>(*command);
+                if (custom.GetQueueType() != queue || !custom.PreservesCompiledResourceStates() ||
+                    submit.translate_execution_class != ERHITranslateExecutionClass::SerialControl) {
+                    return false;
+                }
+                break;
+            }
             case Command::EType::Barrier:
                 if (!static_cast<const BarrierCmd&>(*command).HasExplicitBarriers()) {
                     return false;
@@ -3631,6 +3640,34 @@ void RecordCompiledBindlessUpdate(
     after.Record(native);
 }
 
+void RecordCompiledTlasUpdate(
+    VulkanCommandList& native, VkCmdVisitor& visitor, const UpdateRaytracingSceneCmd& command
+) {
+    if (command.InstancesToUpdate().empty() && !command.ForceUpdate()) { return; }
+    VulkanResolvedBarrierBatch before;
+    const auto protect = [&](VulkanBuffer* buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access) {
+        VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        barrier.dstStageMask = stage;
+        barrier.dstAccessMask = access;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = buffer->GetHandle();
+        barrier.size = VK_WHOLE_SIZE;
+        before.buffer_barriers.push_back(barrier);
+    };
+    protect(ResourceCast(command.InstanceBuffer().Get()),
+            command.InstancesToUpdate().empty() ? VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR : VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            command.InstancesToUpdate().empty() ? VK_ACCESS_2_SHADER_READ_BIT : VK_ACCESS_2_SHADER_WRITE_BIT);
+    protect(ResourceCast(command.ScratchBuffer().Get()), VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+    before.Record(native);
+    // The visitor records the private upload -> build dependency. Public BLAS
+    // input and TLAS output dependencies have already been emitted by RDG.
+    visitor.VisitCmd(&command);
+}
+
 void RecordCompiledCommands(
     VulkanDevice&         device,
     VulkanCommandContext& context,
@@ -3650,6 +3687,11 @@ void RecordCompiledCommands(
         if (command->Type() == Command::EType::UpdateBindlessArray) {
             RecordCompiledBindlessUpdate(device, context.GetCommandList(), visitor,
                                         static_cast<const UpdateBindlessArrayCmd&>(*command));
+            continue;
+        }
+        if (command->Type() == Command::EType::BuildTLAS) {
+            RecordCompiledTlasUpdate(context.GetCommandList(), visitor,
+                                    static_cast<const UpdateRaytracingSceneCmd&>(*command));
             continue;
         }
         // Only private staging allocations and explicit barriers are prepared.

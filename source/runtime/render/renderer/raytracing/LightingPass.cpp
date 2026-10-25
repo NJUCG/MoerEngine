@@ -271,7 +271,7 @@ bool LightingPass::AddPasses(
     const RTGraphFrameResources& graph_resources,
     const RTContext&             rt_ctx,
     const DI::LightBufferParams& light_buffer_params,
-    bool                         prepare_lights_in_graph,
+    bool                         temporal_history_valid,
     LocalLightSamplingDecision&  sampling_decision
 ) {
     const PreparedCommand command            = Prepare(rt_ctx, light_buffer_params);
@@ -337,7 +337,7 @@ bool LightingPass::AddPasses(
          }) {
         graph.SetInitialState(
             texture,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureState::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -360,32 +360,10 @@ bool LightingPass::AddPasses(
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    if (!prepare_lights_in_graph) {
-        for (const auto buffer : {
-                 light_mapping,
-                 light_data,
-                 primitive_to_light,
-             }) {
-            graph.SetInitialState(
-                buffer,
-                RenderGraph::BufferState::UnorderedAccess,
-                RenderGraph::QueueRole::Graphics,
-                RenderGraph::AccessMode::Write
-            );
-        }
-        if (local_light_pdf.IsValid()) {
-            graph.SetInitialState(
-                local_light_pdf,
-                RenderGraph::TextureState::UnorderedAccess,
-                RenderGraph::QueueRole::Graphics,
-                RenderGraph::AccessMode::Write
-            );
-        }
-    }
     if (env_pdf.IsValid()) {
         graph.SetInitialState(
             env_pdf,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureState::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -393,7 +371,7 @@ bool LightingPass::AddPasses(
     if (env_map.IsValid()) {
         graph.SetInitialState(
             env_map,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureState::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -468,7 +446,9 @@ bool LightingPass::AddPasses(
         add_dispatch("RT.Lighting.PresampleLightGrid", ELightingDispatch::PresampleLightGrid);
     }
     add_dispatch("RT.Lighting.GenerateInitialSample", ELightingDispatch::GenerateInitialSample);
-    add_dispatch("RT.Lighting.TemporalResample", ELightingDispatch::TemporalResample);
+    if (temporal_history_valid) {
+        add_dispatch("RT.Lighting.TemporalResample", ELightingDispatch::TemporalResample);
+    }
     add_dispatch("RT.Lighting.SpatialResample", ELightingDispatch::SpatialResample);
     add_dispatch("RT.Lighting.ShadeSample", ELightingDispatch::ShadeSample);
 
@@ -485,18 +465,18 @@ bool LightingPass::AddPasses(
              graph_resources.diffuse_lighting,
              graph_resources.specular_lighting,
          }) {
-        export_texture(texture, RenderGraph::TextureState::ShaderResource, RenderGraph::AccessMode::Read);
+        export_texture(texture, RenderGraph::TextureState::Sampled, RenderGraph::AccessMode::Read);
     }
     if (local_light_pdf.IsValid()) {
         export_texture(
-            local_light_pdf, RenderGraph::TextureState::ShaderResource, RenderGraph::AccessMode::Read
+            local_light_pdf, RenderGraph::TextureState::Sampled, RenderGraph::AccessMode::Read
         );
     }
     if (env_pdf.IsValid()) {
-        export_texture(env_pdf, RenderGraph::TextureState::ShaderResource, RenderGraph::AccessMode::Read);
+        export_texture(env_pdf, RenderGraph::TextureState::Sampled, RenderGraph::AccessMode::Read);
     }
     if (env_map.IsValid()) {
-        export_texture(env_map, RenderGraph::TextureState::ShaderResource, RenderGraph::AccessMode::Read);
+        export_texture(env_map, RenderGraph::TextureState::Sampled, RenderGraph::AccessMode::Read);
     }
 
     graph.Export(

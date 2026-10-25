@@ -151,7 +151,7 @@ public:
         const RTGraphFrameResources& graph_resources,
         const RTContext&             rt_ctx,
         const DI::LightBufferParams& light_buffer_params,
-        bool                         prepare_lights_in_graph,
+        bool                         temporal_history_valid,
         LocalLightSamplingDecision&  sampling_decision
     );
 

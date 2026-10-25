@@ -23,6 +23,11 @@ public:
 
     virtual std::span<const ResourceUsage> GetResourceUsages() const = 0;
 
+    // Opt in only when the caller declares every public resource in RDG and
+    // Execute synchronizes private work, returning public resources in their
+    // declared pass states. Compiled recording never infers GetResourceUsages.
+    virtual bool PreservesCompiledResourceStates() const { return false; }
+
     void IterateArgs(const std::function<void(const TArg&, ERHIAccessFlags)>& visit) const final {
         for (const auto& usage : GetResourceUsages()) {
             visit(usage.resource, usage.info.GetAccess());

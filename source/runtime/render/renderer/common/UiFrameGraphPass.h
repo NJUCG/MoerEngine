@@ -112,6 +112,14 @@ public:
         GraphPasses&                     passes
     );
 
+    [[nodiscard]] static bool ProcessCompiled(
+        CommandList&            cmd_list,
+        UiCombinePass&          combine_pass,
+        const PreparedFrameRef& frame,
+        const TextureRef&       scene_color,
+        const TextureRef&       main_output
+    );
+
     [[nodiscard]] static bool ProcessLinear(
         CommandList&            cmd_list,
         UiCombinePass&          combine_pass,

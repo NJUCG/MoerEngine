@@ -639,7 +639,7 @@ bool PrepareLightPass::AddPasses(
     initial_persistent_buffer(light_data, payload->light_data_initialized);
     graph.SetInitialState(
         local_light_pdf,
-        payload->local_light_pdf_initialized ? RenderGraph::TextureState::ShaderResource :
+        payload->local_light_pdf_initialized ? RenderGraph::TextureState::Sampled :
                                                RenderGraph::TextureState::Undefined,
         payload->local_light_pdf_initialized ? RenderGraph::QueueRole::Graphics :
                                                RenderGraph::QueueRole::None,

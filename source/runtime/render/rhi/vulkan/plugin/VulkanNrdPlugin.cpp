@@ -380,6 +380,8 @@ public:
         }
     }
 
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     EQueueType GetQueueType() const override {
         return EQueueType::Graphics;
     }

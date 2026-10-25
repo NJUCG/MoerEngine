@@ -78,7 +78,7 @@ bool NrdDenoisePass::AddPasses(
     const PreparedCommand& command,
     bool                   outputs_initialized
 ) {
-    if (!outputs_initialized || !command.IsValid() ||
+    if (!command.IsValid() ||
         !graph_resources.frame_setup.ready.IsValid() ||
         !graph_resources.motion.IsValid() ||
         !graph_resources.normal_roughness.IsValid() ||

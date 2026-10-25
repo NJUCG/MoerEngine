@@ -183,7 +183,7 @@ bool VisualizePass::AddPasses(
     );
     graph.SetInitialState(
         graph_resources.debug_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureState::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -284,7 +284,7 @@ bool VisualizePass::AddPasses(
 
     graph.Export(
         graph_resources.debug_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureState::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

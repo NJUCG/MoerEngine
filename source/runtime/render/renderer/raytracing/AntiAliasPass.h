@@ -76,7 +76,6 @@ public:
     void   CommitAcceptedFrame();
     void   SetJitter(EJitter _jitter_mode);
     float2 GetPixelOffset() const;
-    bool   IsHistoryReadyForGraph() const;
 
 private:
     struct SetupInput {
@@ -179,9 +178,6 @@ private:
     TextureRef motion;
     TextureRef feedback_color_ping;
     TextureRef feedback_color_pong;
-    TextureRef feedback_slot_zero;
-    TextureRef feedback_slot_one;
-    uint8      initialized_history_mask = 0;
 
     SharedPtr<RecordingOwner> recording_owner;
 };

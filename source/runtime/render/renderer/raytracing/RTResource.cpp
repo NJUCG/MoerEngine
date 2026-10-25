@@ -1,3 +1,4 @@
+#include "renderer/common/GraphResourceBoundary.h"
 #include "RTResource.h"
 
 #include "Configs.h"
@@ -261,6 +262,37 @@ void RTContext::FillFrameResources(uint2 _resolution) {
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::TRANSFER_SRC
     );
+    const TextureRef initialized[] = {
+        frame_rt.view_depth,
+        frame_rt.diffuse_albedo,
+        frame_rt.specular_roughness,
+        frame_rt.normal,
+        frame_rt.emission,
+        frame_rt.motion,
+        frame_rt.clip_depth,
+        frame_rt.prev_view_depth,
+        frame_rt.prev_diffuse_albedo,
+        frame_rt.prev_specular_roughness,
+        frame_rt.prev_normal,
+        frame_rt.prev_luminance,
+        frame_rt.normal_roughness,
+        frame_rt.diffuse_lighting,
+        frame_rt.prev_diffuse_lighting,
+        frame_rt.specular_lighting,
+        frame_rt.prev_specular_lighting,
+        frame_rt.temporal_sample_pos,
+        frame_rt.gradients,
+        frame_rt.restir_luminance,
+        frame_rt.denoised_diffuse_lighting,
+        frame_rt.denoised_specular_lighting,
+        frame_rt.debug_color,
+        frame_rt.ldr_color,
+        frame_rt.hdr_color,
+        frame_rt.feedback_color_ping,
+        frame_rt.feedback_color_pong,
+        frame_rt.resolved_color,
+    };
+    InitializeGraphicsTextures(initialized);
     Sampler spl{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE};
     AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_depth, frame_rt.view_depth->GetView(), spl);
     AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_normal, frame_rt.normal->GetView(), spl);
@@ -329,6 +361,7 @@ void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _
     for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) {
         env_pdf_mips.push_back(env_pdf_tex->GetView(i));
     }
+    InitializeGraphicsTexture(env_pdf_tex);
     sd_utils.GenerateMipPdf(_cmd_list, env_map, env_pdf_mips);
 
     AllocateAndFreeBdlsIfNeeded(

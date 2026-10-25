@@ -30,7 +30,7 @@ RenderGraph::TextureState PreferredReadState(const TextureRef& texture) {
         (usage & ETextureUsageFlags::UNORDERED_ACCESS) ==
         ETextureUsageFlags::UNORDERED_ACCESS;
     return supports_uav ?
-               RenderGraph::TextureState::ShaderResource :
+               RenderGraph::TextureState::Sampled :
                RenderGraph::TextureState::Sampled;
 }
 
@@ -383,22 +383,12 @@ bool ToneMappingPass::AddPasses(
 
     graph.SetInitialState(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureState::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    graph.SetInitialState(
-        graph_resources.ldr_color,
-        initialized ?
-            RenderGraph::TextureState::Sampled :
-            RenderGraph::TextureState::Undefined,
-        initialized ?
-            RenderGraph::QueueRole::Graphics :
-            RenderGraph::QueueRole::None,
-        initialized ?
-            RenderGraph::AccessMode::Read :
-            RenderGraph::AccessMode::None
-    );
+    graph.SetInitialState(graph_resources.ldr_color, RenderGraph::TextureState::Sampled,
+                          RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
     if (!lut_is_source) {
         graph.SetInitialState(
             lut,
@@ -591,7 +581,7 @@ bool ToneMappingPass::AddPasses(
 
     graph.Export(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureState::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

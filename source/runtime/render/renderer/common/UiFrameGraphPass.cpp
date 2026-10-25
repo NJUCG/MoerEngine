@@ -371,9 +371,9 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
         }
         graph.SetInitialState(
             handle,
-            RenderGraph::TextureState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None
+            RenderGraph::TextureState::PresentationSource,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
         );
         if (targets[index].Get() == main_output.Get()) {
             main_output_handle = handle;
@@ -456,9 +456,22 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
         RenderGraph::PassExecutionClass::SerialRecord
     );
 
+    Array<RenderGraph::TextureHandle> sampled_handles;
+    const auto& draw_packet = frame->GetDrawFrame();
+    if (draw_packet.backend) {
+        size_t sample_index = 0;
+        for (const auto& texture : draw_packet.backend->CollectSampledTextures(draw_packet)) {
+            const auto sample = ImportUiGraphTexture(graph, std::format("UI.sample.{}", sample_index++), texture);
+            const auto boundary = GraphicsTextureBoundary(*texture);
+            graph.SetInitialState(sample, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            graph.Export(sample, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            sampled_handles.push_back(sample);
+        }
+    }
+
     passes.draw = graph.AddRecordPass(
         "UI.DrawCopiedFrame",
-        [target_handles, compose = passes.compose](
+        [target_handles, sampled_handles, compose = passes.compose](
             RenderGraph::PassBuilder& builder
         ) {
             builder
@@ -470,6 +483,9 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
                 .SideEffect()
                 .SerialRecord()
                 .TranslateSerialControl();
+            for (auto sample : sampled_handles) {
+                builder.Read(sample, RenderGraph::TextureState::Sampled);
+            }
             for (const auto target : target_handles) {
                 builder.ReadWrite(
                     target,
@@ -506,6 +522,25 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
     passes.main_output          = main_output_handle;
     passes.presentation_targets = std::move(target_handles);
     return passes.IsValid();
+}
+
+bool UiFrameGraphPass::ProcessCompiled(
+    CommandList& commands, UiCombinePass& combine_pass, const PreparedFrameRef& frame,
+    const TextureRef& scene_color, const TextureRef& main_output
+) {
+    RenderGraph graph("UI.Frame", RenderGraph::QueueTopology::FromRHI());
+    const auto color = ImportUiGraphTexture(graph, "SceneColor", scene_color);
+    graph.SetInitialState(color, RenderGraph::TextureState::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.Export(color, RenderGraph::TextureState::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    const auto ready = graph.ImportToken("SceneReady", scene_color.Get());
+    GraphPasses passes;
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    if (!AddPasses(graph, combine_pass, frame, color, scene_color, main_output, ready, passes) ||
+        !graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
+        frame->Abandon();
+        throw std::runtime_error("UI compiled graph: " + graph.GetCompileError());
+    }
+    return true;
 }
 
 bool UiFrameGraphPass::ProcessLinear(

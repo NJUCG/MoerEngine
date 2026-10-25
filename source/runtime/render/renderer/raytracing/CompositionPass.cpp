@@ -176,7 +176,7 @@ bool CompositionPass::AddPasses(
     );
     graph.SetInitialState(
         graph_resources.hdr_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureState::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -280,7 +280,7 @@ bool CompositionPass::AddPasses(
 
     graph.Export(
         graph_resources.hdr_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureState::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

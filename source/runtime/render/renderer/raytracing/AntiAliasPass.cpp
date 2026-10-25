@@ -29,12 +29,9 @@ void AntialiasPass::RebindResources(const CreateInfo& info) {
     motion              = info.motion;
     feedback_color_ping = info.feedback_color_ping;
     feedback_color_pong = info.feedback_color_pong;
-    feedback_slot_zero  = info.feedback_color_ping;
-    feedback_slot_one   = info.feedback_color_pong;
 
     frame_idx                = 0;
     jitter                   = float2(0.f);
-    initialized_history_mask = 0;
 }
 
 AntialiasPass::SetupInput AntialiasPass::CaptureSetupInput(
@@ -222,7 +219,7 @@ bool AntialiasPass::AddPasses(
     );
     graph.SetInitialState(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureState::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -233,7 +230,7 @@ bool AntialiasPass::AddPasses(
         // histories to the same SRV/read boundary.
         graph.SetInitialState(
             feedback,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureState::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -314,14 +311,14 @@ bool AntialiasPass::AddPasses(
 
     graph.Export(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureState::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     for (const auto feedback : {feedback_read, feedback_write}) {
         graph.Export(
             feedback,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureState::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -336,11 +333,6 @@ bool AntialiasPass::AddPasses(
 }
 
 void AntialiasPass::CommitAcceptedFrame() {
-    if (feedback_color_pong.Get() == feedback_slot_zero.Get()) {
-        initialized_history_mask |= uint8(0b01);
-    } else if (feedback_color_pong.Get() == feedback_slot_one.Get()) {
-        initialized_history_mask |= uint8(0b10);
-    }
     frame_idx++;
 
     if (jitter_mode == EJitter::R2) {
@@ -352,10 +344,6 @@ void AntialiasPass::CommitAcceptedFrame() {
     }
 
     std::swap(feedback_color_ping, feedback_color_pong);
-}
-
-bool AntialiasPass::IsHistoryReadyForGraph() const {
-    return initialized_history_mask == uint8(0b11);
 }
 
 namespace {
