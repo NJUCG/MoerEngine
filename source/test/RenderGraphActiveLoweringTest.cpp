@@ -749,7 +749,10 @@ void TestRecordingSourceSetupCannotCompleteProducerGate(TestSuite& suite) {
     }
 }
 
-void TestManagedRecordCallbackCannotSealOrDowngrade(TestSuite& suite) {
+void TestManagedRecordCallbackCannotSealOrDowngrade(
+    TestSuite& suite,
+    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Explicit
+) {
     for (const auto execution :
          {RenderGraph::PassExecutionClass::SerialRecord,
           RenderGraph::PassExecutionClass::ParallelRecordEligible}) {
@@ -789,7 +792,9 @@ void TestManagedRecordCallbackCannotSealOrDowngrade(TestSuite& suite) {
                         [[maybe_unused]] CmdSubmit discarded = commands.Submit();
                     } else {
                         commands.SetResourceStateOwnership(
-                            ERHIResourceStateOwnership::BackendTracked
+                            ownership == ERHIResourceStateOwnership::Compiled ?
+                                ERHIResourceStateOwnership::Explicit :
+                                ERHIResourceStateOwnership::BackendTracked
                         );
                     }
                 },
@@ -810,7 +815,7 @@ void TestManagedRecordCallbackCannotSealOrDowngrade(TestSuite& suite) {
                 [&](Moer::Array<RHIRecordingSource>&&) {
                     ++publish_calls;
                 },
-                RenderGraph::ActiveRecordingOptions{.enabled = true}
+                RenderGraph::ActiveRecordingOptions{.enabled = true, .state_ownership = ownership}
             );
             suite.Check(!executed, test_name, "managed mutation unexpectedly succeeded");
             suite.Check(
@@ -827,6 +832,51 @@ void TestManagedRecordCallbackCannotSealOrDowngrade(TestSuite& suite) {
                 test_name,
                 "managed mutation must fail its already-admitted producer"
             );
+        }
+    }
+}
+
+void TestTokenOnlyCompiledPassPreservesOwnership(TestSuite& suite) {
+    constexpr std::string_view test_name = "token-only compiled pass retains exact ownership";
+    for (const bool downgrade : {false, true}) {
+        RenderGraph graph("CompiledTokenOnly");
+        const auto table = graph.ImportToken("Table");
+        bool observed_compiled = false;
+        graph.AddRecordPass(
+            "PublishTable",
+            [=](RenderGraph::PassBuilder& builder) { builder.Write(table).SideEffect(); },
+            [&](CommandList& commands) {
+                observed_compiled = commands.GetResourceStateOwnership() ==
+                                    ERHIResourceStateOwnership::Compiled;
+                if (downgrade) {
+                    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+                }
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        Moer::Array<RHIRecordingSource> published;
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
+            {}, {}, true,
+            [&](Moer::Array<RHIRecordingSource>&& sources) { published = std::move(sources); },
+            RenderGraph::ActiveRecordingOptions{
+                .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled
+            }
+        );
+        suite.Check(observed_compiled, test_name, "token-only pass fell back to BackendTracked");
+        suite.Check(executed == !downgrade, test_name, graph.GetCompileError());
+        suite.Check(published.size() == 1, test_name, "expected one recording source");
+        if (!published.empty()) {
+            suite.Check(
+                published.front().completion.Status() ==
+                    (downgrade ? ERHIRecordingStatus::Failed : ERHIRecordingStatus::Succeeded),
+                test_name, "producer completion did not reflect ownership validation"
+            );
+            if (!downgrade) {
+                const auto submit = published.front().command_list->Submit();
+                suite.Check(submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled,
+                            test_name, "token-only submit lost compiled ownership");
+            }
         }
     }
 }
@@ -1370,7 +1420,10 @@ void TestActiveMixedMainThreadAndRecordFailsBeforeCallbacks(TestSuite& suite) {
     );
 }
 
-void TestActiveMainThreadCallbackCannotSealOrDowngrade(TestSuite& suite) {
+void TestActiveMainThreadCallbackCannotSealOrDowngrade(
+    TestSuite& suite,
+    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Explicit
+) {
     for (const bool seal : {false, true}) {
         const std::string test_name =
             std::string("active MainThread callback cannot ") +
@@ -1403,7 +1456,9 @@ void TestActiveMainThreadCallbackCannotSealOrDowngrade(TestSuite& suite) {
                         caller_commands.Submit();
                 } else {
                     caller_commands.SetResourceStateOwnership(
-                        ERHIResourceStateOwnership::BackendTracked
+                        ownership == ERHIResourceStateOwnership::Compiled ?
+                            ERHIResourceStateOwnership::Explicit :
+                            ERHIResourceStateOwnership::BackendTracked
                     );
                 }
             }
@@ -1424,6 +1479,7 @@ void TestActiveMainThreadCallbackCannotSealOrDowngrade(TestSuite& suite) {
             RenderGraph::ActiveRecordingOptions{
                 .enabled                  = true,
                 .main_thread_command_list = &caller_commands,
+                .state_ownership = ownership,
             }
         );
         suite.Check(!executed, test_name, "MainThread mutation unexpectedly succeeded");
@@ -1820,6 +1876,8 @@ int main() {
     TestUnsupportedInputsFailBeforeCallbacksOrPublish(suite);
     TestRecordingSourceSetupCannotCompleteProducerGate(suite);
     TestManagedRecordCallbackCannotSealOrDowngrade(suite);
+    TestManagedRecordCallbackCannotSealOrDowngrade(suite, ERHIResourceStateOwnership::Compiled);
+    TestTokenOnlyCompiledPassPreservesOwnership(suite);
     TestManagedRecordCallbackCannotMoveCommandList(suite);
     TestRecordProducerRejectsBlockingSync(suite);
     TestRecordingPublisherRejectsBlockingSync(suite);
@@ -1828,6 +1886,7 @@ int main() {
     TestActiveRecordingGroupsCommitAtomically(suite);
     TestActiveMixedMainThreadAndRecordFailsBeforeCallbacks(suite);
     TestActiveMainThreadCallbackCannotSealOrDowngrade(suite);
+    TestActiveMainThreadCallbackCannotSealOrDowngrade(suite, ERHIResourceStateOwnership::Compiled);
     TestActiveRecordingLifetimeOutlivesUserCallbacks(suite);
     TestActiveMainThreadExceptionIsReportedAndDrained(suite);
     TestMainThreadPhysicalPassRequiresAndUsesCallerList(suite);

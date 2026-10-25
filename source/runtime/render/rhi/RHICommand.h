@@ -2053,6 +2053,10 @@ public:
         return translate_execution_class;
     }
 
+    ERHIResourceStateOwnership GetResourceStateOwnership() const noexcept {
+        return resource_state_ownership;
+    }
+
 private:
     friend DrawDispatcher;
     friend ComputeDispatcher;

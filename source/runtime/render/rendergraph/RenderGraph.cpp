@@ -2574,8 +2574,8 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     );
                 }
                 if (active_physical_main_thread &&
-                    !active_recording.main_thread_command_list
-                         ->HasExplicitResourceStateOwnership()) {
+                    active_recording.main_thread_command_list
+                            ->GetResourceStateOwnership() != active_recording.state_ownership) {
                     throw std::logic_error(
                         "active MainThread callback changed explicit state ownership"
                     );
@@ -2814,6 +2814,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         const auto error = std::make_shared<RecordingError>();
         auto run_job =
             [error, store_error, attach_recording_lifetime,
+             owns_explicit_state = active_recording.enabled,
              state_ownership = active_recording.state_ownership](RecordingJob job) mutable {
             RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
             ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Record", job.pass_name);
@@ -2859,7 +2860,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     producer_gate_guard.Disarm();
                 };
             try {
-                const bool owns_explicit_state = !job.keepalive.empty();
                 if (owns_explicit_state || !job.before.empty() || !job.after.empty()) {
                     job.command_list->SetResourceStateOwnership(
                         state_ownership
@@ -2893,7 +2893,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     );
                 }
                 if (owns_explicit_state &&
-                    !job.command_list->HasExplicitResourceStateOwnership()) {
+                    job.command_list->GetResourceStateOwnership() != state_ownership) {
                     throw std::logic_error(
                         "record callback changed explicit state ownership"
                     );
