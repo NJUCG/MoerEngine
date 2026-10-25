@@ -173,7 +173,10 @@ public:
 
     void Record(CommandList& cmd_list, const RecordParameters& parameters) {
         culling_pass.Record(cmd_list, parameters.culling);
+        RecordDraw(cmd_list, parameters);
+    }
 
+    void RecordDraw(CommandList& cmd_list, const RecordParameters& parameters) {
         cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryDrawProfileScopeName());
         auto draw_command = cmd_list.Gfx(pipeline, parameters.bindless, parameters.shader);
         draw_command.DrawIndirect(
@@ -193,13 +196,12 @@ public:
         cmd_list.PopScopeWithTimeScope();
     }
 
-    RenderGraph::PreparedPassHandle AddToGraph(
-        RenderGraph& graph,
+    RenderGraph::PassHandle AddToGraph(
+        RenderGraph&   graph,
         RasterContext& context,
-        RasterConfig& raster_config,
-        const Camera& camera,
-        GraphResources resources,
-        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+        RasterConfig&  raster_config,
+        const Camera&  camera,
+        GraphResources resources
     );
 
     void Process(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {

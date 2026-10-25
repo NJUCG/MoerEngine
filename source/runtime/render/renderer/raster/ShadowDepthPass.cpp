@@ -648,6 +648,7 @@ bool ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
                 false
             );
 
+            InitializeGraphicsTexture(shadow_map_texture.tex->GetView().GetTexture());
             AssetTool::AllocateRasterResourceHandle(context.bdls, shadow_map_texture, tex_cfg);
 
             LOG_DEBUG(
@@ -691,6 +692,7 @@ bool ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
                 context.textures.depth_linear_sampler.tex->GetFormat(),
                 ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
             );
+            InitializeGraphicsTexture(cube_res.tex);
 
             // GetView 必须请求完整的 6 层 (0, 1, 0, 6)，这样 Shader 才能把它当 Cube 采
             cube_res.handle =
@@ -1137,6 +1139,14 @@ void ShadowDepthPass::RecordPointShadowMultiview(
         "Raster::PointShadowMultiviewMatrices"
     );
 
+    RecordPointShadowMultiviewDraw(cmd_list, parameters, batch);
+}
+
+void ShadowDepthPass::RecordPointShadowMultiviewDraw(
+    CommandList&            cmd_list,
+    const RecordParameters& parameters,
+    const DrawBatch&        batch
+) {
     cmd_list.PushScopeWithTimeScope(batch.draw_profile_scope_name);
     auto draw = cmd_list.Gfx(
         m_point_shadow_multiview_pso,

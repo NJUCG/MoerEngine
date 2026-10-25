@@ -201,10 +201,7 @@ TessellatedSurfacePass::RecordParameters TessellatedSurfacePass::Prepare(
     return parameters;
 }
 
-void TessellatedSurfacePass::Record(
-    CommandList& cmd_list,
-    const RecordParameters& parameters
-) {
+void TessellatedSurfacePass::RecordUpload(CommandList& cmd_list, const RecordParameters& parameters) {
     if (!parameters.enabled) {
         return;
     }
@@ -212,7 +209,17 @@ void TessellatedSurfacePass::Record(
     Array<byte> upload(sizeof(TessellatedSurfaceData));
     std::memcpy(upload.data(), &parameters.data, sizeof(TessellatedSurfaceData));
     cmd_list.CopyFrom(std::move(upload), parameters.surface_data->GetView());
+}
 
+void TessellatedSurfacePass::Record(CommandList& cmd_list, const RecordParameters& parameters) {
+    RecordUpload(cmd_list, parameters);
+    RecordDraw(cmd_list, parameters);
+}
+
+void TessellatedSurfacePass::RecordDraw(CommandList& cmd_list, const RecordParameters& parameters) {
+    if (!parameters.enabled) {
+        return;
+    }
     DepthAttachment depth_attachment(parameters.depth);
     depth_attachment.action = EAttachmentAction::AC_DS_LOAD_STORE_DEPTH;
 

@@ -37,128 +37,264 @@ void RecordWithPassMarker(CommandList& cmd_list, std::string_view name, Record&&
     std::invoke(std::forward<Record>(record));
 }
 
+std::vector<RenderGraph::TextureHandle> ImportShadowMaps(RenderGraph& graph, const RasterContext& context) {
+    std::vector<RenderGraph::TextureHandle> result;
+    for (const auto& map : context.csm_data.shadow_map_textures) {
+        if (map.tex) {
+            result.push_back(ImportRasterTexture(graph, "Shadow.cascade", map.tex->GetView().GetTexture()));
+        }
+    }
+    for (const auto& map : context.point_shadow_data.shadow_cubes) {
+        if (map.tex) {
+            result.push_back(ImportRasterTexture(graph, "Shadow.point", map.tex.Get()));
+        }
+    }
+    return result;
+}
+
 } // namespace
 
-RenderGraph::PreparedPassHandle ShadowDepthPass::AddToGraph(
-    RenderGraph& graph,
-    RasterContext& context,
+RenderGraph::PassHandle ShadowDepthPass::AddToGraph(
+    RenderGraph&        graph,
+    RasterContext&      context,
     const RasterConfig& ui_config,
-    const Camera& camera,
-    GraphResources resources,
-    std::span<const RenderGraph::SetupPassHandle> setup_dependencies
+    const Camera&       camera,
+    GraphResources      resources
 ) {
-    auto prepared = graph.AddSetupPass(
-        "ShadowDepth.Prepare",
-        uint8_t{0},
-        [this, &context, &ui_config, &camera](const uint8_t&) {
-            return Prepare(context, ui_config, camera);
-        },
-        setup_dependencies,
-        RenderGraph::PrepareSafety::Unsafe
-    );
-    if (!prepared.IsValid()) {
-        return {};
+    // Allocation and cache decisions determine the graph's physical resources
+    // and node count, so they must finish before Compile. GPU recording remains parallel.
+    auto       parameters = std::make_shared<const RecordParameters>(Prepare(context, ui_config, camera));
+    const auto table      = graph.ImportToken("Raster.bindless", parameters->bindless.Get());
+    RenderGraph::PassHandle publication{};
+    if (parameters->update_bindless_array) {
+        publication = graph.AddRecordPass(
+            "ShadowDepth.PublishBindings",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.Write(table).SideEffect();
+            },
+            [parameters](CommandList& commands) {
+                commands.UpdateBindlessArray(parameters->bindless);
+            }
+        );
     }
-
-    auto pass = graph.AddRecordPass(
-        "ShadowDepth",
-        [resources](RenderGraph::PassBuilder& builder) {
+    const RasterSceneGraphReads scene_reads(graph, context.GetGpuSceneRes());
+    const auto indices = ImportRasterBuffer(graph, "Scene.indices", parameters->index_buffer.GetBuffer());
+    std::vector<RenderGraph::PassHandle> draws;
+    for (size_t index = 0; index < parameters->draws.size(); ++index) {
+        const auto& batch = parameters->draws[index];
+        m_culling_pass.AddToGraph(graph, batch.pass_name, batch.culling);
+        RenderGraph::BufferHandle matrices{};
+        if (batch.multiview) {
+            matrices = ImportRasterBuffer(
+                graph, "ShadowDepth.matrices", parameters->point_shadow_view_matrices.Get()
+            );
+            graph.AddRecordPass(
+                batch.pass_name + ".UploadMatrices",
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                        .Write(matrices, RenderGraph::BufferState::TransferDestination);
+                },
+                [parameters, index](CommandList& commands) {
+                    const auto& data = parameters->draws[index].multiview_matrices;
+                    commands.CopyFrom(
+                        std::span<const byte>(reinterpret_cast<const byte*>(&data), sizeof(data)),
+                        parameters->point_shadow_view_matrices->GetView()
+                    );
+                }
+            );
+        }
+        const auto depth = ImportRasterTexture(graph, batch.pass_name, batch.depth_view.GetTexture());
+        const auto visible =
+            ImportRasterBuffer(graph, "ShadowDepth.visible", batch.culling.visible_instance_ids.GetBuffer());
+        const auto indirect =
+            ImportRasterBuffer(graph, "ShadowDepth.indirect", batch.culling.draw_commands.GetBuffer());
+        const auto count =
+            ImportRasterBuffer(graph, "ShadowDepth.count", batch.culling.draw_count.GetBuffer());
+        RenderGraph::TextureRange range{};
+        range.mip_first   = batch.depth_view.mip_level;
+        range.mip_count   = batch.depth_view.num_mips;
+        range.layer_first = batch.depth_view.array_layer;
+        range.layer_count = batch.depth_view.num_array;
+        draws.push_back(graph.AddRecordPass(
+            batch.pass_name,
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                    .Read(table)
+                    .Read(indices, RenderGraph::BufferState::IndexBuffer)
+                    .Read(visible, RenderGraph::BufferState::ShaderResource)
+                    .Read(indirect, RenderGraph::BufferState::IndirectArgument)
+                    .Read(count, RenderGraph::BufferState::IndirectArgument)
+                    .Write(depth, RenderGraph::TextureState::DepthStencilWrite, range);
+                scene_reads.Declare(builder);
+                if (matrices.IsValid()) {
+                    builder.Read(matrices, RenderGraph::BufferState::ShaderResource);
+                }
+            },
+            [this, parameters, index](CommandList& commands) {
+                const auto& draw = parameters->draws[index];
+                if (draw.multiview) {
+                    RecordPointShadowMultiviewDraw(commands, *parameters, draw);
+                } else {
+                    RecordShadowDraw(commands, *parameters, draw);
+                }
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        ));
+    }
+    return graph.AddRecordPass(
+        "ShadowDepth.Ready",
+        [=](RenderGraph::PassBuilder& builder) {
             builder.Write(resources.shadow_maps).SideEffect();
+            for (auto draw : draws) {
+                builder.DependsOn(draw);
+            }
+            if (publication.IsValid()) {
+                builder.DependsOn(publication);
+            }
         },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "ShadowDepth", [&] {
-                cmd_list.PushScopeWithTimeScope(
-                    RasterTool::GetShadowDepthPassProfileScopeName()
-                );
-                Record(cmd_list, prepared.Get());
-                cmd_list.PopScopeWithTimeScope();
-            });
-        },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        [](CommandList&) {}
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle ProbeUpdatePass::AddToGraph(
-    RenderGraph& graph,
-    RasterContext& context,
+RenderGraph::PassHandle ProbeUpdatePass::AddToGraph(
+    RenderGraph&        graph,
+    RasterContext&      context,
     const RasterConfig& config,
-    const Camera& camera,
-    uint64 frame_index,
-    GraphResources resources,
-    std::span<const RenderGraph::SetupPassHandle> setup_dependencies
+    const Camera&       camera,
+    uint64              frame_index,
+    GraphResources      resources
 ) {
-    auto prepared = graph.AddSetupPass(
-        "ProbeUpdate.Prepare",
-        uint8_t{0},
-        [this, &context, &config, &camera, frame_index](const uint8_t&) {
-            return Prepare(context, config, camera, frame_index);
-        },
-        setup_dependencies,
-        RenderGraph::PrepareSafety::Unsafe
-    );
-    if (!prepared.IsValid()) {
+    auto parameters = std::make_shared<const RecordParameters>(Prepare(context, config, camera, frame_index));
+    if (!parameters->enabled) {
         return {};
     }
-
-    auto pass = graph.AddRecordPass(
-        "ProbeUpdate",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.probe_volume)
+    const auto import = [&](BufferView view) {
+        return ImportRasterBuffer(graph, "ProbeUpdate.data", view.GetBuffer());
+    };
+    std::vector<RenderGraph::BufferHandle> uploads;
+    const auto&                            upload = parameters->scene_upload;
+    const auto add_upload                         = [&](const BufferRef& buffer, const Array<byte>& data) {
+        if (buffer && !data.empty()) {
+            uploads.push_back(ImportRasterBuffer(graph, "ProbeUpdate.upload", buffer.Get()));
+        }
+    };
+    add_upload(upload.cell_buffer, upload.cell_data);
+    add_upload(upload.volume_buffer, upload.volume_data);
+    add_upload(upload.brick_buffer, upload.brick_data);
+    add_upload(upload.page_table_buffer, upload.page_table_data);
+    add_upload(upload.scene_data_buffer, upload.scene_data);
+    auto last = graph.AddRecordPass(
+        "ProbeUpdate.Upload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Write(resources.probe_volume)
                 .SideEffect();
+            for (auto buffer : uploads) {
+                builder.Write(buffer, RenderGraph::BufferState::TransferDestination);
+            }
         },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "ProbeUpdate", [&] {
-                Record(cmd_list, prepared.Get());
-            });
-        },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        [parameters](CommandList& commands) {
+            ProbeVolumeResource::RecordSceneDataUpload(commands, parameters->scene_upload);
+        }
     );
-    return {prepared.GetSetupPass(), pass};
+    const auto probes           = import(parameters->probe_data);
+    const auto visibility       = import(parameters->visibility_atlas);
+    const auto irradiance       = import(parameters->irradiance_atlas);
+    const auto scene            = import(parameters->scene_data);
+    const auto volumes          = import(parameters->volume_data);
+    const auto bricks           = import(parameters->brick_data);
+    const auto visibility_image = ImportRasterTexture(
+        graph, "ProbeUpdate.visibility", parameters->visibility_atlas_texture.GetTexture()
+    );
+    const auto irradiance_image = ImportRasterTexture(
+        graph, "ProbeUpdate.irradiance", parameters->irradiance_atlas_texture.GetTexture()
+    );
+    const auto environment =
+        ImportRasterTexture(graph, "ProbeUpdate.environment", context.textures.cubemap_tex.tex.Get());
+    const RasterSceneGraphReads            scene_reads(graph, context.GetGpuSceneRes());
+    std::vector<RenderGraph::BufferHandle> ray_data;
+    const auto&                            scene_resources = context.GetGpuSceneRes();
+    for (const auto* resource :
+         {&scene_resources.rt_instance_buf,
+          &scene_resources.rt_primitive_table_buf,
+          &scene_resources.index_buf,
+          &scene_resources.light_buf}) {
+        if (resource->buf) {
+            ray_data.push_back(ImportRasterBuffer(graph, "ProbeUpdate.ray_data", resource->buf.Get()));
+        }
+    }
+    for (uint index = 0; index < parameters->update.job_count && parameters->update.scheduled_probe_count;
+         ++index) {
+        if (!parameters->update.jobs[index].probe_count) {
+            continue;
+        }
+        last = graph.AddRecordPass(
+            std::format("ProbeUpdate.Job{}", index),
+            [=](RenderGraph::PassBuilder& builder) {
+                using BS = RenderGraph::BufferState;
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                    .ReadWrite(resources.probe_volume)
+                    .ReadWrite(probes, BS::UnorderedAccess)
+                    .ReadWrite(visibility, BS::UnorderedAccess)
+                    .ReadWrite(irradiance, BS::UnorderedAccess)
+                    .Read(scene, BS::ShaderResource)
+                    .Read(volumes, BS::ShaderResource)
+                    .Read(bricks, BS::ShaderResource)
+                    .Write(visibility_image, RenderGraph::TextureState::UnorderedAccess)
+                    .Write(irradiance_image, RenderGraph::TextureState::UnorderedAccess)
+                    .Read(environment, RenderGraph::TextureState::Sampled)
+                    .SideEffect();
+                scene_reads.Declare(builder);
+                for (auto buffer : ray_data) {
+                    builder.Read(buffer, BS::ShaderResource);
+                }
+            },
+            [this, parameters, index](CommandList& commands) {
+                RecordJob(commands, *parameters, index);
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+    }
+    return last;
 }
 
-RenderGraph::PreparedPassHandle GeometryPass::AddToGraph(
-    RenderGraph& graph,
+RenderGraph::PassHandle GeometryPass::AddToGraph(
+    RenderGraph&   graph,
     RasterContext& context,
-    RasterConfig& raster_config,
-    const Camera& camera,
-    GraphResources resources,
-    std::span<const RenderGraph::SetupPassHandle> setup_dependencies
+    RasterConfig&  raster_config,
+    const Camera&  camera,
+    GraphResources resources
 ) {
-    auto prepared = graph.AddSetupPass(
-        "Geometry.Prepare",
-        uint8_t{0},
-        [this, &context, &raster_config, &camera](const uint8_t&) {
-            return Prepare(context, raster_config, camera);
+    auto parameters = std::make_shared<const RecordParameters>(Prepare(context, raster_config, camera));
+    culling_pass.AddToGraph(graph, "Geometry", parameters->culling, resources.hiz_previous);
+    const RasterSceneGraphReads scene_reads(graph, context.GetGpuSceneRes());
+    const auto indices = ImportRasterBuffer(graph, "Scene.indices", parameters->index_buffer.GetBuffer());
+    const auto visible =
+        ImportRasterBuffer(graph, "Geometry.visible", parameters->culling.visible_instance_ids.GetBuffer());
+    const auto indirect =
+        ImportRasterBuffer(graph, "Geometry.indirect", parameters->draw_commands.GetBuffer());
+    const auto count = ImportRasterBuffer(graph, "Geometry.count", parameters->draw_count.GetBuffer());
+    const auto table = graph.ImportToken("Raster.bindless", parameters->bindless.Get());
+    return graph.AddRecordPass(
+        "Geometry.Draw",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                .Read(table)
+                .Read(indices, RenderGraph::BufferState::IndexBuffer)
+                .Read(visible, RenderGraph::BufferState::ShaderResource)
+                .Read(indirect, RenderGraph::BufferState::IndirectArgument)
+                .Read(count, RenderGraph::BufferState::IndirectArgument)
+                .Write(resources.base_color, RenderGraph::TextureState::RenderTarget)
+                .Write(resources.normal, RenderGraph::TextureState::RenderTarget)
+                .Write(resources.metal_rough_ao, RenderGraph::TextureState::RenderTarget)
+                .Write(resources.depth, RenderGraph::TextureState::DepthStencilWrite);
+            scene_reads.Declare(builder);
         },
-        setup_dependencies,
-        RenderGraph::PrepareSafety::Unsafe
-    );
-    if (!prepared.IsValid()) {
-        return {};
-    }
-
-    auto pass = graph.AddRecordPass(
-        "Geometry",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.hiz_previous)
-                .Write(resources.base_color)
-                .Write(resources.normal)
-                .Write(resources.metal_rough_ao)
-                .Write(resources.depth);
-        },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "Geometry", [&] {
-                cmd_list.PushScopeWithTimeScope(
-                    RasterTool::GetGeometryPassProfileScopeName()
-                );
-                Record(cmd_list, prepared.Get());
-                cmd_list.PopScopeWithTimeScope();
-            });
+        [this, parameters](CommandList& commands) {
+            RecordDraw(commands, *parameters);
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
 RenderGraph::PreparedPassHandle TessellatedSurfacePass::AddToGraph(
@@ -168,6 +304,9 @@ RenderGraph::PreparedPassHandle TessellatedSurfacePass::AddToGraph(
     const Camera& camera,
     GraphResources resources
 ) {
+    if (!supported || !config.tessellated_surface_enabled) {
+        return {};
+    }
     auto prepared = graph.AddSetupPass(
         "TessellatedSurface.Prepare",
         uint8_t{0},
@@ -179,17 +318,29 @@ RenderGraph::PreparedPassHandle TessellatedSurfacePass::AddToGraph(
         return {};
     }
 
+    const auto data = ImportRasterBuffer(graph, "Tessellation.data", surface_data_buffer.Get());
+    graph.AddRecordPass(
+        "Tessellation.Upload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Write(data, RenderGraph::BufferState::TransferDestination);
+        },
+        [this, prepared](CommandList& commands) {
+            RecordUpload(commands, prepared.Get());
+        }
+    );
     auto pass = graph.AddRecordPass(
         "TessellatedSurface",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.base_color)
-                .ReadWrite(resources.normal)
-                .ReadWrite(resources.metal_rough_ao)
-                .ReadWrite(resources.depth);
+        [resources, data](RenderGraph::PassBuilder& builder) {
+            builder.Read(data, RenderGraph::BufferState::ShaderResource);
+            builder.ReadWrite(resources.base_color, RenderGraph::TextureState::RenderTarget)
+                .ReadWrite(resources.normal, RenderGraph::TextureState::RenderTarget)
+                .ReadWrite(resources.metal_rough_ao, RenderGraph::TextureState::RenderTarget)
+                .ReadWrite(resources.depth, RenderGraph::TextureState::DepthStencilWrite);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "TessellatedSurface", [&] {
-                Record(cmd_list, prepared.Get());
+                RecordDraw(cmd_list, prepared.Get());
             });
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -246,14 +397,19 @@ RenderGraph::PreparedPassHandle DirectionalShadowMaskPass::AddToGraph(
         return {};
     }
 
-    auto pass = graph.AddRecordPass(
+    const auto shadows = ImportShadowMaps(graph, context);
+    auto       pass    = graph.AddRecordPass(
         "DirectionalShadowMask",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.normal)
-                .Read(resources.depth)
-                .Read(resources.lighting_data)
+        [resources, shadows](RenderGraph::PassBuilder& builder) {
+            for (auto texture : shadows) {
+                builder.Read(texture, RenderGraph::TextureState::Sampled);
+            }
+
+            builder.Read(resources.normal, RenderGraph::TextureState::Sampled)
+                .Read(resources.depth, RenderGraph::TextureState::Sampled)
+                .Read(resources.lighting_data, RenderGraph::BufferState::ShaderResource)
                 .Read(resources.shadow_maps)
-                .Write(resources.shadow_mask);
+                .Write(resources.shadow_mask, RenderGraph::TextureState::RenderTarget);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "DirectionalShadowMask", [&] {
@@ -282,20 +438,31 @@ RenderGraph::PreparedPassHandle LightingPass::AddToGraph(
         return {};
     }
 
-    auto pass = graph.AddRecordPass(
+    const auto                  shadows = ImportShadowMaps(graph, context);
+    const RasterProbeGraphReads probes(graph, context.probe_volume);
+    const auto emu  = ImportRasterTexture(graph, "Lighting.emu", context.textures.lut_ggx_emu.tex.Get());
+    const auto eavg = ImportRasterTexture(graph, "Lighting.eavg", context.textures.lut_ggx_eavg.tex.Get());
+    auto       pass = graph.AddRecordPass(
         "Lighting",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.base_color)
-                .Read(resources.normal)
-                .Read(resources.metal_rough_ao)
-                .Read(resources.depth)
-                .Read(resources.shadow_mask)
-                .Read(resources.lighting_data)
-                .Read(resources.cubemap)
+        [resources, shadows, probes, emu, eavg](RenderGraph::PassBuilder& builder) {
+            for (auto texture : shadows) {
+                builder.Read(texture, RenderGraph::TextureState::Sampled);
+            }
+            probes.Declare(builder);
+            builder.Read(emu, RenderGraph::TextureState::Sampled)
+                .Read(eavg, RenderGraph::TextureState::Sampled);
+
+            builder.Read(resources.base_color, RenderGraph::TextureState::Sampled)
+                .Read(resources.normal, RenderGraph::TextureState::Sampled)
+                .Read(resources.metal_rough_ao, RenderGraph::TextureState::Sampled)
+                .Read(resources.depth, RenderGraph::TextureState::Sampled)
+                .Read(resources.shadow_mask, RenderGraph::TextureState::Sampled)
+                .Read(resources.lighting_data, RenderGraph::BufferState::ShaderResource)
+                .Read(resources.cubemap, RenderGraph::TextureState::Sampled)
                 .Read(resources.probe_volume)
-                .Write(resources.lighting_output);
+                .Write(resources.lighting_output, RenderGraph::TextureState::RenderTarget);
             if (resources.scene_lights.IsValid()) {
-                builder.Read(resources.scene_lights);
+                builder.Read(resources.scene_lights, RenderGraph::BufferState::ShaderResource);
             }
         },
         [this, prepared](CommandList& cmd_list) {
@@ -329,9 +496,11 @@ RenderGraph::PreparedPassHandle SkyboxPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "Skybox",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.depth)
-                .Read(resources.cubemap)
-                .ReadWrite(resources.lighting_output);
+            // Skybox disables depth writes, but the attachment STORE operation
+            // still writes memory at the end of rendering.
+            builder.ReadWrite(resources.depth, RenderGraph::TextureState::DepthStencilWrite)
+                .Read(resources.cubemap, RenderGraph::TextureState::Sampled)
+                .ReadWrite(resources.lighting_output, RenderGraph::TextureState::RenderTarget);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Skybox", [&] {
@@ -363,11 +532,14 @@ RenderGraph::PreparedPassHandle ProbeGizmoPass::AddToGraph(
         return {};
     }
 
-    auto pass = graph.AddRecordPass(
+    const RasterProbeGraphReads probes(graph, context.probe_volume);
+    auto                        pass = graph.AddRecordPass(
         "ProbeGizmo",
-        [resources](RenderGraph::PassBuilder& builder) {
+        [resources, probes](RenderGraph::PassBuilder& builder) {
+            probes.Declare(builder);
+
             builder.Read(resources.probe_volume)
-                .ReadWrite(resources.lighting_output)
+                .ReadWrite(resources.lighting_output, RenderGraph::TextureState::RenderTarget)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
@@ -399,19 +571,43 @@ RenderGraph::PreparedPassHandle AoPass::AddToGraph(
         return {};
     }
 
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
+        "AmbientOcclusion.UploadMotion",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Write(resources.motion_vector_data, RenderGraph::BufferState::TransferDestination);
+        },
+        [this, prepared](CommandList& commands) {
+            RecordUpload(commands, prepared.Get());
+        }
+    );
+    const bool ray_query = ui_config.ao_mode == EAoMode::RTAO || ui_config.ao_mode == EAoMode::RTAO_AO_ONLY;
+    auto       pass      = graph.AddRecordPass(
         "AmbientOcclusion",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.normal)
-                .Read(resources.depth)
-                .Read(resources.lighting_output)
-                .Write(resources.ao_only)
-                .Write(resources.camera_motion_vector)
-                .Write(resources.motion_vector_data);
+        [resources, ray_query](RenderGraph::PassBuilder& builder) {
+            builder
+                .ExecuteOn(
+                    RenderGraph::QueueRole::Graphics,
+                    ray_query ? RenderGraph::PipelineType::Compute : RenderGraph::PipelineType::Graphics
+                )
+                .Read(resources.normal, RenderGraph::TextureState::Sampled)
+                .Read(resources.depth, RenderGraph::TextureState::Sampled)
+                .Read(resources.lighting_output, RenderGraph::TextureState::Sampled)
+                .Write(
+                    resources.ao_only,
+                    ray_query ? RenderGraph::TextureState::UnorderedAccess :
+                                           RenderGraph::TextureState::RenderTarget
+                )
+                .Write(
+                    resources.camera_motion_vector,
+                    ray_query ? RenderGraph::TextureState::UnorderedAccess :
+                                           RenderGraph::TextureState::RenderTarget
+                )
+                .Read(resources.motion_vector_data, RenderGraph::BufferState::ShaderResource);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AmbientOcclusion", [&] {
-                Record(cmd_list, prepared.Get());
+                RecordEvaluate(cmd_list, prepared.Get());
             });
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -440,11 +636,12 @@ RenderGraph::PreparedPassHandle AoPass::AddCompositeToGraph(
     auto pass = graph.AddRecordPass(
         "AoComposite",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.ao_only)
-                .Read(resources.lighting_output)
-                .Read(resources.depth)
-                .Read(resources.normal)
-                .Write(resources.ao_output);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                .Read(resources.ao_only, RenderGraph::TextureState::Sampled)
+                .Read(resources.lighting_output, RenderGraph::TextureState::Sampled)
+                .Read(resources.depth, RenderGraph::TextureState::Sampled)
+                .Read(resources.normal, RenderGraph::TextureState::Sampled)
+                .Write(resources.ao_output, RenderGraph::TextureState::UnorderedAccess);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AoComposite", [&] {
@@ -463,6 +660,10 @@ RenderGraph::PreparedPassHandle RtaoDenoiserPass::AddToGraph(
     uint ao_only_index,
     GraphResources resources
 ) {
+    if (!ui_config.rtao_denoiser_enable ||
+        (ui_config.ao_mode != EAoMode::RTAO && ui_config.ao_mode != EAoMode::RTAO_AO_ONLY)) {
+        return {};
+    }
     auto prepared = graph.AddSetupPass(
         "RtaoDenoise.Prepare",
         uint8_t{0},
@@ -477,17 +678,28 @@ RenderGraph::PreparedPassHandle RtaoDenoiserPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "RtaoDenoise",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.normal)
-                .Read(resources.depth)
-                .Read(resources.camera_motion_vector)
-                .Read(resources.history_read)
-                .ReadWrite(resources.ao_only)
-                .Write(resources.history_write);
+            builder.Read(resources.normal, RenderGraph::TextureState::Sampled)
+                .Read(resources.depth, RenderGraph::TextureState::Sampled)
+                .Read(resources.camera_motion_vector, RenderGraph::TextureState::Sampled)
+                .Read(resources.history_read, RenderGraph::TextureState::Sampled)
+                .Read(resources.ao_only, RenderGraph::TextureState::Sampled)
+                .Write(resources.history_write, RenderGraph::TextureState::RenderTarget);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "RtaoDenoise", [&] {
-                Record(cmd_list, prepared.Get());
+                RecordDenoise(cmd_list, prepared.Get());
             });
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    pass = graph.AddRecordPass(
+        "RtaoDenoise.Copy",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(resources.history_write, RenderGraph::TextureState::Sampled)
+                .Write(resources.ao_only, RenderGraph::TextureState::RenderTarget);
+        },
+        [this, prepared](CommandList& commands) {
+            RecordCopy(commands, prepared.Get());
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
@@ -515,8 +727,8 @@ RenderGraph::PreparedPassHandle BilateralFilterDenoiserPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "BilateralDenoise",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.input)
-                .Write(resources.denoiser_output);
+            builder.Read(resources.input, RenderGraph::TextureState::Sampled)
+                .Write(resources.denoiser_output, RenderGraph::TextureState::RenderTarget);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "BilateralDenoise", [&] {
@@ -550,11 +762,11 @@ RenderGraph::PreparedPassHandle SsrPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "ScreenSpaceReflection",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.input)
-                .Read(resources.normal)
-                .Read(resources.depth)
-                .Read(resources.metal_rough_ao)
-                .Write(resources.ssr_output);
+            builder.Read(resources.input, RenderGraph::TextureState::Sampled)
+                .Read(resources.normal, RenderGraph::TextureState::Sampled)
+                .Read(resources.depth, RenderGraph::TextureState::Sampled)
+                .Read(resources.metal_rough_ao, RenderGraph::TextureState::Sampled)
+                .Write(resources.ssr_output, RenderGraph::TextureState::RenderTarget);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "ScreenSpaceReflection", [&] {
@@ -588,9 +800,7 @@ RenderGraph::PreparedPassHandle AaPass::AddToGraph(
 
     using State = RenderGraph::TextureState;
     const auto import = [&](std::string_view name, const TextureWithHandle& texture) {
-        return graph.ImportTexture(name, texture.tex,
-            RenderGraph::TextureDesc{.mip_count = texture.tex->GetNumMips(),
-                                     .layer_count = texture.tex->GetNumArray()});
+        return ImportRasterTexture(graph, name, texture.tex.Get());
     };
     const auto texture_1 = import("AA.edges_or_luma", context.textures.aa_texture_1);
     const bool smaa = ui_config.aa_mode >= EAaMode::SMAA_1X;
@@ -836,7 +1046,7 @@ RenderGraph::PreparedPassHandle CameraGizmoPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "CameraGizmo",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.tonemapping_output)
+            builder.ReadWrite(resources.tonemapping_output, RenderGraph::TextureState::RenderTarget)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
@@ -871,16 +1081,28 @@ RenderGraph::PreparedPassHandle CsmGizmoPass::AddToGraph(
         return {};
     }
 
+    const auto data = ImportRasterBuffer(graph, "CsmGizmo.data", m_cascade_data_buffer.buf.Get());
+    graph.AddRecordPass(
+        "CsmGizmo.Upload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Write(data, RenderGraph::BufferState::TransferDestination);
+        },
+        [this, prepared](CommandList& commands) {
+            RecordUpload(commands, prepared.Get());
+        }
+    );
     auto pass = graph.AddRecordPass(
         "CsmGizmo",
-        [resources](RenderGraph::PassBuilder& builder) {
+        [resources, data](RenderGraph::PassBuilder& builder) {
+            builder.Read(data, RenderGraph::BufferState::ShaderResource);
             builder.Read(resources.shadow_maps)
-                .ReadWrite(resources.tonemapping_output)
+                .ReadWrite(resources.tonemapping_output, RenderGraph::TextureState::RenderTarget)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "CsmGizmo", [&] {
-                Record(cmd_list, prepared.Get());
+                RecordDraw(cmd_list, prepared.Get());
             });
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -951,12 +1173,14 @@ RenderGraph::PreparedPassHandle UiCombinePass::AddToGraph(
         "UiCombine",
         [resources, ui_enabled, writes_external_window](RenderGraph::PassBuilder& builder) {
             if (!ui_enabled) {
-                builder.Read(resources.processing_input).Write(resources.output);
+                builder.Read(resources.processing_input, RenderGraph::TextureState::Sampled)
+                    .Write(resources.output, RenderGraph::TextureState::RenderTarget);
             } else if (writes_external_window) {
-                builder.Read(resources.selected_framebuffer)
-                    .Write(resources.window_framebuffer);
+                builder.Read(resources.selected_framebuffer, RenderGraph::TextureState::Sampled)
+                    .Write(resources.window_framebuffer, RenderGraph::TextureState::RenderTarget);
             } else {
-                builder.Read(resources.selected_framebuffer).Write(resources.output);
+                builder.Read(resources.selected_framebuffer, RenderGraph::TextureState::Sampled)
+                    .Write(resources.output, RenderGraph::TextureState::RenderTarget);
             }
             builder.SideEffect();
         },

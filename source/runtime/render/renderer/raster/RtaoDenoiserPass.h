@@ -158,6 +158,11 @@ public:
     }
 
     void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        RecordDenoise(cmd_list, parameters);
+        RecordCopy(cmd_list, parameters);
+    }
+
+    void RecordDenoise(CommandList& cmd_list, const RecordParameters& parameters) {
         if (!parameters.enabled) {
             return;
         }
@@ -168,7 +173,12 @@ public:
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(parameters.history_write.tex)
             );
+    }
 
+    void RecordCopy(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (!parameters.enabled) {
+            return;
+        }
         cmd_list.Gfx(copy_pso, parameters.bindless, parameters.copy)
             .Draw(
                 "RtaoDenoiser Copy Pass",

@@ -72,13 +72,12 @@ public:
     [[nodiscard]] RecordParameters
     Prepare(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
-    RenderGraph::PreparedPassHandle AddToGraph(
-        RenderGraph& graph,
-        RasterContext& context,
+    RenderGraph::PassHandle AddToGraph(
+        RenderGraph&        graph,
+        RasterContext&      context,
         const RasterConfig& ui_config,
-        const Camera& camera,
-        GraphResources resources,
-        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+        const Camera&       camera,
+        GraphResources      resources
     );
 
     // Legacy synchronous adapter. New graph passes call Prepare/Record directly.
@@ -108,6 +107,11 @@ private:
         bool already_transposed
     ) const;
     void RecordShadowDraw(CommandList& cmd_list, const RecordParameters& parameters, const DrawBatch& batch);
+    void RecordPointShadowMultiviewDraw(
+        CommandList&            cmd_list,
+        const RecordParameters& parameters,
+        const DrawBatch&        batch
+    );
     void RecordPointShadowMultiview(
         CommandList& cmd_list, const RecordParameters& parameters, const DrawBatch& batch
     );

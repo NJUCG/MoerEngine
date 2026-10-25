@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssetTool.h"
+#include "renderer/common/GraphResourceBoundary.h"
 #include "rhi/RHIResource.h"
 
 namespace Moer::Render::Raster {
@@ -206,6 +207,24 @@ struct RasterTextures {
                 hiz_previous, device, "hiz_previous", scene_size, hiz_cfg, false
             );
         }
+        Array<TextureRef> initialized;
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                                               \
+    {                                                                                                \
+        const TexConfig cfg = (CONFIG);                                                              \
+        if (!cfg.is_asset && (cfg.b_output_size ? create_output_resources : create_scene_resources)) \
+            initialized.emplace_back(NAME.tex->GetView().GetTexture());                              \
+    }
+        RASTER_TEXTURES_TABLE
+        RASTER_TEXTURES_TABLE_DOWNSAMPLED
+#undef X
+        if (create_scene_resources) {
+#define X(TYPE, NAME, TEXTYPE, CONFIG) initialized.emplace_back(NAME##_half.tex->GetView().GetTexture());
+            RASTER_TEXTURES_TABLE_DOWNSAMPLED
+#undef X
+            initialized.emplace_back(hiz_current.tex);
+            initialized.emplace_back(hiz_previous.tex);
+        }
+        InitializeGraphicsTextures(initialized);
     }
 
     void LoadAndUploadAssets(RenderDevice& device, CommandList& cmd_list) {

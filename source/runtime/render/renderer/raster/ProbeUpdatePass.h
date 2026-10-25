@@ -158,66 +158,62 @@ public:
         }
 
         for (uint job_index = 0; job_index < parameters.update.job_count; ++job_index) {
-            const auto& job = parameters.update.jobs[job_index];
-            if (job.probe_count == 0) {
-                continue;
-            }
-            const uint dispatch_count =
-                (job.probe_count + RASTER_PROBE_UPDATE_GROUP_SIZE - 1u) /
-                RASTER_PROBE_UPDATE_GROUP_SIZE;
+            RecordJob(cmd_list, parameters, job_index);
+        }
+    }
 
-            if (parameters.ray_query) {
-                cmd_list
-                    .Compute(
-                        probe_update_ray_query_pipeline,
-                        parameters.probe_data,
-                        parameters.visibility_atlas,
-                        parameters.irradiance_atlas,
-                        parameters.scene_data,
-                        parameters.visibility_atlas_texture,
-                        parameters.irradiance_atlas_texture,
-                        parameters.tlas,
-                        parameters.volume_data,
-                        parameters.brick_data,
-                        parameters.bindless,
-                        job.param
-                    )
-                    .Dispatch(
-                        uint3(dispatch_count, 1, 1),
-                        "Probe GI DDGI Resident Brick Ray Query Update Pass"
-                    );
-                continue;
-            }
+    void RecordJob(CommandList& cmd_list, const RecordParameters& parameters, uint job_index) {
+        const auto& job = parameters.update.jobs[job_index];
+        if (job.probe_count == 0) {
+            return;
+        }
+        const uint dispatch_count =
+            (job.probe_count + RASTER_PROBE_UPDATE_GROUP_SIZE - 1u) / RASTER_PROBE_UPDATE_GROUP_SIZE;
 
+        if (parameters.ray_query) {
             cmd_list
                 .Compute(
-                    probe_update_pipeline,
+                    probe_update_ray_query_pipeline,
                     parameters.probe_data,
                     parameters.visibility_atlas,
                     parameters.irradiance_atlas,
                     parameters.scene_data,
                     parameters.visibility_atlas_texture,
                     parameters.irradiance_atlas_texture,
+                    parameters.tlas,
                     parameters.volume_data,
                     parameters.brick_data,
                     parameters.bindless,
                     job.param
                 )
-                .Dispatch(
-                    uint3(dispatch_count, 1, 1),
-                    "Probe GI Fallback Resident Brick Update Pass"
-                );
+                .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI DDGI Resident Brick Ray Query Update Pass");
+            return;
         }
+
+        cmd_list
+            .Compute(
+                probe_update_pipeline,
+                parameters.probe_data,
+                parameters.visibility_atlas,
+                parameters.irradiance_atlas,
+                parameters.scene_data,
+                parameters.visibility_atlas_texture,
+                parameters.irradiance_atlas_texture,
+                parameters.volume_data,
+                parameters.brick_data,
+                parameters.bindless,
+                job.param
+            )
+            .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI Fallback Resident Brick Update Pass");
     }
 
-    RenderGraph::PreparedPassHandle AddToGraph(
-        RenderGraph& graph,
-        RasterContext& context,
+    RenderGraph::PassHandle AddToGraph(
+        RenderGraph&        graph,
+        RasterContext&      context,
         const RasterConfig& config,
-        const Camera& camera,
-        uint64 frame_index,
-        GraphResources resources,
-        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+        const Camera&       camera,
+        uint64              frame_index,
+        GraphResources      resources
     );
 
     void Process(

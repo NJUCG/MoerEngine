@@ -1,4 +1,5 @@
 #include "ProbeVolumeResource.h"
+#include "renderer/common/GraphResourceBoundary.h"
 
 #include "log/LogSystem.h"
 #include "math/Function.h"
@@ -179,6 +180,10 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_irradiance_atlas_texture.hdl =
         bdls->AllocateTexture(m_irradiance_atlas_texture.tex->GetView(), atlas_sampler);
+    const std::array<TextureRef, 2> atlas_textures{
+        m_visibility_atlas_texture.tex, m_irradiance_atlas_texture.tex
+    };
+    InitializeGraphicsTextures(atlas_textures);
 
     constexpr uint scene_data_byte_size = sizeof(GBufferPassParams);
     m_scene_data_buffer = device.CreateBuffer<byte>(

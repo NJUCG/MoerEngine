@@ -109,10 +109,8 @@ private:
 
     SceneRenderExtentTracker scene_render_extent_tracker;
 
-    bool                            render_graph_enabled = false;
     bool                            render_graph_debug_dump = false;
     bool                            parallel_recording_enabled = false;
-    bool                            render_graph_fallback_latched = false;
     std::unordered_set<std::string> logged_render_graph_dumps;
 };
 

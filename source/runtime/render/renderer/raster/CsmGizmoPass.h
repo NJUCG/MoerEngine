@@ -145,6 +145,11 @@ public:
     }
 
     void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        RecordUpload(cmd_list, parameters);
+        RecordDraw(cmd_list, parameters);
+    }
+
+    void RecordUpload(CommandList& cmd_list, const RecordParameters& parameters) {
         if (!parameters.enabled) {
             return;
         }
@@ -157,6 +162,12 @@ public:
             parameters.cascade_buffer.buf->GetView(),
             "Raster::CsmGizmoCascadeData"
         );
+    }
+
+    void RecordDraw(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (!parameters.enabled) {
+            return;
+        }
         cmd_list.Gfx(m_pipeline, parameters.bindless, parameters.shader)
             .Draw(
                 "CSM Gizmo Pass",

@@ -276,12 +276,20 @@ public:
         return parameters;
     }
 
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+    void RecordUpload(CommandList& cmd_list, const RecordParameters& parameters) {
         CameraMotionVectorData upload = parameters.motion_vector_upload;
         cmd_list.CopyFrom(
             std::span<byte>(reinterpret_cast<byte*>(&upload), sizeof(upload)),
             parameters.motion_vector_data.buf->GetView()
         );
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        RecordUpload(cmd_list, parameters);
+        RecordEvaluate(cmd_list, parameters);
+    }
+
+    void RecordEvaluate(CommandList& cmd_list, const RecordParameters& parameters) {
 
         if (parameters.mode == EAoMode::RTAO || parameters.mode == EAoMode::RTAO_AO_ONLY) {
             auto& active_pipeline =

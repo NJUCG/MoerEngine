@@ -17,8 +17,9 @@
 #include "shaderheaders/shared/raster/culling/ShaderParameters.h"
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 
-#include "RasterConfig.h"
 #include "CullingReadbackState.h"
+#include "RasterConfig.h"
+#include "RasterGraphResourceAccess.h"
 #include "RasterResource.h"
 
 #include <algorithm>
@@ -253,24 +254,23 @@ public:
     }
 
     // Records only commands from the immutable packet produced by Prepare.
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+    void RecordInitialize(CommandList& cmd_list, const RecordParameters& parameters) {
         if (parameters.update_bindless_array) {
             cmd_list.UpdateBindlessArray(parameters.bindless);
         }
-
         cmd_list.ClearResource(parameters.counters, 0u);
+        if (parameters.dispatch_count != 0) {
+            cmd_list.CopyFrom(
+                std::span<const byte>(reinterpret_cast<const byte*>(&parameters.cull_data), sizeof(CullData)),
+                parameters.cull_data_buffer
+            );
+        }
+    }
+
+    void RecordCull(CommandList& cmd_list, const RecordParameters& parameters) {
         if (parameters.dispatch_count == 0) {
-            QueueCounterReadback(cmd_list, parameters.counters);
             return;
         }
-
-        cmd_list.CopyFrom(
-            std::span<const byte>(
-                reinterpret_cast<const byte*>(&parameters.cull_data), sizeof(CullData)
-            ),
-            parameters.cull_data_buffer
-        );
-
         if (!parameters.profile_scope_name.empty()) {
             cmd_list.PushScopeWithTimeScope(parameters.profile_scope_name);
         }
@@ -311,7 +311,91 @@ public:
         if (!parameters.profile_scope_name.empty()) {
             cmd_list.PopScopeWithTimeScope();
         }
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        RecordInitialize(cmd_list, parameters);
+        RecordCull(cmd_list, parameters);
         QueueCounterReadback(cmd_list, parameters.counters);
+    }
+
+    RenderGraph::PassHandle AddToGraph(
+        RenderGraph&               graph,
+        std::string_view           name,
+        RecordParameters           parameters,
+        RenderGraph::TextureHandle hiz = {}
+    ) {
+        using BS          = RenderGraph::BufferState;
+        const auto import = [&](BufferView view) {
+            return ImportRasterBuffer(graph, name, view.GetBuffer());
+        };
+        const auto table     = graph.ImportToken("Raster.bindless", parameters.bindless.Get());
+        const auto counters  = import(parameters.counters);
+        const auto cull_data = import(parameters.cull_data_buffer);
+        graph.AddRecordPass(
+            std::string(name) + ".Initialize",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                    .Write(counters, BS::TransferDestination);
+                if (parameters.dispatch_count) {
+                    builder.Write(cull_data, BS::TransferDestination);
+                }
+                if (parameters.update_bindless_array) {
+                    builder.Write(table);
+                }
+                // Bindless publication is a table operation; target accesses are declared below.
+                builder.SideEffect();
+            },
+            [this, parameters](CommandList& commands) {
+                RecordInitialize(commands, parameters);
+            }
+        );
+        RenderGraph::PassHandle cull{};
+        if (parameters.dispatch_count) {
+            const auto source     = import(parameters.source_draw_commands);
+            const auto primitives = import(parameters.primitives);
+            const auto instances  = import(parameters.instances);
+            const auto visible    = import(parameters.visible_instance_ids);
+            const auto draws      = import(parameters.draw_commands);
+            const auto clusters   = import(parameters.cluster_groups);
+            cull                  = graph.AddRecordPass(
+                std::string(name) + ".Cull",
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                        .Read(table)
+                        .Read(source, BS::ShaderResource)
+                        .Read(primitives, BS::ShaderResource)
+                        .Read(instances, BS::ShaderResource)
+                        .Read(cull_data, BS::ShaderResource)
+                        .Read(clusters, BS::ShaderResource)
+                        .Write(visible, BS::UnorderedAccess)
+                        .Write(draws, BS::UnorderedAccess)
+                        .ReadWrite(counters, BS::UnorderedAccess);
+                    if (parameters.use_hiz) {
+                        builder.Read(hiz, RenderGraph::TextureState::Sampled);
+                    }
+                },
+                [this, parameters](CommandList& commands) {
+                    RecordCull(commands, parameters);
+                },
+                RenderGraph::PassExecutionClass::ParallelRecordEligible
+            );
+        }
+        // This callback updates one pass-owned readback slot; keep CPU recording
+        // serial even when independent GPU recording jobs run concurrently.
+        graph.AddRecordPass(
+            std::string(name) + ".Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                    .Read(counters, BS::TransferSource)
+                    .SideEffect();
+            },
+            [this, parameters](CommandList& commands) {
+                QueueCounterReadback(commands, parameters.counters);
+            },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+        return cull;
     }
 
     // Legacy synchronous adapters. New graph passes call Prepare/Record directly.
