@@ -652,22 +652,69 @@ RenderGraph::PreparedPassHandle TonemappingPass::AddToGraph(
         return {};
     }
 
-    auto pass = graph.AddRecordPass(
-        "Tonemapping",
+    return {prepared.GetSetupPass(), AddRecordPasses(graph, resources, prepared)};
+}
+
+RenderGraph::PassHandle TonemappingPass::AddRecordPasses(
+    RenderGraph& graph, GraphResources resources, RGPreparedValue<RecordParameters> prepared
+) {
+    graph.AddRecordPass(
+        "Tonemapping.ClearHistogram",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.input)
-                .ReadWrite(resources.histogram)
-                .ReadWrite(resources.exposure)
-                .Write(resources.tonemapping_output);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Write(resources.histogram, RenderGraph::BufferState::TransferDestination);
         },
         [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "Tonemapping", [&] {
-                Record(cmd_list, prepared.Get());
+            RecordWithPassMarker(cmd_list, "Tonemapping.ClearHistogram", [&] {
+                RecordClear(cmd_list, prepared.Get());
             });
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
+    graph.AddRecordPass(
+        "Tonemapping.BuildHistogram",
+        [resources](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                .Read(resources.input, RenderGraph::TextureState::ShaderResource)
+                .ReadWrite(resources.histogram, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [this, prepared](CommandList& cmd_list) {
+            RecordWithPassMarker(cmd_list, "Tonemapping.BuildHistogram", [&] {
+                RecordHistogram(cmd_list, prepared.Get());
+            });
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "Tonemapping.CalculateExposure",
+        [resources](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                .Read(resources.histogram, RenderGraph::BufferState::ShaderResource)
+                .ReadWrite(resources.exposure, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [this, prepared](CommandList& cmd_list) {
+            RecordWithPassMarker(cmd_list, "Tonemapping.CalculateExposure", [&] {
+                RecordExposure(cmd_list, prepared.Get());
+            });
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    return graph.AddRecordPass(
+        "Tonemapping.Apply",
+        [resources](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                .Read(resources.input, RenderGraph::TextureState::ShaderResource)
+                .Read(resources.histogram, RenderGraph::BufferState::ShaderResource)
+                .Read(resources.exposure, RenderGraph::BufferState::ShaderResource)
+                .Write(resources.tonemapping_output, RenderGraph::TextureState::RenderTarget);
+        },
+        [this, prepared](CommandList& cmd_list) {
+            RecordWithPassMarker(cmd_list, "Tonemapping.Apply", [&] {
+                RecordTonemapping(cmd_list, prepared.Get());
+            });
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
 }
 
 RenderGraph::PreparedPassHandle CameraGizmoPass::AddToGraph(

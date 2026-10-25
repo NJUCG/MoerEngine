@@ -17,6 +17,7 @@
 #include "rhi/vulkan/VulkanRHIResource.h"
 #include "rhi/vulkan/diagnostics/VulkanSubmissionDiagnostics.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
+#include "renderer/raster/TonemappingPass.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 
@@ -1396,9 +1397,9 @@ private:
     bool                                  installed{false};
 };
 
-template<size_t N>
-Array<Moer::byte> OwnedBytes(const std::array<uint32, N>& _values) {
-    Array<Moer::byte> bytes(sizeof(uint32) * N);
+template<typename T, size_t N>
+Array<Moer::byte> OwnedBytes(const std::array<T, N>& _values) {
+    Array<Moer::byte> bytes(sizeof(T) * N);
     std::memcpy(bytes.data(), _values.data(), bytes.size());
     return bytes;
 }
@@ -1702,6 +1703,174 @@ void RunCompiledSubrangeSubmission(EQueueType queue) {
     );
 }
 
+void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
+    using namespace Moer::Render::Raster;
+    auto& device = RenderDevice::Get();
+    constexpr uint32 width = 16;
+    constexpr uint32 height = 16;
+    auto             run    = [&](ERHIResourceStateOwnership ownership) {
+        TonemappingPass pass(device, manager, PF_R32G32B32A32_SFLOAT);
+        auto            input = device.CreateTexture(
+            "tonemap_test_input",
+            Extent3D(width, height, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+        );
+        auto output = device.CreateTexture(
+            "tonemap_test_output",
+            Extent3D(width, height, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+        );
+        std::array<float4, width * height> pixels{};
+        pixels.fill(float4(0.25f, 0.5f, 0.75f, 1.0f));
+        TonemappingPass::RecordParameters params{};
+        params.input                 = {input, 0, {}};
+        params.output                = {output, 0, {}};
+        params.histogram             = pass.GetHistogramBuffer();
+        params.exposure              = pass.GetExposureBuffer();
+        params.histogram_groups      = uint3(1, 1, 1);
+        params.shader.resolution     = uint2(width, height);
+        params.shader.resolution_inv = float2(1.0f / width, 1.0f / height);
+        params.shader.exposure_ev    = 1.0f;
+        auto& ae                     = params.shader.ae;
+        ae.enabled                   = 1;
+        ae.log2lum_to01_scale        = 1.0f / 16.0f;
+        ae.log2lum_to01_bias         = 0.5f;
+        ae.log2lum_to01_scale_inv    = 16.0f;
+        ae.log2lum_to01_bias_inv     = -8.0f;
+        ae.histogram_low_percentile  = 0.1f;
+        ae.histogram_high_percentile = 0.9f;
+        ae.min_adapted_luminance     = 0.001f;
+        ae.max_adapted_luminance     = 64.0f;
+        ae.eye_adaptation_speed_up   = 1.0f;
+        ae.eye_adaptation_speed_down = 1.0f;
+        ae.frame_time                = 0.1f;
+        ae.diff_log2_threshold       = 0.01f;
+
+        RenderGraph                     graph("CompiledTonemapping");
+        TonemappingPass::GraphResources resources{
+                           .input     = graph.ImportTexture("Input", input, {}),
+                           .histogram = graph.ImportBuffer(
+                "Histogram", params.histogram, {.byte_size = params.histogram->GetByteSize()}
+            ),
+                           .exposure = graph.ImportBuffer(
+                "Exposure", params.exposure, {.byte_size = params.exposure->GetByteSize()}
+            ),
+                           .tonemapping_output = graph.ImportTexture("Output", output, {}),
+        };
+        for (auto texture : {resources.input, resources.tonemapping_output}) {
+            graph.SetInitialState(
+                texture,
+                RenderGraph::TextureState::Undefined,
+                RenderGraph::QueueRole::None,
+                RenderGraph::AccessMode::None
+            );
+        }
+        for (auto buffer : {resources.histogram, resources.exposure}) {
+            graph.SetInitialState(
+                buffer,
+                RenderGraph::BufferState::Undefined,
+                RenderGraph::QueueRole::None,
+                RenderGraph::AccessMode::None
+            );
+        }
+        graph.AddRecordPass(
+            "Upload",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                    .Write(resources.input, RenderGraph::TextureState::TransferDestination)
+                    .Write(resources.exposure, RenderGraph::BufferState::TransferDestination);
+            },
+            [=](CommandList& commands) {
+                commands.CopyFrom(OwnedBytes(pixels), input->GetView());
+                commands.CopyFrom(OwnedBytes(std::array<float, 1>{1.0f}), params.exposure->GetView());
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        auto prepared = graph.AddSetupPass("Prepare", params, [](const auto& parameters) {
+            return parameters;
+        });
+        pass.AddRecordPasses(graph, resources, prepared);
+        ReadbackFuture output_readback, histogram_readback, exposure_readback;
+        graph.AddRecordPass(
+            "Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                    .Read(resources.tonemapping_output, RenderGraph::TextureState::TransferSource)
+                    .Read(resources.histogram, RenderGraph::BufferState::TransferSource)
+                    .Read(resources.exposure, RenderGraph::BufferState::TransferSource)
+                    .SideEffect();
+            },
+            [&](CommandList& commands) {
+                output_readback    = commands.Readback(output->GetView());
+                histogram_readback = commands.Readback(params.histogram->GetView());
+                exposure_readback  = commands.Readback(params.exposure->GetView());
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        graph.Export(
+            resources.input,
+            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        graph.Export(
+            resources.tonemapping_output,
+            RenderGraph::TextureState::TransferSource,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        for (auto buffer : {resources.histogram, resources.exposure}) {
+            graph.Export(
+                buffer,
+                RenderGraph::BufferState::TransferSource,
+                RenderGraph::QueueRole::Graphics,
+                RenderGraph::AccessMode::Read
+            );
+        }
+        if (!graph.Compile() ||
+            !graph.ExecuteFrontendRecordingPlan(
+                {},
+                {},
+                parallel,
+                {},
+                RenderGraph::ActiveRecordingOptions{.enabled = true, .state_ownership = ownership}
+            )) {
+            throw std::runtime_error("tonemapping graph failed: " + graph.GetCompileError());
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        const auto histogram = histogram_readback.Get().CopyAs<uint32>();
+        const auto exposure  = exposure_readback.Get().CopyAs<float>();
+        auto       result    = output_readback.Get().CopyAs<float>();
+        uint64     sum       = 0;
+        if (histogram) {
+            for (const auto count : *histogram) {
+                sum += count;
+            }
+        }
+        if (sum != width * height * TONEMAPPING_HISTOGRAM_POINT_FRAC_MULTIPLIER || !exposure ||
+            exposure->size() != 1 || !std::isfinite(exposure->front()) || exposure->front() <= 0 || !result ||
+            result->size() != width * height * 4) {
+            throw std::runtime_error("tonemapping histogram/exposure/output readback is invalid");
+        }
+        result->push_back(exposure->front());
+        return *result;
+    };
+    const auto reference = run(ERHIResourceStateOwnership::Explicit);
+    const auto compiled  = run(ERHIResourceStateOwnership::Compiled);
+    if (reference.size() != compiled.size()) {
+        throw std::runtime_error("compiled tonemapping output size mismatch");
+    }
+    for (size_t i = 0; i < reference.size(); ++i) {
+        if (!std::isfinite(compiled[i]) || std::abs(reference[i] - compiled[i]) > 0.00001f) {
+            throw std::runtime_error("compiled tonemapping differs from the tracked reference");
+        }
+    }
+    LOG_INFO("[TESTCASE][PASS] name=CompiledTonemapping stages=4 histogram=verified exposure=verified "
+             "image=matched");
+}
+
 void RunActiveRdgExplicitBarrierReadback(
     bool                       _parallel,
     ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Explicit
@@ -1710,10 +1879,8 @@ void RunActiveRdgExplicitBarrierReadback(
     const EBufferUsageFlags usage     = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
     constexpr uint64_t      byte_size = sizeof(uint32) * kElementCount;
 
-    BufferRef source =
-        device.CreateBuffer<uint32>("active_rdg_source", kElementCount, usage);
-    BufferRef destination =
-        device.CreateBuffer<uint32>("active_rdg_destination", kElementCount, usage);
+    BufferRef source      = device.CreateBuffer<uint32>("active_rdg_source", kElementCount, usage);
+    BufferRef destination = device.CreateBuffer<uint32>("active_rdg_destination", kElementCount, usage);
 
     std::array<uint32, kElementCount> values{};
     std::array<uint32, kElementCount> readback{};
@@ -16138,6 +16305,11 @@ int main(int argc, const char** argv) {
             RunCompiledSubrangeSubmission(EQueueType::Graphics);
             RunCompiledSubrangeSubmission(EQueueType::Copy);
             RunActiveRdgExplicitBarrierReadback(parallel, ERHIResourceStateOwnership::Compiled);
+            ShaderManager& manager = ShaderManager::Get();
+            shader_manager_initialized = true;
+            RunCompiledTonemapping(manager, parallel);
+            ShaderManager::ShutDown();
+            shader_manager_initialized = false;
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();
