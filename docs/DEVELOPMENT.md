@@ -318,6 +318,11 @@ Raster、Raytracing、UI、场景上传、环境贴图处理和导出读回都�
 这放弃初始场景上传的独立 Copy 重叠。独立运行时贴图加载仍由一张 RDG 图执行
 Copy → Graphics 交接，跨队列依赖由编译结果生成。
 
+NRD 的公共纹理依赖也由图声明：RELAX 读取 motion，REBLUR 还可能写回 motion，因此后者
+声明为 `ReadWrite/UnorderedAccess`。NRD/NRI 负责 pass 内部临时纹理及多次 dispatch 的同步，
+并依据实际结束状态将公共纹理恢复到声明状态，再交回 RDG；插件不再访问后端资源 tracker。
+其串行 native 录制约束来自 NRI 的可变 descriptor 和 command-buffer 缓存，与资源依赖分析无关。
+
 低层 RHI 的 legacy recorder 暂留作兼容和对照测试，不属于渲染器执行分支。
 验证完整运行路径时可设置 `MOER_VULKAN_REQUIRE_COMPILED=1`：任何包含命令的非 compiled
 提交都会被拒绝。新增入口应补充资源声明或后端私有协议，不能通过关闭此检查掩盖遗漏。

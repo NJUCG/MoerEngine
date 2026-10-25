@@ -174,11 +174,6 @@ private:
         auto desc_key = uint64(vk_tex->GetHandle());
         if (tex_barrier_desc_map.contains(desc_key)) {
             auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
-            if (_index == EResourceSlot::MOTION_VECTOR) {
-                // The 'nri::TextureBarrierDesc.after' of motion vector has been trasitioned to GENERAL by NRD REBLUR Denoisers, so we need to reset it
-                tex_barrier_desc.after.access = nri::AccessBits::SHADER_RESOURCE;
-                tex_barrier_desc.after.layout = nri::Layout::SHADER_RESOURCE;
-            }
             nrd::Integration_SetResource(_user_pool, ResourceSlot(_index), &tex_barrier_desc);
         } else {
             auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
@@ -351,6 +346,23 @@ private:
     NRDInterface::PreparedFrameRef   frame;
     Array<ResourceUsage>             resource_usages{};
 
+    nri::AccessLayoutStage PublicState(NRDInterface::EResourceSlot slot) const {
+        const bool writable =
+            slot >= NRDInterface::EResourceSlot::OUT_DIFFUSE ||
+            (slot == NRDInterface::EResourceSlot::MOTION_VECTOR && IsReblurDenoiser(frame->GetDenoiser()));
+        return writable ?
+                   nri::AccessLayoutStage{
+                       nri::AccessBits::SHADER_RESOURCE_STORAGE,
+                       nri::Layout::SHADER_RESOURCE_STORAGE,
+                       nri::StageBits::COMPUTE_SHADER
+                   } :
+                   nri::AccessLayoutStage{
+                       nri::AccessBits::SHADER_RESOURCE,
+                       nri::Layout::SHADER_RESOURCE,
+                       nri::StageBits::COMPUTE_SHADER
+                   };
+    }
+
 public:
     VkNrdDenoiseCmd(
         SharedPtr<VkNRDInterface>      _nrd,
@@ -368,7 +380,7 @@ public:
                 continue;
             }
 
-            const bool is_input = slot < NRDInterface::EResourceSlot::OUT_DIFFUSE;
+            const bool is_input = PublicState(slot).layout == nri::Layout::SHADER_RESOURCE;
             resource_usages.emplace_back(
                 texture,
                 VulkanArgumentInfo{
@@ -417,6 +429,19 @@ public:
                 nrd_interface->SetOutput(user_pool, slot, texture);
             }
         }
+        // RDG establishes these entry states on every invocation. Cached NRI
+        // wrappers must not carry the previous denoiser's public boundary into
+        // a new graph (RELAX reads motion; REBLUR may also write it).
+        for (uint8 index = 0; index < NRDInterface::resource_slot_count; ++index) {
+            const auto        slot    = static_cast<NRDInterface::EResourceSlot>(index);
+            const TextureRef& texture = frame->GetResource(slot);
+            if (texture) {
+                auto& state =
+                    nrd_interface->texture_barrier_descs[index].at(uint64(ResourceCast(texture)->GetHandle())
+                    );
+                state.before = state.after = PublicState(slot);
+            }
+        }
         //=======================================================================================================
         // RENDER - DENOISE
         //=======================================================================================================
@@ -447,86 +472,28 @@ public:
             user_pool
         );
 
-        // Old UserPool-based NRD leaves REBLUR motion in GENERAL. Restore the
-        // graph-declared Sampled state with a real native barrier; changing
-        // only VulkanResourceTracker would make the next explicit RDG barrier name the
-        // wrong oldLayout.
-        if (IsReblurDenoiser(denoiser)) {
-            const TextureRef& motion = frame->GetResource(
-                NRDInterface::EResourceSlot::MOTION_VECTOR
-            );
-            auto* vk_motion = ResourceCast(motion);
-            VkImageMemoryBarrier2 restore_motion{
-                VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2
-            };
-            restore_motion.srcStageMask =
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            restore_motion.srcAccessMask =
-                VK_ACCESS_2_SHADER_READ_BIT |
-                VK_ACCESS_2_SHADER_WRITE_BIT;
-            restore_motion.dstStageMask =
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            restore_motion.dstAccessMask =
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            restore_motion.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            restore_motion.newLayout =
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            restore_motion.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            restore_motion.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            restore_motion.image = vk_motion->GetHandle();
-            restore_motion.subresourceRange = VkImageSubresourceRange{
-                .aspectMask =
-                    VulkanEnumTranslator::METoVKImageAspectFlags(
-                        vk_motion->GetAspectFlags()
-                    ),
-                .baseMipLevel   = 0,
-                .levelCount     = vk_motion->GetNumMips(),
-                .baseArrayLayer = 0,
-                .layerCount     = vk_motion->GetNumArray(),
-            };
-            const VkDependencyInfo dependency{
-                .sType                   =
-                    VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                .pNext                   = nullptr,
-                .dependencyFlags         = 0,
-                .memoryBarrierCount      = 0,
-                .pMemoryBarriers         = nullptr,
-                .bufferMemoryBarrierCount = 0,
-                .pBufferMemoryBarriers   = nullptr,
-                .imageMemoryBarrierCount = 1,
-                .pImageMemoryBarriers    = &restore_motion,
-            };
-            vkCmdPipelineBarrier2(_context.cmd_list, &dependency);
-        }
-
-        auto* vk_tracker = static_cast<VulkanResourceTracker*>(_context.user_data);
-        for (uint8 index = 0;
-             index < NRDInterface::resource_slot_count;
-             ++index) {
-            const auto slot =
-                static_cast<NRDInterface::EResourceSlot>(index);
+        // NRD owns all internal transitions. Restore every public resource to
+        // the declared pass state using NRD's actual final state, including
+        // configurations which skip REBLUR temporal stabilization.
+        std::array<nri::TextureBarrierDesc, NRDInterface::resource_slot_count> restores{};
+        nri::BarrierGroupDesc                                                  barriers{};
+        barriers.textures = restores.data();
+        for (uint8 index = 0; index < NRDInterface::resource_slot_count; ++index) {
+            const auto        slot    = static_cast<NRDInterface::EResourceSlot>(index);
             const TextureRef& texture = frame->GetResource(slot);
             if (!texture) {
                 continue;
             }
-            auto* vk_texture = ResourceCast(texture);
-            if (slot < NRDInterface::EResourceSlot::OUT_DIFFUSE) {
-                vk_tracker->AdoptExternalState(
-                    vk_texture,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                );
-            } else {
-                vk_tracker->AdoptExternalState(
-                    vk_texture,
-                    static_cast<VkAccessFlagBits2>(
-                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-                    ),
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                );
+            auto& state =
+                nrd_interface->texture_barrier_descs[index].at(uint64(ResourceCast(texture)->GetHandle()));
+            const auto declared = PublicState(slot);
+            if (state.after.access != declared.access || state.after.layout != declared.layout ||
+                state.after.stages != declared.stages) {
+                restores[barriers.textureNum++] = nri::TextureBarrierFromState(state, declared);
             }
+        }
+        if (barriers.textureNum != 0) {
+            nri.rhi.CmdBarrier(*nri.cmd_list, barriers);
         }
         // IMPORTANT: NRD integration binds own descriptor pool, don't forget to re-bind back your pool (heap)
     }
@@ -549,7 +516,7 @@ void VkNRDInterface::Denoise(
     }
     // The external NRD/NRI integration owns mutable descriptor and native
     // command-buffer wrapper caches. Make SerialControl a backend invariant
-    // for every caller, including the linear warm-up path; the graph policy is
+    // for every caller; the graph policy is
     // retained as a declarative compiler contract.
     _cmd_list.SetTranslateExecutionClass(
         ERHITranslateExecutionClass::SerialControl

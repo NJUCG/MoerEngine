@@ -39,7 +39,6 @@ public:
         VkPhysicalDevice gpu;
         VkDevice         device;
         VkCommandBuffer  cmd_list;
-        void*            user_data;
     };
 
 public:

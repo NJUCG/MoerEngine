@@ -153,10 +153,6 @@ bool NrdDenoisePass::AddPasses(
                 )
                 .Read(graph_resources.frame_setup.ready)
                 .Read(
-                    graph_resources.motion,
-                    RenderGraph::TextureState::Sampled
-                )
-                .Read(
                     graph_resources.normal_roughness,
                     RenderGraph::TextureState::Sampled
                 )
@@ -184,6 +180,14 @@ bool NrdDenoisePass::AddPasses(
                 .SideEffect()
                 .SerialRecord()
                 .TranslateSerialControl();
+            // REBLUR temporal stabilization writes adjusted motion vectors.
+            // Its private transitions remain inside NRD, but the write hazard
+            // must be visible to the graph and to subsequent motion readers.
+            if (Ext::IsReblurDenoiser(command.frame->GetDenoiser())) {
+                builder.ReadWrite(graph_resources.motion, RenderGraph::TextureState::UnorderedAccess);
+            } else {
+                builder.Read(graph_resources.motion, RenderGraph::TextureState::Sampled);
+            }
         },
         [command](CommandList& cmd_list) {
             ScopedGpuMarker marker(

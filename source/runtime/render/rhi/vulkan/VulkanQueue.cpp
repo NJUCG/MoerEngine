@@ -3489,11 +3489,7 @@ public:
 
     void Visit(const VkCustomDispatchCmd& _cmd) {
         const VkCustomDispatchCmd::VkDispatchContext context = {
-            m_device->GetInstance(),
-            m_device->GetGpu(),
-            m_device->GetDevice(),
-            cmd_list.GetHandle(),
-            &this->tracker
+            m_device->GetInstance(), m_device->GetGpu(), m_device->GetDevice(), cmd_list.GetHandle()
         };
         _cmd.Execute(context);
     }
