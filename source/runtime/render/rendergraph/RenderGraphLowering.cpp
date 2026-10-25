@@ -809,16 +809,9 @@ bool RenderGraphLowering::Lower(
         }
         if (state.state.kind == ResourceKind::Texture &&
             state.state.texture == TextureState::PresentationSource) {
-            if (initial) {
-                error =
-                    "PresentationSource is an export-boundary-only state on resource '" +
-                    resource.name + "'";
-                return false;
-            }
             if (state.queue != RenderGraph::QueueRole::Graphics) {
-                error =
-                    "PresentationSource export requires the Graphics queue on resource '" +
-                    resource.name + "'";
+                error = "PresentationSource boundary requires the Graphics queue on resource '" +
+                        resource.name + "'";
                 return false;
             }
         }

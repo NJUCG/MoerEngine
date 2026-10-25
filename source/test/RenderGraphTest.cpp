@@ -524,6 +524,13 @@ void TestImportedAliasIdentityAndDump(TestSuite& suite) {
         texture == texture_view, test_name, "aliases of one physical identity must return one handle"
     );
 
+    const auto repeated = graph.ImportTexture(
+        "SceneColor", &physical_resource, RenderGraph::TextureDesc{.mip_count = 4, .layer_count = 1}
+    );
+    suite.Check(
+        texture == repeated, test_name, "repeated imports of the same named object must be idempotent"
+    );
+
     graph.AddPass(
         "ReadSceneColor",
         [texture_view](RenderGraph::PassBuilder& builder) {
@@ -1580,7 +1587,7 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
         );
     }
 
-    RenderGraph initial_graph("PresentationSourceImportRejected");
+    RenderGraph initial_graph("PresentationSourceReimport");
     int         initial_physical = 0;
     const auto  initial_texture = initial_graph.ImportTexture(
         "Color",
@@ -1614,13 +1621,9 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
         RenderGraph::AccessMode::Read
     );
     suite.Check(
-        !initial_graph.Compile() &&
-            Contains(
-                initial_graph.GetCompileError(),
-                "export-boundary-only"
-            ),
+        initial_graph.Compile(),
         test_name,
-        "an import boundary accepted the export-only PresentationSource state"
+        "a following graph must import the previous presentation-copy read boundary"
     );
 
     RenderGraph write_graph("PresentationSourceWriteRejected");

@@ -467,29 +467,19 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
         RenderGraph::AccessMode::Read
     );
 
+    suite.Check(rejected_graph.Compile(), test_name, rejected_graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan imported_plan{};
+    std::string                      imported_error{};
     suite.Check(
-        !rejected_graph.Compile() &&
-            Contains(
-                rejected_graph.GetCompileError(),
-                "export-boundary-only"
-            ),
-        test_name,
-        "PresentationSource must be rejected as an import boundary before lowering"
+        RenderGraphLowering::Lower(rejected_graph, imported_plan, imported_error), test_name, imported_error
     );
-    RenderGraphLowering::LoweredPlan rejected_lowered{};
-    std::string rejected_error{};
     suite.Check(
-        !RenderGraphLowering::Lower(
-            rejected_graph,
-            rejected_lowered,
-            rejected_error
-        ) &&
-            rejected_lowered.prologue.empty() &&
-            rejected_lowered.passes.empty() &&
-            rejected_lowered.queue_syncs.empty() &&
-            Contains(rejected_error, "compiled before lowering"),
+        !imported_plan.prologue.empty() &&
+            imported_plan.prologue.front().source.stages == ERHIPipelineStageFlags::PS_TRANSFER &&
+            imported_plan.prologue.front().source.access == ERHIAccessFlags::TRANSFER_READ &&
+            imported_plan.prologue.front().source.layout == ETextureLayout::TEXTURE_LAYOUT_COMMON,
         test_name,
-        "a graph with a PresentationSource import boundary reached lowering"
+        "presentation reimport must wait for the preceding copy read in GENERAL"
     );
 }
 

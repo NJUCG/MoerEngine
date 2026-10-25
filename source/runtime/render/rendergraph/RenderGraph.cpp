@@ -1307,16 +1307,21 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
         return {};
     }
 
-    for (uint32_t index = 0; index < resources.size(); ++index) {
-        auto& resource = resources[index];
-        if (resource.name == resource_name ||
-            std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) !=
-                resource.aliases.end()) {
+    // Repeated imports of one named physical object are idempotent. Check all
+    // names first so an early physical alias cannot hide a later name collision.
+    for (const auto& resource : resources) {
+        const bool same_name = resource.name == resource_name ||
+                               std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) !=
+                                   resource.aliases.end();
+        if (same_name && (!physical_identity || resource.physical_identity != physical_identity)) {
             declaration_errors.emplace_back(
                 "duplicate resource or alias name: " + std::string(resource_name)
             );
             return {};
         }
+    }
+    for (uint32_t index = 0; index < resources.size(); ++index) {
+        auto& resource = resources[index];
         if (physical_identity == nullptr || resource.physical_identity != physical_identity) {
             continue;
         }
@@ -1354,7 +1359,11 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
             resource.buffer_desc = *buffer_desc;
             resource.typed_desc  = true;
         }
-        resource.aliases.emplace_back(resource_name);
+        if (resource.name != resource_name &&
+            std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) ==
+                resource.aliases.end()) {
+            resource.aliases.emplace_back(resource_name);
+        }
         return ResourceHandle{index, graph_id};
     }
 

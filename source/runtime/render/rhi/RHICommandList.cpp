@@ -656,8 +656,7 @@ void CommandList::AppendRecorded(CommandList&& _source) {
             "CommandList cannot append its own recording generation"
         );
     }
-    if (managed_recording_lease_count != 0 ||
-        _source.managed_recording_lease_count != 0) {
+    if (_source.managed_recording_lease_count != 0) {
         throw std::logic_error(
             "CommandList merge is forbidden while graph-managed recording is active"
         );
@@ -677,8 +676,9 @@ void CommandList::AppendRecorded(CommandList&& _source) {
             "frontend CommandList merge requires every barrier batch to be closed"
         );
     }
-    if (!scope_stack.empty() || !_source.scope_stack.empty() ||
-        HasOpenQueries() || _source.HasOpenQueries()) {
+    // A complete child stream can be nested inside the destination's scope.
+    // Only the source is sealed; the parent's recording lease stays intact.
+    if (!_source.scope_stack.empty() || _source.HasOpenQueries()) {
         throw std::logic_error(
             "frontend CommandList merge requires closed marker and query scopes"
         );
@@ -727,6 +727,10 @@ void CommandList::AppendRecorded(CommandList&& _source) {
                     ERHITranslateExecutionClass::SerialControl ?
             ERHITranslateExecutionClass::SerialControl :
             ERHITranslateExecutionClass::Parallel;
+
+    if (managed_recording_lease_count != 0 && merged_translate_class != translate_execution_class) {
+        throw std::logic_error("a nested stream cannot change its parent's translation class");
+    }
 
     // Submit() is only a frontend sealing operation. It rotates the source's
     // cancellation generation and packages every side payload without

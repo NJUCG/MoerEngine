@@ -1870,10 +1870,66 @@ void TestMainThreadPhysicalPassRequiresAndUsesCallerList(TestSuite& suite) {
     }
 }
 
+void TestCompiledChildGraphPreservesParentLeaseAndScope(TestSuite& suite) {
+    constexpr std::string_view test_name = "compiled child graph preserves parent lease and scope";
+    RenderGraph                parent("Parent");
+    parent.AddRecordPass(
+        "ParentPass",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().TranslateSerialControl();
+        },
+        [&](CommandList& commands) {
+            const auto generation = commands.GetSealGeneration();
+            commands.PushScope("ParentScope");
+            RenderGraph child("Child");
+            child.AddRecordPass(
+                "ChildPass",
+                [](RenderGraph::PassBuilder& builder) {
+                    builder.SideEffect();
+                },
+                [](CommandList& list) {
+                    list.AddCustomCommand(MakeUnique<ProbeCommand>(707), "ChildBody");
+                }
+            );
+            if (!child.Compile() || !child.RecordAndMergeFrontendCommands(commands, false)) {
+                throw std::runtime_error(child.GetCompileError());
+            }
+            suite.Check(
+                commands.GetSealGeneration() == generation, test_name, "child append must not seal its parent"
+            );
+            commands.PopScope();
+        }
+    );
+    Moer::Array<RHIRecordingSource> published;
+    suite.Check(parent.Compile(), test_name, parent.GetCompileError());
+    const bool success = parent.ExecuteFrontendRecordingPlan(
+        {},
+        {},
+        false,
+        [&](Moer::Array<RHIRecordingSource>&& sources) {
+            published = std::move(sources);
+        },
+        {.enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled}
+    );
+    suite.Check(success, test_name, parent.GetCompileError());
+    if (!success || published.size() != 1) {
+        return;
+    }
+    auto submission = published.front().command_list->Submit();
+    suite.Check(
+        submission.resource_state_ownership == ERHIResourceStateOwnership::Compiled &&
+            submission.cmds.size() == 3 && AsProbe(submission.cmds[1]) &&
+            AsProbe(submission.cmds[1])->Marker() == 707,
+        test_name,
+        "child commands must stay nested in the parent's complete compiled stream"
+    );
+}
+
 } // namespace
 
 int main() {
     TestSuite suite;
+    TestCompiledChildGraphPreservesParentLeaseAndScope(suite);
     TestRecordPassMaterializesExplicitBeforeBodyAfter(suite);
     TestRecordPassMaterializesExplicitBeforeBodyAfter(suite, true);
     TestSameStateSecondReadMaterializesStateSeed(suite);
