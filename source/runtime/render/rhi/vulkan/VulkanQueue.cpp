@@ -3533,7 +3533,7 @@ public:
 // Validate before native recording or consuming command payloads. Commands
 // with backend-private build/update protocols migrate separately; never fall
 // back to inferred barriers for a partially compiled submission.
-bool SupportsCompiledCommands(const CmdSubmit& submit) {
+bool SupportsCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
     for (const auto& command : submit.cmds) {
         if (!command) {
             return false;
@@ -3554,6 +3554,13 @@ bool SupportsCompiledCommands(const CmdSubmit& submit) {
             case Command::EType::Query:
             case Command::EType::Scope:
                 break;
+            case Command::EType::UpdateBindlessArray:
+                // The update command and its private storage currently belong
+                // to Graphics. A copy queue cannot execute the shuffle shader.
+                if (queue != EQueueType::Graphics) {
+                    return false;
+                }
+                break;
             case Command::EType::Barrier:
                 if (!static_cast<const BarrierCmd&>(*command).HasExplicitBarriers()) {
                     return false;
@@ -3564,6 +3571,64 @@ bool SupportsCompiledCommands(const CmdSubmit& submit) {
         }
     }
     return true;
+}
+
+void RecordCompiledBindlessUpdate(
+    VulkanDevice&                 device,
+    VulkanCommandList&            native,
+    VkCmdVisitor&                 visitor,
+    const UpdateBindlessArrayCmd& command
+) {
+    auto*                      table = static_cast<VulkanBindlessArray*>(command.Handle());
+    VulkanResolvedBarrierBatch before, after;
+    auto protect = [&](VulkanBuffer* buffer, uint64 offset, uint64 size, VkAccessFlags2 read_access) {
+        VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        barrier.srcStageMask        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.srcAccessMask       = read_access | VK_ACCESS_2_SHADER_WRITE_BIT;
+        barrier.dstStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrier.dstAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer              = buffer->GetHandle();
+        barrier.offset              = offset;
+        barrier.size                = size;
+        before.buffer_barriers.push_back(barrier);
+        barrier.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        barrier.dstStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.dstAccessMask = read_access;
+        after.buffer_barriers.push_back(barrier);
+    };
+    // These are table-storage dependencies, not dependencies of the resources
+    // named by the table. RDG owns target access declarations and publication
+    // order (a Write/Read token suffices on Graphics). Protect only this table's
+    // ranges, including when several tables share one resource heap.
+    if (command.HasUpdates()) {
+        auto* indices = table->GetIndexBuffer();
+        protect(indices, 0, indices->GetByteSize(), VK_ACCESS_2_SHADER_READ_BIT);
+    }
+    const auto& heap = device.GetGlobalDescriptorHeap();
+    if (command.HasBufferUpdates()) {
+        protect(
+            table->GetBufferDescriptorBuffer(),
+            table->buffer_descriptors_byte_offset,
+            table->handles.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+            table->GetDescriptorReadAccess()
+        );
+    }
+    if (command.HasTextureUpdates()) {
+        protect(
+            table->GetTextureSamplerDescriptorBuffer(),
+            table->texture_offset_in_buffer,
+            table->handles.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+            table->GetDescriptorReadAccess()
+        );
+    }
+    before.Record(native);
+    // Keep the existing staging, stale-batch rejection, completion token and
+    // slot retirement protocol. Capture barriers before the visitor moves data.
+    visitor.VisitCmd(&command);
+    after.Record(native);
 }
 
 void RecordCompiledCommands(
@@ -3580,6 +3645,11 @@ void RecordCompiledCommands(
     );
     for (const auto& command : submit.cmds) {
         if (suppress_timestamp_queries && command->Type() == Command::EType::Query) {
+            continue;
+        }
+        if (command->Type() == Command::EType::UpdateBindlessArray) {
+            RecordCompiledBindlessUpdate(device, context.GetCommandList(), visitor,
+                                        static_cast<const UpdateBindlessArrayCmd&>(*command));
             continue;
         }
         // Only private staging allocations and explicit barriers are prepared.
@@ -3616,7 +3686,7 @@ void RecordVulkanCopyCommands(
     bool                  suppress_timestamp_queries
 ) {
     if (submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled) {
-        if (!SupportsCompiledCommands(submit)) {
+        if (!SupportsCompiledCommands(submit, EQueueType::Copy)) {
             throw std::invalid_argument("compiled Copy submission contains an unsupported command");
         }
         auto&        native  = vk_command_context.GetCommandList();
@@ -7519,7 +7589,7 @@ void VkCommandQueue::ExecuteNow(
         .unlock_bdls_array       = &UnlockBindlessArray
     };
     const bool compiled_commands = _submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled;
-    if (compiled_commands && !SupportsCompiledCommands(_submit)) {
+    if (compiled_commands && !SupportsCompiledCommands(_submit, queue.GetType())) {
         reject_before_native_record(
             {EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT},
             "compiled submission contains an unsupported command or inferred barrier"

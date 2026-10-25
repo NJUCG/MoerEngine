@@ -76,11 +76,13 @@ struct CompiledBindlessParameters {
     RGTextureAccess<RenderGraph::AccessMode::Read, RenderGraph::TextureState::Sampled>        texture;
     RGBufferAccess<RenderGraph::AccessMode::Write, RenderGraph::BufferState::UnorderedAccess> output;
     uint                                                                                      index = 0;
+    RGOptionalAccess<RGTokenAccess<RenderGraph::AccessMode::Read>> publication;
 
     void DeclareRGAccess(RGParameterAccessCollector& accesses) const {
         accesses.Add(input);
         accesses.Add(texture);
         accesses.Add(output);
+        accesses.Add(publication);
     }
 };
 
@@ -1727,7 +1729,7 @@ void RunCompiledSubrangeSubmission(EQueueType queue) {
     );
 }
 
-void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel) {
+void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel, bool publish_in_graph = false) {
     auto& device = RenderDevice::Get();
     auto pipeline = manager.Compute<CompiledBindlessPipeline>("test/ShaderBindlessAddress.hlsl", "ComputeMain");
     const auto buffer_usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
@@ -1745,18 +1747,32 @@ void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel) {
     if (table->AllocateTexture(texture->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)) != index + 1) {
         throw std::runtime_error("bindless address fixture requires consecutive buffer/texture handles");
     }
-    // Publish only the table using the existing update protocol. It stays
-    // immutable through graph completion; target contents are produced below,
-    // so their upload-to-shader dependencies must come from RDG declarations.
-    CommandList publish;
-    publish.UpdateBindlessArray(table);
-    RHIExecutor::Get().Submit(EQueueType::Graphics, publish.Submit(), ERHIExecSubmitFlags::FlushGPU);
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!publish_in_graph) {
+        // Stable-table case: publication is complete before entering the graph.
+        CommandList publish;
+        publish.UpdateBindlessArray(table);
+        RHIExecutor::Get().Submit(EQueueType::Graphics, publish.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    }
 
     RenderGraph graph("CompiledKnownBindlessAccess");
     const auto  input_handle   = graph.ImportBuffer("Input", input, {.byte_size = input->GetByteSize()});
     const auto  output_handle  = graph.ImportBuffer("Output", output, {.byte_size = output->GetByteSize()});
     const auto  texture_handle = graph.ImportTexture("Texture", texture, {});
+    CompiledBindlessParameters parameters{input_handle, texture_handle, output_handle, index};
+    if (publish_in_graph) {
+        const auto publication = graph.ImportToken("BindlessPublication", table.Get());
+        parameters.publication = RGTokenAccess<RenderGraph::AccessMode::Read>{publication};
+        graph.AddRecordPass(
+            "PublishBindless",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                    .Write(publication).TranslateSerialControl();
+            },
+            [=](CommandList& commands) { commands.UpdateBindlessArray(table); },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+    }
     for (auto handle : {input_handle, output_handle}) {
         graph.SetInitialState(
             handle,
@@ -1786,7 +1802,7 @@ void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel) {
     );
     graph.AddRecordPass(
         "ReadKnownBindlessTargets",
-        CompiledBindlessParameters{input_handle, texture_handle, output_handle, index},
+        parameters,
         [](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute);
         },
@@ -1844,7 +1860,7 @@ void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel) {
         );
     }
     LOG_INFO("[TESTCASE][PASS] name=CompiledKnownBindlessAccess targets=buffer,texture "
-             "table=published-readonly result=84");
+             "publication={} result=84", publish_in_graph ? "graph-token" : "completed-before-graph");
 }
 
 void RunCompiledTonemapping(ShaderManager& manager, bool parallel) {
@@ -16453,6 +16469,7 @@ int main(int argc, const char** argv) {
             shader_manager_initialized = true;
             RunCompiledTonemapping(manager, parallel);
             RunCompiledKnownBindlessAccess(manager, parallel);
+            RunCompiledKnownBindlessAccess(manager, parallel, true);
             ShaderManager::ShutDown();
             shader_manager_initialized = false;
             RenderDevice::Dispose();
