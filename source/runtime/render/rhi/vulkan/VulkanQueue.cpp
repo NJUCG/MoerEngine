@@ -1422,6 +1422,9 @@ struct VkCmdPreprocessor {
                         VK_QUEUE_FAMILY_IGNORED,
                     };
                     if (transfer.phase == EBarrierQueueTransferPhase::None) {
+                        if (transfer.external) {
+                            throw std::invalid_argument("Vulkan external ownership barrier requires a phase");
+                        }
                         return families;
                     }
                     if (transfer.phase != EBarrierQueueTransferPhase::Release &&
@@ -1429,6 +1432,23 @@ struct VkCmdPreprocessor {
                         throw std::invalid_argument(
                             "Vulkan ownership barrier carries an unknown phase"
                         );
+                    }
+                    if (transfer.external) {
+                        const bool release  = transfer.phase == EBarrierQueueTransferPhase::Release;
+                        const auto managed  = release ? transfer.src_queue : transfer.dst_queue;
+                        const auto external = release ? transfer.dst_queue : transfer.src_queue;
+                        if (managed != current_queue || external != EQueueType::Ignore) {
+                            throw std::invalid_argument("Vulkan external ownership barrier endpoint mismatch"
+                            );
+                        }
+                        const auto family = device.GetQueueFamilyIndex(managed);
+                        if (family == VK_QUEUE_FAMILY_IGNORED) {
+                            throw std::invalid_argument(
+                                "Vulkan external ownership barrier has no native queue"
+                            );
+                        }
+                        return release ? std::pair{family, uint32_t(VK_QUEUE_FAMILY_EXTERNAL)} :
+                                         std::pair{uint32_t(VK_QUEUE_FAMILY_EXTERNAL), family};
                     }
                     if ((transfer.src_queue != EQueueType::Graphics &&
                          transfer.src_queue != EQueueType::Compute &&

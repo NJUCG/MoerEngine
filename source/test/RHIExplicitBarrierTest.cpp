@@ -631,6 +631,62 @@ void ExpectRejectedWithoutMutation(
     );
 }
 
+void ExternalOwnershipRequiresCompiledSubmission() {
+    TestBuffer       resource(64);
+    const BufferView view(&resource, 0, 16, 4);
+    const auto       state = BarrierState::Buffer(
+        ERHIPipelineStageFlags::PS_ALL_COMMANDS, ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE
+    );
+    for (const auto transfer :
+         {BarrierQueueTransfer::ReleaseToExternal(EQueueType::Graphics),
+          BarrierQueueTransfer::AcquireFromExternal(EQueueType::Graphics)}) {
+        auto barrier           = BarrierCreateInfo::Transition(view, state, state);
+        barrier.queue_transfer = transfer;
+        CommandList legacy(EQueueType::Graphics);
+        ExpectInvalidArgument(
+            [&] {
+                legacy.Barriers({barrier});
+            },
+            "external transfer accepted legacy tracking"
+        );
+        Expect(legacy.Submit().cmds.empty(), "rejected external transfer partially recorded");
+
+        CommandList compiled(EQueueType::Graphics);
+        compiled.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        compiled.Barriers({barrier});
+        const auto submit = compiled.Submit();
+        Expect(
+            submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled,
+            "external transfer lost compiled ownership"
+        );
+        const auto& command = static_cast<const BarrierCmd&>(*submit.cmds.front());
+        Expect(
+            command.ExplicitBuffers().front().queue_transfer == transfer,
+            "external transfer lost its endpoint or phase"
+        );
+
+        CommandList wrong_queue(EQueueType::Copy);
+        wrong_queue.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        ExpectInvalidArgument(
+            [&] {
+                wrong_queue.Barriers({barrier});
+            },
+            "external transfer accepted wrong endpoint"
+        );
+        Expect(wrong_queue.Submit().cmds.empty(), "wrong external endpoint partially recorded");
+
+        barrier.queue_transfer.phase = EBarrierQueueTransferPhase::None;
+        CommandList no_phase(EQueueType::Graphics);
+        no_phase.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        ExpectInvalidArgument(
+            [&] {
+                no_phase.Barriers({barrier});
+            },
+            "external transfer accepted no phase"
+        );
+    }
+}
+
 void InvalidQueueTransferEndpointsFailWithoutMutation() {
     TestBuffer         buffer_resource(64);
     const BufferView   buffer(&buffer_resource, 0, 16, 4);
@@ -892,6 +948,7 @@ int main() {
         BackendTrackedPublicationMarkerPreservesLegacyOwnership();
         LocalExplicitPayloadAndOwnershipArePreserved();
         ReleaseAndAcquirePayloadsPreserveEndpointAffinity();
+        ExternalOwnershipRequiresCompiledSubmission();
         InvalidQueueTransferEndpointsFailWithoutMutation();
         InvalidResourceRangeFailsWithoutMutation();
         LegacyBarrierRemainsCompatible();

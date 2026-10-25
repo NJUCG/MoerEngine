@@ -817,6 +817,10 @@ struct BarrierQueueTransfer {
     EBarrierQueueTransferPhase phase{EBarrierQueueTransferPhase::None};
     EQueueType                 src_queue{EQueueType::Ignore};
     EQueueType                 dst_queue{EQueueType::Ignore};
+    // The unrecorded endpoint is an external API on the same physical device.
+    // Its resource allocation and semaphore protocol belong to the interop
+    // owner; Ignore alone never denotes an external endpoint.
+    bool external{false};
 
     [[nodiscard]] static constexpr BarrierQueueTransfer Release(
         EQueueType _src_queue,
@@ -838,6 +842,14 @@ struct BarrierQueueTransfer {
             .src_queue = _src_queue,
             .dst_queue = _dst_queue,
         };
+    }
+
+    [[nodiscard]] static constexpr BarrierQueueTransfer ReleaseToExternal(EQueueType queue) {
+        return {EBarrierQueueTransferPhase::Release, queue, EQueueType::Ignore, true};
+    }
+
+    [[nodiscard]] static constexpr BarrierQueueTransfer AcquireFromExternal(EQueueType queue) {
+        return {EBarrierQueueTransferPhase::Acquire, EQueueType::Ignore, queue, true};
     }
 
     friend bool operator==(const BarrierQueueTransfer&, const BarrierQueueTransfer&) = default;

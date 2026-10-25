@@ -1617,10 +1617,10 @@ void CommandList::Barriers(
         const auto& transfer = barrier.queue_transfer;
         switch (transfer.phase) {
             case EBarrierQueueTransferPhase::None:
-                if (!((transfer.src_queue == EQueueType::Ignore &&
-                       transfer.dst_queue == EQueueType::Ignore) ||
-                      (transfer.src_queue == queue_type &&
-                       transfer.dst_queue == queue_type))) {
+                if (transfer.external ||
+                    !((transfer.src_queue == EQueueType::Ignore && transfer.dst_queue == EQueueType::Ignore
+                      ) ||
+                      (transfer.src_queue == queue_type && transfer.dst_queue == queue_type))) {
                     throw std::invalid_argument(
                         "local explicit barrier endpoints must be ignored or match "
                         "the CommandList queue"
@@ -1629,6 +1629,19 @@ void CommandList::Barriers(
                 break;
             case EBarrierQueueTransferPhase::Release:
             case EBarrierQueueTransferPhase::Acquire:
+                if (transfer.external) {
+                    const bool release  = transfer.phase == EBarrierQueueTransferPhase::Release;
+                    const auto managed  = release ? transfer.src_queue : transfer.dst_queue;
+                    const auto external = release ? transfer.dst_queue : transfer.src_queue;
+                    if (resource_state_ownership != ERHIResourceStateOwnership::Compiled ||
+                        !is_supported_ownership_queue(managed) || managed != queue_type ||
+                        external != EQueueType::Ignore) {
+                        throw std::invalid_argument(
+                            "external ownership barrier requires a compiled list on its managed endpoint"
+                        );
+                    }
+                    break;
+                }
                 if (!is_supported_ownership_queue(transfer.src_queue) ||
                     !is_supported_ownership_queue(transfer.dst_queue) ||
                     transfer.src_queue == transfer.dst_queue) {
