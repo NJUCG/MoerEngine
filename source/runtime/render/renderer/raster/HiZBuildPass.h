@@ -92,40 +92,20 @@ public:
         return parameters;
     }
 
+    void RecordMip(CommandList& cmd_list, const RecordParameters& parameters, uint32 mip) {
+        const MipDispatch& dispatch = parameters.dispatches.at(mip);
+        HiZBuildParam param{};
+        param.src_size = dispatch.source_size;
+        param.dst_size = dispatch.destination_size;
+        param.is_mip0 = dispatch.is_mip0 ? 1u : 0u;
+        cmd_list.Compute(pipeline, param, dispatch.source, dispatch.destination)
+            .Dispatch(uint3((param.dst_size.x + 7) / 8, (param.dst_size.y + 7) / 8, 1), "Build Hi-Z");
+    }
+
     void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        if (parameters.IsEmpty()) {
-            return;
+        for (uint32 mip = 0; mip < parameters.dispatches.size(); ++mip) {
+            RecordMip(cmd_list, parameters, mip);
         }
-
-        // mip 0 复制深度，后续每次 dispatch 将当前层级的每个 2x2 区域归约到下一个 mip。
-        auto dispatch_build = [&](TextureView source_view,
-                                  TextureView destination_view,
-                                  const uint2 source_size,
-                                  const uint2 destination_size,
-                                  bool        is_mip0) {
-            HiZBuildParam param{};
-            param.src_size = source_size;
-            param.dst_size = destination_size;
-            param.is_mip0  = is_mip0 ? 1u : 0u;
-
-            cmd_list.Compute(pipeline, param, source_view, destination_view)
-                .Dispatch(
-                    uint3((destination_size.x + 7) / 8, (destination_size.y + 7) / 8, 1),
-                    "Build Hi-Z"
-                );
-        };
-
-        cmd_list.PushScopeWithTimeScope("Build Hi-Z");
-        for (const MipDispatch& dispatch : parameters.dispatches) {
-            dispatch_build(
-                dispatch.source,
-                dispatch.destination,
-                dispatch.source_size,
-                dispatch.destination_size,
-                dispatch.is_mip0
-            );
-        }
-        cmd_list.PopScopeWithTimeScope();
     }
 
     RenderGraph::PreparedPassHandle AddToGraph(

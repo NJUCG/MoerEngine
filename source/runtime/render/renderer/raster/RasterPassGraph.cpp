@@ -211,18 +211,22 @@ RenderGraph::PreparedPassHandle HiZBuildPass::AddToGraph(
         return {};
     }
 
-    auto pass = graph.AddRecordPass(
-        "HiZBuild",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.depth).Write(resources.hiz_current);
-        },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "HiZBuild", [&] {
-                Record(cmd_list, prepared.Get());
-            });
-        },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
-    );
+    RenderGraph::PassHandle pass{};
+    for (uint32 mip = 0; mip < context.textures.hiz_current.tex->GetNumMips(); ++mip) {
+        pass = graph.AddRecordPass(
+            std::format("HiZBuild.Mip{}", mip),
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                    .Read(mip == 0 ? resources.depth : resources.hiz_current,
+                          RenderGraph::TextureState::Sampled,
+                          RenderGraph::TextureRange::Mips(mip == 0 ? 0 : mip - 1, 1))
+                    .Write(resources.hiz_current, RenderGraph::TextureState::UnorderedAccess,
+                           RenderGraph::TextureRange::Mips(mip, 1));
+            },
+            [this, prepared, mip](CommandList& cmd_list) { RecordMip(cmd_list, prepared.Get(), mip); },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+    }
     return {prepared.GetSetupPass(), pass};
 }
 
@@ -582,20 +586,62 @@ RenderGraph::PreparedPassHandle AaPass::AddToGraph(
         return {};
     }
 
+    using State = RenderGraph::TextureState;
+    const auto import = [&](std::string_view name, const TextureWithHandle& texture) {
+        return graph.ImportTexture(name, texture.tex,
+            RenderGraph::TextureDesc{.mip_count = texture.tex->GetNumMips(),
+                                     .layer_count = texture.tex->GetNumArray()});
+    };
+    const auto texture_1 = import("AA.edges_or_luma", context.textures.aa_texture_1);
+    const bool smaa = ui_config.aa_mode >= EAaMode::SMAA_1X;
+    const bool temporal = ui_config.aa_mode == EAaMode::SMAA_T2X;
+    graph.AddRecordPass(
+        smaa ? "AA.Edges" : "AA.Luma",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                .Read(resources.input, State::Sampled).Write(texture_1, State::RenderTarget);
+            if (temporal) { builder.Read(resources.depth, State::Sampled); }
+        },
+        [this, prepared](CommandList& commands) { RecordEdgesOrLuma(commands, prepared.Get()); },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible);
+    RenderGraph::TextureHandle texture_2{};
+    if (smaa) {
+        texture_2 = import("AA.weights", context.textures.aa_texture_2);
+        const auto area = import("AA.area", smaa_area_tex);
+        const auto search = import("AA.search", smaa_search_tex);
+        graph.AddRecordPass(
+            "AA.Weights",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                    .Read(texture_1, State::Sampled).Read(area, State::Sampled).Read(search, State::Sampled)
+                    .Write(texture_2, State::RenderTarget);
+            },
+            [this, prepared](CommandList& commands) { RecordWeights(commands, prepared.Get()); },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible);
+    }
+    const auto blend_output = temporal ? import("AA.current", *aa_texture_34[smaa_phase]) : resources.aa_output;
     auto pass = graph.AddRecordPass(
-        "AntiAliasing",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.input)
-                .Read(resources.depth)
-                .Write(resources.aa_output);
+        "AA.Blend",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                .Read(texture_1, State::Sampled).Write(blend_output, State::RenderTarget);
+            if (smaa) { builder.Read(resources.input, State::Sampled).Read(texture_2, State::Sampled); }
         },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "AntiAliasing", [&] {
-                Record(cmd_list, prepared.Get());
-            });
-        },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
-    );
+        [this, prepared](CommandList& commands) { RecordBlend(commands, prepared.Get()); },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible);
+    if (temporal) {
+        // An invalid history samples the current output, exactly as Prepare's shader handle does.
+        const auto previous = history_valid ? import("AA.previous", *aa_texture_34[smaa_phase ^ 1u]) : blend_output;
+        pass = graph.AddRecordPass(
+            "AA.Resolve",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                    .Read(blend_output, State::Sampled).Read(previous, State::Sampled)
+                    .Read(texture_1, State::Sampled).Write(resources.aa_output, State::RenderTarget);
+            },
+            [this, prepared](CommandList& commands) { RecordResolve(commands, prepared.Get()); },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible);
+    }
     return {prepared.GetSetupPass(), pass};
 }
 

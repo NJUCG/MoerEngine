@@ -367,69 +367,54 @@ public:
         return parameters;
     }
 
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        if (parameters.mode == EAaMode::NONE ||
-            parameters.mode == EAaMode::FXAA_SIMPLIFIED ||
-            parameters.mode == EAaMode::FXAA_QUALITY) {
+    void RecordEdgesOrLuma(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (parameters.mode <= EAaMode::FXAA_QUALITY) {
             cmd_list.Gfx(fxaa_precompute_pipeline, parameters.bindless, parameters.fxaa_precompute)
-                .Draw(
-                    "FXAA Precompute Pass",
-                    parameters.texture_1.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.texture_1.tex)
-                );
-            cmd_list.Gfx(fxaa_pipeline, parameters.bindless, parameters.fxaa)
-                .Draw(
-                    "FXAA Pass",
-                    parameters.output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.output.tex)
-                );
-            return;
-        }
-
-        cmd_list.Gfx(smaa_edge_detection_pipeline, parameters.bindless, parameters.smaa)
-            .Draw(
-                "SMAA Edge Detection Pass",
-                parameters.texture_1.GetRect2D(),
-                std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(parameters.texture_1.tex)
-            );
-
-        cmd_list.Gfx(smaa_blending_weight_pipeline, parameters.bindless, parameters.smaa)
-            .Draw(
-                "SMAA Blending Weight Calculation Pass",
-                parameters.texture_2.GetRect2D(),
-                std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(parameters.texture_2.tex)
-            );
-
-        if (parameters.mode == EAaMode::SMAA_1X) {
-            cmd_list.Gfx(smaa_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
-                .Draw(
-                    "SMAA Neighborhood Blending Pass",
-                    parameters.output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.output.tex)
-                );
-        } else if (parameters.mode == EAaMode::SMAA_T2X) {
-            cmd_list.Gfx(smaa_t2x_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
-                .Draw(
-                    "SMAA T2x Neighborhood Blending Pass",
-                    parameters.temporal_output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.temporal_output.tex)
-                );
-
-            cmd_list.Gfx(smaa_t2x_resolve_pipeline, parameters.bindless, parameters.smaa)
-                .Draw(
-                    "SMAA T2x Resolve Pass",
-                    parameters.output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.output.tex)
-                );
+                .Draw("FXAA Precompute Pass", parameters.texture_1.GetRect2D(),
+                      RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.texture_1.tex));
         } else {
-            assert(false && "Invalid antialiasing mode");
+            cmd_list.Gfx(smaa_edge_detection_pipeline, parameters.bindless, parameters.smaa)
+                .Draw("SMAA Edge Detection Pass", parameters.texture_1.GetRect2D(),
+                      RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.texture_1.tex));
+        }
+    }
+
+    void RecordWeights(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list.Gfx(smaa_blending_weight_pipeline, parameters.bindless, parameters.smaa)
+            .Draw("SMAA Blending Weight Calculation Pass", parameters.texture_2.GetRect2D(),
+                  RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.texture_2.tex));
+    }
+
+    void RecordBlend(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (parameters.mode <= EAaMode::FXAA_QUALITY) {
+            cmd_list.Gfx(fxaa_pipeline, parameters.bindless, parameters.fxaa)
+                .Draw("FXAA Pass", parameters.output.GetRect2D(), RasterTool::GetFullScreenDrawDatas(),
+                      ColorAttachment(parameters.output.tex));
+        } else if (parameters.mode == EAaMode::SMAA_1X) {
+            cmd_list.Gfx(smaa_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
+                .Draw("SMAA Neighborhood Blending Pass", parameters.output.GetRect2D(),
+                      RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.output.tex));
+        } else {
+            cmd_list.Gfx(smaa_t2x_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
+                .Draw("SMAA T2x Neighborhood Blending Pass", parameters.temporal_output.GetRect2D(),
+                      RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.temporal_output.tex));
+        }
+    }
+
+    void RecordResolve(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list.Gfx(smaa_t2x_resolve_pipeline, parameters.bindless, parameters.smaa)
+            .Draw("SMAA T2x Resolve Pass", parameters.output.GetRect2D(), RasterTool::GetFullScreenDrawDatas(),
+                  ColorAttachment(parameters.output.tex));
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        RecordEdgesOrLuma(cmd_list, parameters);
+        if (parameters.mode >= EAaMode::SMAA_1X) {
+            RecordWeights(cmd_list, parameters);
+        }
+        RecordBlend(cmd_list, parameters);
+        if (parameters.mode == EAaMode::SMAA_T2X) {
+            RecordResolve(cmd_list, parameters);
         }
     }
 
