@@ -2114,7 +2114,7 @@ void TestImportAndExportBoundaries(TestSuite& suite) {
 void TestQueueTopologySynchronization(TestSuite& suite) {
     constexpr std::string_view test_name = "queue topology synchronization";
     auto check_case = [&](RenderGraph::QueueTopology topology,
-                          RenderGraph::TextureDesc::SharingMode sharing,
+                          RenderGraph::SharingMode sharing,
                           bool                                  queue_dependency,
                           bool                                  ownership,
                           bool                                  gpu_wait,
@@ -2157,7 +2157,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
 
     check_case(
         RenderGraph::QueueTopology::SingleQueue(),
-        RenderGraph::TextureDesc::SharingMode::Exclusive,
+        RenderGraph::SharingMode::Exclusive,
         false,
         false,
         false,
@@ -2169,7 +2169,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
             .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
             .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
         },
-        RenderGraph::TextureDesc::SharingMode::Exclusive,
+        RenderGraph::SharingMode::Exclusive,
         true,
         false,
         true,
@@ -2177,7 +2177,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
     );
     check_case(
         RenderGraph::QueueTopology::DedicatedQueues(),
-        RenderGraph::TextureDesc::SharingMode::Exclusive,
+        RenderGraph::SharingMode::Exclusive,
         true,
         true,
         true,
@@ -2185,7 +2185,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
     );
     check_case(
         RenderGraph::QueueTopology::DedicatedQueues(),
-        RenderGraph::TextureDesc::SharingMode::Concurrent,
+        RenderGraph::SharingMode::Concurrent,
         true,
         false,
         true,
@@ -2202,7 +2202,7 @@ void TestExclusiveOwnershipUsesCurrentOwnerFamily(TestSuite& suite) {
         &physical,
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+            .sharing_mode = RenderGraph::SharingMode::Exclusive,
         }
     );
     graph.SetInitialState(
@@ -2378,7 +2378,7 @@ void TestAutomaticReadsPreserveAvailabilityFrontier(TestSuite& suite) {
         "Concurrent",
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
     const auto writer = graph.AddPass(
@@ -3050,7 +3050,7 @@ void TestPipelineDomainsAndBarrierSources(TestSuite& suite) {
         "Shared",
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
     const auto producer = graph.AddPass(
@@ -3217,7 +3217,7 @@ void TestMixedQueueExecuteRemainsDeclarationOrder(TestSuite& suite) {
         "Output",
         RenderGraph::BufferDesc{
             .byte_size = 128,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+            .sharing_mode = RenderGraph::SharingMode::Exclusive,
         }
     );
     graph.AddPass(
@@ -3285,7 +3285,7 @@ void TestBarrierSourcesIgnoreUnrelatedLastRead(TestSuite& suite) {
         "Concurrent",
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
     const auto writer = graph.AddPass(
@@ -3344,7 +3344,7 @@ void TestFanInBarrierPlacementCoversEverySourceBatch(TestSuite& suite) {
         &physical,
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
     graph.SetInitialState(
@@ -3524,7 +3524,7 @@ void TestReadTransitionWaitsForEveryActiveReader(TestSuite& suite) {
         &physical,
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
     graph.SetInitialState(

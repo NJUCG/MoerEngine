@@ -186,9 +186,9 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
 template<typename ResourceDeclaration>
 [[nodiscard]] bool IsExclusive(const ResourceDeclaration& resource) {
     return resource.kind == ResourceKind::Texture ?
-               resource.texture_desc.sharing_mode == RenderGraph::TextureDesc::SharingMode::Exclusive :
+               resource.texture_desc.sharing_mode == RenderGraph::SharingMode::Exclusive :
            resource.kind == ResourceKind::Buffer ?
-               resource.buffer_desc.sharing_mode == RenderGraph::TextureDesc::SharingMode::Exclusive :
+               resource.buffer_desc.sharing_mode == RenderGraph::SharingMode::Exclusive :
                false;
 }
 

@@ -78,21 +78,23 @@ public:
         return static_cast<TextureAspect>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
     }
 
+    enum class SharingMode : uint8_t {
+        Exclusive,
+        Concurrent,
+    };
+
     struct TextureDesc {
         uint32_t      mip_count   = 1;
         uint32_t      layer_count = 1;
         TextureAspect aspects     = TextureAspect::Color;
-        enum class SharingMode : uint8_t {
-            Exclusive,
-            Concurrent,
-        } sharing_mode = SharingMode::Exclusive;
+        SharingMode sharing_mode=SharingMode::Exclusive;
 
         friend bool operator==(const TextureDesc&, const TextureDesc&) = default;
     };
 
     struct BufferDesc {
         uint64_t byte_size = 0;
-        TextureDesc::SharingMode sharing_mode = TextureDesc::SharingMode::Exclusive;
+        SharingMode sharing_mode = SharingMode::Exclusive;
 
         friend bool operator==(const BufferDesc&, const BufferDesc&) = default;
     };

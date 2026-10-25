@@ -3184,13 +3184,13 @@ std::string RenderGraph::Dump() const {
                    << " layers=" << resource.texture_desc.layer_count << " aspects=";
             AppendTextureAspects(stream, resource.texture_desc.aspects);
             stream << " sharing="
-                   << (resource.texture_desc.sharing_mode == TextureDesc::SharingMode::Exclusive ?
+                   << (resource.texture_desc.sharing_mode == SharingMode::Exclusive ?
                            "exclusive" :
                            "concurrent")
                    << ']';
         } else if (resource.kind == ResourceKind::Buffer && resource.typed_desc) {
             stream << " desc=[bytes=" << resource.buffer_desc.byte_size << " sharing="
-                   << (resource.buffer_desc.sharing_mode == TextureDesc::SharingMode::Exclusive ?
+                   << (resource.buffer_desc.sharing_mode == SharingMode::Exclusive ?
                            "exclusive" :
                            "concurrent")
                    << ']';

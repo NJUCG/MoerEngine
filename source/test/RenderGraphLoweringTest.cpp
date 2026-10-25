@@ -762,7 +762,7 @@ void TestSameFamilyQueueBarrierLowersToAcquire(TestSuite& suite) {
         buffer,
         RenderGraph::BufferDesc{
             .byte_size    = 256,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+            .sharing_mode = RenderGraph::SharingMode::Exclusive,
         }
     );
     graph.SetInitialState(
@@ -934,7 +934,7 @@ void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
                             .mip_count    = 2,
                             .layer_count  = 2,
                             .aspects      = RenderGraph::TextureAspect::Color,
-                            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+                            .sharing_mode = RenderGraph::SharingMode::Exclusive,
         }
     );
     graph.SetInitialState(
@@ -1097,7 +1097,7 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
         buffer,
         RenderGraph::BufferDesc{
              .byte_size    = 256,
-             .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+             .sharing_mode = RenderGraph::SharingMode::Exclusive,
         }
     );
     graph.SetInitialState(

@@ -3296,7 +3296,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         RenderGraph::BufferDesc{
             .byte_size    = byte_size,
             .sharing_mode =
-                RenderGraph::TextureDesc::SharingMode::Exclusive,
+                RenderGraph::SharingMode::Exclusive,
         }
     );
     const auto intermediate_handle = graph.ImportBuffer(
@@ -3305,7 +3305,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         RenderGraph::BufferDesc{
             .byte_size    = byte_size,
             .sharing_mode =
-                RenderGraph::TextureDesc::SharingMode::Exclusive,
+                RenderGraph::SharingMode::Exclusive,
         }
     );
     const auto destination_handle = graph.ImportBuffer(
@@ -3314,7 +3314,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         RenderGraph::BufferDesc{
             .byte_size    = byte_size,
             .sharing_mode =
-                RenderGraph::TextureDesc::SharingMode::Exclusive,
+                RenderGraph::SharingMode::Exclusive,
         }
     );
     for (const auto handle : {
