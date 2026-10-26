@@ -1584,21 +1584,14 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     // token as a non-blocking exact-value query and fail closed for both
     // pending and rejected dependencies.
     const std::atomic_bool do_not_wait{false};
-    const uint32 dependency_count =
-        static_cast<uint32>(_submit.wait_events.size());
     const bool unaccepted_dependency = std::any_of(
         _submit.wait_events.begin(),
         _submit.wait_events.end(),
-        [&do_not_wait, dependency_count](const WaitEvent& _event) {
+        [&do_not_wait](const WaitEvent& _event) {
             auto* fence =
                 reinterpret_cast<D3D12Fence*>(_event.timeline_handle);
             return fence == nullptr ||
-                   !fence->WaitSubmitted(
-                       _event.value,
-                       &do_not_wait,
-                       EQueueType::Graphics,
-                       dependency_count
-                   );
+                   !fence->WaitSubmitted(_event.value, &do_not_wait);
         }
     );
     if (unaccepted_dependency) {
@@ -1902,10 +1895,8 @@ void D3D12Fence::MarkSubmitted(uint64_t _value) {
 }
 
 bool D3D12Fence::WaitSubmitted(
-    uint64_t               _value,
-    const std::atomic_bool* _continue_waiting,
-    EQueueType,
-    uint32
+    uint64_t                _value,
+    const std::atomic_bool* _continue_waiting
 ) {
     std::unique_lock lock(submission_mutex);
     while (submitted_value.load(std::memory_order_acquire) < _value &&

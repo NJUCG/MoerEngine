@@ -106,9 +106,7 @@ public:
 
     bool WaitSubmitted(
         uint64_t               _value,
-        const std::atomic_bool* = nullptr,
-        EQueueType              = EQueueType::Ignore,
-        Moer::uint32            = 0
+        const std::atomic_bool* = nullptr
     ) override {
         return submitted_value.load(std::memory_order_acquire) >= _value &&
                !IsRejected(_value);

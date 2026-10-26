@@ -1092,9 +1092,12 @@ private:
     bool installed{false};
 };
 
-class DependencyWaitCapture final {
+// Observes entry into queue-level dependency waiting, not a blocked fence.
+// These tests keep the dependency unpublished until they release it or stop
+// the runtime, and verify that native/source submission cannot pass it.
+class DependencyWaitBeginCapture final {
 public:
-    explicit DependencyWaitCapture(EQueueType _queue) :
+    explicit DependencyWaitBeginCapture(EQueueType _queue) :
         queue(_queue) {}
 
     static void Observe(
@@ -1102,7 +1105,7 @@ public:
         const VulkanSubmissionDependencyWaitEvent& _event
     ) noexcept {
         auto& capture =
-            *static_cast<DependencyWaitCapture*>(_context);
+            *static_cast<DependencyWaitBeginCapture*>(_context);
         if (_event.queue != capture.queue) {
             return;
         }
@@ -1125,11 +1128,11 @@ private:
 class ScopedDependencyWaitObserver final {
 public:
     explicit ScopedDependencyWaitObserver(
-        DependencyWaitCapture& _capture
+        DependencyWaitBeginCapture& _capture
     ) :
         observer{
             .context  = &_capture,
-            .callback = &DependencyWaitCapture::Observe,
+            .callback = &DependencyWaitBeginCapture::Observe,
         } {
         if (!TryInstallVulkanSubmissionDependencyWaitObserver(
                 &observer
@@ -7637,7 +7640,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
     ScopedSourceSubmissionObserver source_observer(source_capture);
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          graphics_wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     graphics_wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   wait_observer(graphics_wait_capture);
 
     FenceRef dependency    = device.CreateFence();
@@ -7711,8 +7714,8 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
             source_capture.Count() != 0 ||
             !graphics_translated.try_acquire()) {
             throw std::runtime_error(
-                "batch 0 did not block its translated Graphics packet on "
-                "the sole Submission owner"
+                "batch 0 did not begin dependency waiting for its translated "
+                "Graphics packet on the sole Submission owner"
             );
         }
         if (translate_counts[0].load(std::memory_order_acquire) != 1 ||
@@ -7965,7 +7968,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
     ScopedSourceSubmissionObserver source_observer(source_capture);
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   wait_observer(wait_capture);
     BackendSyncWaitCapture         sync_wait_capture{};
     ScopedBackendSyncWaitObserver  sync_wait_observer(sync_wait_capture);
@@ -8049,7 +8052,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             source_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "malformed-ordering prefix did not block on the sole "
+                "malformed-ordering prefix did not begin dependency waiting on the sole "
                 "Submission owner"
             );
         }
@@ -8277,7 +8280,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture graphics_wait_capture{
+    DependencyWaitBeginCapture graphics_wait_capture{
         EQueueType::Graphics
     };
     ScopedDependencyWaitObserver wait_observer(
@@ -8358,8 +8361,8 @@ void RunBoundedCrossBatchRecoverableRejection() {
             source_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "recoverable batch 0 did not block its translated Graphics "
-                "packet on the sole Submission owner"
+                "recoverable batch 0 did not begin dependency waiting for its "
+                "translated Graphics packet on the sole Submission owner"
             );
         }
 
@@ -8599,7 +8602,7 @@ void RunBoundedPipelineShutdownCancellation() {
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          graphics_wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     graphics_wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   dependency_wait_observer(
         graphics_wait_capture
     );
@@ -8682,8 +8685,8 @@ void RunBoundedPipelineShutdownCancellation() {
             source_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "shutdown batch 0 did not block its translated Graphics "
-                "packet on the sole Submission owner"
+                "shutdown batch 0 did not begin dependency waiting for its "
+                "translated Graphics packet on the sole Submission owner"
             );
         }
 
@@ -8918,7 +8921,7 @@ void RunShutdownDependencyCancellation() {
     std::atomic<bool>   sync_returned{false};
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          copy_wait_capture{EQueueType::Copy};
+    DependencyWaitBeginCapture     copy_wait_capture{EQueueType::Copy};
     ScopedDependencyWaitObserver   wait_observer(copy_wait_capture);
     BackendSyncWaitCapture         sync_wait_capture{};
     ScopedBackendSyncWaitObserver  sync_wait_observer(sync_wait_capture);
@@ -8954,7 +8957,7 @@ void RunShutdownDependencyCancellation() {
         copy_wait_capture.wrong_owner.load(std::memory_order_acquire) ||
         native_capture.Count() != 0) {
         throw std::runtime_error(
-            "Copy did not enter its unpublished dependency wait on the sole "
+            "Copy did not begin dependency waiting on the sole "
             "Submission owner"
         );
     }
@@ -9034,7 +9037,7 @@ void RunSerialControlPipelineBoundary() {
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   wait_observer(wait_capture);
 
     constexpr size_t element_count = 16;
@@ -9136,7 +9139,7 @@ void RunSerialControlPipelineBoundary() {
             boundary_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "SerialControl prefix did not block on the sole "
+                "SerialControl prefix did not begin dependency waiting on the sole "
                 "Submission owner"
             );
         }
@@ -11331,7 +11334,7 @@ void RunPresentPipelineBoundary() {
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          wait_capture{prefix_queue};
+    DependencyWaitBeginCapture     wait_capture{prefix_queue};
     ScopedDependencyWaitObserver   wait_observer(wait_capture);
     ScriptedPresentCapture scripted_capture(
         VulkanScriptedPresentResult{
@@ -11436,7 +11439,7 @@ void RunPresentPipelineBoundary() {
             scripted_capture.count.load(std::memory_order_acquire) != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "Present boundary prefix did not block on the sole "
+                "Present boundary prefix did not begin dependency waiting on the sole "
                 "Submission owner"
             );
         }
@@ -12059,7 +12062,7 @@ void RunQueuedPresentShutdownBoundary() {
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   wait_observer(wait_capture);
     ScriptedPresentCapture scripted_capture(
         VulkanScriptedPresentResult{
@@ -12143,7 +12146,7 @@ void RunQueuedPresentShutdownBoundary() {
             boundary_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "shutdown Present prefix did not block on the sole "
+                "shutdown Present prefix did not begin dependency waiting on the sole "
                 "Submission owner"
             );
         }

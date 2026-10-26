@@ -1064,10 +1064,8 @@ public:
     // merely because the frontend handoff accepted the CmdSubmit.
     virtual void MarkSubmitted(uint64_t _value) = 0;
     [[nodiscard]] virtual bool WaitSubmitted(
-        uint64_t               _value,
-        const std::atomic_bool* _continue_waiting = nullptr,
-        EQueueType              _waiting_queue = EQueueType::Ignore,
-        uint32                  _dependency_count = 0
+        uint64_t                _value,
+        const std::atomic_bool* _continue_waiting = nullptr
     ) = 0;
     [[nodiscard]] virtual bool IsRejected(uint64_t _value) const = 0;
 

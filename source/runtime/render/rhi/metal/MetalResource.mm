@@ -25,8 +25,7 @@ void MetalFence::MarkSubmitted(uint64 value) {
     cv_.notify_all();
 }
 
-bool MetalFence::WaitSubmitted(uint64 value, const std::atomic_bool* continue_waiting,
-    EQueueType, uint32) {
+bool MetalFence::WaitSubmitted(uint64 value, const std::atomic_bool* continue_waiting) {
     std::unique_lock lock(mutex_);
     while (submitted_ < value && !IsRejectedLocked(value) &&
            (continue_waiting == nullptr || continue_waiting->load(std::memory_order_acquire))) {

@@ -191,7 +191,7 @@ public:
         auto* fence = dynamic_cast<MetalFence*>(reinterpret_cast<Fence*>(event.timeline_handle));
         const std::atomic_bool do_not_wait{false};
         if (fence == nullptr ||
-            !fence->WaitSubmitted(event.value, &do_not_wait, EQueueType::Graphics, 1)) {
+            !fence->WaitSubmitted(event.value, &do_not_wait)) {
             throw std::runtime_error("Metal graphics dependency was not submitted or was rejected");
         }
         fence->Wait(event.value);

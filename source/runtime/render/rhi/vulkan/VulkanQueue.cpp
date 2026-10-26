@@ -3877,15 +3877,15 @@ bool WaitForSubmittedDependencies(
     EQueueType               _queue,
     const std::atomic_bool* _continue_waiting
 ) {
+    if (!_wait_events.empty()) {
+        NotifyVulkanSubmissionDependencyWaitBegin(
+            _queue, static_cast<uint32>(_wait_events.size())
+        );
+    }
     for (const WaitEvent& event : _wait_events) {
         auto* fence = reinterpret_cast<VulkanTimeline*>(event.timeline_handle);
         if (fence == nullptr ||
-            !fence->WaitSubmitted(
-                event.value,
-                _continue_waiting,
-                _queue,
-                static_cast<uint32>(_wait_events.size())
-            )) {
+            !fence->WaitSubmitted(event.value, _continue_waiting)) {
             return false;
         }
     }

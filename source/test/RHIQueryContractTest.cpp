@@ -45,9 +45,7 @@ public:
 
     bool WaitSubmitted(
         uint64_t,
-        const std::atomic_bool* = nullptr,
-        EQueueType              = EQueueType::Ignore,
-        Moer::uint32            = 0
+        const std::atomic_bool* = nullptr
     ) override {
         return false;
     }

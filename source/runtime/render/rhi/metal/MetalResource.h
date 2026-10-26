@@ -16,8 +16,7 @@ public:
     uint64 GetValue() const override;
     void Wait(uint64 value) override;
     void MarkSubmitted(uint64 value) override;
-    bool WaitSubmitted(uint64 value, const std::atomic_bool* continue_waiting,
-        EQueueType, uint32) override;
+    bool WaitSubmitted(uint64 value, const std::atomic_bool* continue_waiting = nullptr) override;
     void Reject(uint64 value) noexcept override;
     bool IsRejected(uint64 value) const override;
     void Complete(uint64 value);

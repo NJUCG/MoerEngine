@@ -247,10 +247,11 @@ struct VulkanSubmissionDependencyWaitObserver {
     VulkanSubmissionDependencyWaitCallback callback{nullptr};
 };
 
-// Test/diagnostic seam on the first unsatisfied WaitSubmitted blocking cycle
-// entered by the sole Submission owner. The callback runs while the fence wait
-// mutex is held and therefore must not block or re-enter RHI. Disabled cost is
-// one atomic pointer load for a dependency that actually blocks.
+// Test/diagnostic seam before a queue starts processing a non-empty dependency
+// list, once per submission regardless of whether its fences are already ready.
+// This reports entry into dependency waiting, not that a fence has blocked.
+// No fence mutex is held. Callbacks must be short, non-blocking, noexcept, and
+// must not re-enter RHI. Quiesce observed work before removing the observer.
 [[nodiscard]] RENDER_API bool
 TryInstallVulkanSubmissionDependencyWaitObserver(
     const VulkanSubmissionDependencyWaitObserver* _observer

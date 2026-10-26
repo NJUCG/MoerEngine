@@ -269,7 +269,7 @@ void NotifyVulkanDeviceIdleWait(const VulkanOperationContext& _context) noexcept
     );
 }
 
-void NotifyVulkanSubmissionDependencyWaitBlocked(
+void NotifyVulkanSubmissionDependencyWaitBegin(
     EQueueType _queue,
     uint32     _dependency_count
 ) noexcept {

@@ -30,9 +30,7 @@ public:
     void            MarkSubmitted(uint64_t _value) override;
     RENDER_API bool WaitSubmitted(
         uint64_t                _value,
-        const std::atomic_bool* _continue_waiting = nullptr,
-        EQueueType              _waiting_queue    = EQueueType::Ignore,
-        uint32                  _dependency_count = 0
+        const std::atomic_bool* _continue_waiting = nullptr
     ) override;
     RENDER_API bool IsRejected(uint64_t _value) const override;
     RENDER_API VkResult

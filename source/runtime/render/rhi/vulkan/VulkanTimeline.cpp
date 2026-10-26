@@ -1,7 +1,6 @@
 #include "VulkanTimeline.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
-#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "log/LogSystem.h"
 
 #include <algorithm>
@@ -114,19 +113,12 @@ void VulkanTimeline::MarkSubmitted(uint64_t _value) {
 
 bool VulkanTimeline::WaitSubmitted(
     uint64_t                _value,
-    const std::atomic_bool* _continue_waiting,
-    EQueueType              _waiting_queue,
-    uint32                  _dependency_count
+    const std::atomic_bool* _continue_waiting
 ) {
     std::unique_lock<std::mutex> lock(cv_m);
-    bool                         notified_blocked_wait = false;
     while (submitted_value < _value && !rejected_values.contains(_value) && !failed &&
            !m_device->IsFaulted() &&
            (_continue_waiting == nullptr || _continue_waiting->load(std::memory_order_acquire))) {
-        if (!notified_blocked_wait) {
-            NotifyVulkanSubmissionDependencyWaitBlocked(_waiting_queue, _dependency_count);
-            notified_blocked_wait = true;
-        }
         cv.wait_for(lock, std::chrono::milliseconds(50));
     }
     return submitted_value >= _value && !rejected_values.contains(_value) && !failed &&
