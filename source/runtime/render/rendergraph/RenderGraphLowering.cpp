@@ -319,12 +319,14 @@ template<typename Enum>
 }
 
 void AppendRange(std::ostringstream& stream, const RenderGraph::ResourceRange& range) {
-    if (range.kind == ResourceKind::Texture) {
-        stream << "aspect=" << static_cast<uint32_t>(range.texture.aspects)
-               << ",mip=" << range.texture.mip_first << "+" << range.texture.mip_count
-               << ",layer=" << range.texture.layer_first << "+" << range.texture.layer_count;
+    if (const auto* texture = std::get_if<RenderGraph::TextureRange>(&range)) {
+        stream << "aspect=" << static_cast<uint32_t>(texture->aspects)
+               << ",mip=" << texture->mip_first << "+" << texture->mip_count
+               << ",layer=" << texture->layer_first << "+" << texture->layer_count;
+    } else if (const auto* buffer = std::get_if<RenderGraph::BufferRange>(&range)) {
+        stream << "offset=" << buffer->offset << ",size=" << buffer->size;
     } else {
-        stream << "offset=" << range.buffer.offset << ",size=" << range.buffer.size;
+        stream << "token[all]";
     }
 }
 
@@ -1215,7 +1217,7 @@ bool RenderGraphLowering::Lower(
             .resource_kind           = resource.kind,
             .range                   = barrier.range,
             .texture_aspects         = resource.kind == ResourceKind::Texture ?
-                                           LowerAspects(barrier.range.texture.aspects) :
+                                           LowerAspects(std::get<RenderGraph::TextureRange>(barrier.range).aspects) :
                                            ETextureAspectFlags::NONE,
             .physical                = binding_for(barrier.resource),
             .src_pass                = barrier.src_pass,
@@ -1235,13 +1237,14 @@ bool RenderGraphLowering::Lower(
         };
 
         if (resource.kind == ResourceKind::Texture) {
-            if (barrier.range.texture.aspects == TextureAspect::None ||
-                barrier.range.texture.mip_count == RenderGraph::RemainingTextureRange ||
-                barrier.range.texture.layer_count == RenderGraph::RemainingTextureRange) {
+            const auto& texture = std::get<RenderGraph::TextureRange>(barrier.range);
+            if (texture.aspects == TextureAspect::None ||
+                texture.mip_count == RenderGraph::RemainingTextureRange ||
+                texture.layer_count == RenderGraph::RemainingTextureRange) {
                 error = "texture barrier range is not fully normalized";
                 return false;
             }
-        } else if (barrier.range.buffer.size == RenderGraph::RemainingBufferRange) {
+        } else if (std::get<RenderGraph::BufferRange>(barrier.range).size == RenderGraph::RemainingBufferRange) {
             error = "buffer barrier range is not fully normalized";
             return false;
         }
@@ -1708,7 +1711,7 @@ bool RenderGraphLowering::Lower(
             .resource_kind           = resource.kind,
             .range                   = access.range,
             .texture_aspects         = resource.kind == ResourceKind::Texture ?
-                                           LowerAspects(access.range.texture.aspects) :
+                                           LowerAspects(std::get<RenderGraph::TextureRange>(access.range).aspects) :
                                            ETextureAspectFlags::NONE,
             .physical                = binding_for(access.resource),
             .src_pass                = access.pass,

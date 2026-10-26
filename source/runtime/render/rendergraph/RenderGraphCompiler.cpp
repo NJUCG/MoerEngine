@@ -29,16 +29,8 @@ void SortUnique(std::vector<T>& values) {
 }
 
 [[nodiscard]] auto RangeSortKey(const ResourceRange& range) {
-    return std::tuple{
-        static_cast<uint8_t>(range.kind),
-        AspectMask(range.texture.aspects),
-        range.texture.mip_first,
-        range.texture.mip_count,
-        range.texture.layer_first,
-        range.texture.layer_count,
-        range.buffer.offset,
-        range.buffer.size
-    };
+    // Keep resource-kind ordering independent of the variant's alternative order.
+    return std::tuple<ResourceKind, const ResourceRange&>{RenderGraph::GetRangeKind(range), range};
 }
 
 [[nodiscard]] bool
@@ -413,7 +405,7 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                 }
                 if (resource.kind == ResourceKind::Texture &&
                     !TextureStateSupportsAspects(
-                        declaration.state.texture, normalized.texture.aspects
+                        declaration.state.texture, std::get<RenderGraph::TextureRange>(normalized).aspects
                     )) {
                     return Fail(
                         "boundary texture state is incompatible with the selected aspects on resource '" +
@@ -446,7 +438,7 @@ bool RenderGraphCompiler::NormalizeRange(
     const ResourceRange&                    requested,
     ResourceRange&                          normalized
 ) {
-    if (requested.kind != resource.kind) {
+    if (RenderGraph::GetRangeKind(requested) != resource.kind) {
         return Fail("resource range kind does not match resource '" + resource.name + "'");
     }
 
@@ -461,7 +453,7 @@ bool RenderGraphCompiler::NormalizeRange(
                 return Fail("texture resource has an invalid descriptor: " + resource.name);
             }
 
-            auto& range = normalized.texture;
+            auto& range = std::get<RenderGraph::TextureRange>(normalized);
             if (range.aspects == TextureAspect::All) {
                 range.aspects = desc.aspects;
             }
@@ -493,7 +485,7 @@ bool RenderGraphCompiler::NormalizeRange(
             break;
         }
         case ResourceKind::Buffer: {
-            auto& range = normalized.buffer;
+            auto& range = std::get<RenderGraph::BufferRange>(normalized);
             if (resource.buffer_desc.byte_size == 0) {
                 if (range.offset != 0 || range.size != RenderGraph::RemainingBufferRange) {
                     return Fail("an explicitly ranged buffer requires a known byte size: " + resource.name);
@@ -512,7 +504,7 @@ bool RenderGraphCompiler::NormalizeRange(
             break;
         }
         case ResourceKind::Token:
-            normalized = ResourceRange::Token();
+            normalized = std::monostate{};
             break;
     }
     return true;
@@ -580,7 +572,7 @@ bool RenderGraphCompiler::ValidateAccessState(
         if (attachment_state && pass.domain.pipeline != RenderGraph::PipelineType::Graphics) {
             return Fail("attachment state requires the graphics pipeline in pass '" + pass.name + "'");
         }
-        if (!TextureStateSupportsAspects(state.texture, range.texture.aspects)) {
+        if (!TextureStateSupportsAspects(state.texture, std::get<RenderGraph::TextureRange>(range).aspects)) {
             return Fail(
                 "texture state is incompatible with the selected aspects in pass '" + pass.name + "'"
             );
@@ -621,10 +613,11 @@ bool RenderGraphCompiler::BuildAtomicCells() {
             std::vector<uint32_t> mip_boundaries{0, resource.texture_desc.mip_count};
             std::vector<uint32_t> layer_boundaries{0, resource.texture_desc.layer_count};
             auto add_texture_boundaries = [&](const ResourceRange& range) {
-                mip_boundaries.push_back(range.texture.mip_first);
-                mip_boundaries.push_back(range.texture.mip_first + range.texture.mip_count);
-                layer_boundaries.push_back(range.texture.layer_first);
-                layer_boundaries.push_back(range.texture.layer_first + range.texture.layer_count);
+                const auto& texture = std::get<RenderGraph::TextureRange>(range);
+                mip_boundaries.push_back(texture.mip_first);
+                mip_boundaries.push_back(texture.mip_first + texture.mip_count);
+                layer_boundaries.push_back(texture.layer_first);
+                layer_boundaries.push_back(texture.layer_first + texture.layer_count);
             };
             for (const auto& accesses : normalized_accesses) {
                 for (const auto& access : accesses) {
@@ -657,13 +650,13 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                             continue;
                         }
                         AtomicCell cell{};
-                        cell.range       = ResourceRange::Texture(RenderGraph::TextureRange{
-                                  .aspects     = aspect,
-                                  .mip_first   = mip_first,
-                                  .mip_count   = mip_end - mip_first,
-                                  .layer_first = layer_first,
-                                  .layer_count = layer_end - layer_first
-                        });
+                        cell.range       = RenderGraph::TextureRange{
+                            .aspects     = aspect,
+                            .mip_first   = mip_first,
+                            .mip_count   = mip_end - mip_first,
+                            .layer_first = layer_first,
+                            .layer_count = layer_end - layer_first
+                        };
                         cell.initialized = resource.imported;
                         cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
                         cell.state       = RenderGraph::ResourceState::Texture(
@@ -678,8 +671,9 @@ bool RenderGraphCompiler::BuildAtomicCells() {
         } else if (resource.kind == ResourceKind::Buffer && resource.buffer_desc.byte_size != 0) {
             std::vector<uint64_t> boundaries{0, resource.buffer_desc.byte_size};
             auto add_buffer_boundaries = [&](const ResourceRange& range) {
-                boundaries.push_back(range.buffer.offset);
-                boundaries.push_back(range.buffer.offset + range.buffer.size);
+                const auto& buffer = std::get<RenderGraph::BufferRange>(range);
+                boundaries.push_back(buffer.offset);
+                boundaries.push_back(buffer.offset + buffer.size);
             };
             for (const auto& accesses : normalized_accesses) {
                 for (const auto& access : accesses) {
@@ -701,9 +695,9 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                     continue;
                 }
                 AtomicCell cell{};
-                cell.range       = ResourceRange::Buffer(RenderGraph::BufferRange{
-                          .offset = boundaries[index], .size = boundaries[index + 1] - boundaries[index]
-                });
+                cell.range       = RenderGraph::BufferRange{
+                    .offset = boundaries[index], .size = boundaries[index + 1] - boundaries[index]
+                };
                 cell.initialized = resource.imported;
                 cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
                 cell.state       = RenderGraph::ResourceState::Buffer(
@@ -715,7 +709,7 @@ bool RenderGraphCompiler::BuildAtomicCells() {
             }
         } else {
             AtomicCell cell{};
-            cell.range       = ResourceRange::Whole(resource.kind);
+            cell.range       = RenderGraph::WholeResourceRange(resource.kind);
             cell.initialized = resource.imported;
             cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
             if (resource.kind == ResourceKind::Buffer) {
@@ -1833,19 +1827,18 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
     const auto is_whole_range =
         [](const RenderGraph::ResourceDeclaration& resource,
            const RenderGraph::ResourceRange&       range) {
-            if (range.kind != resource.kind) {
+            if (RenderGraph::GetRangeKind(range) != resource.kind) {
                 return false;
             }
             if (resource.kind == ResourceKind::Texture) {
-                return range.texture.aspects == resource.texture_desc.aspects &&
-                       range.texture.mip_first == 0 &&
-                       range.texture.mip_count == resource.texture_desc.mip_count &&
-                       range.texture.layer_first == 0 &&
-                       range.texture.layer_count == resource.texture_desc.layer_count;
+                const auto& texture = std::get<RenderGraph::TextureRange>(range);
+                return texture.aspects == resource.texture_desc.aspects && texture.mip_first == 0 &&
+                       texture.mip_count == resource.texture_desc.mip_count && texture.layer_first == 0 &&
+                       texture.layer_count == resource.texture_desc.layer_count;
             }
             if (resource.kind == ResourceKind::Buffer) {
-                return range.buffer.offset == 0 &&
-                       range.buffer.size == resource.buffer_desc.byte_size;
+                const auto& buffer = std::get<RenderGraph::BufferRange>(range);
+                return buffer.offset == 0 && buffer.size == resource.buffer_desc.byte_size;
             }
             return false;
         };
@@ -2372,32 +2365,30 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
 }
 
 bool RenderGraphCompiler::RangesOverlap(const ResourceRange& lhs, const ResourceRange& rhs) {
-    if (lhs.kind != rhs.kind) {
+    if (lhs.index() != rhs.index()) {
         return false;
     }
-    switch (lhs.kind) {
-        case ResourceKind::Texture: {
-            if ((AspectMask(lhs.texture.aspects) & AspectMask(rhs.texture.aspects)) == 0) {
-                return false;
-            }
-            const uint32_t lhs_mip_end   = lhs.texture.mip_first + lhs.texture.mip_count;
-            const uint32_t rhs_mip_end   = rhs.texture.mip_first + rhs.texture.mip_count;
-            const uint32_t lhs_layer_end = lhs.texture.layer_first + lhs.texture.layer_count;
-            const uint32_t rhs_layer_end = rhs.texture.layer_first + rhs.texture.layer_count;
-            return lhs.texture.mip_first < rhs_mip_end && rhs.texture.mip_first < lhs_mip_end &&
-                   lhs.texture.layer_first < rhs_layer_end && rhs.texture.layer_first < lhs_layer_end;
+    if (const auto* left = std::get_if<RenderGraph::TextureRange>(&lhs)) {
+        const auto& right = std::get<RenderGraph::TextureRange>(rhs);
+        if ((AspectMask(left->aspects) & AspectMask(right.aspects)) == 0) {
+            return false;
         }
-        case ResourceKind::Buffer:
-            if (lhs.buffer.size == RenderGraph::RemainingBufferRange ||
-                rhs.buffer.size == RenderGraph::RemainingBufferRange) {
-                return true;
-            }
-            return lhs.buffer.offset < rhs.buffer.offset + rhs.buffer.size &&
-                   rhs.buffer.offset < lhs.buffer.offset + lhs.buffer.size;
-        case ResourceKind::Token:
-            return true;
+        const uint32_t lhs_mip_end   = left->mip_first + left->mip_count;
+        const uint32_t rhs_mip_end   = right.mip_first + right.mip_count;
+        const uint32_t lhs_layer_end = left->layer_first + left->layer_count;
+        const uint32_t rhs_layer_end = right.layer_first + right.layer_count;
+        return left->mip_first < rhs_mip_end && right.mip_first < lhs_mip_end &&
+               left->layer_first < rhs_layer_end && right.layer_first < lhs_layer_end;
     }
-    return false;
+    if (const auto* left = std::get_if<RenderGraph::BufferRange>(&lhs)) {
+        const auto& right = std::get<RenderGraph::BufferRange>(rhs);
+        if (left->size == RenderGraph::RemainingBufferRange ||
+            right.size == RenderGraph::RemainingBufferRange) {
+            return true;
+        }
+        return left->offset < right.offset + right.size && right.offset < left->offset + left->size;
+    }
+    return true;
 }
 
 bool RenderGraphCompiler::Fail(std::string message) {

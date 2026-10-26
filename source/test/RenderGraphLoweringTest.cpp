@@ -179,7 +179,7 @@ void TestTextureFanInAndDeterminism(TestSuite& suite) {
                 ETextureLayout::TEXTURE_LAYOUT_UNDEFINED &&
             first.prologue.front().destination.layout ==
                 ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT &&
-            first.prologue.front().range.texture.mip_count == 1 &&
+            std::get<RenderGraph::TextureRange>(first.prologue.front().range).mip_count == 1 &&
             first.prologue.front().texture_aspects == ETextureAspectFlags::COLOR,
         test_name,
         "prologue must retain discard, normalized range, aspect and layouts"
@@ -514,7 +514,7 @@ void TestUntouchedImportedRangesNeedNoCommands(TestSuite& suite) {
     suite.Check(RenderGraphLowering::Lower(graph, plan, error), name, error);
     for (const auto& instruction : plan.After(pass)) {
         suite.Check(
-            instruction.range.texture.mip_first == 0,
+            std::get<RenderGraph::TextureRange>(instruction.range).mip_first == 0,
             name,
             "untouched mip must not be attached to an unrelated pass"
         );
@@ -624,8 +624,8 @@ void TestSameStateReadGetsStateSeed(TestSuite& suite) {
         seed != before_second.end() &&
             seed->barrier_index == RenderGraphLowering::InvalidBarrierIndex &&
             seed->access_index != RenderGraphLowering::InvalidAccessIndex &&
-            seed->range.buffer.offset == 0 &&
-            seed->range.buffer.size == 256 &&
+            std::get<RenderGraph::BufferRange>(seed->range).offset == 0 &&
+            std::get<RenderGraph::BufferRange>(seed->range).size == 256 &&
             seed->source.stages == ERHIPipelineStageFlags::PS_ALL_GRAPHICS &&
             seed->source.access == (ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::UNIFORM_READ) &&
             seed->source.stages == seed->destination.stages &&

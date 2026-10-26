@@ -1083,9 +1083,9 @@ void TestTypedPartialExportRequiresOnlyDeclaredRange(TestSuite& suite) {
     );
     suite.Check(
         final_barrier != nullptr && final_barrier->export_boundary &&
-            final_barrier->range.kind == RenderGraph::ResourceKind::Texture &&
-            final_barrier->range.texture.mip_first == 0 &&
-            final_barrier->range.texture.mip_count == 1 &&
+            RenderGraph::GetRangeKind(final_barrier->range) == RenderGraph::ResourceKind::Texture &&
+            std::get<RenderGraph::TextureRange>(final_barrier->range).mip_first == 0 &&
+            std::get<RenderGraph::TextureRange>(final_barrier->range).mip_count == 1 &&
             valid_plan.state_plan_complete,
         test_name,
         "a typed partial export must cover only its initialized declared range"
@@ -3162,8 +3162,8 @@ void TestPartialRangeBarrier(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto* barrier = FindBarrier(graph.GetCompiledPlan(), buffer.Untyped(), {}, write);
     suite.Check(
-        barrier != nullptr && barrier->range.kind == RenderGraph::ResourceKind::Buffer &&
-            barrier->range.buffer == RenderGraph::BufferRange{.offset = 32, .size = 32},
+        barrier != nullptr && RenderGraph::GetRangeKind(barrier->range) == RenderGraph::ResourceKind::Buffer &&
+            std::get<RenderGraph::BufferRange>(barrier->range) == RenderGraph::BufferRange{.offset = 32, .size = 32},
         test_name,
         "a partial access must emit one barrier for exactly its canonical byte interval"
     );
@@ -3744,9 +3744,9 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
             write_export_barrier->discard_previous_contents &&
             write_export_barrier->state_transition && write_export_barrier->memory_dependency &&
             write_export_barrier->after_access == RenderGraph::AccessMode::Write &&
-            write_export_barrier->range.kind == RenderGraph::ResourceKind::Buffer &&
-            write_export_barrier->range.buffer.offset == 0 &&
-            write_export_barrier->range.buffer.size == 64 &&
+            RenderGraph::GetRangeKind(write_export_barrier->range) == RenderGraph::ResourceKind::Buffer &&
+            std::get<RenderGraph::BufferRange>(write_export_barrier->range).offset == 0 &&
+            std::get<RenderGraph::BufferRange>(write_export_barrier->range).size == 64 &&
             write_export_graph.GetCompiledPlan().state_plan_complete,
         test_name,
         "a write-only export of Undefined contents must remain an explicit discard boundary"

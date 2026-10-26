@@ -656,24 +656,20 @@ void AppendCount(std::ostringstream& stream, uint64_t count, uint64_t remaining)
 }
 
 void AppendRange(std::ostringstream& stream, const RenderGraph::ResourceRange& range) {
-    switch (range.kind) {
-        case RenderGraph::ResourceKind::Texture:
-            stream << "texture[aspect=";
-            AppendTextureAspects(stream, range.texture.aspects);
-            stream << " mip=" << range.texture.mip_first << '+';
-            AppendCount(stream, range.texture.mip_count, RenderGraph::RemainingTextureRange);
-            stream << " layer=" << range.texture.layer_first << '+';
-            AppendCount(stream, range.texture.layer_count, RenderGraph::RemainingTextureRange);
-            stream << ']';
-            break;
-        case RenderGraph::ResourceKind::Buffer:
-            stream << "buffer[offset=" << range.buffer.offset << " size=";
-            AppendCount(stream, range.buffer.size, RenderGraph::RemainingBufferRange);
-            stream << ']';
-            break;
-        case RenderGraph::ResourceKind::Token:
-            stream << "token[all]";
-            break;
+    if (const auto* texture = std::get_if<RenderGraph::TextureRange>(&range)) {
+        stream << "texture[aspect=";
+        AppendTextureAspects(stream, texture->aspects);
+        stream << " mip=" << texture->mip_first << '+';
+        AppendCount(stream, texture->mip_count, RenderGraph::RemainingTextureRange);
+        stream << " layer=" << texture->layer_first << '+';
+        AppendCount(stream, texture->layer_count, RenderGraph::RemainingTextureRange);
+        stream << ']';
+    } else if (const auto* buffer = std::get_if<RenderGraph::BufferRange>(&range)) {
+        stream << "buffer[offset=" << buffer->offset << " size=";
+        AppendCount(stream, buffer->size, RenderGraph::RemainingBufferRange);
+        stream << ']';
+    } else {
+        stream << "token[all]";
     }
 }
 
@@ -736,16 +732,16 @@ RenderGraph::~RenderGraph() {
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(ResourceHandle resource, std::string_view range) {
-    ResourceRange typed_range = ResourceRange::Token();
+    ResourceRange typed_range = std::monostate{};
     if (graph.IsValidResource(resource)) {
-        typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
+        typed_range = RenderGraph::WholeResourceRange(graph.resources[resource.index].kind);
     }
     graph.AddAccess(
         pass_index,
         resource,
         AccessMode::Read,
         typed_range,
-        ResourceState{.kind = typed_range.kind},
+        ResourceState{.kind = RenderGraph::GetRangeKind(typed_range)},
         false,
         false,
         range
@@ -754,16 +750,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(ResourceHandle resource
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(ResourceHandle resource, std::string_view range) {
-    ResourceRange typed_range = ResourceRange::Token();
+    ResourceRange typed_range = std::monostate{};
     if (graph.IsValidResource(resource)) {
-        typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
+        typed_range = RenderGraph::WholeResourceRange(graph.resources[resource.index].kind);
     }
     graph.AddAccess(
         pass_index,
         resource,
         AccessMode::Write,
         typed_range,
-        ResourceState{.kind = typed_range.kind},
+        ResourceState{.kind = RenderGraph::GetRangeKind(typed_range)},
         false,
         false,
         range
@@ -773,16 +769,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(ResourceHandle resourc
 
 RenderGraph::PassBuilder&
 RenderGraph::PassBuilder::ReadWrite(ResourceHandle resource, std::string_view range) {
-    ResourceRange typed_range = ResourceRange::Token();
+    ResourceRange typed_range = std::monostate{};
     if (graph.IsValidResource(resource)) {
-        typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
+        typed_range = RenderGraph::WholeResourceRange(graph.resources[resource.index].kind);
     }
     graph.AddAccess(
         pass_index,
         resource,
         AccessMode::ReadWrite,
         typed_range,
-        ResourceState{.kind = typed_range.kind},
+        ResourceState{.kind = RenderGraph::GetRangeKind(typed_range)},
         false,
         false,
         range
@@ -795,7 +791,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(TextureHandle resource,
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(TextureState::Automatic),
         true,
         false
@@ -808,7 +804,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(TextureHandle resource
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(TextureState::Automatic),
         true,
         false
@@ -821,7 +817,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TextureHandle reso
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(TextureState::Automatic),
         true,
         false
@@ -835,7 +831,7 @@ RenderGraph::PassBuilder::Read(TextureHandle resource, TextureState state, Textu
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(state),
         true,
         true
@@ -849,7 +845,7 @@ RenderGraph::PassBuilder::Write(TextureHandle resource, TextureState state, Text
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(state),
         true,
         true
@@ -863,7 +859,7 @@ RenderGraph::PassBuilder::ReadWrite(TextureHandle resource, TextureState state, 
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(state),
         true,
         true
@@ -876,7 +872,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(BufferHandle resource, 
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(BufferState::Automatic),
         true,
         false
@@ -889,7 +885,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(BufferHandle resource,
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(BufferState::Automatic),
         true,
         false
@@ -902,7 +898,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(BufferHandle resou
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(BufferState::Automatic),
         true,
         false
@@ -916,7 +912,7 @@ RenderGraph::PassBuilder::Read(BufferHandle resource, BufferState state, BufferR
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(state),
         true,
         true
@@ -930,7 +926,7 @@ RenderGraph::PassBuilder::Write(BufferHandle resource, BufferState state, Buffer
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(state),
         true,
         true
@@ -944,7 +940,7 @@ RenderGraph::PassBuilder::ReadWrite(BufferHandle resource, BufferState state, Bu
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(state),
         true,
         true
@@ -957,7 +953,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(TokenHandle resource) {
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Token(),
+        std::monostate{},
         ResourceState::Token(),
         true,
         false
@@ -970,7 +966,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(TokenHandle resource) 
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Token(),
+        std::monostate{},
         ResourceState::Token(),
         true,
         false
@@ -983,7 +979,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TokenHandle resour
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Token(),
+        std::monostate{},
         ResourceState::Token(),
         true,
         false
@@ -1111,7 +1107,7 @@ bool RenderGraphLowering::MaterializeInstruction(
 
     if (instruction.resource_kind == RenderGraph::ResourceKind::Texture) {
         const auto& binding = instruction.physical.texture;
-        const auto& range   = instruction.range.texture;
+        const auto& range   = std::get<RenderGraph::TextureRange>(instruction.range);
         if (!binding.IsValid() || instruction.texture_aspects == ETextureAspectFlags::NONE) {
             error = "texture instruction has no physical binding or aspect";
             return false;
@@ -1149,7 +1145,7 @@ bool RenderGraphLowering::MaterializeInstruction(
 
     if (instruction.resource_kind == RenderGraph::ResourceKind::Buffer) {
         const auto& binding = instruction.physical.buffer;
-        const auto& range   = instruction.range.buffer;
+        const auto& range   = std::get<RenderGraph::BufferRange>(instruction.range);
         if (!binding.IsValid() || range.size == 0 || range.offset > binding->GetByteSize() ||
             range.size > binding->GetByteSize() - range.offset) {
             error = "buffer instruction has no physical binding or has an invalid range";
@@ -1557,7 +1553,7 @@ void RenderGraph::SetInitialState(
 ) {
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(state),
         owner_queue,
         last_access,
@@ -1574,7 +1570,7 @@ void RenderGraph::SetInitialState(
 ) {
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(state),
         owner_queue,
         last_access,
@@ -1594,7 +1590,7 @@ void RenderGraph::Export(
     }
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(final_state),
         owner_queue,
         next_access,
@@ -1614,7 +1610,7 @@ void RenderGraph::Export(
     }
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(final_state),
         owner_queue,
         next_access,
@@ -3516,7 +3512,7 @@ void RenderGraph::AddAccess(
         );
         return;
     }
-    if (range.kind != resources[resource.index].kind) {
+    if (RenderGraph::GetRangeKind(range) != resources[resource.index].kind) {
         declaration_errors.emplace_back(
             "pass '" + passes[pass_index].name + "' used a typed handle with the wrong resource kind"
         );
@@ -3563,7 +3559,7 @@ void RenderGraph::AddStateDeclaration(
         return;
     }
     auto& declaration = resources[resource.index];
-    if (declaration.kind == ResourceKind::Token || range.kind != declaration.kind ||
+    if (declaration.kind == ResourceKind::Token || RenderGraph::GetRangeKind(range) != declaration.kind ||
         state.kind != declaration.kind) {
         declaration_errors.emplace_back(
             "state declaration has the wrong resource kind for '" + declaration.name + "'"

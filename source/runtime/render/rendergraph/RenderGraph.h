@@ -5,6 +5,7 @@
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHIExecutor.h"
 
+#include <compare>
 #include <concepts>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace Moer::Render {
@@ -124,7 +126,7 @@ public:
             return range;
         }
 
-        friend bool operator==(const TextureRange&, const TextureRange&) = default;
+        friend auto operator<=>(const TextureRange&, const TextureRange&) = default;
     };
 
     struct BufferRange {
@@ -135,42 +137,33 @@ public:
             return {};
         }
 
-        friend bool operator==(const BufferRange&, const BufferRange&) = default;
+        friend auto operator<=>(const BufferRange&, const BufferRange&) = default;
     };
 
-    struct ResourceRange {
-        ResourceKind kind = ResourceKind::Token;
-        TextureRange texture{};
-        BufferRange  buffer{};
+    // A token has no subranges; its monostate is also the default range.
+    using ResourceRange = std::variant<std::monostate, TextureRange, BufferRange>;
 
-        [[nodiscard]] static constexpr ResourceRange Whole(ResourceKind kind) {
-            ResourceRange result{};
-            result.kind = kind;
-            return result;
+    [[nodiscard]] static constexpr ResourceKind GetRangeKind(const ResourceRange& range) {
+        if (std::holds_alternative<TextureRange>(range)) {
+            return ResourceKind::Texture;
         }
-
-        [[nodiscard]] static constexpr ResourceRange Texture(TextureRange range = TextureRange::Whole()) {
-            ResourceRange result{};
-            result.kind    = ResourceKind::Texture;
-            result.texture = range;
-            return result;
+        if (std::holds_alternative<BufferRange>(range)) {
+            return ResourceKind::Buffer;
         }
+        return ResourceKind::Token;
+    }
 
-        [[nodiscard]] static constexpr ResourceRange Buffer(BufferRange range = BufferRange::Whole()) {
-            ResourceRange result{};
-            result.kind   = ResourceKind::Buffer;
-            result.buffer = range;
-            return result;
+    [[nodiscard]] static constexpr ResourceRange WholeResourceRange(ResourceKind kind) {
+        switch (kind) {
+            case ResourceKind::Texture:
+                return TextureRange::Whole();
+            case ResourceKind::Buffer:
+                return BufferRange::Whole();
+            case ResourceKind::Token:
+                return std::monostate{};
         }
-
-        [[nodiscard]] static constexpr ResourceRange Token() {
-            ResourceRange result{};
-            result.kind = ResourceKind::Token;
-            return result;
-        }
-
-        friend bool operator==(const ResourceRange&, const ResourceRange&) = default;
-    };
+        return std::monostate{};
+    }
 
     struct ResourceHandle {
         static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
