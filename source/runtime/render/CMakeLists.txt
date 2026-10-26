@@ -48,6 +48,9 @@ if (MOER_VULKAN_TEST_SUPPORT AND NOT APPLE)
         "${moer_source_dir}/test/vulkan/VulkanFaultInjection.cpp"
     )
     target_include_directories(${target_name} PRIVATE "${moer_source_dir}/test")
+    if (WITH_CUDA)
+        target_sources(${target_name} PRIVATE "${moer_source_dir}/test/vulkan/CudaInteropProbe.cpp")
+    endif()
 endif()
 target_compile_definitions(${target_name} PUBLIC
     MOER_VULKAN_TEST_SUPPORT=$<BOOL:${MOER_VULKAN_TEST_SUPPORT}>

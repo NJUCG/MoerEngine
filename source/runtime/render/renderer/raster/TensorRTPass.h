@@ -96,6 +96,7 @@ struct TensorRTEngine {
     std::unique_ptr<INetworkDefinition>    network;
     std::unique_ptr<nvonnxparser::IParser> parser;
     std::unique_ptr<IBuilderConfig>        config;
+    std::unique_ptr<IRuntime>              runtime;
     std::unique_ptr<ICudaEngine>           engine;
     std::unique_ptr<IExecutionContext>     context;
 
@@ -115,11 +116,13 @@ public:
             LoadEngineFromOnnx();
         }
 
+        if (!engine) {
+            throw std::runtime_error("TensorRT engine creation failed");
+        }
         // Context
         context = std::unique_ptr<IExecutionContext>(engine->createExecutionContext());
         if (!context) {
-            LOG_ERROR("Context creation failed");
-            return;
+            throw std::runtime_error("TensorRT context creation failed");
         }
 
         LOG_INFO("Created TensorRT IExecutionContext.");
@@ -137,6 +140,7 @@ public:
 
         context.reset();
         engine.reset();
+        runtime.reset();
 
         config.reset();
         parser.reset();
@@ -448,7 +452,7 @@ public:
     void Run(const cudaStream_t& stream_to_run) {
         bool is_success = context->enqueueV3(stream_to_run);
         if (!is_success) {
-            LOG_ERROR("TRT Pass: enqueueV3 failed.");
+            throw std::runtime_error("TensorRT enqueueV3 failed");
         }
     }
 
@@ -485,7 +489,7 @@ private:
         file.read(engine_data.data(), size);
         file.close();
 
-        auto runtime = std::unique_ptr<IRuntime>(createInferRuntime(gLogger));
+        runtime = std::unique_ptr<IRuntime>(createInferRuntime(gLogger));
         if (!runtime) {
             LOG_ERROR("Failed to create TensorRT runtime for cache loading");
             return false;
@@ -767,9 +771,10 @@ public:
                                                  .string());
     }
     ~TensorRTPass() {
+        // Drain the CUDA stream before freeing buffers used by pending inference.
+        res.reset();
         engine2.reset();
         engine1.reset();
-        res.reset();
         cusolverDnDestroy(cusolver);
     }
 

@@ -878,6 +878,12 @@ endif()
 
 # CUDA Test
 if (TARGET Moer::Cuda)
+    if (MOER_VULKAN_TEST_SUPPORT)
+        add_executable(TestCudaInterop CudaInteropTest.cpp)
+        target_link_libraries(TestCudaInterop PRIVATE Moer::Runtime Moer::Cuda)
+        set_target_properties(TestCudaInterop PROPERTIES FOLDER ${moer_test_folder})
+    endif()
+
     set(test_target TestCuda)
     add_executable(${test_target} CudaTest.cpp)
     target_include_directories(${test_target}
@@ -933,7 +939,7 @@ endif()
 
 # These tests execute GPU work and fail on unavailable runtimes or wrong readbacks.
 # Keep SDK DLL lookup local to each test instead of relying on a global PATH.
-foreach(cuda_test IN ITEMS TestCuda TestTorch TestTensorRT)
+foreach(cuda_test IN ITEMS TestCuda TestTorch TestTensorRT TestCudaInterop)
     if (TARGET ${cuda_test})
         add_test(NAME ${cuda_test}Smoke COMMAND $<TARGET_FILE:${cuda_test}>)
         set_tests_properties(${cuda_test}Smoke PROPERTIES

@@ -43,6 +43,7 @@ public:
                 cudaGetErrorString(result),
                 func
             );
+            throw std::runtime_error(std::string(func) + ": " + cudaGetErrorString(result));
         }
     }
 
@@ -56,6 +57,7 @@ public:
             LOG_ERROR(
                 "CUDA error at {}:{}. Error code={}. \"{}\"", file, line, static_cast<int32>(result), func
             );
+            throw std::runtime_error(std::string(func) + ": cuSOLVER error " + std::to_string(result));
         }
     }
 
@@ -69,12 +71,6 @@ public:
 
     static VulkanTimeline& getVulkanTimeline(FenceRef fence) {
         return *dynamic_cast<VulkanTimeline*>(fence.Get());
-    }
-
-    static VkDeviceMemory getVkDeviceMemory(VulkanDevice& vulkan_device, VulkanTexture& vulkan_texture) {
-        VmaAllocationInfo info;
-        vmaGetAllocationInfo(vulkan_device.GetVmaAllocator(), vulkan_texture.GetAllocation(), &info);
-        return info.deviceMemory;
     }
 
     static void CloseWin32Handle(HANDLE& handle) {
@@ -128,14 +124,14 @@ struct CudaTexture {
     size_t             element_type_count; // float4 的 4
 
     // cuda objects
-    cudaExternalMemory_t             cudaExtMemImageBuffer;
-    cudaMipmappedArray_t             cudaMipmappedImageArray;
+    cudaExternalMemory_t             cudaExtMemImageBuffer{};
+    cudaMipmappedArray_t             cudaMipmappedImageArray{};
     std::vector<cudaSurfaceObject_t> surfaceObjectList;
-    cudaSurfaceObject_t*             d_surfaceObjectList;
-    cudaTextureObject_t              textureObjMipMapInput;
+    cudaSurfaceObject_t*             d_surfaceObjectList{};
+    cudaTextureObject_t              textureObjMipMapInput{};
 
     // win32 objects
-    HANDLE win32_handle;
+    HANDLE win32_handle{};
 
     cudaTextureObject_t GetTextureObject() {
         return textureObjMipMapInput;
@@ -153,157 +149,167 @@ struct CudaTexture {
         return element_type_count;
     }
 
-    CudaTexture(RasterContext& context, TextureRef texture) :
+    CudaTexture(RasterContext& context, TextureRef texture) : CudaTexture(context.device, texture) {}
+
+    CudaTexture(RenderDevice& device, TextureRef texture) :
         moer_texture(texture),
         mip_levels(texture.Get()->GetNumMips()),
         width(texture->GetWidth()),
         height(texture->GetHeight()) {
 
-        if (mip_levels == 0 || width == 0 || height == 0) {
-            LOG_WARNING("CudaTexture failed to initialize, texture name: {}.", texture->GetName());
-            return;
-        }
-
-        VulkanDevice&  vulkan_device  = CudaVulkanTools::getVulkanDevice(context.device);
-        VulkanTexture& vulkan_texture = CudaVulkanTools::getVulkanTexture(texture);
-
-        win32_handle = getMemoryWin32Handle(vulkan_device, vulkan_texture);
-
-        auto format_desc   = getCudaFormatDescriptor(moer_texture->GetFormat());
-        element_type       = format_desc.element_type;
-        element_type_count = format_desc.element_type_count;
-
-        {
-            uint64 total_size = [&]() {
-                VkMemoryRequirements vkMemoryRequirements = {};
-                vkGetImageMemoryRequirements(
-                    vulkan_device.GetDevice(), vulkan_texture.GetHandle(), &vkMemoryRequirements
-                );
-                return vkMemoryRequirements.size;
-            }();
-
-            cudaExternalMemoryHandleDesc desc;
-            memset(&desc, 0, sizeof(desc));
-
-            desc.type                = cudaExternalMemoryHandleTypeOpaqueWin32;
-            desc.handle.win32.handle = win32_handle;
-            desc.size                = total_size;
-
-            checkCudaErrors(cudaImportExternalMemory(&cudaExtMemImageBuffer, &desc));
-        }
-        {
-            cudaExternalMemoryMipmappedArrayDesc desc;
-            memset(&desc, 0, sizeof(desc));
-
-            cudaExtent extent = make_cudaExtent(width, height, 0);
-
-            desc.offset     = 0;
-            desc.formatDesc = format_desc.desc;
-            desc.extent     = extent;
-            desc.flags      = 0;
-            desc.numLevels  = mip_levels;
-
-            checkCudaErrors(cudaExternalMemoryGetMappedMipmappedArray(
-                &cudaMipmappedImageArray, cudaExtMemImageBuffer, &desc
-            ));
-        }
-        { // surface
-            for (uint mipLevelIdx = 0; mipLevelIdx < mip_levels; mipLevelIdx++) {
-                cudaArray_t      cudaMipLevelArray;
-                cudaResourceDesc resourceDesc;
-
-                checkCudaErrors(
-                    cudaGetMipmappedArrayLevel(&cudaMipLevelArray, cudaMipmappedImageArray, mipLevelIdx)
-                );
-
-                memset(&resourceDesc, 0, sizeof(resourceDesc));
-                resourceDesc.resType         = cudaResourceTypeArray;
-                resourceDesc.res.array.array = cudaMipLevelArray;
-
-                cudaSurfaceObject_t surfaceObject;
-                checkCudaErrors(cudaCreateSurfaceObject(&surfaceObject, &resourceDesc));
-
-                surfaceObjectList.push_back(surfaceObject);
+        try {
+            if (mip_levels == 0 || width == 0 || height == 0) {
+                throw std::invalid_argument("CUDA image extent and mip count must be nonzero");
             }
-        }
-        { // texture
-            cudaResourceDesc resDescr;
-            memset(&resDescr, 0, sizeof(cudaResourceDesc));
 
-            resDescr.resType           = cudaResourceTypeMipmappedArray;
-            resDescr.res.mipmap.mipmap = cudaMipmappedImageArray;
+            VulkanDevice&  vulkan_device  = CudaVulkanTools::getVulkanDevice(device);
+            VulkanTexture& vulkan_texture = CudaVulkanTools::getVulkanTexture(texture);
 
-            cudaTextureDesc texDescr;
-            memset(&texDescr, 0, sizeof(cudaTextureDesc));
+            win32_handle = getMemoryWin32Handle(vulkan_device, vulkan_texture);
 
-            texDescr.normalizedCoords = true;
-            texDescr.filterMode       = cudaFilterModeLinear;
-            texDescr.mipmapFilterMode = cudaFilterModeLinear;
+            auto format_desc   = getCudaFormatDescriptor(moer_texture->GetFormat());
+            element_type       = format_desc.element_type;
+            element_type_count = format_desc.element_type_count;
 
-            texDescr.addressMode[0] = cudaAddressModeWrap;
-            texDescr.addressMode[1] = cudaAddressModeWrap;
+            {
+                VmaAllocationInfo2 allocation{};
+                vmaGetAllocationInfo2(
+                    vulkan_device.GetVmaAllocator(), vulkan_texture.GetAllocation(), &allocation
+                );
+                cudaExternalMemoryHandleDesc desc;
+                memset(&desc, 0, sizeof(desc));
 
-            texDescr.maxMipmapLevelClamp = float(mip_levels - 1);
+                desc.type                = cudaExternalMemoryHandleTypeOpaqueWin32;
+                desc.handle.win32.handle = win32_handle;
+                // The exported handle names the entire VkDeviceMemory block.
+                desc.size  = allocation.blockSize;
+                desc.flags = allocation.dedicatedMemory ? cudaExternalMemoryDedicated : 0;
 
-            texDescr.readMode = format_desc.read_mode;
+                checkCudaErrors(cudaImportExternalMemory(&cudaExtMemImageBuffer, &desc));
+                CudaVulkanTools::CloseWin32Handle(win32_handle);
+            }
+            {
+                cudaExternalMemoryMipmappedArrayDesc desc;
+                memset(&desc, 0, sizeof(desc));
 
-            checkCudaErrors(cudaCreateTextureObject(&textureObjMipMapInput, &resDescr, &texDescr, NULL));
-        }
-        { // surface
+                cudaExtent extent = make_cudaExtent(width, height, 0);
 
-            assert(surfaceObjectList.size() == mip_levels);
+                VmaAllocationInfo allocation{};
+                vmaGetAllocationInfo(
+                    vulkan_device.GetVmaAllocator(), vulkan_texture.GetAllocation(), &allocation
+                );
+                desc.offset     = allocation.offset;
+                desc.formatDesc = format_desc.desc;
+                desc.extent     = extent;
+                desc.flags      = cudaArraySurfaceLoadStore;
+                if ((texture->GetUsage() & ETextureUsageFlags::COLOR_ATTACHMENT) !=
+                    ETextureUsageFlags::UNDEFINED) {
+                    desc.flags |= cudaArrayColorAttachment;
+                }
+                desc.numLevels = mip_levels;
 
-            checkCudaErrors(cudaMalloc(
-                (void**)&d_surfaceObjectList, surfaceObjectList.size() * sizeof(cudaSurfaceObject_t)
-            ));
+                checkCudaErrors(cudaExternalMemoryGetMappedMipmappedArray(
+                    &cudaMipmappedImageArray, cudaExtMemImageBuffer, &desc
+                ));
+            }
+            { // surface
+                for (uint mipLevelIdx = 0; mipLevelIdx < mip_levels; mipLevelIdx++) {
+                    cudaArray_t      cudaMipLevelArray;
+                    cudaResourceDesc resourceDesc;
 
-            checkCudaErrors(cudaMemcpy(
-                d_surfaceObjectList,
-                surfaceObjectList.data(),
-                surfaceObjectList.size() * sizeof(cudaSurfaceObject_t),
-                cudaMemcpyHostToDevice
-            ));
+                    checkCudaErrors(
+                        cudaGetMipmappedArrayLevel(&cudaMipLevelArray, cudaMipmappedImageArray, mipLevelIdx)
+                    );
+
+                    memset(&resourceDesc, 0, sizeof(resourceDesc));
+                    resourceDesc.resType         = cudaResourceTypeArray;
+                    resourceDesc.res.array.array = cudaMipLevelArray;
+
+                    cudaSurfaceObject_t surfaceObject;
+                    checkCudaErrors(cudaCreateSurfaceObject(&surfaceObject, &resourceDesc));
+
+                    surfaceObjectList.push_back(surfaceObject);
+                }
+            }
+            { // texture
+                cudaResourceDesc resDescr;
+                memset(&resDescr, 0, sizeof(cudaResourceDesc));
+
+                resDescr.resType           = cudaResourceTypeMipmappedArray;
+                resDescr.res.mipmap.mipmap = cudaMipmappedImageArray;
+
+                cudaTextureDesc texDescr;
+                memset(&texDescr, 0, sizeof(cudaTextureDesc));
+
+                texDescr.normalizedCoords = true;
+                texDescr.filterMode       = cudaFilterModeLinear;
+                texDescr.mipmapFilterMode = cudaFilterModeLinear;
+
+                texDescr.addressMode[0] = cudaAddressModeWrap;
+                texDescr.addressMode[1] = cudaAddressModeWrap;
+
+                texDescr.maxMipmapLevelClamp = float(mip_levels - 1);
+
+                texDescr.readMode = format_desc.read_mode;
+
+                checkCudaErrors(cudaCreateTextureObject(&textureObjMipMapInput, &resDescr, &texDescr, NULL));
+            }
+            { // surface
+
+                assert(surfaceObjectList.size() == mip_levels);
+
+                checkCudaErrors(cudaMalloc(
+                    (void**)&d_surfaceObjectList, surfaceObjectList.size() * sizeof(cudaSurfaceObject_t)
+                ));
+
+                checkCudaErrors(cudaMemcpy(
+                    d_surfaceObjectList,
+                    surfaceObjectList.data(),
+                    surfaceObjectList.size() * sizeof(cudaSurfaceObject_t),
+                    cudaMemcpyHostToDevice
+                ));
+            }
+        } catch (...) {
+            Reset();
+            throw;
         }
     }
     ~CudaTexture() {
-        // destroy cuda objects
-        for (int i = 0; i < mip_levels; i++) {
-            checkCudaErrors(cudaDestroySurfaceObject(surfaceObjectList[i]));
-        }
-
-        checkCudaErrors(cudaFree(d_surfaceObjectList));
-        checkCudaErrors(cudaFreeMipmappedArray(cudaMipmappedImageArray));
-        checkCudaErrors(cudaDestroyTextureObject(textureObjMipMapInput));
-
-        // destroy non-cuda objects
-
-        // destroy win32 handles
-        CudaVulkanTools::CloseWin32Handle(win32_handle);
+        Reset();
     }
 
     CudaTexture(const CudaTexture&)            = delete;
     CudaTexture& operator=(const CudaTexture&) = delete;
 
 private:
+    void Reset() noexcept {
+        // Objects must die before their mapped array and imported memory.
+        if (textureObjMipMapInput)
+            cudaDestroyTextureObject(textureObjMipMapInput);
+        for (auto surface : surfaceObjectList)
+            cudaDestroySurfaceObject(surface);
+        if (d_surfaceObjectList)
+            cudaFree(d_surfaceObjectList);
+        if (cudaMipmappedImageArray)
+            cudaFreeMipmappedArray(cudaMipmappedImageArray);
+        if (cudaExtMemImageBuffer)
+            cudaDestroyExternalMemory(cudaExtMemImageBuffer);
+        CudaVulkanTools::CloseWin32Handle(win32_handle);
+        textureObjMipMapInput = 0;
+        surfaceObjectList.clear();
+        d_surfaceObjectList     = nullptr;
+        cudaMipmappedImageArray = nullptr;
+        cudaExtMemImageBuffer   = nullptr;
+    }
+
     static HANDLE getMemoryWin32Handle(VulkanDevice& vulkan_device, VulkanTexture& vulkan_texture) {
-        HANDLE handle;
+        HANDLE handle{};
 
-        VkDeviceMemory vk_device_memory = CudaVulkanTools::getVkDeviceMemory(vulkan_device, vulkan_texture);
-
-        VkMemoryGetWin32HandleInfoKHR info;
-        info.sType      = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
-        info.pNext      = NULL;
-        info.memory     = vk_device_memory;
-        info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-        // vkGetMemoryWin32HandleKHR(vulkan_device.GetDevice(), &info, &handle);
         auto result = vmaGetMemoryWin32Handle(
             vulkan_device.GetVmaAllocator(), vulkan_texture.GetAllocation(), NULL, &handle
         );
         if (result != VK_SUCCESS) {
-            LOG_WARNING(
-                "CudaPass: vmaGetMemoryWin32Handle Failed. VkResult = {}", static_cast<int32>(result)
-            );
+            throw std::runtime_error("Vulkan external image memory export failed");
         }
 
         return handle;
@@ -400,10 +406,13 @@ struct CudaInteropBoundary {
     cudaStream_t stream_to_run{};
 
     CudaInteropBoundary(RasterContext& context, std::initializer_list<TextureRef> resources) :
-        vulkan_device(CudaVulkanTools::getVulkanDevice(context.device)),
-        before(context.device.CreateFence()),
-        after(context.device.CreateFence()),
-        acquired(context.device.CreateFence()) {
+        CudaInteropBoundary(context.device, resources) {}
+
+    CudaInteropBoundary(RenderDevice& device, std::initializer_list<TextureRef> resources) :
+        vulkan_device(CudaVulkanTools::getVulkanDevice(device)),
+        before(device.CreateFence()),
+        after(device.CreateFence()),
+        acquired(device.CreateFence()) {
         std::unordered_set<Texture*> unique;
         for (const auto& texture : resources) {
             if (!texture) {
@@ -463,16 +472,20 @@ struct CudaInteropBoundary {
         }
         cudaExternalSemaphoreWaitParams wait{};
         wait.params.fence.value = value;
-        Require(cudaWaitExternalSemaphoresAsync(&cuda_before, &wait, 1, stream_to_run));
+        Require(
+            cudaWaitExternalSemaphoresAsync(&cuda_before, &wait, 1, stream_to_run), "wait for Vulkan release"
+        );
     }
 
     void AcquireFromCuda() {
         cudaExternalSemaphoreSignalParams signal{};
         signal.params.fence.value = value;
-        Require(cudaSignalExternalSemaphoresAsync(&cuda_after, &signal, 1, stream_to_run));
+        Require(
+            cudaSignalExternalSemaphoresAsync(&cuda_after, &signal, 1, stream_to_run), "signal Vulkan acquire"
+        );
         // A failed CUDA operation must not publish a Vulkan wait on a signal
         // that will never execute. This also bounds reuse of TensorRT buffers.
-        Require(cudaStreamSynchronize(stream_to_run));
+        Require(cudaStreamSynchronize(stream_to_run), "complete CUDA work before Vulkan acquire");
         auto& external_timeline = CudaVulkanTools::getVulkanTimeline(after);
         external_timeline.Notify(value);
 
@@ -499,9 +512,9 @@ private:
     cudaExternalSemaphore_t cuda_after{};
     uint64                  value{};
 
-    static void Require(cudaError_t result) {
+    static void Require(cudaError_t result, const char* operation = "initialize CUDA interop") {
         if (result != cudaSuccess) {
-            throw std::runtime_error(std::string("CUDA interop failed: ") + cudaGetErrorString(result));
+            throw std::runtime_error(std::string(operation) + ": " + cudaGetErrorString(result));
         }
     }
 

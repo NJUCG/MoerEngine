@@ -27,7 +27,9 @@ VulkanTimeline::VulkanTimeline(VulkanDevice& _device) : VulkanDeviceObject(&_dev
     vulkanExportSemaphoreWin32HandleInfoKHR.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR;
     vulkanExportSemaphoreWin32HandleInfoKHR.pNext = NULL;
     vulkanExportSemaphoreWin32HandleInfoKHR.pAttributes = &winSecurityAttributes;
-    vulkanExportSemaphoreWin32HandleInfoKHR.dwAccess = DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE;
+    // Opaque synchronization handles need generic write access for CUDA signal.
+    // DXGI_SHARED_RESOURCE_WRITE is a resource-specific bit, not GENERIC_WRITE.
+    vulkanExportSemaphoreWin32HandleInfoKHR.dwAccess = GENERIC_READ | GENERIC_WRITE;
     vulkanExportSemaphoreWin32HandleInfoKHR.name     = (LPCWSTR)NULL;
 
     VkExportSemaphoreCreateInfoKHR vulkanExportSemaphoreCreateInfo = {};
