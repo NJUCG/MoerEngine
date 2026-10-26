@@ -155,22 +155,12 @@ Run repeated threaded RT soak checks for five minutes per process:
 python tools/threading/run_matrix.py --set soak --repeat 3 --soak-seconds 300 --base-config template.MoerEngine.toml
 ```
 
-Collect the fixed-scene Phase 9.0 serial-recording samples for the linear and
-RenderGraph Raster paths. Build Release first so the predicted savings are not
-based on Debug instrumentation cost:
-
-```powershell
-just b Release
-python tools/threading/run_matrix.py --scenario raster_rt1_rhi --repeat 3 --skip-window-stress --profile-tail-windows 5 --strict-serial-golden --base-config template.MoerEngine.toml --exe target/bin/Release/MoerEditor.exe --workdir target/bin/Release --outdir target/validation/rt_rhi/phase9_0/raster_rt1_rhi
-python tools/threading/run_matrix.py --scenario raster_graph_rt1_rhi --repeat 3 --skip-window-stress --profile-tail-windows 5 --strict-serial-golden --base-config template.MoerEngine.toml --exe target/bin/Release/MoerEditor.exe --workdir target/bin/Release --outdir target/validation/rt_rhi/phase9_0/raster_graph_rt1_rhi
-```
-
-`--strict-serial-golden` is intentionally opt-in because unsupported commands
-in other render paths may be reported as incomplete. For the Phase 9.0 fixed
-Raster scenes it requires every selected tail sample to be complete, rejects
-any incomplete, unresolved, or opaque sample, requires one stable manifest
-across the selected tail windows, and compares that manifest across repeated
-runs of the same scenario.
+The old `--strict-serial-golden` renderer comparison mode is retired and the
+runner rejects it. Use `TestRHIParallelRecordVulkan --compiled-commands` for GPU
+output comparisons. Low-level legacy recordings may still collect serial
+summaries when profiling is enabled; these do not validate the active compiled
+renderer path. Barrier summaries consume resolved batches in diagnostics code,
+without adding trace responsibilities to the resource tracker.
 
 Generate and validate all scenario configs without launching the editor:
 

@@ -8,6 +8,16 @@
 #include <string_view>
 
 namespace Moer::Render {
+struct VulkanResolvedBarrierBatch;
+
+struct BarrierSemanticDiagnostics {
+    uint64 digest{0};
+    uint32 buffer_count{0};
+    uint32 texture_count{0};
+    uint32 memory_count{0};
+};
+
+
 
 // One recording's summary and the reasons it could not be fully described.
 struct VulkanSerialGoldenResult {
@@ -50,6 +60,13 @@ public:
     StableSubmissionToken ResolveNativeBuffer(uint64_t _native_handle);
     StableSubmissionToken ResolveNativeImage(uint64_t _native_handle);
     void AddBarrier(const SerialBarrierItem& _item);
+    // Observe the same resolved batch that will be recorded; the tracker has
+    // no knowledge of trace IDs, hashes, or diagnostic output.
+    BarrierSemanticDiagnostics RecordBarriers(
+        const VulkanResolvedBarrierBatch& _barriers,
+        uint64_t                          _group_ordinal,
+        const SerialQueueFamilyMap&        _queue_family_map
+    );
     void RecordUnresolvedBufferBarrier(const SerialBarrierItem& _item);
 
     // Called only from ExecuteNow's profile-on branch, after VisitCmd returned.

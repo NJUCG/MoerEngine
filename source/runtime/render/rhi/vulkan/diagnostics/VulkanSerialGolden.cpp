@@ -2,6 +2,7 @@
 #include "rhi/vulkan/VulkanBindlessArray.h"
 #include "rhi/vulkan/VulkanRaytracingResource.h"
 #include "VulkanSerialGolden.h"
+#include "rhi/vulkan/VulkanResourceTracker.h"
 
 #include "rhi/RHIImpl.h"
 #include "rhi/vulkan/VulkanRHIResource.h"
@@ -1302,6 +1303,142 @@ StableSubmissionToken VulkanSerialGoldenTrace::ResolveNativeImage(uint64_t _nati
 
 void VulkanSerialGoldenTrace::AddBarrier(const SerialBarrierItem& _item) {
     impl->barrier_builder.Add(_item);
+}
+
+BarrierSemanticDiagnostics VulkanSerialGoldenTrace::RecordBarriers(
+    const VulkanResolvedBarrierBatch& _barriers,
+    uint64_t                          _group_ordinal,
+    const SerialQueueFamilyMap&        _queue_family_map
+) {
+    BarrierSemanticDiagnostics diagnostics;
+    diagnostics.buffer_count  = static_cast<uint32>(_barriers.buffer_barriers.size());
+    diagnostics.texture_count = static_cast<uint32>(_barriers.texture_barriers.size());
+    diagnostics.memory_count  = static_cast<uint32>(_barriers.memory_barriers.size());
+
+    uint64 digest_sum         = 0;
+    uint64 digest_xor         = 0;
+    auto   add_barrier_digest = [&](uint64 _barrier_digest) {
+        const uint64 mixed = StableRecordHash::Mix(_barrier_digest);
+        digest_sum += mixed;
+        digest_xor ^= mixed;
+    };
+
+    const auto queue_roles = [&](uint32_t _src, uint32_t _dst) {
+        const uint32_t src = ResolveSerialQueueRole(_src, _queue_family_map);
+        const uint32_t dst = ResolveSerialQueueRole(_dst, _queue_family_map);
+        return std::tuple{
+            src,
+            dst,
+            IsCompleteSerialQueueRole(src) && IsCompleteSerialQueueRole(dst),
+        };
+    };
+
+    for (const VkBufferMemoryBarrier2& barrier : _barriers.buffer_barriers) {
+        const StableSubmissionToken resource =
+            ResolveNativeBuffer(NativeHandleKey(barrier.buffer));
+        const auto [src_queue_role, dst_queue_role, queue_roles_complete] =
+            queue_roles(barrier.srcQueueFamilyIndex, barrier.dstQueueFamilyIndex);
+        const SerialBarrierItem serial_item{
+            .group_ordinal        = _group_ordinal,
+            .resource             = resource,
+            .src_stage_mask       = barrier.srcStageMask,
+            .dst_stage_mask       = barrier.dstStageMask,
+            .src_access_mask      = barrier.srcAccessMask,
+            .dst_access_mask      = barrier.dstAccessMask,
+            .src_queue_role       = src_queue_role,
+            .dst_queue_role       = dst_queue_role,
+            .queue_roles_complete = queue_roles_complete,
+            .range_offset         = barrier.offset,
+            .range_size           = barrier.size,
+        };
+        AddBarrier(serial_item);
+        if (!resource.complete) {
+            RecordUnresolvedBufferBarrier(serial_item);
+        }
+        StableRecordHash hash;
+        hash.Add(0x4255464645525f42ull);
+        hash.Add(barrier.srcStageMask);
+        hash.Add(barrier.srcAccessMask);
+        hash.Add(barrier.dstStageMask);
+        hash.Add(barrier.dstAccessMask);
+        hash.Add(src_queue_role);
+        hash.Add(dst_queue_role);
+        hash.Add(queue_roles_complete ? 1u : 0u);
+        hash.Add(barrier.offset);
+        hash.Add(barrier.size);
+        add_barrier_digest(hash.Value());
+    }
+    for (const VkImageMemoryBarrier2& barrier : _barriers.texture_barriers) {
+        const StableSubmissionToken resource =
+            ResolveNativeImage(NativeHandleKey(barrier.image));
+        const auto [src_queue_role, dst_queue_role, queue_roles_complete] =
+            queue_roles(barrier.srcQueueFamilyIndex, barrier.dstQueueFamilyIndex);
+        AddBarrier(
+            SerialBarrierItem{
+                .group_ordinal        = _group_ordinal,
+                .resource             = resource,
+                .src_stage_mask       = barrier.srcStageMask,
+                .dst_stage_mask       = barrier.dstStageMask,
+                .src_access_mask      = barrier.srcAccessMask,
+                .dst_access_mask      = barrier.dstAccessMask,
+                .old_state            = static_cast<uint64_t>(barrier.oldLayout),
+                .new_state            = static_cast<uint64_t>(barrier.newLayout),
+                .src_queue_role       = src_queue_role,
+                .dst_queue_role       = dst_queue_role,
+                .queue_roles_complete = queue_roles_complete,
+                .aspect_mask          = barrier.subresourceRange.aspectMask,
+                .base_mip_level       = barrier.subresourceRange.baseMipLevel,
+                .level_count          = barrier.subresourceRange.levelCount,
+                .base_array_layer     = barrier.subresourceRange.baseArrayLayer,
+                .layer_count          = barrier.subresourceRange.layerCount,
+            }
+        );
+        StableRecordHash hash;
+        hash.Add(0x494d4147455f4241ull);
+        hash.Add(barrier.srcStageMask);
+        hash.Add(barrier.srcAccessMask);
+        hash.Add(barrier.dstStageMask);
+        hash.Add(barrier.dstAccessMask);
+        hash.Add(src_queue_role);
+        hash.Add(dst_queue_role);
+        hash.Add(queue_roles_complete ? 1u : 0u);
+        hash.Add(barrier.oldLayout);
+        hash.Add(barrier.newLayout);
+        hash.Add(barrier.subresourceRange.aspectMask);
+        hash.Add(barrier.subresourceRange.baseMipLevel);
+        hash.Add(barrier.subresourceRange.levelCount);
+        hash.Add(barrier.subresourceRange.baseArrayLayer);
+        hash.Add(barrier.subresourceRange.layerCount);
+        add_barrier_digest(hash.Value());
+    }
+    for (const VkMemoryBarrier2& barrier : _barriers.memory_barriers) {
+        AddBarrier(
+            SerialBarrierItem{
+                .group_ordinal   = _group_ordinal,
+                .resource        = StableSubmissionToken::Null(),
+                .src_stage_mask  = barrier.srcStageMask,
+                .dst_stage_mask  = barrier.dstStageMask,
+                .src_access_mask = barrier.srcAccessMask,
+                .dst_access_mask = barrier.dstAccessMask,
+            }
+        );
+        StableRecordHash hash;
+        hash.Add(0x4d454d4f52595f42ull);
+        hash.Add(barrier.srcStageMask);
+        hash.Add(barrier.srcAccessMask);
+        hash.Add(barrier.dstStageMask);
+        hash.Add(barrier.dstAccessMask);
+        add_barrier_digest(hash.Value());
+    }
+
+    StableRecordHash final_hash;
+    final_hash.Add(diagnostics.buffer_count);
+    final_hash.Add(diagnostics.texture_count);
+    final_hash.Add(diagnostics.memory_count);
+    final_hash.Add(digest_sum);
+    final_hash.Add(digest_xor);
+    diagnostics.digest = final_hash.Value();
+    return diagnostics;
 }
 
 void VulkanSerialGoldenTrace::RecordUnresolvedBufferBarrier(const SerialBarrierItem& _item) {

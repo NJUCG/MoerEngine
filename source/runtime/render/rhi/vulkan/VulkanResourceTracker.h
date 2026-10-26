@@ -12,15 +12,6 @@ namespace Moer::Render {
 class VulkanBuffer;
 class VulkanTexture;
 class VulkanCommandList;
-class VulkanSerialGoldenTrace;
-struct SerialQueueFamilyMap;
-
-struct BarrierSemanticDiagnostics {
-    uint64 digest{0};
-    uint32 buffer_count{0};
-    uint32 texture_count{0};
-    uint32 memory_count{0};
-};
 
 // A self-contained, ordered barrier prefix produced by the coordinator. It
 // can outlive the tracker's pending arrays and be emitted later while a single
@@ -209,12 +200,6 @@ public:
     void ResolveBarriers();
 
     VulkanResolvedBarrierBatch TakeResolvedBarriers();
-
-    BarrierSemanticDiagnostics GetPendingBarrierDiagnostics(
-        VulkanSerialGoldenTrace*    _serial_golden,
-        uint64_t                    _group_ordinal,
-        const SerialQueueFamilyMap& _queue_family_map
-    ) const;
 
     void DispatchBarriers(VulkanCommandList& _cmd_list);
     // Finalize this submit with queue-preferred layouts and a buffer dependency.

@@ -7911,7 +7911,7 @@ void VkCommandQueue::ExecuteNow(
         record_sample->topology = topology_builder.Finish();
     }
 
-    auto record_pending_barriers = [&](uint64 _group_index) {
+    auto record_barrier_diagnostics = [&](const VulkanResolvedBarrierBatch& _barriers, uint64 _group_index) {
         const QueueFamilyIndices queue_families = vk_device.GetQueueFamilyIndices();
         const SerialQueueFamilyMap serial_queue_family_map{
             .graphics_family = queue_families.graphics.value_or(VK_QUEUE_FAMILY_IGNORED),
@@ -7920,8 +7920,8 @@ void VkCommandQueue::ExecuteNow(
             .ignored_family  = VK_QUEUE_FAMILY_IGNORED,
         };
         const BarrierSemanticDiagnostics barriers =
-            tracker.GetPendingBarrierDiagnostics(
-                serial_golden.get(), _group_index, serial_queue_family_map
+            serial_golden->RecordBarriers(
+                _barriers, _group_index, serial_queue_family_map
             );
         record_sample->barrier_hash.Add(_group_index);
         record_sample->barrier_hash.Add(barriers.digest);
@@ -8056,8 +8056,9 @@ void VkCommandQueue::ExecuteNow(
                 serial_golden->RegisterDerivedResources(cmdnode->cmd);
             }
             tracker.ResolveBarriers();
-            record_pending_barriers(current_raw_layer);
-            tracker.DispatchBarriers(vk_command_context.GetCommandList());
+            const VulkanResolvedBarrierBatch barriers = tracker.TakeResolvedBarriers();
+            record_barrier_diagnostics(barriers, current_raw_layer);
+            barriers.Record(vk_command_context.GetCommandList());
             reorder_timer.Stop();
             preprocess_time += reorder_timer.ElapsedMilliseconds();
             vk_command_context.GetCommandList().InsertLabel(
@@ -8194,10 +8195,11 @@ void VkCommandQueue::ExecuteNow(
         if (!_submit.HasExplicitResourceStateOwnership()) {
             tracker.RestorePreferredStates();
         }
+        const VulkanResolvedBarrierBatch barriers = tracker.TakeResolvedBarriers();
         if (record_sample) {
-            record_pending_barriers(std::numeric_limits<uint64>::max());
+            record_barrier_diagnostics(barriers, std::numeric_limits<uint64>::max());
         }
-        tracker.DispatchBarriers(vk_command_context.GetCommandList());
+        barriers.Record(vk_command_context.GetCommandList());
         if (ends_profiling_frame) {
             profiler_storage.EndProfilerSession(vk_command_context.GetCommandList(), "Graphics Exec");
             if (serial_golden) {
