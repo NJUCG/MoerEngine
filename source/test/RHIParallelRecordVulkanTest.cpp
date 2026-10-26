@@ -56,6 +56,43 @@ constexpr uint32 kIterations   = 24;
 constexpr uint32 kHeavyCopiesPerWave = 48;
 constexpr uint32 kHeavyCopyCount = kHeavyCopiesPerWave * 2;
 
+// Only for test-owned dependency fences, which have no GPU producer or CPU
+// completion waiter. Signal the native semaphore before publishing acceptance
+// so both GPU dependency waits and the Submission owner's wait can proceed.
+void ReleaseTestSubmissionDependency(Fence& _dependency, uint64 _value) {
+    auto* device = static_cast<VulkanDevice*>(RenderDevice::Get().GetImpl());
+    VkSemaphoreSignalInfo signal_info{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+    signal_info.semaphore = ResourceCast(&_dependency)->GetSemaphore();
+    signal_info.value     = _value;
+
+    // Static Volk linkage can give the test executable its own dispatch globals,
+    // separate from the Render DLL. Leave an already-loaded dispatch untouched.
+    VkResult result = VK_SUCCESS;
+    if (vkGetDeviceProcAddr == nullptr) {
+        result = volkInitialize();
+        if (result == VK_SUCCESS) {
+            volkLoadInstanceOnly(device->GetInstance());
+        }
+    }
+    if (result == VK_SUCCESS) {
+        const auto signal_semaphore = reinterpret_cast<PFN_vkSignalSemaphore>(
+            vkGetDeviceProcAddr(device->GetDevice(), "vkSignalSemaphore")
+        );
+        result = signal_semaphore != nullptr ?
+                     signal_semaphore(device->GetDevice(), &signal_info) :
+                     VK_ERROR_INITIALIZATION_FAILED;
+    }
+    if (result != VK_SUCCESS) {
+        // Unblock submission cleanup even when the test cannot release its gate.
+        _dependency.Reject(_value);
+        throw std::runtime_error(
+            "Failed to release test submission dependency: VkResult=" +
+            std::to_string(static_cast<int32>(result))
+        );
+    }
+    _dependency.MarkSubmitted(_value);
+}
+
 class MultiviewLayerPipeline final : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(MultiviewLayerPipeline);
@@ -7655,15 +7692,15 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
     std::atomic<bool>                  dependency_release_started{false};
     std::atomic<bool>                  graphics_observed_release{true};
     std::atomic<bool>                  compute_observed_release{false};
-    bool                               dependency_released{false};
+    bool                               dependency_release_attempted{false};
 
     const auto release_dependency = [&] {
-        if (dependency_released) {
+        if (dependency_release_attempted) {
             return;
         }
         dependency_release_started.store(true, std::memory_order_release);
-        ResourceCast(dependency.Get())->SignalHost(1);
-        dependency_released = true;
+        dependency_release_attempted = true;
+        ReleaseTestSubmissionDependency(*dependency.Get(), 1);
     };
 
     try {
@@ -7925,7 +7962,11 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
         }
     } catch (...) {
         const std::exception_ptr failure = std::current_exception();
-        release_dependency();
+        try {
+            release_dependency();
+        } catch (...) {
+            // A failed release rejects the dependency; still drain observed work.
+        }
         try {
             RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         } catch (...) {
@@ -7990,14 +8031,14 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
     std::vector<uint32>                callback_order{};
     std::atomic<bool>                  sync_returned{false};
     std::jthread                       sync_waiter{};
-    bool                               dependency_released{false};
+    bool                               dependency_release_attempted{false};
 
     const auto release_dependency = [&] {
-        if (dependency_released) {
+        if (dependency_release_attempted) {
             return;
         }
-        ResourceCast(dependency.Get())->SignalHost(1);
-        dependency_released = true;
+        dependency_release_attempted = true;
+        ReleaseTestSubmissionDependency(*dependency.Get(), 1);
     };
     const auto record_callback = [&](size_t _index) {
         {
@@ -8214,7 +8255,11 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
         }
     } catch (...) {
         const std::exception_ptr failure = std::current_exception();
-        release_dependency();
+        try {
+            release_dependency();
+        } catch (...) {
+            // A failed release rejects the dependency; still drain observed work.
+        }
         try {
             if (sync_waiter.joinable()) {
                 sync_waiter.join();
@@ -9086,14 +9131,14 @@ void RunSerialControlPipelineBoundary() {
     std::array<std::atomic<uint32>, 3> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 3> success_callbacks{};
     std::binary_semaphore later_translated{0};
-    bool dependency_released = false;
+    bool dependency_release_attempted = false;
 
     const auto release_dependency = [&] {
-        if (dependency_released) {
+        if (dependency_release_attempted) {
             return;
         }
-        ResourceCast(dependency.Get())->SignalHost(1);
-        dependency_released = true;
+        dependency_release_attempted = true;
+        ReleaseTestSubmissionDependency(*dependency.Get(), 1);
     };
 
     try {
@@ -9390,7 +9435,11 @@ void RunSerialControlPipelineBoundary() {
             "boundary_events=2 native_submits=3 replay=0"
         );
     } catch (...) {
-        release_dependency();
+        try {
+            release_dependency();
+        } catch (...) {
+            // A failed release rejects the dependency; still drain observed work.
+        }
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         throw;
     }
@@ -11385,14 +11434,14 @@ void RunPresentPipelineBoundary() {
     std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 2> success_callbacks{};
     std::binary_semaphore later_translated{0};
-    bool dependency_released = false;
+    bool dependency_release_attempted = false;
 
     const auto release_dependency = [&] {
-        if (dependency_released) {
+        if (dependency_release_attempted) {
             return;
         }
-        ResourceCast(dependency.Get())->SignalHost(1);
-        dependency_released = true;
+        dependency_release_attempted = true;
+        ReleaseTestSubmissionDependency(*dependency.Get(), 1);
     };
 
     try {
@@ -11867,7 +11916,11 @@ void RunPresentPipelineBoundary() {
             prefix_native
         );
     } catch (...) {
-        release_dependency();
+        try {
+            release_dependency();
+        } catch (...) {
+            // A failed release rejects the dependency; still drain observed work.
+        }
         RHIExecutor::Get().Sync(ERHISyncDepth::Present);
         throw;
     }

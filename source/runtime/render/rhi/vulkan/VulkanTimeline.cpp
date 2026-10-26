@@ -196,25 +196,6 @@ bool VulkanTimeline::IsFailed() const {
     return failed;
 }
 
-void VulkanTimeline::SignalHost(uint64_t _value) {
-    VkSemaphoreSignalInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-    info.semaphore = timeline;
-    info.value     = _value;
-    if (m_device->IsFaulted()) {
-        Fail(m_device->GetFirstFaultResult());
-        return;
-    }
-    const VkResult result = vkSignalSemaphore(m_device->GetDevice(), &info);
-    if (result != VK_SUCCESS) {
-        m_device->TryLatchFirstFault(
-            VulkanOperationContext{.operation = EVulkanFaultOperation::TimelineHostWait}, result
-        );
-        Fail(result);
-        return;
-    }
-    Notify(_value);
-}
-
 VulkanTimeline::~VulkanTimeline() {
     if (timeline != VK_NULL_HANDLE) {
         vkDestroySemaphore(m_device->GetDevice(), timeline, VK_NULL_HANDLE);

@@ -37,7 +37,6 @@ public:
     HostWait(uint64_t _value, const VulkanOperationContext& _context = VulkanOperationContext{});
     RENDER_API void Fail(VkResult _result);
     RENDER_API bool IsFailed() const;
-    RENDER_API void SignalHost(uint64_t _value);
     VkSemaphore     GetSemaphore() const noexcept {
         return timeline;
     }
