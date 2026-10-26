@@ -6,12 +6,13 @@
 
 #include "Base.h"
 #include "Matrix.h"
+#include "misc/NumericLimits.h"
 namespace Moer {
-static constexpr int      MAX_INT   = (std::numeric_limits<int>::max)();
+static constexpr int      MAX_INT   = MaxValue<int>;
 static constexpr int      MIN_INT   = std::numeric_limits<int>::lowest();
-static constexpr uint64_t MAX_INT64 = (std::numeric_limits<uint64_t>::max)();
+static constexpr uint64_t MAX_INT64 = MaxValue<uint64_t>;
 static constexpr uint64_t MIN_INT64 = std::numeric_limits<uint64_t>::lowest();
-static constexpr float    MAX_FLOAT = (std::numeric_limits<float>::max)();
+static constexpr float    MAX_FLOAT = MaxValue<float>;
 static constexpr float    MIN_FLOAT = std::numeric_limits<float>::lowest();
 static constexpr float    EPS       = 1e-5f;
 static constexpr float    PI        = 3.14159265358979323846f;

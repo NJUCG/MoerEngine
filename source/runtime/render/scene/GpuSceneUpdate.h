@@ -1,13 +1,13 @@
 #pragma once
 
 #include "PixelFormat.h"
+#include "misc/NumericLimits.h"
 #include "misc/STL.h"
 #include "rhi/RHICommandDrawData.h"
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 
 #include <climits>
 #include <cstdint>
-#include <limits>
 #include <string>
 
 namespace Moer::Render {
@@ -15,7 +15,7 @@ namespace Moer::Render {
 using GpuSceneResourceKey = uint64;
 
 inline constexpr GpuSceneResourceKey k_invalid_gpu_scene_resource_key =
-    std::numeric_limits<GpuSceneResourceKey>::max();
+    MaxValue<GpuSceneResourceKey>;
 
 struct GpuSceneTextureData {
     GpuSceneResourceKey key = k_invalid_gpu_scene_resource_key;

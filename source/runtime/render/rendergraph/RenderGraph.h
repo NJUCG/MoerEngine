@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "misc/NumericLimits.h"
 #include "misc/STL.h"
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHIExecutor.h"
@@ -9,7 +10,6 @@
 #include <concepts>
 #include <cstdint>
 #include <functional>
-#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -54,10 +54,10 @@ concept RGParameterAccessProvider =
  */
 class RENDER_API RenderGraph {
 public:
-    static constexpr uint32_t InvalidIndex          = std::numeric_limits<uint32_t>::max();
+    static constexpr uint32_t InvalidIndex          = MaxValue<uint32_t>;
     static constexpr uint64_t InvalidGraphId        = 0;
-    static constexpr uint32_t RemainingTextureRange = std::numeric_limits<uint32_t>::max();
-    static constexpr uint64_t RemainingBufferRange  = std::numeric_limits<uint64_t>::max();
+    static constexpr uint32_t RemainingTextureRange = MaxValue<uint32_t>;
+    static constexpr uint64_t RemainingBufferRange  = MaxValue<uint64_t>;
     static constexpr uint32_t InvalidVersion        = InvalidIndex;
 
     enum class ResourceKind : uint8_t {
