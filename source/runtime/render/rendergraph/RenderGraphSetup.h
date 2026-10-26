@@ -183,7 +183,7 @@ auto RenderGraph::AddSetupPass(
     Input&&          immutable_input,
     Prepare&&        prepare,
     std::span<const SetupPassHandle> dependencies,
-    PrepareSafety    safety
+    SetupPassSafety  safety
 ) -> RGPreparedValue<RGSetupResult<Input, Prepare>> {
     using InputType   = std::decay_t<Input>;
     using PrepareType = std::decay_t<Prepare>;

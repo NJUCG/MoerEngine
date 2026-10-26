@@ -228,7 +228,7 @@ public:
         }
     };
 
-    enum class PrepareSafety : uint8_t {
+    enum class SetupPassSafety : uint8_t {
         Restricted,
         Unsafe,
     };
@@ -962,7 +962,7 @@ public:
         Input&&          immutable_input,
         Prepare&&        prepare,
         std::span<const SetupPassHandle> dependencies = {},
-        PrepareSafety    safety = PrepareSafety::Restricted
+        SetupPassSafety  safety = SetupPassSafety::Restricted
     ) -> RGPreparedValue<RGSetupResult<Input, Prepare>>;
 
     /** Explicit escape hatch for CPU preparation that must use the RHI. */
@@ -989,7 +989,7 @@ public:
             std::forward<Input>(immutable_input),
             std::forward<Prepare>(prepare),
             dependencies,
-            PrepareSafety::Unsafe
+            SetupPassSafety::Unsafe
         );
     }
 
@@ -1179,7 +1179,7 @@ private:
     struct SetupPassDeclaration {
         std::string                              name{};
         std::vector<uint32_t>                    dependencies{};
-        PrepareSafety                            safety = PrepareSafety::Restricted;
+        SetupPassSafety                          safety = SetupPassSafety::Restricted;
         std::function<void()>                    execute{};
         std::function<void(std::string_view)>    fail{};
         std::function<void(std::string_view)>    annotate_failure{};
@@ -1237,7 +1237,7 @@ private:
     SetupPassHandle RegisterSetupPass(
         std::string_view                         setup_name,
         std::span<const SetupPassHandle>         dependencies,
-        PrepareSafety                           safety,
+        SetupPassSafety                         safety,
         std::function<void()>                    execute,
         std::function<void(std::string_view)>    fail,
         std::function<void(std::string_view)>    annotate_failure

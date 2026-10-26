@@ -217,7 +217,7 @@ private:
         }
         try {
             RHICommandAccessRestrictionScope access_scope(
-                jobs[index].safety == PrepareSafety::Restricted
+                jobs[index].safety == SetupPassSafety::Restricted
             );
             jobs[index].execute();
             if (!cancelled.load(std::memory_order_acquire)) {
@@ -3690,7 +3690,7 @@ void RenderGraph::SetPassTranslateExecutionClass(
 RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
     std::string_view                         setup_name,
     std::span<const SetupPassHandle>         dependencies,
-    PrepareSafety                            safety,
+    SetupPassSafety                          safety,
     std::function<void()>                    execute,
     std::function<void(std::string_view)>    fail,
     std::function<void(std::string_view)>    annotate_failure
