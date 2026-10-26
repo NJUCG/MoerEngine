@@ -221,9 +221,6 @@ public:
     GetTimestampQueryResetMode(
         EQueueType _queue_type
     ) const;
-    [[nodiscard]] RENDER_API bool SupportsTimestampQueries(
-        EQueueType _queue_type
-    ) const;
 
     VulkanDescriptorMode GetDescriptorMode() const {
         return descriptor_mode;

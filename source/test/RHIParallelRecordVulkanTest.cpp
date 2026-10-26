@@ -14964,7 +14964,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
     const EVulkanTimestampQueryResetMode native_reset_mode =
         vk_device->GetTimestampQueryResetMode(EQueueType::Copy);
     const bool native_supported =
-        vk_device->SupportsTimestampQueries(EQueueType::Copy);
+        native_reset_mode != EVulkanTimestampQueryResetMode::Unsupported;
     const char* native_reset_mode_name =
         native_reset_mode ==
                 EVulkanTimestampQueryResetMode::CommandBuffer ?

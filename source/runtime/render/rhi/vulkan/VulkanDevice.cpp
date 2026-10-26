@@ -989,13 +989,6 @@ VulkanDevice::GetTimestampQueryResetMode(
     );
 }
 
-bool VulkanDevice::SupportsTimestampQueries(
-    EQueueType _queue_type
-) const {
-    return GetTimestampQueryResetMode(_queue_type) !=
-           EVulkanTimestampQueryResetMode::Unsupported;
-}
-
 QueueFamilyIndices VulkanDevice::SelectQueueFamilyIndices(VkPhysicalDevice _gpu) const {
     QueueFamilyIndices indices;
 
