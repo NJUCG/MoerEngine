@@ -63,13 +63,6 @@ public:
         mutable std::mutex                     mutex;
     };
 
-    class Checkpoint {
-        friend class VulkanDescriptorBufferAllocator;
-        const LeaseState* owner{nullptr};
-        size_t            block_count{0};
-        uint64_t          last_block_used_bytes{0};
-    };
-
     VulkanDescriptorBufferAllocator(
         uint64_t _capacity, uint64_t _block_size, uint64_t _range_alignment,
         uint64_t _allocation_alignment = 0
@@ -88,10 +81,8 @@ public:
     // Possible write extents, including prepared but conditionally unused bytes.
     std::vector<Range>      GetWrittenRanges(const LeaseState& _lease) const;
 
-    // Checkpoints, rewind and release require all relevant recorders to have
-    // joined. Rewind additionally requires their recorded commands to be discarded.
-    Checkpoint CreateCheckpoint(const LeaseState& _lease) const;
-    void       Rewind(LeaseState& _lease, const Checkpoint& _checkpoint);
+    // Release only after all recorders have joined and their commands have
+    // completed on the GPU or have been discarded.
     void       Release(LeaseState& _lease);
 
 private:

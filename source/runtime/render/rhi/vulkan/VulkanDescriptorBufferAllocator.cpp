@@ -247,35 +247,6 @@ VulkanDescriptorBufferAllocator::GetWrittenRanges(const LeaseState& _lease) cons
     return ranges;
 }
 
-VulkanDescriptorBufferAllocator::Checkpoint
-VulkanDescriptorBufferAllocator::CreateCheckpoint(const LeaseState& _lease) const {
-    std::lock_guard lock(_lease.mutex);
-    ValidateLease(_lease);
-    Checkpoint checkpoint;
-    checkpoint.owner                 = &_lease;
-    checkpoint.block_count           = _lease.blocks.size();
-    checkpoint.last_block_used_bytes = _lease.blocks.empty() ? 0 : _lease.blocks.back().used_bytes;
-    return checkpoint;
-}
-
-void VulkanDescriptorBufferAllocator::Rewind(LeaseState& _lease, const Checkpoint& _checkpoint) {
-    std::lock_guard lease_lock(_lease.mutex);
-    ValidateLease(_lease);
-    if (_checkpoint.owner != &_lease || _checkpoint.block_count > _lease.blocks.size() ||
-        (_checkpoint.block_count != 0 &&
-         _checkpoint.last_block_used_bytes > _lease.blocks[_checkpoint.block_count - 1].used_bytes)) {
-        throw std::logic_error("invalid descriptor allocation checkpoint");
-    }
-    std::lock_guard pool_lock(free_ranges_mutex);
-    while (_lease.blocks.size() > _checkpoint.block_count) {
-        ReturnRange(_lease.blocks.back().range);
-        _lease.blocks.pop_back();
-    }
-    if (!_lease.blocks.empty()) {
-        _lease.blocks.back().used_bytes = _checkpoint.last_block_used_bytes;
-    }
-}
-
 void VulkanDescriptorBufferAllocator::Release(LeaseState& _lease) {
     std::lock_guard lease_lock(_lease.mutex);
     ValidateLease(_lease);

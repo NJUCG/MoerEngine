@@ -103,14 +103,12 @@ void CheckSharedLeaseHandoff() {
     allocator.Release(*waiting);
 }
 
-void CheckCheckpointAndWrittenRanges() {
+void CheckWrittenRangesAndRetirement() {
     Allocator  allocator(6 * MiB, 64 * KiB, 32);
     auto       lease            = allocator.CreateLease();
-    const auto empty_checkpoint = allocator.CreateCheckpoint(*lease);
     Check(allocator.ReserveRange(*lease, 32) == 0, "prefix allocation failed");
     auto other = allocator.CreateLease();
     Check(allocator.ReserveRange(*other, 32) == 64 * KiB, "interleaved lease allocation failed");
-    const auto checkpoint = allocator.CreateCheckpoint(*lease);
     Check(allocator.ReserveRange(*lease, 32) == 32, "existing block was not reused");
     Check(allocator.ReserveRange(*lease, 2 * MiB) == 128 * KiB, "large reservation failed");
     auto ranges = allocator.GetWrittenRanges(*lease);
@@ -122,28 +120,16 @@ void CheckCheckpointAndWrittenRanges() {
         allocator.GetUsage(*lease).used_bytes == 2 * MiB + 64,
         "usage was computed from physical offsets instead of allocated bytes"
     );
-    CheckRejected([&] {
-        allocator.Rewind(*other, checkpoint);
-    });
-    allocator.Rewind(*lease, checkpoint);
-    Check(
-        allocator.GetUsage(*lease).used_bytes == 32 && allocator.GetUsage(*lease).reserved_bytes == 64 * KiB,
-        "rollback did not restore the prefix"
-    );
-    Check(allocator.ReserveRange(*lease, 32) == 32, "fallback could not reuse the last block tail");
-    allocator.Rewind(*lease, empty_checkpoint);
-    Check(allocator.GetWrittenRanges(*lease).empty(), "empty rollback retained blocks");
     allocator.Release(*lease);
     allocator.Release(*other);
     auto full = allocator.CreateLease();
-    Check(allocator.ReserveRange(*full, 6 * MiB) == 0, "rollback leaked storage");
+    Check(allocator.ReserveRange(*full, 6 * MiB) == 0, "retirement leaked storage");
     allocator.Release(*full);
 }
 
 void CheckConcurrentRecording() {
     Allocator                                       allocator(6 * MiB, 64 * KiB, 32);
     auto                                            lease        = allocator.CreateLease();
-    const auto                                      checkpoint   = allocator.CreateCheckpoint(*lease);
     constexpr size_t                                worker_count = 8;
     constexpr size_t                                allocations_per_worker = 2048;
     std::array<std::vector<uint64_t>, worker_count> offsets;
@@ -164,7 +150,7 @@ void CheckConcurrentRecording() {
             }
         });
     }
-    workers.clear(); // Join before flushing, inspecting payloads, or rewinding.
+    workers.clear(); // Join before flushing, inspecting payloads, or releasing.
     std::vector<uint64_t> all_offsets;
     for (size_t worker = 0; worker < worker_count; ++worker) {
         if (errors[worker]) {
@@ -193,9 +179,10 @@ void CheckConcurrentRecording() {
         allocator.GetUsage(*lease).used_bytes == worker_count * allocations_per_worker * 32,
         "parallel allocation accounting mismatch"
     );
-    allocator.Rewind(*lease, checkpoint);
-    Check(allocator.ReserveRange(*lease, 6 * MiB) == 0, "parallel rollback leaked blocks");
     allocator.Release(*lease);
+    auto replacement = allocator.CreateLease();
+    Check(allocator.ReserveRange(*replacement, 6 * MiB) == 0, "parallel retirement leaked blocks");
+    allocator.Release(*replacement);
 }
 
 void CheckRandomizedLifetimes() {
@@ -255,7 +242,6 @@ void CheckConcurrentLeaseRetirement() {
             try {
                 for (size_t batch = 0; batch < 500; ++batch) {
                     auto                lease      = allocator.CreateLease();
-                    const auto          checkpoint = allocator.CreateCheckpoint(*lease);
                     std::vector<size_t> owned_blocks;
                     for (size_t i = 0; i < 1 + batch % 4; ++i) {
                         const auto offset = allocator.ReserveRange(*lease, block_size);
@@ -285,9 +271,6 @@ void CheckConcurrentLeaseRetirement() {
                             owners[index].exchange(-1) == static_cast<int>(worker),
                             "live ownership changed before retirement"
                         );
-                    }
-                    if (batch % 2 == 0) {
-                        allocator.Rewind(*lease, checkpoint);
                     }
                     allocator.Release(*lease);
                 }
@@ -510,7 +493,7 @@ int main() {
         CheckLazyAllocationAndRetirement();
         CheckFragmentationAndFailurePreserveState();
         CheckSharedLeaseHandoff();
-        CheckCheckpointAndWrittenRanges();
+        CheckWrittenRangesAndRetirement();
         CheckConcurrentRecording();
         CheckRandomizedLifetimes();
         CheckConcurrentLeaseRetirement();
