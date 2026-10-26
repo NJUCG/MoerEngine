@@ -12,9 +12,10 @@ uint64 MetalFence::GetValue() const {
     return completed_;
 }
 
-void MetalFence::Wait(uint64 value) {
+bool MetalFence::Wait(uint64 value) {
     std::unique_lock lock(mutex_);
     cv_.wait(lock, [&] { return completed_ >= value || IsRejectedLocked(value); });
+    return completed_ >= value && !IsRejectedLocked(value);
 }
 
 void MetalFence::MarkSubmitted(uint64 value) {

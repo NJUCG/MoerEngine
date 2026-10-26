@@ -807,11 +807,7 @@ void VkCopyQueue::ExecuteThread() {
             batch.outcome.result != VK_ERROR_DEVICE_LOST;
 
         if (batch.gpu_submitted) {
-            VulkanOperationContext wait_context = batch.context;
-            wait_context.operation = EVulkanFaultOperation::TimelineHostWait;
-            const VkResult wait_result =
-                timeline->HostWait(event_timeline, wait_context);
-            if (wait_result == VK_SUCCESS && !device.IsFaulted()) {
+            if (timeline->Wait(event_timeline) && !device.IsFaulted()) {
                 batch_gpu_success = true;
                 completion_result = VK_SUCCESS;
 
@@ -830,18 +826,12 @@ void VkCopyQueue::ExecuteThread() {
                     batch_gpu_success = false;
                 }
 
-                if (batch_gpu_success) {
-                    timeline->Notify(event_timeline);
-                } else if (batch.owns_queue_timeline) {
+                if (!batch_gpu_success && batch.owns_queue_timeline) {
                     timeline->Fail(completion_result);
                 }
             } else {
-                completion_result =
-                    wait_result != VK_SUCCESS ?
-                        wait_result :
-                    device.IsFaulted() ?
-                        device.GetFirstFaultResult() :
-                        VK_ERROR_DEVICE_LOST;
+                // Wait failed or the device faulted; read the recorded error.
+                completion_result = timeline->QueryGpuCompletion(event_timeline);
                 if (batch.owns_queue_timeline) {
                     timeline->Fail(completion_result);
                 }
@@ -861,7 +851,7 @@ void VkCopyQueue::ExecuteThread() {
                 continue;
             }
             if (batch_gpu_success) {
-                fence->Notify(event.value);
+                fence->RecordGpuCompletion(event.value);
             } else if (recoverable_rejection) {
                 fence->Reject(event.value);
             } else {

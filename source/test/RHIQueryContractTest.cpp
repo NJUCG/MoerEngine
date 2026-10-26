@@ -37,7 +37,9 @@ public:
         return 0;
     }
 
-    void Wait(uint64_t) override {}
+    bool Wait(uint64_t _value) override {
+        return _value == 0 && !IsRejected(_value);
+    }
 
     void MarkSubmitted(uint64_t _value) override {
         submitted_value.store(_value, std::memory_order_release);

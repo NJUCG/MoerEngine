@@ -8907,15 +8907,11 @@ void VkCommandQueue::CompletionThreadMain() {
                         return;
                     }
 
-                    VulkanOperationContext wait_context = _submission.context;
-                    wait_context.operation = EVulkanFaultOperation::TimelineHostWait;
-                    const VkResult wait_result = timeline->HostWait(event_timeline, wait_context);
-                    if (wait_result == VK_SUCCESS && !vk_device.IsDeviceLost()) {
-                        timeline->Notify(event_timeline);
+                    if (timeline->Wait(event_timeline) && !vk_device.IsDeviceLost()) {
                         batch_gpu_success = true;
                         batch_release_safe = true;
                     } else {
-                        timeline->Fail(wait_result);
+                        timeline->Fail(timeline->QueryGpuCompletion(event_timeline));
                     }
                 },
                 [this, event_timeline, &batch_gpu_success, &batch_release_safe](
@@ -8939,11 +8935,7 @@ void VkCommandQueue::CompletionThreadMain() {
                         _batch.outcome.result != VK_ERROR_DEVICE_LOST;
 
                     if (_batch.gpu_submitted) {
-                        VulkanOperationContext wait_context = _batch.context;
-                        wait_context.operation = EVulkanFaultOperation::TimelineHostWait;
-                        const VkResult wait_result =
-                            timeline->HostWait(event_timeline, wait_context);
-                        if (wait_result == VK_SUCCESS && !vk_device.IsFaulted()) {
+                        if (timeline->Wait(event_timeline) && !vk_device.IsFaulted()) {
                             batch_gpu_success = true;
                             batch_release_safe = true;
                             completion_result = VK_SUCCESS;
@@ -8965,18 +8957,12 @@ void VkCommandQueue::CompletionThreadMain() {
                                 batch_release_safe = false;
                             }
 
-                            if (batch_gpu_success) {
-                                timeline->Notify(event_timeline);
-                            } else if (_batch.owns_queue_timeline) {
+                            if (!batch_gpu_success && _batch.owns_queue_timeline) {
                                 timeline->Fail(completion_result);
                             }
                         } else {
-                            completion_result =
-                                wait_result != VK_SUCCESS ?
-                                    wait_result :
-                                vk_device.IsFaulted() ?
-                                    vk_device.GetFirstFaultResult() :
-                                    VK_ERROR_DEVICE_LOST;
+                            // Wait failed or the device faulted; read the recorded error.
+                            completion_result = timeline->QueryGpuCompletion(event_timeline);
                             if (_batch.owns_queue_timeline) {
                                 timeline->Fail(completion_result);
                             }
@@ -8996,7 +8982,7 @@ void VkCommandQueue::CompletionThreadMain() {
                             continue;
                         }
                         if (batch_gpu_success) {
-                            fence->Notify(event.value);
+                            fence->RecordGpuCompletion(event.value);
                         } else if (recoverable_rejection) {
                             fence->Reject(event.value);
                         } else {
@@ -9258,7 +9244,7 @@ void VkCommandQueue::CompletionThreadMain() {
                 [this, &batch_gpu_success](SignalEvent& _evt) {
                     auto* fence = reinterpret_cast<VulkanTimeline*>(_evt.timeline_handle);
                     if (batch_gpu_success) {
-                        fence->Notify(_evt.value);
+                        fence->RecordGpuCompletion(_evt.value);
                     } else if (vk_device.IsFaulted()) {
                         fence->Fail(vk_device.GetFirstFaultResult());
                     }

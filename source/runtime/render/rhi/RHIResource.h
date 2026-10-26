@@ -1055,8 +1055,11 @@ protected:
 class Fence : public RHIResource {
 public:
     Fence() : RHIResource(RRT_GPU_FENCE) {}
-    virtual uint64_t GetValue() const      = 0;
-    virtual void     Wait(uint64_t _value) = 0;
+    virtual uint64_t GetValue() const = 0;
+
+    // Wait for GPU completion. False means rejected/failed, not completed.
+    // CPU callbacks and resource retirement have separate completion boundaries.
+    virtual bool Wait(uint64_t _value) = 0;
 
     // Native-submission acceptance is intentionally distinct from GPU
     // completion. A renderer history transaction may advance as soon as its

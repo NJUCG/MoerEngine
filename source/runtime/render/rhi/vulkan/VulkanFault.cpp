@@ -18,6 +18,8 @@ std::string_view VulkanFaultOperationName(EVulkanFaultOperation _operation) {
             return "AcquireNextImage";
         case EVulkanFaultOperation::TimelineHostWait:
             return "TimelineHostWait";
+        case EVulkanFaultOperation::TimelineQuery:
+            return "TimelineQuery";
         case EVulkanFaultOperation::CommandPoolCreate:
             return "CommandPoolCreate";
         case EVulkanFaultOperation::CommandBufferAllocate:

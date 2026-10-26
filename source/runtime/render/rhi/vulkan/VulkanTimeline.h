@@ -10,46 +10,56 @@
 
 namespace Moer::Render {
 
-// RHI synchronization timeline backed by a VkSemaphore and host-side
-// submission/completion state.
+// GPU signal progress backed by a VkSemaphore. CPU callbacks, query publication
+// and resource retirement are tracked separately by the owning queue.
 class VulkanTimeline final : public Fence, VulkanDeviceObject {
 public:
     VulkanTimeline(VulkanDevice&);
-    virtual ~VulkanTimeline();
+    ~VulkanTimeline() override;
 
+    // Last observed GPU value; may lag the semaphore. This watermark alone
+    // does not imply that an individual value was accepted (see IsRejected).
     uint64_t GetValue() const override;
 
-    uint64 GetDeviceValue() const;
+    // Non-blocking: cached success, otherwise query Vulkan. Returns SUCCESS,
+    // NOT_READY or an error; rejected values never report success.
+    RENDER_API VkResult QueryGpuCompletion(uint64_t value);
 
-    void Wait(uint64_t _value) override;
-    void Reject(uint64_t _value) noexcept override;
-    // can be called on any thread to block current thread
-    void Sync(uint64);
-    // Publish observed completion to CPU waiters; does not signal the semaphore.
-    void            Notify(uint64);
-    void            MarkSubmitted(uint64_t _value) override;
+    // Wait for GPU completion, not the queue's CPU retirement work.
+    RENDER_API bool Wait(uint64_t value) override;
+
+    // Only after native completion has been established, including an external
+    // producer such as CUDA. Does not signal the semaphore or accept a submit.
+    void RecordGpuCompletion(uint64_t value);
+
+    // Native-submission acceptance is independent of the GPU progress cache.
+    void MarkSubmitted(uint64_t value) override;
     RENDER_API bool WaitSubmitted(
-        uint64_t                _value,
-        const std::atomic_bool* _continue_waiting = nullptr
+        uint64_t                value,
+        const std::atomic_bool* continue_waiting = nullptr
     ) override;
-    RENDER_API bool IsRejected(uint64_t _value) const override;
-    RENDER_API VkResult
-    HostWait(uint64_t _value, const VulkanOperationContext& _context = VulkanOperationContext{});
-    RENDER_API void Fail(VkResult _result);
+    void            Reject(uint64_t value) noexcept override;
+    RENDER_API bool IsRejected(uint64_t value) const override;
+
+    RENDER_API void Fail(VkResult result);
     RENDER_API bool IsFailed() const;
     VkSemaphore     GetSemaphore() const noexcept {
-        return timeline;
+        return m_timeline;
     }
 
 private:
-    uint64                  current_value = 0;
-    VkSemaphore             timeline;
-    std::condition_variable cv;
-    mutable std::mutex      cv_m;
-    uint64                  submitted_value{0};
-    UnorderedSet<uint64>    rejected_values;
-    bool                    failed{false};
-    VkResult                failure_result{VK_SUCCESS};
+    VkResult GetCachedGpuCompletionStatus(uint64_t value) const;
+    VkResult RefreshGpuCompletedValue(uint64_t target_value);
+    VkResult HandleGpuOperationFailure(VkResult result, uint64_t value, EVulkanFaultOperation operation);
+
+    VkSemaphore             m_timeline{VK_NULL_HANDLE};
+    mutable std::mutex      m_state_mutex;
+    uint64                  m_cached_gpu_completed_value{0};
+    std::condition_variable m_submission_cv;
+    uint64                  m_submitted_value{0};
+    UnorderedSet<uint64>     m_rejected_values;
+    bool                    m_is_failed{false};
+    VkResult                m_failure_result{VK_SUCCESS};
 };
 
 using VulkanTimelineRef = CountableRef<VulkanTimeline>;

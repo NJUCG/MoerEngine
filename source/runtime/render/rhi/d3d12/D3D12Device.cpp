@@ -1028,7 +1028,7 @@ void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
             // visit event
             evt->event.Match(
                 [&fence_value, this](UniquePtr<D3D12CommandResourceAllocator>& allocator) {
-                    queue_fence.WaitOnHost(fence_value);
+                    queue_fence.Wait(fence_value);
                     allocator->ReleaseDescriptorChunks();
                     allocator->OnComplete(); // callbacks,
                     allocator->Reset();
@@ -1051,8 +1051,6 @@ void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
                 [&fence_value, this](WaitEvent e) {
                     LOG_INFO("visit event: wait, {}", fence_value);
                     FATAL("not implemented");
-                    //auto fence = reinterpret_cast<D3D12Fence*>(e.timeline_handle);
-                    //fence->WaitOnHost(e.value);
                 }
             );
         }
@@ -1863,7 +1861,6 @@ void D3D12GraphicsCommandQueue::Sync() {
     } else {
         Complete(target);
     }
-    //queue_fence.WaitOnHost(last_submitted_fence_value);  // here can't just use gpu to signal fence, need to wait more for cpu work
 }
 
 D3D12Fence::D3D12Fence(D3D12Device* _device) : D3D12DeviceChild(_device) {
@@ -1883,10 +1880,6 @@ D3D12Fence::~D3D12Fence() {
 uint64_t D3D12Fence::GetValue() const {
     //return current_value;
     return fence->GetCompletedValue();
-}
-
-void D3D12Fence::Wait(uint64_t _value) {
-    WaitOnHost(_value);
 }
 
 void D3D12Fence::MarkSubmitted(uint64_t _value) {
@@ -1940,15 +1933,15 @@ bool D3D12Fence::IsFenceComplete(uint64 _value) {
     return current_value >= _value;
 }
 
-void D3D12Fence::WaitOnHost(uint64 _value) {
-    if (IsFenceComplete(_value) || IsRejected(_value))
-        return;
+bool D3D12Fence::Wait(uint64 _value) {
+    if (IsFenceComplete(_value) || IsRejected(_value)) {
+        return !IsRejected(_value) && fence->GetCompletedValue() != UINT64_MAX;
+    }
     DX_CHECK_HRESULT(fence->SetEventOnCompletion(_value, event));
     while (!IsFenceComplete(_value) && !IsRejected(_value)) {
         WaitForSingleObjectEx(event, 50, FALSE);
     }
-    //OnScopeExit([&]() { ResetEvent(event); });// maybe useful
-    //ResetEvent(event);
+    return !IsRejected(_value) && fence->GetCompletedValue() != UINT64_MAX;
 }
 
 void D3D12Fence::SignalOnHost(uint64 _value) {

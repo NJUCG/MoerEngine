@@ -474,7 +474,8 @@ struct CudaInteropBoundary {
         // that will never execute. This also bounds reuse of TensorRT buffers.
         Require(cudaStreamSynchronize(stream_to_run));
         auto& external_timeline = CudaVulkanTools::getVulkanTimeline(after);
-        external_timeline.Notify(value);
+        external_timeline.MarkSubmitted(value);
+        external_timeline.RecordGpuCompletion(value);
 
         CommandList commands(EQueueType::Graphics);
         RecordTransfer(commands, false);
@@ -483,8 +484,7 @@ struct CudaInteropBoundary {
             EQueueType::Graphics, commands.Submit().Wait(after.Get(), value), ERHIExecSubmitFlags::FlushGPU
         );
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-        if (!acquired->WaitSubmitted(value) ||
-            CudaVulkanTools::getVulkanTimeline(acquired).HostWait(value) != VK_SUCCESS) {
+        if (!acquired->WaitSubmitted(value) || !acquired->Wait(value)) {
             throw std::runtime_error("CUDA acquire submission did not complete");
         }
     }

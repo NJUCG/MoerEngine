@@ -626,7 +626,7 @@ public:
         return fence.Get();
     }
     uint64_t GetValue() const override; // by default, get latest value, not cached 'current_value'
-    void     Wait(uint64_t _value) override;
+    bool     Wait(uint64_t _value) override;
     void     MarkSubmitted(uint64_t _value) override;
     [[nodiscard]] bool WaitSubmitted(
         uint64_t                _value,
@@ -636,7 +636,6 @@ public:
 
     bool IsFenceComplete(uint64 _value);
     bool IsRejected(uint64 _value) const override;
-    void WaitOnHost(uint64 _value);
     void SignalOnHost(uint64 _value);
 };
 

@@ -57,7 +57,6 @@ VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForT
     completion->RetireOrdinary(1);
     result.suffix_retirement_deferred_callbacks = ordinary_callback_count == 0 && success_callback_count == 0;
 
-    prefix->Notify(1);
     completion->RetireOrdinary(0);
     result.prefix_retirement_completed_callbacks =
         ordinary_callback_count == 1 && success_callback_count == 0;

@@ -1,11 +1,9 @@
 #include "VulkanTimeline.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
-#include "log/LogSystem.h"
 
 #include <algorithm>
 #include <chrono>
-#include <thread>
 
 #if WITH_CUDA
 #include "platform/windows/WindowsSecurityAttributes.h"
@@ -13,7 +11,7 @@
 
 namespace Moer::Render {
 
-VulkanTimeline::VulkanTimeline(VulkanDevice& _device) : VulkanDeviceObject(&_device) {
+VulkanTimeline::VulkanTimeline(VulkanDevice& device) : VulkanDeviceObject(&device) {
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
     VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
@@ -39,167 +37,152 @@ VulkanTimeline::VulkanTimeline(VulkanDevice& _device) : VulkanDeviceObject(&_dev
 #endif
 
     create_info.pNext = &timeline_semaphore_info;
-    VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &timeline));
+    VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_timeline));
+}
+
+VulkanTimeline::~VulkanTimeline() {
+    if (m_timeline != VK_NULL_HANDLE) {
+        vkDestroySemaphore(m_device->GetDevice(), m_timeline, VK_NULL_HANDLE);
+    }
 }
 
 uint64 VulkanTimeline::GetValue() const {
-    // uint64_t value;
-    // vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
-    // // vkGetSemaphoreCounterValue(m_device->GetDevice(), m_fence.timeline, &value);
-    // return value;
-    std::unique_lock<std::mutex> lock(cv_m);
-    return current_value;
+    std::lock_guard lock(m_state_mutex);
+    return m_cached_gpu_completed_value;
 }
 
-uint64 VulkanTimeline::GetDeviceValue() const {
-    uint64_t value;
+VkResult VulkanTimeline::QueryGpuCompletion(uint64_t value) {
+    const VkResult cached_status = GetCachedGpuCompletionStatus(value);
+    return cached_status != VK_NOT_READY ? cached_status : RefreshGpuCompletedValue(value);
+}
+
+bool VulkanTimeline::Wait(uint64_t value) {
+    VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    info.semaphoreCount = 1;
+    info.pValues        = &value;
+    info.pSemaphores    = &m_timeline;
+    constexpr uint64_t k_wait_slice_ns = 50'000'000;
+    while (true) {
+        const VkResult cached_status = GetCachedGpuCompletionStatus(value);
+        if (cached_status != VK_NOT_READY) {
+            return cached_status == VK_SUCCESS;
+        }
+
+        // Native timed waits allow CPU rejection/failure to interrupt a value
+        // that will never be signalled; no completion-thread notification needed.
+        const VkResult result = vkWaitSemaphores(m_device->GetDevice(), &info, k_wait_slice_ns);
+        switch (result) {
+        case VK_SUCCESS:
+            RecordGpuCompletion(value);
+            return GetCachedGpuCompletionStatus(value) == VK_SUCCESS;
+        case VK_TIMEOUT:
+            continue;
+        default:
+            HandleGpuOperationFailure(result, value, EVulkanFaultOperation::TimelineHostWait);
+            return false;
+        }
+    }
+}
+
+void VulkanTimeline::RecordGpuCompletion(uint64_t value) {
+    std::lock_guard lock(m_state_mutex);
+    m_cached_gpu_completed_value = std::max(m_cached_gpu_completed_value, value);
+}
+
+void VulkanTimeline::MarkSubmitted(uint64_t value) {
     {
-        std::unique_lock<std::mutex> lock(cv_m);
-        value = current_value;
+        std::lock_guard lock(m_state_mutex);
+        m_submitted_value = std::max(m_submitted_value, value);
     }
-    VkResult result = vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
-    if (result != VK_SUCCESS) {
-        m_device->TryLatchFirstFault(
-            VulkanOperationContext{.operation = EVulkanFaultOperation::TimelineHostWait}, result
-        );
-    }
-    // vkGetSemaphoreCounterValue(m_device->GetDevice(), m_fence.timeline, &value);
-    return value;
+    m_submission_cv.notify_all();
 }
 
-void VulkanTimeline::Wait(uint64_t _value) {
-    std::unique_lock<std::mutex> _(cv_m);
-    while (current_value < _value && !rejected_values.contains(_value) && !failed && !m_device->IsFaulted()) {
-        cv.wait_for(_, std::chrono::milliseconds(50));
+bool VulkanTimeline::WaitSubmitted(
+    uint64_t                value,
+    const std::atomic_bool* continue_waiting
+) {
+    std::unique_lock<std::mutex> lock(m_state_mutex);
+    while (m_submitted_value < value && !m_rejected_values.contains(value) && !m_is_failed &&
+           !m_device->IsFaulted() &&
+           (continue_waiting == nullptr || continue_waiting->load(std::memory_order_acquire))) {
+        m_submission_cv.wait_for(lock, std::chrono::milliseconds(50));
     }
-    if (current_value < _value && !rejected_values.contains(_value) && !failed && m_device->IsFaulted()) {
-        failed         = true;
-        failure_result = m_device->GetFirstFaultResult();
-    }
+    return m_submitted_value >= value && !m_rejected_values.contains(value) && !m_is_failed &&
+           !m_device->IsFaulted();
 }
 
-void VulkanTimeline::Reject(uint64_t _value) noexcept {
+void VulkanTimeline::Reject(uint64_t value) noexcept {
     {
-        std::unique_lock<std::mutex> lock(cv_m);
+        std::lock_guard lock(m_state_mutex);
         try {
-            rejected_values.emplace(_value);
+            m_rejected_values.emplace(value);
         } catch (...) {
             // A rejected value must always become terminal. If the exact
             // value set cannot grow, conservatively fail the whole fence
             // rather than leaving submission waiters blocked forever.
-            failed         = true;
-            failure_result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            m_is_failed      = true;
+            m_failure_result = VK_ERROR_OUT_OF_HOST_MEMORY;
         }
     }
-    cv.notify_all();
+    m_submission_cv.notify_all();
 }
 
-void VulkanTimeline::Notify(uint64_t _value) {
+bool VulkanTimeline::IsRejected(uint64_t value) const {
+    std::lock_guard lock(m_state_mutex);
+    return m_rejected_values.contains(value);
+}
+
+void VulkanTimeline::Fail(VkResult result) {
     {
-        std::unique_lock<std::mutex> _(cv_m);
-        current_value   = std::max(current_value, _value);
-        submitted_value = std::max(submitted_value, _value);
+        std::lock_guard lock(m_state_mutex);
+        m_is_failed      = true;
+        m_failure_result = result;
     }
-    cv.notify_all();
-}
-
-void VulkanTimeline::MarkSubmitted(uint64_t _value) {
-    {
-        std::unique_lock<std::mutex> lock(cv_m);
-        submitted_value = std::max(submitted_value, _value);
-    }
-    cv.notify_all();
-}
-
-bool VulkanTimeline::WaitSubmitted(
-    uint64_t                _value,
-    const std::atomic_bool* _continue_waiting
-) {
-    std::unique_lock<std::mutex> lock(cv_m);
-    while (submitted_value < _value && !rejected_values.contains(_value) && !failed &&
-           !m_device->IsFaulted() &&
-           (_continue_waiting == nullptr || _continue_waiting->load(std::memory_order_acquire))) {
-        cv.wait_for(lock, std::chrono::milliseconds(50));
-    }
-    return submitted_value >= _value && !rejected_values.contains(_value) && !failed &&
-           !m_device->IsFaulted();
-}
-
-bool VulkanTimeline::IsRejected(uint64_t _value) const {
-    std::unique_lock<std::mutex> lock(cv_m);
-    return rejected_values.contains(_value);
-}
-
-void VulkanTimeline::Sync(uint64_t _value) {
-    std::unique_lock<std::mutex> _(cv_m);
-    while (current_value < _value && !rejected_values.contains(_value) && !failed && !m_device->IsFaulted()) {
-        cv.wait_for(_, std::chrono::milliseconds(50));
-    }
-    if (current_value < _value && !rejected_values.contains(_value) && !failed && m_device->IsFaulted()) {
-        failed         = true;
-        failure_result = m_device->GetFirstFaultResult();
-    }
-}
-
-VkResult VulkanTimeline::HostWait(uint64_t _value, const VulkanOperationContext& _context) {
-    VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-    info.semaphoreCount              = 1;
-    info.pValues                     = &_value;
-    info.pSemaphores                 = &timeline;
-    constexpr uint64_t wait_slice_ns = 50'000'000;
-    while (!m_device->IsDeviceLost()) {
-        {
-            std::unique_lock<std::mutex> lock(cv_m);
-            if (rejected_values.contains(_value)) {
-                return VK_ERROR_UNKNOWN;
-            }
-            if (failed) {
-                return failure_result != VK_SUCCESS ? failure_result : VK_ERROR_UNKNOWN;
-            }
-        }
-        const VkResult result = vkWaitSemaphores(m_device->GetDevice(), &info, wait_slice_ns);
-        if (result == VK_SUCCESS) {
-            return VK_SUCCESS;
-        }
-        if (result == VK_TIMEOUT) {
-            continue;
-        }
-
-        VulkanOperationContext context = _context;
-        if (context.operation == EVulkanFaultOperation::None) {
-            context.operation = EVulkanFaultOperation::TimelineHostWait;
-        }
-        context.timeline = _value;
-        m_device->TryLatchFirstFault(context, result);
-        if (result != VK_ERROR_DEVICE_LOST) {
-            m_device->EmergencyExitWithoutVulkanCleanup(context, result);
-        }
-        Fail(result);
-        return result;
-    }
-    const VkResult result = VK_ERROR_DEVICE_LOST;
-    Fail(result);
-    return result;
-}
-
-void VulkanTimeline::Fail(VkResult _result) {
-    {
-        std::unique_lock<std::mutex> lock(cv_m);
-        failed         = true;
-        failure_result = _result;
-    }
-    cv.notify_all();
+    m_submission_cv.notify_all();
 }
 
 bool VulkanTimeline::IsFailed() const {
-    std::unique_lock<std::mutex> lock(cv_m);
-    return failed;
+    std::lock_guard lock(m_state_mutex);
+    return m_is_failed;
 }
 
-VulkanTimeline::~VulkanTimeline() {
-    if (timeline != VK_NULL_HANDLE) {
-        vkDestroySemaphore(m_device->GetDevice(), timeline, VK_NULL_HANDLE);
+VkResult VulkanTimeline::GetCachedGpuCompletionStatus(uint64_t value) const {
+    std::lock_guard lock(m_state_mutex);
+    // A later successful signal may pass a rejected value. Check the outcome
+    // before using the monotonic GPU watermark, even on the cached fast path.
+    if (m_rejected_values.contains(value)) {
+        return VK_ERROR_UNKNOWN;
     }
+    if (m_is_failed) {
+        return m_failure_result != VK_SUCCESS ? m_failure_result : VK_ERROR_UNKNOWN;
+    }
+    if (m_device->IsFaulted()) {
+        return m_device->GetFirstFaultResult();
+    }
+    return m_cached_gpu_completed_value >= value ? VK_SUCCESS : VK_NOT_READY;
+}
+
+VkResult VulkanTimeline::RefreshGpuCompletedValue(uint64_t target_value) {
+    uint64_t       completed_value = 0;
+    const VkResult result = vkGetSemaphoreCounterValue(m_device->GetDevice(), m_timeline, &completed_value);
+    if (result != VK_SUCCESS) {
+        return HandleGpuOperationFailure(result, target_value, EVulkanFaultOperation::TimelineQuery);
+    }
+    RecordGpuCompletion(completed_value);
+    // Recheck rejection/failure: it may have been published during the query.
+    return GetCachedGpuCompletionStatus(target_value);
+}
+
+VkResult VulkanTimeline::HandleGpuOperationFailure(
+    VkResult result, uint64_t value, EVulkanFaultOperation operation
+) {
+    const VulkanOperationContext fault_context{.operation = operation, .timeline = value};
+    m_device->TryLatchFirstFault(fault_context, result);
+    if (result != VK_ERROR_DEVICE_LOST) {
+        m_device->EmergencyExitWithoutVulkanCleanup(fault_context, result);
+    }
+    Fail(result);
+    return result;
 }
 
 } // namespace Moer::Render

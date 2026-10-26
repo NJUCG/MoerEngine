@@ -17,6 +17,7 @@ enum class EVulkanFaultOperation : uint8_t {
     QueuePresent,
     AcquireNextImage,
     TimelineHostWait,
+    TimelineQuery,
     CommandPoolCreate,
     CommandBufferAllocate,
     CommandPoolReset,

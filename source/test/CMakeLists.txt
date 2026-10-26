@@ -597,6 +597,18 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanHeaderContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# The Metal fence bookkeeping can exercise the shared wait contract without a GPU.
+if (APPLE)
+    add_executable(TestMetalFenceContract "MetalFenceContractTest.mm")
+    target_link_libraries(TestMetalFenceContract
+        PRIVATE Moer::Render "-framework Metal" "-framework Foundation"
+    )
+    target_compile_options(TestMetalFenceContract PRIVATE -fobjc-arc)
+    set_target_properties(TestMetalFenceContract PROPERTIES FOLDER ${moer_test_folder})
+    add_test(NAME MetalFenceContract COMMAND $<TARGET_FILE:TestMetalFenceContract>)
+    set_tests_properties(MetalFenceContract PROPERTIES TIMEOUT 10)
+endif()
+
 # CPU-only feature checks are built from the platform-independent implementation
 # so padding and capability regressions can be tested without a Vulkan GPU.
 set(test_target TestVulkanDeviceFeatures)

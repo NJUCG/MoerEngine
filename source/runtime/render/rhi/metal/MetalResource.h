@@ -14,7 +14,7 @@ namespace Moer::Render {
 class MetalFence final : public Fence {
 public:
     uint64 GetValue() const override;
-    void Wait(uint64 value) override;
+    bool Wait(uint64 value) override;
     void MarkSubmitted(uint64 value) override;
     bool WaitSubmitted(uint64 value, const std::atomic_bool* continue_waiting = nullptr) override;
     void Reject(uint64 value) noexcept override;

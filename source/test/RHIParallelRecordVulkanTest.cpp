@@ -58,8 +58,8 @@ constexpr uint32 kIterations   = 24;
 constexpr uint32 kHeavyCopiesPerWave = 48;
 constexpr uint32 kHeavyCopyCount = kHeavyCopiesPerWave * 2;
 
-// Only for test-owned dependency fences, which have no GPU producer or CPU
-// completion waiter. Signal the native semaphore before publishing acceptance
+// Only for test-owned fences with no GPU producer. This does not update the
+// GPU completion cache. Signal the native semaphore before publishing acceptance
 // so both GPU dependency waits and the Submission owner's wait can proceed.
 void ReleaseTestSubmissionDependency(Fence& _dependency, uint64 _value) {
     auto* device = static_cast<VulkanDevice*>(RenderDevice::Get().GetImpl());
@@ -93,6 +93,78 @@ void ReleaseTestSubmissionDependency(Fence& _dependency, uint64 _value) {
         );
     }
     _dependency.MarkSubmitted(_value);
+}
+
+void RunTimelineGpuProgressContract() {
+    using namespace std::chrono_literals;
+
+    // No queue submission/completion owner participates in this fixture. Native
+    // host signals stand in for a producer, never for CPU retirement work.
+    FenceRef fence = RenderDevice::Get().CreateFence();
+    auto* timeline = ResourceCast(fence.Get());
+    if (fence->GetValue() != 0 || timeline->QueryGpuCompletion(1) != VK_NOT_READY) {
+        throw std::runtime_error("new timeline reported unobserved GPU progress");
+    }
+    ReleaseTestSubmissionDependency(*fence, 1);
+    if (fence->GetValue() != 0 || timeline->QueryGpuCompletion(1) != VK_SUCCESS ||
+        fence->GetValue() != 1) {
+        throw std::runtime_error("timeline query did not refresh its stale GPU cache");
+    }
+
+    // RHI Wait must observe the semaphore itself; no RecordGpuCompletion call
+    // or completion-thread notification will arrive to rescue it.
+    std::binary_semaphore waited{0};
+    bool wait_succeeded = false;
+    std::jthread waiter([&] {
+        wait_succeeded = fence->Wait(2);
+        waited.release();
+    });
+    try {
+        ReleaseTestSubmissionDependency(*fence, 2);
+        if (!waited.try_acquire_for(5s)) {
+            throw std::runtime_error("RHI Wait still depends on CPU completion notification");
+        }
+    } catch (...) {
+        timeline->Fail(VK_ERROR_UNKNOWN);
+        throw;
+    }
+    waiter.join();
+    if (!wait_succeeded || fence->GetValue() < 2 || timeline->QueryGpuCompletion(3) != VK_NOT_READY ||
+        !timeline->Wait(1) || fence->GetValue() < 2) {
+        throw std::runtime_error("timeline wait failed to retain monotonic GPU progress");
+    }
+
+    // A native wait on a never-signalled value must also observe CPU rejection.
+    bool cancelled_wait_succeeded = true;
+    std::jthread cancelled_waiter([&] {
+        cancelled_wait_succeeded = timeline->Wait(3);
+        waited.release();
+    });
+    fence->Reject(3);
+    if (!waited.try_acquire_for(5s)) {
+        timeline->Fail(VK_ERROR_UNKNOWN);
+        throw std::runtime_error("CPU rejection did not interrupt a native timeline wait");
+    }
+    cancelled_waiter.join();
+    if (cancelled_wait_succeeded) {
+        throw std::runtime_error("rejected native wait reported success");
+    }
+
+    ReleaseTestSubmissionDependency(*fence, 4);
+    if (timeline->QueryGpuCompletion(3) != VK_ERROR_UNKNOWN ||
+        timeline->QueryGpuCompletion(4) != VK_SUCCESS || fence->GetValue() != 4 ||
+        timeline->QueryGpuCompletion(3) != VK_ERROR_UNKNOWN ||
+        timeline->Wait(3) || fence->WaitSubmitted(3) ||
+        !fence->WaitSubmitted(4)) {
+        throw std::runtime_error("later GPU progress hid an exact rejected timeline value");
+    }
+
+    timeline->Fail(VK_ERROR_UNKNOWN);
+    if (timeline->QueryGpuCompletion(4) != VK_ERROR_UNKNOWN ||
+        timeline->Wait(4)) {
+        throw std::runtime_error("cached GPU success hid a failed timeline");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=TimelineGpuProgress cache=refresh wait=native rejection=exact");
 }
 
 class MultiviewLayerPipeline final : public RasterPipeline {
@@ -5217,7 +5289,7 @@ void RunAsyncQueueParallelTranslateSmoke() {
             );
         }
         auto* vk_copy_done = ResourceCast(copy_done.Get());
-        if (vk_copy_done->HostWait(1) != VK_SUCCESS ||
+        if (!vk_copy_done->Wait(1) ||
             vk_copy_done->IsRejected(1) ||
             vk_copy_done->IsFailed()) {
             throw std::runtime_error(
@@ -5530,7 +5602,7 @@ void RunMultiSegmentSourceExecution() {
         release_compute_guard.Release();
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-        if (ResourceCast(source_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(source_done.Get())->Wait(1) ||
             ResourceCast(source_done.Get())->IsRejected(1) || ResourceCast(source_done.Get())->IsFailed()) {
             throw std::runtime_error("multi-segment source signal did not complete successfully");
         }
@@ -5694,7 +5766,7 @@ void RunMultiSegmentCopyRoundTrip() {
     if (readback != expected) {
         throw std::runtime_error("multi-segment Copy source GPU readback mismatch");
     }
-    if (ResourceCast(source_done.Get())->HostWait(1) != VK_SUCCESS ||
+    if (!ResourceCast(source_done.Get())->Wait(1) ||
         ResourceCast(source_done.Get())->IsRejected(1) || ResourceCast(source_done.Get())->IsFailed()) {
         throw std::runtime_error("multi-segment Copy source signal did not complete successfully");
     }
@@ -5830,7 +5902,7 @@ void RunMultiSegmentRecoverableRejection() {
     Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
     rejected_batch.emplace_back(EQueueType::Graphics, std::move(rejected_submit));
     RHIExecutor::Get().Submit(std::move(rejected_batch), ERHIExecSubmitFlags::FlushGPU);
-    if (ResourceCast(rejected_done.Get())->HostWait(1) != VK_ERROR_UNKNOWN ||
+    if (ResourceCast(rejected_done.Get())->Wait(1) ||
         !ResourceCast(rejected_done.Get())->IsRejected(1) || ResourceCast(rejected_done.Get())->IsFailed()) {
         throw std::runtime_error("multi-segment rejected dependency did not reject the source signal");
     }
@@ -5865,7 +5937,7 @@ void RunMultiSegmentRecoverableRejection() {
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     if (!recovered_translated.try_acquire() ||
-        ResourceCast(recovered_done.Get())->HostWait(1) != VK_SUCCESS ||
+        !ResourceCast(recovered_done.Get())->Wait(1) ||
         ResourceCast(recovered_done.Get())->IsRejected(1) || ResourceCast(recovered_done.Get())->IsFailed()) {
         throw std::runtime_error("multi-segment dependency rejection latched the runtime");
     }
@@ -6327,8 +6399,8 @@ void RunParallelTranslateRecoverableRejection() {
     // Wait for exact Submission-side publication without calling Sync:
     // ProcessSync itself clears async-scope admission state and would hide a
     // stale seen-lane bug between two backend batches reusing this scope.
-    if (ResourceCast(graphics_done.Get())->HostWait(1) != VK_ERROR_UNKNOWN ||
-        ResourceCast(compute_done.Get())->HostWait(1) != VK_ERROR_UNKNOWN) {
+    if (ResourceCast(graphics_done.Get())->Wait(1) ||
+        ResourceCast(compute_done.Get())->Wait(1)) {
         throw std::runtime_error("recoverable parallel Translate signals were not published");
     }
 
@@ -6368,7 +6440,7 @@ void RunParallelTranslateRecoverableRejection() {
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     if (!recovered_translated.try_acquire() ||
-        ResourceCast(recovered_done.Get())->HostWait(1) != VK_SUCCESS ||
+        !ResourceCast(recovered_done.Get())->Wait(1) ||
         ResourceCast(recovered_done.Get())->IsRejected(1) || ResourceCast(recovered_done.Get())->IsFailed()) {
         throw std::runtime_error("recoverable parallel Translate rejection latched the runtime");
     }
@@ -7323,8 +7395,11 @@ void RunRecoverableCopyDependencyRejection() {
     }
     if (!shared_vk_fence->IsRejected(1) ||
         !shared_vk_fence->WaitSubmitted(2) ||
-        shared_vk_fence->HostWait(2) != VK_SUCCESS ||
-        shared_vk_fence->HostWait(1) != VK_ERROR_UNKNOWN) {
+        !shared_vk_fence->Wait(2) ||
+        shared_done->GetValue() < 2 ||
+        shared_vk_fence->QueryGpuCompletion(2) != VK_SUCCESS ||
+        shared_vk_fence->Wait(1) ||
+        shared_vk_fence->QueryGpuCompletion(1) != VK_ERROR_UNKNOWN) {
         throw std::runtime_error(
             "reused external fence lost its exact rejection or accepted value"
         );
@@ -7927,8 +8002,8 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
             );
         }
 
-        if (ResourceCast(graphics_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(compute_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(graphics_done.Get())->Wait(1) ||
+            !ResourceCast(compute_done.Get())->Wait(1) ||
             ResourceCast(graphics_done.Get())->IsRejected(1) ||
             ResourceCast(compute_done.Get())->IsRejected(1) ||
             ResourceCast(graphics_done.Get())->IsFailed() ||
@@ -8191,15 +8266,14 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             );
         }
 
-        if (ResourceCast(prefix_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(prefix_done.Get())->Wait(1) ||
             ResourceCast(prefix_done.Get())->IsRejected(1) ||
             ResourceCast(prefix_done.Get())->IsFailed()) {
             throw std::runtime_error(
                 "malformed-ordering prefix did not complete successfully"
             );
         }
-        if (ResourceCast(malformed_done.Get())->HostWait(1) !=
-                VK_ERROR_UNKNOWN ||
+        if (ResourceCast(malformed_done.Get())->Wait(1) ||
             !ResourceCast(malformed_done.Get())->IsRejected(1) ||
             ResourceCast(malformed_done.Get())->IsFailed()) {
             throw std::runtime_error(
@@ -8512,15 +8586,14 @@ void RunBoundedCrossBatchRecoverableRejection() {
                 "Translate ownership"
             );
         }
-        if (ResourceCast(graphics_done.Get())->HostWait(1) !=
-                VK_ERROR_UNKNOWN ||
+        if (ResourceCast(graphics_done.Get())->Wait(1) ||
             !ResourceCast(graphics_done.Get())->IsRejected(1) ||
             ResourceCast(graphics_done.Get())->IsFailed()) {
             throw std::runtime_error(
                 "recoverable batch 0 did not reject its exact signal value"
             );
         }
-        if (ResourceCast(copy_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(copy_done.Get())->Wait(1) ||
             ResourceCast(copy_done.Get())->IsRejected(1) ||
             ResourceCast(copy_done.Get())->IsFailed()) {
             throw std::runtime_error(
@@ -8855,15 +8928,14 @@ void RunBoundedPipelineShutdownCancellation() {
                 "pipeline shutdown did not release the concurrent Sync"
             );
         }
-        if (ResourceCast(graphics_done.Get())->HostWait(1) !=
-                VK_ERROR_UNKNOWN ||
+        if (ResourceCast(graphics_done.Get())->Wait(1) ||
             !ResourceCast(graphics_done.Get())->IsRejected(1) ||
             ResourceCast(graphics_done.Get())->IsFailed()) {
             throw std::runtime_error(
                 "pipeline shutdown did not reject batch 0's exact signal value"
             );
         }
-        if (ResourceCast(copy_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(copy_done.Get())->Wait(1) ||
             ResourceCast(copy_done.Get())->IsRejected(1) ||
             ResourceCast(copy_done.Get())->IsFailed()) {
             throw std::runtime_error(
@@ -9294,9 +9366,9 @@ void RunSerialControlPipelineBoundary() {
                 "GPU ordering"
             );
         }
-        if (ResourceCast(prefix_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(control_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(later_done.Get())->HostWait(1) != VK_SUCCESS) {
+        if (!ResourceCast(prefix_done.Get())->Wait(1) ||
+            !ResourceCast(control_done.Get())->Wait(1) ||
+            !ResourceCast(later_done.Get())->Wait(1)) {
             throw std::runtime_error(
                 "SerialControl boundary signals did not succeed"
             );
@@ -11595,8 +11667,8 @@ void RunPresentPipelineBoundary() {
                 );
             }
         }
-        if (ResourceCast(prefix_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(later_done.Get())->HostWait(1) != VK_SUCCESS) {
+        if (!ResourceCast(prefix_done.Get())->Wait(1) ||
+            !ResourceCast(later_done.Get())->Wait(1)) {
             throw std::runtime_error(
                 "Present boundary source signals did not succeed"
             );
@@ -12041,7 +12113,7 @@ void RunPresentRetryRecovery() {
             submit.Signal(done.Get(), index + 1);
             RHIExecutor::Get().Submit(EQueueType::Graphics, std::move(submit), ERHIExecSubmitFlags::FlushGPU);
             // Do not hide a broken queue wait behind device idle or a direct
-            // HostWait: ordinary Sync must complete the GPU work and readback.
+            // Wait: ordinary Sync must complete the GPU work and readback.
             RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
             auto* fence = ResourceCast(done.Get());
             if (fence->IsFailed() || fence->IsRejected(index + 1) || done->GetValue() < index + 1 ||
@@ -12235,8 +12307,7 @@ void RunQueuedPresentShutdownBoundary() {
                 "shutdown Retry Present resolved the wrong receipt state"
             );
         }
-        if (ResourceCast(prefix_done.Get())->HostWait(1) !=
-                VK_ERROR_UNKNOWN ||
+        if (ResourceCast(prefix_done.Get())->Wait(1) ||
             !ResourceCast(prefix_done.Get())->IsRejected(1) ||
             ResourceCast(prefix_done.Get())->IsFailed() ||
             ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
@@ -17113,6 +17184,7 @@ int main(int argc, const char** argv) {
             return 0;
         }
 
+        RunTimelineGpuProgressContract();
         RunMultiSegmentCompletionAggregateCpuProbe();
 
         if (inject_translate_failure) {
