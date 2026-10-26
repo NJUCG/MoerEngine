@@ -55,7 +55,7 @@ concept RGParameterAccessProvider =
 class RENDER_API RenderGraph {
 public:
     static constexpr uint32_t InvalidIndex          = MaxValue<uint32_t>;
-    static constexpr uint64_t InvalidGraphId        = 0;
+    static constexpr uint64_t InvalidGraphId        = MaxValue<uint64_t>;
     static constexpr uint32_t RemainingTextureRange = MaxValue<uint32_t>;
     static constexpr uint64_t RemainingBufferRange  = MaxValue<uint64_t>;
     static constexpr uint32_t InvalidVersion        = InvalidIndex;
@@ -167,6 +167,7 @@ public:
         return std::monostate{};
     }
 
+
     struct ResourceHandle {
         uint32_t resource_id = InvalidIndex;
         uint64_t graph_id    = InvalidGraphId;
@@ -180,50 +181,25 @@ public:
         }
     };
 
-    struct TextureHandle {
-        ResourceHandle resource{};
+    template<ResourceKind Kind>
+    struct TypedResourceHandle{
+        ResourceHandle handle;
 
-        [[nodiscard]] bool IsValid() const {
-            return resource.IsValid();
-        }
-        [[nodiscard]] ResourceHandle Untyped() const {
-            return resource;
+        [[nodiscard]] bool IsValid() const{
+            return handle.IsValid();
         }
 
-        friend bool operator==(TextureHandle lhs, TextureHandle rhs) {
-            return lhs.resource == rhs.resource;
+        [[nodiscard]] ResourceHandle Untyped() const{
+            return handle;
         }
+
+        friend bool operator==(const TypedResourceHandle&,const TypedResourceHandle&) = default;
+
     };
 
-    struct BufferHandle {
-        ResourceHandle resource{};
-
-        [[nodiscard]] bool IsValid() const {
-            return resource.IsValid();
-        }
-        [[nodiscard]] ResourceHandle Untyped() const {
-            return resource;
-        }
-
-        friend bool operator==(BufferHandle lhs, BufferHandle rhs) {
-            return lhs.resource == rhs.resource;
-        }
-    };
-
-    struct TokenHandle {
-        ResourceHandle resource{};
-
-        [[nodiscard]] bool IsValid() const {
-            return resource.IsValid();
-        }
-        [[nodiscard]] ResourceHandle Untyped() const {
-            return resource;
-        }
-
-        friend bool operator==(TokenHandle lhs, TokenHandle rhs) {
-            return lhs.resource == rhs.resource;
-        }
-    };
+    using TextureHandle= TypedResourceHandle<ResourceKind::Texture>;
+    using BufferHandle = TypedResourceHandle<ResourceKind::Buffer>;
+    using TokenHandle = TypedResourceHandle<ResourceKind::Token>;
 
     struct PassHandle {
         uint32_t pass_id  = InvalidIndex;

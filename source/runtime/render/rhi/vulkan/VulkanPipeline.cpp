@@ -261,6 +261,8 @@ void InitializeDescriptorBufferBindingTemplate(
     for (auto& [set_index, set_binding] : binding_template.set_bindings) {
         if (set_binding.push)
             continue;
+
+        // we actually dispose one set at a visit
         std::visit(
             [&](const auto& resource_bindings) {
                 using ResourceBindings = std::decay_t<decltype(resource_bindings)>;
