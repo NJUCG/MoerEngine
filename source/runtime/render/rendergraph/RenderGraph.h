@@ -228,15 +228,6 @@ public:
         }
     };
 
-    struct PreparedPassHandle {
-        SetupPassHandle setup{};
-        PassHandle      record{};
-
-        [[nodiscard]] bool IsValid() const {
-            return setup.IsValid() && record.IsValid();
-        }
-    };
-
     enum class PrepareSafety : uint8_t {
         Restricted,
         Unsafe,
@@ -998,73 +989,6 @@ public:
             std::forward<Input>(immutable_input),
             std::forward<Prepare>(prepare),
             dependencies,
-            PrepareSafety::Unsafe
-        );
-    }
-
-    /**
-     * Convenience wrapper around AddSetupPass followed by AddRecordPass.
-     * Pass-owned registration should prefer the two explicit calls so setup
-     * dependencies and record-pass declaration remain independently visible.
-     */
-    template<typename Input, typename Prepare, typename Record>
-        requires std::invocable<
-                     std::decay_t<Prepare>&,
-                     const std::decay_t<Input>&> &&
-                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
-                 (!std::is_reference_v<
-                     std::invoke_result_t<
-                         std::decay_t<Prepare>&,
-                         const std::decay_t<Input>&>>) &&
-                 std::invocable<
-                     std::decay_t<Record>&,
-                     CommandList&,
-                     const RGSetupResult<Input, Prepare>&>
-    PreparedPassHandle AddPreparedPass(
-        std::string_view                 name,
-        Input&&                          immutable_input,
-        Prepare&&                        prepare,
-        const SetupCallback&             declare_access,
-        Record&&                         record,
-        PassExecutionClass               execution = PassExecutionClass::ParallelRecordEligible,
-        uint32_t                         workload = 1,
-        std::span<const SetupPassHandle>  setup_dependencies = {},
-        PrepareSafety                    prepare_safety = PrepareSafety::Restricted
-    );
-
-    /** Convenience escape hatch for a combined prepared pass that needs RHI access. */
-    template<typename Input, typename Prepare, typename Record>
-        requires std::invocable<
-                     std::decay_t<Prepare>&,
-                     const std::decay_t<Input>&> &&
-                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
-                 (!std::is_reference_v<
-                     std::invoke_result_t<
-                         std::decay_t<Prepare>&,
-                         const std::decay_t<Input>&>>) &&
-                 std::invocable<
-                     std::decay_t<Record>&,
-                     CommandList&,
-                     const RGSetupResult<Input, Prepare>&>
-    PreparedPassHandle AddUnsafePreparedPass(
-        std::string_view                 name,
-        Input&&                          immutable_input,
-        Prepare&&                        prepare,
-        const SetupCallback&             declare_access,
-        Record&&                         record,
-        PassExecutionClass               execution = PassExecutionClass::ParallelRecordEligible,
-        uint32_t                         workload = 1,
-        std::span<const SetupPassHandle>  setup_dependencies = {}
-    ) {
-        return AddPreparedPass(
-            name,
-            std::forward<Input>(immutable_input),
-            std::forward<Prepare>(prepare),
-            declare_access,
-            std::forward<Record>(record),
-            execution,
-            workload,
-            setup_dependencies,
             PrepareSafety::Unsafe
         );
     }

@@ -87,7 +87,7 @@ public:
             );
     }
 
-    RenderGraph::PreparedPassHandle AddToGraph(
+    void AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
         const Camera& scene_camera,

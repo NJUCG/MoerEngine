@@ -102,7 +102,7 @@ public:
         RGPreparedValue<RecordParameters> prepared,
         uint32                            mip_count
     );
-    RenderGraph::PreparedPassHandle AddToGraph(
+    void AddToGraph(
         RenderGraph&         graph,
         const RasterContext& context,
         const RasterConfig&  raster_config,

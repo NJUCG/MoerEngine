@@ -47,7 +47,7 @@ public:
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
     void                            RecordUpload(CommandList& cmd_list, const RecordParameters& parameters);
     void                            RecordDraw(CommandList& cmd_list, const RecordParameters& parameters);
-    RenderGraph::PreparedPassHandle AddToGraph(
+    void AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
         const RasterConfig& config,

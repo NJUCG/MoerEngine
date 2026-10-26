@@ -297,7 +297,7 @@ RenderGraph::PassHandle GeometryPass::AddToGraph(
     );
 }
 
-RenderGraph::PreparedPassHandle TessellatedSurfacePass::AddToGraph(
+void TessellatedSurfacePass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& config,
@@ -305,7 +305,7 @@ RenderGraph::PreparedPassHandle TessellatedSurfacePass::AddToGraph(
     GraphResources resources
 ) {
     if (!supported || !config.tessellated_surface_enabled) {
-        return {};
+        return;
     }
     auto prepared = graph.AddSetupPass(
         "TessellatedSurface.Prepare",
@@ -315,7 +315,7 @@ RenderGraph::PreparedPassHandle TessellatedSurfacePass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
     const auto data = ImportRasterBuffer(graph, "Tessellation.data", surface_data_buffer.Get());
@@ -329,7 +329,7 @@ RenderGraph::PreparedPassHandle TessellatedSurfacePass::AddToGraph(
             RecordUpload(commands, prepared.Get());
         }
     );
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "TessellatedSurface",
         [resources, data](RenderGraph::PassBuilder& builder) {
             builder.Read(data, RenderGraph::BufferState::ShaderResource);
@@ -345,10 +345,9 @@ RenderGraph::PreparedPassHandle TessellatedSurfacePass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle HiZBuildPass::AddToGraph(
+void HiZBuildPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     GraphResources resources
@@ -359,12 +358,11 @@ RenderGraph::PreparedPassHandle HiZBuildPass::AddToGraph(
         [this, &context](const uint8_t&) { return Prepare(context); }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    RenderGraph::PassHandle pass{};
     for (uint32 mip = 0; mip < context.textures.hiz_current.tex->GetNumMips(); ++mip) {
-        pass = graph.AddRecordPass(
+        graph.AddRecordPass(
             std::format("HiZBuild.Mip{}", mip),
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
@@ -378,10 +376,9 @@ RenderGraph::PreparedPassHandle HiZBuildPass::AddToGraph(
             RenderGraph::PassExecutionClass::ParallelRecordEligible
         );
     }
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle DirectionalShadowMaskPass::AddToGraph(
+void DirectionalShadowMaskPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     GraphResources resources,
@@ -394,11 +391,11 @@ RenderGraph::PreparedPassHandle DirectionalShadowMaskPass::AddToGraph(
         setup_dependencies
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
     const auto shadows = ImportShadowMaps(graph, context);
-    auto       pass    = graph.AddRecordPass(
+    graph.AddRecordPass(
         "DirectionalShadowMask",
         [resources, shadows](RenderGraph::PassBuilder& builder) {
             for (auto texture : shadows) {
@@ -418,10 +415,9 @@ RenderGraph::PreparedPassHandle DirectionalShadowMaskPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle LightingPass::AddToGraph(
+void LightingPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& ui_config,
@@ -435,14 +431,14 @@ RenderGraph::PreparedPassHandle LightingPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
     const auto                  shadows = ImportShadowMaps(graph, context);
     const RasterProbeGraphReads probes(graph, context.probe_volume);
     const auto emu  = ImportRasterTexture(graph, "Lighting.emu", context.textures.lut_ggx_emu.tex.Get());
     const auto eavg = ImportRasterTexture(graph, "Lighting.eavg", context.textures.lut_ggx_eavg.tex.Get());
-    auto       pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "Lighting",
         [resources, shadows, probes, emu, eavg](RenderGraph::PassBuilder& builder) {
             for (auto texture : shadows) {
@@ -472,10 +468,9 @@ RenderGraph::PreparedPassHandle LightingPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle SkyboxPass::AddToGraph(
+void SkyboxPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& config,
@@ -490,10 +485,10 @@ RenderGraph::PreparedPassHandle SkyboxPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "Skybox",
         [resources](RenderGraph::PassBuilder& builder) {
             // Skybox disables depth writes, but the attachment STORE operation
@@ -509,10 +504,9 @@ RenderGraph::PreparedPassHandle SkyboxPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle ProbeGizmoPass::AddToGraph(
+void ProbeGizmoPass::AddToGraph(
     RenderGraph& graph,
     RasterContext& context,
     RasterConfig config,
@@ -529,11 +523,11 @@ RenderGraph::PreparedPassHandle ProbeGizmoPass::AddToGraph(
         setup_dependencies
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
     const RasterProbeGraphReads probes(graph, context.probe_volume);
-    auto                        pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "ProbeGizmo",
         [resources, probes](RenderGraph::PassBuilder& builder) {
             probes.Declare(builder);
@@ -549,10 +543,9 @@ RenderGraph::PreparedPassHandle ProbeGizmoPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle AoPass::AddToGraph(
+void AoPass::AddToGraph(
     RenderGraph& graph,
     RasterContext& context,
     const RasterConfig& ui_config,
@@ -568,7 +561,7 @@ RenderGraph::PreparedPassHandle AoPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
     graph.AddRecordPass(
@@ -582,7 +575,7 @@ RenderGraph::PreparedPassHandle AoPass::AddToGraph(
         }
     );
     const bool ray_query = ui_config.ao_mode == EAoMode::RTAO || ui_config.ao_mode == EAoMode::RTAO_AO_ONLY;
-    auto       pass      = graph.AddRecordPass(
+    graph.AddRecordPass(
         "AmbientOcclusion",
         [resources, ray_query](RenderGraph::PassBuilder& builder) {
             builder
@@ -612,10 +605,9 @@ RenderGraph::PreparedPassHandle AoPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle AoPass::AddCompositeToGraph(
+void AoPass::AddCompositeToGraph(
     RenderGraph& graph,
     RasterContext& context,
     const RasterConfig& ui_config,
@@ -630,10 +622,10 @@ RenderGraph::PreparedPassHandle AoPass::AddCompositeToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "AoComposite",
         [resources](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
@@ -650,10 +642,9 @@ RenderGraph::PreparedPassHandle AoPass::AddCompositeToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle RtaoDenoiserPass::AddToGraph(
+void RtaoDenoiserPass::AddToGraph(
     RenderGraph& graph,
     RasterContext& context,
     const RasterConfig& ui_config,
@@ -662,7 +653,7 @@ RenderGraph::PreparedPassHandle RtaoDenoiserPass::AddToGraph(
 ) {
     if (!ui_config.rtao_denoiser_enable ||
         (ui_config.ao_mode != EAoMode::RTAO && ui_config.ao_mode != EAoMode::RTAO_AO_ONLY)) {
-        return {};
+        return;
     }
     auto prepared = graph.AddSetupPass(
         "RtaoDenoise.Prepare",
@@ -672,10 +663,10 @@ RenderGraph::PreparedPassHandle RtaoDenoiserPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "RtaoDenoise",
         [resources](RenderGraph::PassBuilder& builder) {
             builder.Read(resources.normal, RenderGraph::TextureState::Sampled)
@@ -692,7 +683,7 @@ RenderGraph::PreparedPassHandle RtaoDenoiserPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "RtaoDenoise.Copy",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(resources.history_write, RenderGraph::TextureState::Sampled)
@@ -703,10 +694,9 @@ RenderGraph::PreparedPassHandle RtaoDenoiserPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle BilateralFilterDenoiserPass::AddToGraph(
+void BilateralFilterDenoiserPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& ui_config,
@@ -721,10 +711,10 @@ RenderGraph::PreparedPassHandle BilateralFilterDenoiserPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "BilateralDenoise",
         [resources](RenderGraph::PassBuilder& builder) {
             builder.Read(resources.input, RenderGraph::TextureState::Sampled)
@@ -737,10 +727,9 @@ RenderGraph::PreparedPassHandle BilateralFilterDenoiserPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle SsrPass::AddToGraph(
+void SsrPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& ui_config,
@@ -756,10 +745,10 @@ RenderGraph::PreparedPassHandle SsrPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "ScreenSpaceReflection",
         [resources](RenderGraph::PassBuilder& builder) {
             builder.Read(resources.input, RenderGraph::TextureState::Sampled)
@@ -775,10 +764,9 @@ RenderGraph::PreparedPassHandle SsrPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle AaPass::AddToGraph(
+void AaPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& ui_config,
@@ -795,7 +783,7 @@ RenderGraph::PreparedPassHandle AaPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
     using State = RenderGraph::TextureState;
@@ -830,7 +818,7 @@ RenderGraph::PreparedPassHandle AaPass::AddToGraph(
             RenderGraph::PassExecutionClass::ParallelRecordEligible);
     }
     const auto blend_output = temporal ? import("AA.current", *aa_texture_34[smaa_phase]) : resources.aa_output;
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "AA.Blend",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
@@ -842,7 +830,7 @@ RenderGraph::PreparedPassHandle AaPass::AddToGraph(
     if (temporal) {
         // An invalid history samples the current output, exactly as Prepare's shader handle does.
         const auto previous = history_valid ? import("AA.previous", *aa_texture_34[smaa_phase ^ 1u]) : blend_output;
-        pass = graph.AddRecordPass(
+        graph.AddRecordPass(
             "AA.Resolve",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
@@ -852,10 +840,9 @@ RenderGraph::PreparedPassHandle AaPass::AddToGraph(
             [this, prepared](CommandList& commands) { RecordResolve(commands, prepared.Get()); },
             RenderGraph::PassExecutionClass::ParallelRecordEligible);
     }
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle BloomPass::AddToGraph(
+void BloomPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& raster_config,
@@ -863,7 +850,7 @@ RenderGraph::PreparedPassHandle BloomPass::AddToGraph(
     GraphResources resources
 ) {
     if (!raster_config.bloom_enabled) {
-        return {};
+        return;
     }
     auto prepared = graph.AddSetupPass(
         "Bloom.Prepare",
@@ -873,12 +860,12 @@ RenderGraph::PreparedPassHandle BloomPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    auto pass = AddRecordPasses(graph, resources, prepared,
-                               context.textures.bloom_downsample_chain.tex->GetNumMips());
-    return {prepared.GetSetupPass(), pass};
+    AddRecordPasses(
+        graph, resources, prepared, context.textures.bloom_downsample_chain.tex->GetNumMips()
+    );
 }
 
 RenderGraph::PassHandle BloomPass::AddRecordPasses(
@@ -942,7 +929,7 @@ RenderGraph::PassHandle BloomPass::AddRecordPasses(
     );
 }
 
-RenderGraph::PreparedPassHandle TonemappingPass::AddToGraph(
+void TonemappingPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& ui_config,
@@ -957,10 +944,10 @@ RenderGraph::PreparedPassHandle TonemappingPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    return {prepared.GetSetupPass(), AddRecordPasses(graph, resources, prepared)};
+    AddRecordPasses(graph, resources, prepared);
 }
 
 RenderGraph::PassHandle TonemappingPass::AddRecordPasses(
@@ -1025,7 +1012,7 @@ RenderGraph::PassHandle TonemappingPass::AddRecordPasses(
     );
 }
 
-RenderGraph::PreparedPassHandle CameraGizmoPass::AddToGraph(
+void CameraGizmoPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const Camera& scene_camera,
@@ -1040,10 +1027,10 @@ RenderGraph::PreparedPassHandle CameraGizmoPass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "CameraGizmo",
         [resources](RenderGraph::PassBuilder& builder) {
             builder.ReadWrite(resources.tonemapping_output, RenderGraph::TextureState::RenderTarget)
@@ -1056,10 +1043,9 @@ RenderGraph::PreparedPassHandle CameraGizmoPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
-RenderGraph::PreparedPassHandle CsmGizmoPass::AddToGraph(
+void CsmGizmoPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
     const RasterConfig& config,
@@ -1078,7 +1064,7 @@ RenderGraph::PreparedPassHandle CsmGizmoPass::AddToGraph(
         setup_dependencies
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
     const auto data = ImportRasterBuffer(graph, "CsmGizmo.data", m_cascade_data_buffer.buf.Get());
@@ -1092,7 +1078,7 @@ RenderGraph::PreparedPassHandle CsmGizmoPass::AddToGraph(
             RecordUpload(commands, prepared.Get());
         }
     );
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "CsmGizmo",
         [resources, data](RenderGraph::PassBuilder& builder) {
             builder.Read(data, RenderGraph::BufferState::ShaderResource);
@@ -1107,14 +1093,13 @@ RenderGraph::PreparedPassHandle CsmGizmoPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
 } // namespace Moer::Render::Raster
 
 namespace Moer::Render {
 
-RenderGraph::PreparedPassHandle UiCombinePass::AddToGraph(
+void UiCombinePass::AddToGraph(
     RenderGraph& graph,
     bool ui_enabled,
     bool writes_external_window,
@@ -1166,10 +1151,10 @@ RenderGraph::PreparedPassHandle UiCombinePass::AddToGraph(
         }
     );
     if (!prepared.IsValid()) {
-        return {};
+        return;
     }
 
-    auto pass = graph.AddRecordPass(
+    graph.AddRecordPass(
         "UiCombine",
         [resources, ui_enabled, writes_external_window](RenderGraph::PassBuilder& builder) {
             if (!ui_enabled) {
@@ -1191,7 +1176,6 @@ RenderGraph::PreparedPassHandle UiCombinePass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
 }
 
 } // namespace Moer::Render
