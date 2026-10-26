@@ -352,13 +352,13 @@ bool RenderGraphTransientAllocator::Prepare(
                 error = "compiled transient resource references an invalid handle";
                 return false;
             }
-            auto& resource = graph.resources[compiled_resource.resource.index];
+            auto& resource = graph.resources[compiled_resource.resource.resource_id];
             if (resource.imported || resource.kind == RenderGraph::ResourceKind::Token ||
-                compiled_resource.first_use == RenderGraph::PassHandle::InvalidIndex) {
+                compiled_resource.first_use == RenderGraph::InvalidIndex) {
                 continue;
             }
             if (compiled_resource.transient_slot ==
-                RenderGraph::PassHandle::InvalidIndex) {
+                RenderGraph::InvalidIndex) {
                 error =
                     "active transient resource lacks a physical allocation descriptor: '" +
                     resource.name + "'";
@@ -409,7 +409,7 @@ bool RenderGraphTransientAllocator::Prepare(
                         resource.name + "'";
                     return false;
                 }
-                texture_bindings[compiled_resource.resource.index] = slot;
+                texture_bindings[compiled_resource.resource.resource_id] = slot;
             } else {
                 if (!resource.transient_buffer_desc.has_value()) {
                     error =
@@ -444,7 +444,7 @@ bool RenderGraphTransientAllocator::Prepare(
                         resource.name + "'";
                     return false;
                 }
-                buffer_bindings[compiled_resource.resource.index] = slot;
+                buffer_bindings[compiled_resource.resource.resource_id] = slot;
             }
         }
     } catch (const std::exception& exception) {

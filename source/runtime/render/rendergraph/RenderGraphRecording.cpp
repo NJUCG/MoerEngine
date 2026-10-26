@@ -101,7 +101,7 @@ struct FrontendRecordJob {
 RenderGraph::ExecutedPassInfo RenderGraph::MakeExecutedPassInfo(
     PassHandle pass_handle
 ) const {
-    const auto& pass = passes[pass_handle.index];
+    const auto& pass = passes[pass_handle.pass_id];
     return ExecutedPassInfo{
         .handle          = pass_handle,
         .name            = pass.name,
@@ -275,8 +275,8 @@ private:
             graph.compiled_plan.resources.end(),
             [](const CompiledResource& resource) {
                 return !resource.imported &&
-                       resource.first_use != PassHandle::InvalidIndex &&
-                       resource.transient_slot != PassHandle::InvalidIndex;
+                       resource.first_use != InvalidIndex &&
+                       resource.transient_slot != InvalidIndex;
             }
         );
         if (has_allocation_backed_transient) {
@@ -308,14 +308,14 @@ private:
                 return true;
             };
             for (const auto& instruction : lowered.prologue) {
-                if (!append(instruction, before.at(instruction.dst_pass.index))) { return false; }
+                if (!append(instruction, before.at(instruction.dst_pass.pass_id))) { return false; }
             }
             for (const auto& pass : lowered.passes) {
                 for (const auto& instruction : pass.before) {
-                    if (!append(instruction, before.at(pass.pass.index))) { return false; }
+                    if (!append(instruction, before.at(pass.pass.pass_id))) { return false; }
                 }
                 for (const auto& instruction : pass.after) {
-                    if (!append(instruction, after.at(pass.pass.index))) { return false; }
+                    if (!append(instruction, after.at(pass.pass.pass_id))) { return false; }
                 }
             }
         }
@@ -326,7 +326,7 @@ private:
         const CompiledFrontendRecordUnit& unit
     ) {
         const PassHandle pass_handle = unit.pass;
-        const auto&      pass = graph.passes[pass_handle.index];
+        const auto&      pass = graph.passes[pass_handle.pass_id];
         if (unit.record_execution_class != PassExecutionClass::SerialRecord &&
             unit.record_execution_class !=
                 PassExecutionClass::ParallelRecordEligible) {
@@ -390,7 +390,7 @@ private:
                 const auto&  unit =
                     graph.compiled_plan.frontend_record_units[unit_index];
                 const PassHandle pass_handle = unit.pass;
-                const auto&      pass = graph.passes[pass_handle.index];
+                const auto&      pass = graph.passes[pass_handle.pass_id];
 
                 auto pass_command_list =
                     MakeShared<CommandList>(EQueueType::Graphics);
@@ -404,8 +404,8 @@ private:
                 if (ownership == ERHIResourceStateOwnership::Compiled) {
                     const auto keepalive = lowered.Keepalive(pass_handle);
                     record_callback = [record = pass.record,
-                                       prologue = before.at(pass_handle.index),
-                                       epilogue = after.at(pass_handle.index),
+                                       prologue = before.at(pass_handle.pass_id),
+                                       epilogue = after.at(pass_handle.pass_id),
                                        resources = std::vector<RenderGraphLowering::PhysicalBinding>(
                                            keepalive.begin(), keepalive.end())](CommandList& commands) {
                         if (!prologue.empty()) { commands.Barriers(prologue); }

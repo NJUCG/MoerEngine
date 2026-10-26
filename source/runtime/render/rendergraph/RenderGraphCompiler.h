@@ -33,11 +33,11 @@ private:
     struct AtomicCell {
         RenderGraph::ResourceRange range{};
         std::vector<RenderGraph::CompiledBarrierSource> readers{};
-        uint32_t                   last_writer = RenderGraph::PassHandle::InvalidIndex;
+        uint32_t                   last_writer = RenderGraph::InvalidIndex;
         RenderGraph::CompiledBarrierSource last_writer_source{};
-        uint32_t                   last_access = RenderGraph::PassHandle::InvalidIndex;
-        uint32_t                   availability_established_pass = RenderGraph::PassHandle::InvalidIndex;
-        uint32_t                   ownership_established_pass = RenderGraph::PassHandle::InvalidIndex;
+        uint32_t                   last_access = RenderGraph::InvalidIndex;
+        uint32_t                   availability_established_pass = RenderGraph::InvalidIndex;
+        uint32_t                   ownership_established_pass = RenderGraph::InvalidIndex;
         uint32_t                   version     = RenderGraph::InvalidVersion;
         RenderGraph::ResourceState state{};
         RenderGraph::ExecutionDomain last_domain{

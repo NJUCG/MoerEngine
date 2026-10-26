@@ -54,9 +54,11 @@ concept RGParameterAccessProvider =
  */
 class RENDER_API RenderGraph {
 public:
+    static constexpr uint32_t InvalidIndex          = std::numeric_limits<uint32_t>::max();
+    static constexpr uint64_t InvalidGraphId        = 0;
     static constexpr uint32_t RemainingTextureRange = std::numeric_limits<uint32_t>::max();
     static constexpr uint64_t RemainingBufferRange  = std::numeric_limits<uint64_t>::max();
-    static constexpr uint32_t InvalidVersion        = std::numeric_limits<uint32_t>::max();
+    static constexpr uint32_t InvalidVersion        = InvalidIndex;
 
     enum class ResourceKind : uint8_t {
         Texture,
@@ -166,17 +168,15 @@ public:
     }
 
     struct ResourceHandle {
-        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
-
-        uint32_t index    = InvalidIndex;
-        uint64_t owner_id = 0;
+        uint32_t resource_id = InvalidIndex;
+        uint64_t graph_id    = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
-            return index != InvalidIndex && owner_id != 0;
+            return resource_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
         friend bool operator==(ResourceHandle lhs, ResourceHandle rhs) {
-            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
+            return lhs.resource_id == rhs.resource_id && lhs.graph_id == rhs.graph_id;
         }
     };
 
@@ -226,33 +226,29 @@ public:
     };
 
     struct PassHandle {
-        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
-
-        uint32_t index    = InvalidIndex;
-        uint64_t owner_id = 0;
+        uint32_t pass_id  = InvalidIndex;
+        uint64_t graph_id = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
-            return index != InvalidIndex && owner_id != 0;
+            return pass_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
         friend bool operator==(PassHandle lhs, PassHandle rhs) {
-            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
+            return lhs.pass_id == rhs.pass_id && lhs.graph_id == rhs.graph_id;
         }
     };
 
     /** Stable identity for one graph-owned CPU setup task. */
     struct SetupPassHandle {
-        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
-
-        uint32_t index    = InvalidIndex;
-        uint64_t owner_id = 0;
+        uint32_t setup_pass_id = InvalidIndex;
+        uint64_t graph_id      = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
-            return index != InvalidIndex && owner_id != 0;
+            return setup_pass_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
         friend bool operator==(SetupPassHandle lhs, SetupPassHandle rhs) {
-            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
+            return lhs.setup_pass_id == rhs.setup_pass_id && lhs.graph_id == rhs.graph_id;
         }
     };
 
@@ -491,11 +487,11 @@ public:
 
     struct CompiledResource {
         ResourceHandle resource{};
-        uint32_t       first_use     = PassHandle::InvalidIndex;
-        uint32_t       last_use      = PassHandle::InvalidIndex;
+        uint32_t       first_use     = InvalidIndex;
+        uint32_t       last_use      = InvalidIndex;
         uint32_t       version_count = 0;
         /** Compiler-assigned whole-object transient allocation slot. */
-        uint32_t       transient_slot = PassHandle::InvalidIndex;
+        uint32_t       transient_slot = InvalidIndex;
         bool           imported      = false;
         bool           exported      = false;
     };
@@ -517,7 +513,7 @@ public:
             ERHITranslateExecutionClass::Parallel
         };
         uint32_t                estimated_record_work = 1;
-        uint32_t                dependency_level_index = PassHandle::InvalidIndex;
+        uint32_t                dependency_level_index = InvalidIndex;
     };
 
     /**
@@ -584,14 +580,14 @@ public:
      * placed-resource / shared-heap aliasing.
      */
     struct CompiledAliasBoundary {
-        uint32_t       transient_slot = PassHandle::InvalidIndex;
+        uint32_t       transient_slot = InvalidIndex;
         ResourceHandle predecessor_resource{};
         ResourceHandle successor_resource{};
         /** Latest source for compact diagnostics; source_frontier is authoritative. */
         PassHandle     primary_src_pass{};
         std::vector<PassHandle> source_frontier{};
         PassHandle     dst_pass{};
-        uint32_t       barrier_index = PassHandle::InvalidIndex;
+        uint32_t       barrier_index = InvalidIndex;
     };
 
     struct CompiledQueueSync {
@@ -600,8 +596,8 @@ public:
         PassHandle   wait_pass{};
         QueueBinding signal_queue{};
         QueueBinding wait_queue{};
-        uint32_t     signal_batch = PassHandle::InvalidIndex;
-        uint32_t     wait_batch   = PassHandle::InvalidIndex;
+        uint32_t     signal_batch = InvalidIndex;
+        uint32_t     wait_batch   = InvalidIndex;
         bool         gpu_wait_required = false;
         std::vector<uint32_t> dependency_edges{};
         std::vector<uint32_t> barriers{};
@@ -1260,8 +1256,8 @@ private:
         bool                     whole_resource_exported = false;
         std::vector<StateDeclaration> initial_states{};
         std::vector<StateDeclaration> final_states{};
-        uint32_t                 first_use  = PassHandle::InvalidIndex;
-        uint32_t                 last_use   = PassHandle::InvalidIndex;
+        uint32_t                 first_use  = InvalidIndex;
+        uint32_t                 last_use   = InvalidIndex;
     };
 
     struct PassDeclaration {
@@ -1374,7 +1370,7 @@ private:
     CompiledPlan                     compiled_plan{};
     std::vector<std::string>         declaration_errors{};
     std::string                      compile_error{};
-    uint64_t                         graph_id = 0;
+    uint64_t                         graph_id = InvalidGraphId;
     QueueTopology                    queue_topology{};
     bool                             compiled = false;
     bool                             executed = false;

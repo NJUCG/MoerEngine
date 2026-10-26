@@ -308,7 +308,7 @@ RenderGraph::PreparedPassHandle RenderGraph::AddPreparedPass(
         return {};
     }
     const PassExecutionClass declared_execution =
-        passes[record_handle.index].execution_class;
+        passes[record_handle.pass_id].execution_class;
     if (declared_execution != PassExecutionClass::SerialRecord &&
         declared_execution != PassExecutionClass::ParallelRecordEligible) {
         declaration_errors.emplace_back(

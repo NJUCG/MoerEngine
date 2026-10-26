@@ -257,10 +257,10 @@ void TestActiveTransientLifetimeIsCompletionOwned(TestSuite& suite) {
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
     const auto& compiled_resource =
-        graph.GetCompiledPlan().resources[transient.resource.index];
+        graph.GetCompiledPlan().resources[transient.resource.resource_id];
     suite.Check(
         compiled_resource.transient_slot !=
-                RenderGraph::PassHandle::InvalidIndex &&
+                RenderGraph::InvalidIndex &&
             compiled_resource.first_use == 0 &&
             compiled_resource.last_use == 0,
         test,
@@ -473,11 +473,11 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
 
     const auto& plan = graph.GetCompiledPlan();
     const auto first_slot =
-        plan.resources[first.resource.index].transient_slot;
+        plan.resources[first.resource.resource_id].transient_slot;
     const auto second_slot =
-        plan.resources[second.resource.index].transient_slot;
+        plan.resources[second.resource.resource_id].transient_slot;
     suite.Check(
-        first_slot != RenderGraph::PassHandle::InvalidIndex &&
+        first_slot != RenderGraph::InvalidIndex &&
             first_slot == second_slot && plan.alias_boundaries.size() == 1,
         test,
         "compiler did not color non-overlapping descriptor-exact buffers into one slot"
@@ -629,8 +629,8 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
         if (compiled) {
             const auto& plan = graph.GetCompiledPlan();
             suite.Check(
-                plan.resources[first.resource.index].transient_slot !=
-                    plan.resources[second.resource.index].transient_slot &&
+                plan.resources[first.resource.resource_id].transient_slot !=
+                    plan.resources[second.resource.resource_id].transient_slot &&
                     plan.alias_boundaries.empty(),
                 overlap_test,
                 "overlapping lifetimes were assigned one physical slot"
@@ -686,8 +686,8 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
         if (compiled) {
             const auto& plan = graph.GetCompiledPlan();
             suite.Check(
-                plan.resources[first.resource.index].transient_slot !=
-                    plan.resources[second.resource.index].transient_slot &&
+                plan.resources[first.resource.resource_id].transient_slot !=
+                    plan.resources[second.resource.resource_id].transient_slot &&
                     plan.alias_boundaries.empty(),
                 descriptor_test,
                 "descriptor-incompatible resources shared a transient slot"
@@ -734,8 +734,8 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
         if (compiled) {
             const auto& plan = graph.GetCompiledPlan();
             suite.Check(
-                plan.resources[exported.resource.index].transient_slot !=
-                    plan.resources[later.resource.index].transient_slot &&
+                plan.resources[exported.resource.resource_id].transient_slot !=
+                    plan.resources[later.resource.resource_id].transient_slot &&
                     plan.alias_boundaries.empty(),
                 export_test,
                 "an exported resource was reused by a later transient"
@@ -784,8 +784,8 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
         if (compiled) {
             const auto& plan = graph.GetCompiledPlan();
             suite.Check(
-                plan.resources[referenced.resource.index].transient_slot !=
-                    plan.resources[later.resource.index].transient_slot &&
+                plan.resources[referenced.resource.resource_id].transient_slot !=
+                    plan.resources[later.resource.resource_id].transient_slot &&
                     plan.alias_boundaries.empty(),
                 reference_test,
                 "opaque Reference lifetime was reused by a later transient"
@@ -831,8 +831,8 @@ void TestNonOverlappingTexturesAlias(TestSuite& suite) {
     }
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
-        plan.resources[first.resource.index].transient_slot ==
-                plan.resources[second.resource.index].transient_slot &&
+        plan.resources[first.resource.resource_id].transient_slot ==
+                plan.resources[second.resource.resource_id].transient_slot &&
             plan.alias_boundaries.size() == 1,
         test,
         "compiler did not alias compatible whole textures"
@@ -1057,11 +1057,11 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
         return;
     }
     const auto& plan = graph.GetCompiledPlan();
-    const uint32_t slot = plan.resources[first.resource.index].transient_slot;
+    const uint32_t slot = plan.resources[first.resource.resource_id].transient_slot;
     suite.Check(
-        slot != RenderGraph::PassHandle::InvalidIndex &&
-            plan.resources[second.resource.index].transient_slot == slot &&
-            plan.resources[third.resource.index].transient_slot == slot &&
+        slot != RenderGraph::InvalidIndex &&
+            plan.resources[second.resource.resource_id].transient_slot == slot &&
+            plan.resources[third.resource.resource_id].transient_slot == slot &&
             plan.alias_boundaries.size() == 2,
         test,
         "compiler did not build the expected adjacent alias chain"

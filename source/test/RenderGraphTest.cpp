@@ -1258,8 +1258,8 @@ void TestLogicalResourceVersions(TestSuite& suite) {
         "the next write must advance the resource version"
     );
     suite.Check(
-        buffer.Untyped().index < plan.resources.size() &&
-            plan.resources[buffer.Untyped().index].version_count == 2,
+        buffer.Untyped().resource_id < plan.resources.size() &&
+            plan.resources[buffer.Untyped().resource_id].version_count == 2,
         test_name,
         "compiled resource metadata must expose the final version count"
     );
@@ -5170,11 +5170,11 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     );
 
     const auto& clear_unit =
-        plan.frontend_record_units[ui_passes.clear.index];
+        plan.frontend_record_units[ui_passes.clear.pass_id];
     const auto& compose_unit =
-        plan.frontend_record_units[ui_passes.compose.index];
+        plan.frontend_record_units[ui_passes.compose.pass_id];
     const auto& draw_unit =
-        plan.frontend_record_units[ui_passes.draw.index];
+        plan.frontend_record_units[ui_passes.draw.pass_id];
     suite.Check(
         clear_unit.record_execution_class ==
                 RenderGraph::PassExecutionClass::SerialRecord &&
@@ -7256,7 +7256,7 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     const auto  next_bindless =
         next_graph.ImportToken("Bindless", &bindless_identity);
     suite.Check(
-        next_bindless.Untyped().owner_id != bindless.Untyped().owner_id,
+        next_bindless.Untyped().graph_id != bindless.Untyped().graph_id,
         test_name,
         "same physical token identity in another graph must remain a distinct transaction"
     );
@@ -7591,9 +7591,9 @@ void TestNrdSerialControlIslandContract(TestSuite& suite) {
         "NRD storage outputs must normalize to Sampled before Composition"
     );
     suite.Check(
-        plan.frontend_record_units[nrd.index].record_execution_class ==
+        plan.frontend_record_units[nrd.pass_id].record_execution_class ==
                 RenderGraph::PassExecutionClass::SerialRecord &&
-            plan.frontend_record_units[nrd.index].native_translate_class ==
+            plan.frontend_record_units[nrd.pass_id].native_translate_class ==
                 Moer::Render::ERHITranslateExecutionClass::SerialControl,
         test_name,
         "only the NRD island must carry the explicit translation frontier"
