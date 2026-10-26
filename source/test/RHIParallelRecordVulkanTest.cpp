@@ -17,6 +17,7 @@
 #include "rhi/vulkan/VulkanQueue.h"
 #include "rhi/vulkan/VulkanRHIResource.h"
 #include "rhi/vulkan/diagnostics/VulkanSubmissionDiagnostics.h"
+#include "vulkan/VulkanSubmissionProbe.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
 #include "renderer/raster/TonemappingPass.h"
 #include "renderer/raster/BloomPass.h"

@@ -39,6 +39,14 @@ add_library(${target_name} SHARED
 )
 add_library(Moer::Render ALIAS ${target_name})
 
+# Test probes live with the tests and are absent from ordinary Render builds.
+# Compile inside Render only when enabled so backend-private symbols stay private.
+if (MOER_VULKAN_TEST_SUPPORT AND NOT APPLE)
+    target_sources(${target_name} PRIVATE
+        "${moer_source_dir}/test/vulkan/VulkanSubmissionProbe.cpp"
+    )
+endif()
+
 # Public dependency contract for every header under rhi/vulkan. Keeping Volk,
 # Vulkan platform declarations, and VMA includes on one interface target makes
 # the required macros available before any consumer can parse Vulkan headers.

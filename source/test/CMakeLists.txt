@@ -663,6 +663,9 @@ if (NOT APPLE)
     target_link_libraries(TestVulkanDescriptorBackend PRIVATE Moer::Render)
     set_target_properties(TestVulkanDescriptorBackend PROPERTIES FOLDER ${moer_test_folder})
 
+endif()
+
+if (NOT APPLE AND MOER_VULKAN_TEST_SUPPORT)
     set(test_target TestRHIParallelRecordVulkan)
     add_executable(${test_target} "RHIParallelRecordVulkanTest.cpp")
     target_link_libraries(${test_target}

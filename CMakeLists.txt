@@ -43,6 +43,7 @@ set(CMAKE_PDB_OUTPUT_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>")
 add_compile_definitions(EDITOR_MODE_ON=1)
 
 option(moer_build_test "build test unit" ON)
+option(MOER_VULKAN_TEST_SUPPORT "Enable Vulkan integration test hooks and fault injection" OFF)
 if(moer_build_test)
     enable_testing()
 endif()
