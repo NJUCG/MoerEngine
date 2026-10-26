@@ -1420,7 +1420,7 @@ RenderGraph::TextureHandle RenderGraph::CreateTransientTexture(
             nullptr
         )};
     if (handle.IsValid()) {
-        resources[handle.resource.resource_id].transient_texture_desc =
+        resources[handle.handle.resource_id].transient_texture_desc =
             allocation_desc;
     }
     return handle;
@@ -1448,7 +1448,7 @@ RenderGraph::BufferHandle RenderGraph::CreateTransientBuffer(
             &logical_desc
         )};
     if (handle.IsValid()) {
-        resources[handle.resource.resource_id].transient_buffer_desc =
+        resources[handle.handle.resource_id].transient_buffer_desc =
             allocation_desc;
     }
     return handle;
@@ -1462,7 +1462,7 @@ TextureRef RenderGraph::GetPhysicalTexture(TextureHandle resource) const {
     if (!IsValidResource(resource.Untyped())) {
         return {};
     }
-    const auto& declaration = resources[resource.resource.resource_id];
+    const auto& declaration = resources[resource.handle.resource_id];
     return declaration.kind == ResourceKind::Texture ?
                declaration.physical_texture :
                TextureRef{};
@@ -1472,7 +1472,7 @@ BufferRef RenderGraph::GetPhysicalBuffer(BufferHandle resource) const {
     if (!IsValidResource(resource.Untyped())) {
         return {};
     }
-    const auto& declaration = resources[resource.resource.resource_id];
+    const auto& declaration = resources[resource.handle.resource_id];
     return declaration.kind == ResourceKind::Buffer ?
                declaration.physical_buffer :
                BufferRef{};
