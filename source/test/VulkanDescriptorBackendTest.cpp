@@ -1,3 +1,6 @@
+#if MOER_VULKAN_TEST_SUPPORT
+#include "vulkan/VulkanFaultInjection.h"
+#endif
 #include "Core.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
@@ -293,6 +296,13 @@ int main(int argc, char** argv) {
         ConfigManager::GetInstance().Init(std::filesystem::current_path());
         TaskSystem::Init();
         tasks = true;
+#if MOER_VULKAN_TEST_SUPPORT
+        VulkanFaultInjection::Configure(0, worker_failure ? 1u : 0u);
+#else
+        if (worker_failure) {
+            throw std::invalid_argument("worker failure injection requires MOER_VULKAN_TEST_SUPPORT=ON");
+        }
+#endif
         RenderDevice::Init(DeviceInitInfo{
             .rhi_type                               = ERHIType::Vulkan,
             .name                                   = "DescriptorBackendTest",
@@ -303,7 +313,6 @@ int main(int argc, char** argv) {
             .parallel_record_workers                = 4,
             .parallel_record_verify                 = parallel,
             .parallel_record_min_work_units_per_job = 1,
-            .parallel_record_worker_throw_trigger   = worker_failure ? 1u : 0u,
         });
         device  = true;
         shaders = true;

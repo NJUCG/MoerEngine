@@ -18,6 +18,7 @@
 #include "rhi/vulkan/VulkanRHIResource.h"
 #include "vulkan/VulkanSubmissionTestHooks.h"
 #include "vulkan/VulkanSubmissionProbe.h"
+#include "vulkan/VulkanFaultInjection.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
 #include "renderer/raster/TonemappingPass.h"
 #include "renderer/raster/BloomPass.h"
@@ -16910,6 +16911,7 @@ int main(int argc, const char** argv) {
         TaskSystem::Init();
         task_system_initialized = true;
 
+        VulkanFaultInjection::Configure(0, inject_worker_failure ? 1u : 0u);
         RenderDevice::Init(DeviceInitInfo{
             .rhi_type           = ERHIType::Vulkan,
             .name               = "RHIParallelRecordVulkanTest",
@@ -16928,7 +16930,6 @@ int main(int argc, const char** argv) {
                                       timestamp_query_record_failure_mode || gpu_scope_stream_mode,
             .parallel_record_min_work_units_per_job = production_gate ? 64u : 1u,
             .submission_batch_window                = submission_batch_window,
-            .parallel_record_worker_throw_trigger   = inject_worker_failure ? 1u : 0u,
         });
         render_device_initialized = true;
 

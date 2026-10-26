@@ -66,9 +66,7 @@ VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     config.parallel_record_profile      = _info.parallel_record_profile;
     config.parallel_record_min_work_units_per_job =
         _info.parallel_record_min_work_units_per_job;
-    config.parallel_record_worker_throw_trigger =
-        _info.parallel_record_worker_throw_trigger;
-    config.present_submit_fault_trigger = _info.vulkan_present_submit_fault_trigger;
+
 
     std::string_view api = _info.rhi_api_version;
 

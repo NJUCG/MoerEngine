@@ -69,21 +69,7 @@ VulkanDevice::VulkanDevice(const VulkanRHIConfig& _config) : RenderDevice::Impl(
     parallel_record_profile       = _config.parallel_record_profile;
     parallel_record_min_work_units_per_job =
         std::max(1u, _config.parallel_record_min_work_units_per_job);
-    parallel_record_worker_throw_trigger =
-        _config.parallel_record_worker_throw_trigger;
-    present_submit_fault_trigger = _config.present_submit_fault_trigger;
-    if (parallel_record_worker_throw_trigger != 0) {
-        LOG_INFO(
-            "[ParallelRecord][FaultConfig] point=worker-throw trigger={}",
-            parallel_record_worker_throw_trigger
-        );
-    }
-    if (present_submit_fault_trigger != 0) {
-        LOG_INFO(
-            "[VulkanFault][Config] point=present-submit trigger={} mode=synthetic-device-lost",
-            present_submit_fault_trigger
-        );
-    }
+
     if (_config.rhi_thread && _config.rhi_bypass) {
         LOG_INFO("[Threading] Vulkan RHI Thread bypass is enabled; graphics submissions stay synchronous.");
     } else if (!_config.rhi_thread && !_config.rhi_bypass) {
@@ -605,8 +591,7 @@ void VulkanDevice::CreateDevice() {
         parallel_record_workers,
         parallel_record_verify,
         parallel_record_profile,
-        parallel_record_min_work_units_per_job,
-        parallel_record_worker_throw_trigger
+        parallel_record_min_work_units_per_job
     );
     SetResourceName(uint64(m_graphics_queue_handle), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
     m_compute_command_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute, false);
@@ -1500,43 +1485,6 @@ VkResult VulkanDevice::GetFirstFaultResult() const {
         return VK_ERROR_DEVICE_LOST;
     }
     return first_fault.result;
-}
-
-bool VulkanDevice::ShouldInjectPresentSubmit() {
-    if (present_submit_fault_trigger == 0) {
-        return false;
-    }
-    return present_submit_attempts.fetch_add(1, std::memory_order_relaxed) + 1 ==
-           present_submit_fault_trigger;
-}
-
-VulkanOperationResult VulkanDevice::InjectPresentSubmitFault(
-    const VulkanOperationContext& _context
-) {
-    std::unique_lock<std::shared_mutex> gate(native_queue_gate);
-    if (IsFaulted()) {
-        gate.unlock();
-        RecordRejectedSubmit();
-        return {EVulkanOperationStatus::Rejected, GetFirstFaultResult()};
-    }
-
-    Array<std::unique_lock<std::mutex>> queue_locks;
-    const auto                         queue_mutexes = GetUniqueQueueHostMutexes();
-    queue_locks.reserve(queue_mutexes.size());
-    for (auto* mutex : queue_mutexes) {
-        queue_locks.emplace_back(*mutex);
-    }
-
-    const VkResult predrain_result = vkDeviceWaitIdle(m_device);
-    const bool     predrained      = predrain_result == VK_SUCCESS;
-    const VkResult result          = predrained ? VK_ERROR_DEVICE_LOST : predrain_result;
-    if (TryBeginFirstFault(result)) {
-        PublishFirstFaultLocked(_context, result, true, predrained);
-    }
-    if (!predrained && result != VK_ERROR_DEVICE_LOST) {
-        EmergencyExitWithoutVulkanCleanup(_context, result);
-    }
-    return {EVulkanOperationStatus::Faulted, result};
 }
 
 void VulkanDevice::RecordRejectedSubmit() {

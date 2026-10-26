@@ -144,6 +144,8 @@ python tools/threading/run_matrix.py --set fault --base-config template.MoerEngi
 ```
 
 The `fault` set passes `--vulkan-fault-inject=present-submit@3` to the editor.
+Build the editor with `MOER_VULKAN_TEST_SUPPORT=ON` for this scenario and for
+`--parallel-record-fault-inject`. Ordinary builds reject these arguments.
 It is deliberately separate from `full`, which remains the original nine
 non-fault functional scenarios.
 

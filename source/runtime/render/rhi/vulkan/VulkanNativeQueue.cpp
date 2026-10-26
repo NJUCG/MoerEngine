@@ -2,6 +2,7 @@
 #include "VulkanDevice.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
+#include "vulkan/VulkanFaultInjection.h"
 #endif
 #include "log/LogSystem.h"
 #include "rhi/RHIThreadHeartbeat.h"
@@ -88,16 +89,18 @@ VulkanOperationResult VkNativeQueue::Submit(
     VulkanOperationContext context = _context;
     context.queue_type = type;
     context.queue      = queue;
+#if MOER_VULKAN_TEST_SUPPORT
     if (context.operation == EVulkanFaultOperation::PresentSubmit &&
-        device.ShouldInjectPresentSubmit()) {
+        VulkanFaultInjection::ShouldInjectPresentSubmit()) {
         LOG_INFO(
             "[VulkanFault][Injection] point=present-submit trigger={} mode=synthetic-device-lost",
-            device.GetPresentSubmitFaultTrigger()
+            VulkanFaultInjection::GetPresentTrigger()
         );
         wait_infos.clear();
         signal_infos.clear();
-        return device.InjectPresentSubmitFault(context);
+        return VulkanFaultInjection::InjectPresentSubmitFault(device, context);
     }
+#endif
 
     VkSubmitInfo2 submit_info{};
     Array<VkCommandBufferSubmitInfo> cmd_infos;

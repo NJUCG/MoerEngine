@@ -45,6 +45,7 @@ if (MOER_VULKAN_TEST_SUPPORT AND NOT APPLE)
     target_sources(${target_name} PRIVATE
         "${moer_source_dir}/test/vulkan/VulkanSubmissionProbe.cpp"
         "${moer_source_dir}/test/vulkan/VulkanSubmissionTestHooks.cpp"
+        "${moer_source_dir}/test/vulkan/VulkanFaultInjection.cpp"
     )
     target_include_directories(${target_name} PRIVATE "${moer_source_dir}/test")
 endif()

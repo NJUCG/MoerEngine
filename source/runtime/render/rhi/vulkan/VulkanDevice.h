@@ -66,8 +66,6 @@ struct VulkanRHIConfig {
     bool   parallel_record_verify                 = false;
     bool   parallel_record_profile                = false;
     uint32 parallel_record_min_work_units_per_job = 8;
-    uint64 parallel_record_worker_throw_trigger   = 0;
-    uint64 present_submit_fault_trigger           = 0;
 };
 
 struct VulkanDeviceInfo {
@@ -312,11 +310,6 @@ public:
     [[noreturn]] void EmergencyExitWithoutVulkanCleanup(
         const VulkanOperationContext& _context, VkResult _result
     );
-    [[nodiscard]] bool ShouldInjectPresentSubmit();
-    [[nodiscard]] uint64 GetPresentSubmitFaultTrigger() const {
-        return present_submit_fault_trigger;
-    }
-    VulkanOperationResult InjectPresentSubmitFault(const VulkanOperationContext& _context);
     void RecordRejectedSubmit();
     void RecordRejectedPresent();
     void RecordAllocatorQuarantine();
@@ -326,6 +319,9 @@ public:
 
 private:
     friend VkCommandQueue;
+#if MOER_VULKAN_TEST_SUPPORT
+    friend struct VulkanFaultInjection;
+#endif
 
     struct PluginEntry {
         using CreateFunction  = std::function<RuntimePlugin*(VulkanDevice*)>;
@@ -442,9 +438,6 @@ private:
     bool                parallel_record_verify                 = false;
     bool                parallel_record_profile                = false;
     uint32              parallel_record_min_work_units_per_job = 8;
-    uint64              parallel_record_worker_throw_trigger   = 0;
-    uint64              present_submit_fault_trigger           = 0;
-    std::atomic<uint64> present_submit_attempts{0};
 
     // Fault publication and diagnostics.
     std::atomic<EVulkanFaultPublishState> fault_state{EVulkanFaultPublishState::Healthy};

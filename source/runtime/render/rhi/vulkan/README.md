@@ -88,5 +88,10 @@ Set `MOER_VULKAN_TEST_SUPPORT=OFF` (the default) to return to the ordinary build
 An observer's storage must still outlive all observed work; enabling test support
 does not change submission ownership or callback lifetime rules.
 
+`VulkanFaultInjection` in the test directory owns process-local trigger counters.
+Configure it before device/worker startup. Fault CLI arguments and descriptor
+tests using `--inject-worker-failure` require the same opt-in build; normal
+device initialization and queue constructors carry no injection parameters.
+
 The macOS Render target currently excludes the Vulkan backend. A successful
 macOS engine build or CPU contract test does not validate Vulkan GPU execution.

@@ -19,6 +19,7 @@
 #include "diagnostics/VulkanSerialGolden.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
+#include "vulkan/VulkanFaultInjection.h"
 #endif
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
@@ -4836,8 +4837,7 @@ VkCommandQueue::VkCommandQueue(
     uint32_t      _parallel_record_workers,
     bool          _parallel_record_verify,
     bool          _parallel_record_profile,
-    uint32_t      _parallel_record_min_work_units_per_job,
-    uint64_t      _parallel_record_worker_throw_trigger
+    uint32_t      _parallel_record_min_work_units_per_job
 ) :
     CommandQueue(),
     vk_device(_device),
@@ -4855,8 +4855,7 @@ VkCommandQueue::VkCommandQueue(
     parallel_record_profile_enabled(_parallel_record_profile),
     parallel_record_min_work_units_per_job(
         std::max(1u, _parallel_record_min_work_units_per_job)
-    ),
-    parallel_record_worker_throw_trigger(_parallel_record_worker_throw_trigger) {
+    ) {
     if (_thread_profile_logging) {
         thread_profile = MakeUnique<RhiThreadProfileState>();
     }
@@ -6585,15 +6584,10 @@ bool VkCommandQueue::TryExecuteParallel(
                                     "secondary command buffer begin failed"
                                 );
                             }
-                            bool inject_after_first_command = false;
-                            if (parallel_record_worker_throw_trigger != 0) {
-                                const uint64 attempt =
-                                    parallel_record_worker_attempts.fetch_add(
-                                        1, std::memory_order_acq_rel
-                                    ) + 1;
-                                inject_after_first_command =
-                                    attempt == parallel_record_worker_throw_trigger;
-                            }
+#if MOER_VULKAN_TEST_SUPPORT
+                            const bool inject_after_first_command =
+                                VulkanFaultInjection::ShouldFailWorker(queue.GetType());
+#endif
                             cmd_list.InsertLabel(
                                 std::format(
                                     "[RHI Parallel] Layer {} Commands {}..{}",
@@ -6616,11 +6610,13 @@ bool VkCommandQueue::TryExecuteParallel(
                             for (uint32 command_index = chunk.range.command_begin;
                                  command_index < chunk.range.CommandEnd(); ++command_index) {
                                 visitor.VisitCmd(job_layer.commands[command_index]);
+#if MOER_VULKAN_TEST_SUPPORT
                                 if (inject_after_first_command) {
                                     throw std::runtime_error(
                                         "injected parallel command recorder worker failure"
                                     );
                                 }
+#endif
                             }
                             const VkResult worker_end =
                                 end_command_buffer(cmd_list, job_layer.scopes_after);
@@ -6947,14 +6943,10 @@ bool VkCommandQueue::TryExecuteParallel(
                             chunk.native_failure = worker_begin;
                             throw std::runtime_error("parallel command buffer begin failed");
                         }
-                        bool inject_after_first_command = false;
-                        if (parallel_record_worker_throw_trigger != 0) {
-                            const uint64 attempt = parallel_record_worker_attempts.fetch_add(
-                                1, std::memory_order_acq_rel
-                            ) + 1;
-                            inject_after_first_command =
-                                attempt == parallel_record_worker_throw_trigger;
-                        }
+#if MOER_VULKAN_TEST_SUPPORT
+                        const bool inject_after_first_command =
+                            VulkanFaultInjection::ShouldFailWorker(queue.GetType());
+#endif
                         cmd_list.InsertLabel(
                             std::format(
                                 "[RHI Parallel] Layer {} Commands {}..{}",
@@ -6977,12 +6969,13 @@ bool VkCommandQueue::TryExecuteParallel(
                         for (uint32 command_index = chunk.range.command_begin;
                              command_index < chunk.range.CommandEnd(); ++command_index) {
                             visitor.VisitCmd(job_layer.commands[command_index]);
+#if MOER_VULKAN_TEST_SUPPORT
                             if (inject_after_first_command) {
                                 LOG_INFO(
                                     "[ParallelRecord][Injection] point=worker-throw "
                                     "phase=after-first-command trigger={} batch={} layer={} "
                                     "command={}",
-                                    parallel_record_worker_throw_trigger,
+                                    VulkanFaultInjection::GetWorkerTrigger(),
                                     batch_serial,
                                     layer_index,
                                     command_index
@@ -6991,6 +6984,7 @@ bool VkCommandQueue::TryExecuteParallel(
                                     "injected parallel command recorder worker failure"
                                 );
                             }
+#endif
                         }
                         const VkResult worker_end =
                             end_command_buffer(cmd_list, job_layer.scopes_after);

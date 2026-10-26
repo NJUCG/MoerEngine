@@ -1,3 +1,6 @@
+#if MOER_VULKAN_TEST_SUPPORT
+#include "vulkan/VulkanFaultInjection.h"
+#endif
 #include "Engine.h"
 #include "EngineConsoleControl.h"
 
@@ -268,110 +271,22 @@ void LogCVarOverrideIssue(const CVar::OverrideIssueView& issue, void*) {
     LOG_ERROR("[Config][CVar] {}: {}", issue.name, issue.detail);
 }
 
-uint64_t ParseVulkanPresentSubmitFaultTrigger(int argc, const char** argv) {
-    constexpr std::string_view argument_name = "--vulkan-fault-inject";
-    constexpr std::string_view prefix        = "--vulkan-fault-inject=";
-    constexpr std::string_view point_prefix  = "present-submit@";
 
-    std::optional<std::string_view> specification;
+void ValidateFaultInjectionArguments(int argc, const char** argv) {
+#if MOER_VULKAN_TEST_SUPPORT
+    Render::VulkanFaultInjection::ValidateCommandLine(argc, argv);
+#else
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument = argv[index];
-        std::optional<std::string_view> candidate;
-        if (argument == argument_name) {
-            if (index + 1 >= argc) {
-                throw std::invalid_argument("--vulkan-fault-inject requires <point>@<positive-count>");
-            }
-            candidate = std::string_view(argv[++index]);
-        } else if (argument.starts_with(prefix)) {
-            candidate = argument.substr(prefix.size());
+        if (argument == "--vulkan-fault-inject" || argument.starts_with("--vulkan-fault-inject=") ||
+            argument == "--parallel-record-fault-inject" ||
+            argument.starts_with("--parallel-record-fault-inject=")) {
+            throw std::invalid_argument("Vulkan fault injection requires MOER_VULKAN_TEST_SUPPORT=ON");
         }
-
-        if (!candidate.has_value()) {
-            continue;
-        }
-        if (specification.has_value()) {
-            throw std::invalid_argument("--vulkan-fault-inject may be specified only once");
-        }
-        specification = *candidate;
     }
-
-    if (!specification.has_value()) {
-        return 0;
-    }
-    if (!specification->starts_with(point_prefix)) {
-        throw std::invalid_argument(
-            "unsupported Vulkan fault point; expected present-submit@<positive-count>"
-        );
-    }
-
-    const std::string_view count_text = specification->substr(point_prefix.size());
-    uint64_t               count      = 0;
-    const auto [end, error] = std::from_chars(
-        count_text.data(), count_text.data() + count_text.size(), count
-    );
-    if (count_text.empty() || error != std::errc{} || end != count_text.data() + count_text.size() ||
-        count == 0) {
-        throw std::invalid_argument(
-            "Vulkan fault trigger count must be a positive integer: present-submit@<positive-count>"
-        );
-    }
-    return count;
+#endif
 }
 
-uint64_t ParseParallelRecordWorkerThrowTrigger(int argc, const char** argv) {
-    constexpr std::string_view argument_name = "--parallel-record-fault-inject";
-    constexpr std::string_view prefix        = "--parallel-record-fault-inject=";
-    constexpr std::string_view point_prefix  = "worker-throw@";
-
-    std::optional<std::string_view> specification;
-    for (int index = 1; index < argc; ++index) {
-        const std::string_view argument = argv[index];
-        std::optional<std::string_view> candidate;
-        if (argument == argument_name) {
-            if (index + 1 >= argc) {
-                throw std::invalid_argument(
-                    "--parallel-record-fault-inject requires worker-throw@<positive-count>"
-                );
-            }
-            candidate = std::string_view(argv[++index]);
-        } else if (argument.starts_with(prefix)) {
-            candidate = argument.substr(prefix.size());
-        }
-
-        if (!candidate.has_value()) {
-            continue;
-        }
-        if (specification.has_value()) {
-            throw std::invalid_argument(
-                "--parallel-record-fault-inject may be specified only once"
-            );
-        }
-        specification = *candidate;
-    }
-
-    if (!specification.has_value()) {
-        return 0;
-    }
-    if (!specification->starts_with(point_prefix)) {
-        throw std::invalid_argument(
-            "unsupported parallel-record fault point; expected worker-throw@<positive-count>"
-        );
-    }
-
-    const std::string_view count_text = specification->substr(point_prefix.size());
-    uint64_t               count      = 0;
-    const auto [end, error] = std::from_chars(
-        count_text.data(), count_text.data() + count_text.size(), count
-    );
-    if (count_text.empty() || error != std::errc{} || end != count_text.data() + count_text.size() ||
-        count == 0) {
-        throw std::invalid_argument(
-            "parallel-record worker fault trigger must be a positive integer: "
-            "worker-throw@<positive-count>"
-        );
-    }
-    return count;
-}
 
 bool ParseThreadingRendererSwitchValidation(int argc, const char** argv) {
     constexpr std::string_view argument_name = "--threading-renderer-switch-validation";
@@ -607,8 +522,7 @@ Engine::Engine() {}
 
 void Engine::ValidateCommandLine(int argc, const char** argv) {
     (void)ParseStartupCVarOverrides(argc, argv);
-    (void)ParseVulkanPresentSubmitFaultTrigger(argc, argv);
-    (void)ParseParallelRecordWorkerThrowTrigger(argc, argv);
+    ValidateFaultInjectionArguments(argc, argv);
     const bool renderer_switch_validation =
         ParseThreadingRendererSwitchValidation(argc, argv);
     const bool raster_lifecycle_validation =
@@ -1329,10 +1243,11 @@ void Engine::Init(
             submission_batch_window
         );
     }
-    const uint64_t vulkan_present_submit_fault_trigger =
-        ParseVulkanPresentSubmitFaultTrigger(argc, argv);
-    const uint64_t parallel_record_worker_throw_trigger =
-        ParseParallelRecordWorkerThrowTrigger(argc, argv);
+#if MOER_VULKAN_TEST_SUPPORT
+    Render::VulkanFaultInjection::ConfigureFromCommandLine(argc, argv);
+#else
+    ValidateFaultInjectionArguments(argc, argv);
+#endif
     const bool renderer_switch_validation_enabled =
         ParseThreadingRendererSwitchValidation(argc, argv);
     const bool raster_lifecycle_validation_enabled =
@@ -1502,9 +1417,6 @@ void Engine::Init(
                     startup_config.rhi_heartbeat_stall_timeout_ms,
                 .rhi_heartbeat_poll_interval_ms =
                     startup_config.rhi_heartbeat_poll_interval_ms,
-                .parallel_record_worker_throw_trigger =
-                    parallel_record_worker_throw_trigger,
-                .vulkan_present_submit_fault_trigger = vulkan_present_submit_fault_trigger,
             }
         )
     );

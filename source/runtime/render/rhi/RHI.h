@@ -50,8 +50,6 @@ struct DeviceInitInfo {
     bool             rhi_heartbeat_enabled               = false;
     uint32_t         rhi_heartbeat_stall_timeout_ms       = 5000;
     uint32_t         rhi_heartbeat_poll_interval_ms       = 1000;
-    uint64_t         parallel_record_worker_throw_trigger = 0;
-    uint64_t         vulkan_present_submit_fault_trigger = 0;
 };
 namespace Moer::Render {
 
