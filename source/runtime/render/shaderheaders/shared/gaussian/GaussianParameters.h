@@ -23,7 +23,8 @@ struct GGaussianInstance {
     row_major float4x4 world_transform;
 #endif
     float4   color_opacity;
-    uint4    range; // first Gaussian, count, SH degree, visibility bits (game=1, editor=2)
+    uint4
+        range; // first Gaussian, count, SH degree, flags: game=1, editor=2, cast shadows=4, receive shadows=8
 };
 
 #ifdef __cplusplus

@@ -182,6 +182,13 @@ const GInstance& CpuScene::GetInstanceForPrimitive(uint primitive_id, uint insta
     return arr[instance_idx];
 }
 
+std::optional<uint> CpuScene::GetLightIndex(entt::entity entity) const {
+    auto found = m_map_light_entity_to_id.find(entity);
+    if (found == m_map_light_entity_to_id.end())
+        return std::nullopt;
+    return found->second;
+}
+
 uint CpuScene::GetLightCount() const {
     return static_cast<uint>(m_light_buf.size());
 }

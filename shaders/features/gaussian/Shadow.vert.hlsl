@@ -23,7 +23,7 @@ Output main(uint vertex : SV_VertexID, uint id : SV_InstanceID) {
     float3 ax = mul(jx,axes), ay = mul(jy,axes);
     float a=dot(ax,ax)+.3, b=dot(ax,ay), c=dot(ay,ay)+.3;
     float determinant = a*c-b*b;
-    float opacity = min(.99,g.scale_opacity.w*instance.color_opacity.w);
+    float opacity = g.scale_opacity.w*instance.color_opacity.w;
     if (determinant <= 0 || opacity < param.options.x) return o;
     float radius = sqrt(2*log(opacity/param.options.x)*max(a,c));
     static const float2 corners[6] = {float2(-1,-1),float2(1,-1),float2(-1,1),float2(-1,1),float2(1,-1),float2(1,1)};

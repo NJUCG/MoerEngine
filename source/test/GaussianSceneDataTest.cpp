@@ -68,7 +68,7 @@ void CheckMoca(Scene& scene, const std::filesystem::path& directory) {
     Check(SceneCache::BuildSourceIdentity(scene.GetSourceFilePath(), identity), "cache source identity");
     const auto path = SceneCache::GetCachePath(identity, ESceneCacheKind::State);
     ecs::LogicalScene restored;
-    Check(SceneCacheSerializer::LoadLogicalScene(path, restored), "v6 cache loads");
+    Check(SceneCacheSerializer::LoadLogicalScene(path, restored), "v7 cache loads");
     const auto instances = restored.r().view<ecs::CGaussianInstance>();
     Check(instances.size() == 2, "cache retains all Gaussian instances");
     GaussianAssetRef shared_asset;
@@ -106,10 +106,13 @@ void CheckMoca(Scene& scene, const std::filesystem::path& directory) {
     const auto mixed_path = directory / "mixed.moca";
     Check(SceneCacheSerializer::SaveLogicalScene(mixed_path, {}, restored), "mixed registry saves");
     ecs::LogicalScene mixed;
-    Check(SceneCacheSerializer::LoadLogicalScene(mixed_path, mixed) &&
-        mixed.r().view<ecs::CGaussianInstance>().size() == 2 && mixed.r().view<ecs::CMesh>().size() == 1 &&
-        mixed.r().ctx().get<ecs::CtxMegaBuffers>().position.size() == 1,
-        "v6 keeps Mesh resources and Gaussian assets together");
+    Check(
+        SceneCacheSerializer::LoadLogicalScene(mixed_path, mixed) &&
+            mixed.r().view<ecs::CGaussianInstance>().size() == 2 &&
+            mixed.r().view<ecs::CMesh>().size() == 1 &&
+            mixed.r().ctx().get<ecs::CtxMegaBuffers>().position.size() == 1,
+        "v7 keeps Mesh resources and Gaussian assets together"
+    );
 
     // Failure must not replace the caller's existing registry with a partial scene.
     const auto corrupt_path = directory / "truncated.moca";
@@ -354,6 +357,32 @@ int main(int argc, char** argv) {
         invalid_view_settings = view_settings; invalid_view_settings.background.x = std::numeric_limits<float>::infinity();
         Check(!scene.SetGaussianViewSettings(invalid_view_settings), "nonfinite background rejected");
         CheckMoca(scene, directory);
+        const auto first_point =
+            scene.CreatePointLight({.position = float3(-1, -2, -3), .name = "first shadow light"});
+        const auto selected_point = scene.CreatePointLight(
+            {.position = float3(1, 2, 3), .name = "selected shadow light", .should_set_main_light = true}
+        );
+        auto selected_light_batch = scene.PrepareUpdateBatch(false, false);
+        Check(
+            selected_light_batch.update_gpu_update &&
+                selected_light_batch.main_point_light_index <
+                    selected_light_batch.update_gpu_update->lights.size(),
+            "selected point light exposes its GPU slot"
+        );
+        if (selected_light_batch.update_gpu_update &&
+            selected_light_batch.main_point_light_index <
+                selected_light_batch.update_gpu_update->lights.size()) {
+            const auto light =
+                selected_light_batch.update_gpu_update->lights[selected_light_batch.main_point_light_index];
+            Check(
+                Near(light.position.x, 1) && Near(light.position.y, 2) && Near(light.position.z, 3),
+                "shadow GPU slot belongs to tagged main light"
+            );
+        }
+        scene.DestroyPointLight(selected_point);
+        scene.DestroyPointLight(first_point);
+        scene.PrepareUpdateBatch(false, false);
+
         const auto document_path = directory / "scene.moergs";
         // Authored legacy fixture, independent of the removed .moergs writer.
         nlohmann::json document = {

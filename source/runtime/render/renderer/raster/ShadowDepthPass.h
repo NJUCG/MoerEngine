@@ -70,8 +70,32 @@ public:
     };
 
     ShadowDepthPass(RasterContext& context);
-    void SetGaussians(RasterContext& context, const GaussianGpuScene* scene, GaussianViewSettings settings, bool editor_view);
-    BufferRef GetGaussianShadowData() const { return m_gaussian_pass ? m_gaussian_pass->GetDataBuffer() : BufferRef{}; }
+    void SetGaussians(
+        RasterContext&          context,
+        const GaussianGpuScene* scene,
+        GaussianViewSettings    settings,
+        bool                    editor_view,
+        const RasterConfig&     config
+    );
+    Array<TextureRef> GetGaussianShadowTextures(RasterContext& context) const;
+    void              DeclareGaussianResources(
+        RenderGraph&              graph,
+        RenderGraph::PassBuilder& builder,
+        RasterContext&            context,
+        bool                      write
+    );
+    TextureRef RecordGaussianDepthDebug(CommandList& commands) {
+        return m_gaussian_scene && m_gaussian_pass ? m_gaussian_pass->RecordDepthDebug(commands) :
+                                                     TextureRef{};
+    }
+    double GetGaussianShadowGpuTime() {
+        return m_gaussian_scene && m_gaussian_pass && !m_gaussian_bounds.empty() ?
+                   m_gaussian_pass->GetGpuTime() :
+                   0.;
+    }
+    BufferRef GetGaussianShadowData() const {
+        return m_gaussian_scene && m_gaussian_pass ? m_gaussian_pass->GetDataBuffer() : BufferRef{};
+    }
 
     [[nodiscard]] RecordParameters
     Prepare(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
@@ -124,6 +148,7 @@ private:
     const GaussianGpuScene* m_gaussian_scene = nullptr;
     GaussianViewSettings m_gaussian_settings{};
     bool m_gaussian_editor_view = false;
+    bool                                m_gaussian_point_mode  = false;
     uint64 m_gaussian_revision = 0;
     Array<Box3D> m_gaussian_bounds;
     uint                    enabled_cascade_layers;

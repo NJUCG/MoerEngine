@@ -570,8 +570,12 @@ void BindGaussianApi(py::module_& module, SceneApiClass& scene_api_class) {
         .def_readwrite("receive_shadows", &GaussianInstanceSettings::receive_shadows);
     py::enum_<EGaussianDisplayMode>(module,"EGaussianDisplayMode")
         .value("Reference",EGaussianDisplayMode::Reference).value("Engine",EGaussianDisplayMode::Engine);
-    py::enum_<EGaussianDebugView>(module,"EGaussianDebugView")
-        .value("Color",EGaussianDebugView::Color).value("Transmittance",EGaussianDebugView::Transmittance).value("TileCoverage",EGaussianDebugView::TileCoverage);
+    py::enum_<EGaussianDebugView>(module, "EGaussianDebugView")
+        .value("Color", EGaussianDebugView::Color)
+        .value("Transmittance", EGaussianDebugView::Transmittance)
+        .value("TileCoverage", EGaussianDebugView::TileCoverage)
+        .value("ShadowVisibility", EGaussianDebugView::ShadowVisibility)
+        .value("ShadowDepth", EGaussianDebugView::ShadowDepth);
     py::class_<GaussianViewSettings>(module,"GaussianViewSettings")
         .def(py::init<>()).def_readwrite("background",&GaussianViewSettings::background)
         .def_readwrite("exposure_ev",&GaussianViewSettings::exposure_ev)

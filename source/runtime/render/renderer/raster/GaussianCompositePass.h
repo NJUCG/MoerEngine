@@ -11,6 +11,7 @@ public:
         TextureRef         color{}, transmittance{};
         BufferRef          status{}, ranges{};
         EGaussianDebugView debug_view = EGaussianDebugView::Color;
+        bool               is_shadow_depth_valid = false;
     };
     GaussianCompositePass(ShaderManager& manager, BindlessArrayRef bindless);
     ~GaussianCompositePass();

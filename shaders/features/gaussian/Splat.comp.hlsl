@@ -63,7 +63,8 @@ void main(uint3 group_id : SV_GroupID, uint3 local_id : SV_GroupThreadID) {
             batch_conics[lane_id] = gaussian.conic_opacity;
             // Decode once per tile batch and share the linear result across pixels.
             batch_colors[lane_id] = param.job.x != 0 ?
-                SRGBToLinear(gaussian.color.xyz) * exp2(camera.background.w) : gaussian.color.xyz;
+                SRGBToLinear(gaussian.color.xyz) * exp2(camera.background.w) * lerp(1.0,gaussian.color.w,asfloat(param.job.w & 0x7fffffffu)) : gaussian.color.xyz;
+            if ((param.job.w & 0x80000000u) != 0) batch_colors[lane_id] = gaussian.color.www;
             if (param.job.y != 0) batch_reference_colors[lane_id] = gaussian.color.xyz;
         }
         GroupMemoryBarrierWithGroupSync();

@@ -24,7 +24,8 @@ public:
     DEFINE_SHADER_TEX(transmittance);
     DEFINE_SHADER_BUFFER(status);
     DEFINE_SHADER_BUFFER(ranges);
-    DEFINE_SHADER_ARGS(param, transmittance, status, ranges);
+    DEFINE_SHADER_TEX(debug_color);
+    DEFINE_SHADER_ARGS(param, transmittance, status, ranges, debug_color);
 };
 
 } // namespace
@@ -158,14 +159,15 @@ void GaussianCompositePass::RecordDebug(
     GaussianDispatchParams param{};
     const auto             size = parameters.output.GetSize();
     param.info                  = uint4(size.x, size.y, (size.x + 15) / 16, 0);
-    param.job                   = uint4(uint(parameters.debug_view), 0, 0, 0);
+    param.job = uint4(uint(parameters.debug_view), uint(parameters.is_shadow_depth_valid), 0, 0);
     commands
         .Gfx(
             m_impl->debug_pipeline,
             param,
             parameters.transmittance->GetView(),
             parameters.status->GetView(),
-            parameters.ranges->GetView()
+            parameters.ranges->GetView(),
+            parameters.color->GetView()
         )
         .Draw(
             "Gaussian debug view",

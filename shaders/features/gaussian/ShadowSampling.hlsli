@@ -1,6 +1,18 @@
 #ifndef MOER_GAUSSIAN_SHADOW_SAMPLING
 #define MOER_GAUSSIAN_SHADOW_SAMPLING
 #include "shared/gaussian/GaussianShadowParameters.h"
+// Raw-buffer matrix loads do not preserve the typed-buffer row-major interpretation.
+// Read explicit rows so Mesh and GS consumers use the same CPU matrix layout.
+Moer::GaussianShadowData LoadGaussianShadowData(uint handle) {
+    ArrayBuffer buffer = ArrayBuffer(handle);
+    Moer::GaussianShadowData data = buffer.Load<Moer::GaussianShadowData>(0);
+    [unroll] for (uint view = 0; view < 6; ++view)
+        [unroll] for (uint row = 0; row < 4; ++row)
+            data.world_to_clip[view][row] = buffer.Load<float4>(view * 4 + row);
+    [unroll] for (uint row = 0; row < 4; ++row)
+        data.world_to_view[row] = buffer.Load<float4>(24 + row);
+    return data;
+}
 float GaussianShadowCascade(Moer::GaussianShadowData data, uint handle, uint cascade, float3 world) {
     float4 clip = mul(data.world_to_clip[cascade], float4(world, 1));
     if (clip.w <= 0) return 1;
@@ -12,12 +24,12 @@ float GaussianShadowCascade(Moer::GaussianShadowData data, uint handle, uint cas
         [unroll] for (int x = -1; x <= 1; ++x) {
             float2 sample_uv = uv + float2(x,y) / data.config.z;
             if (any(sample_uv < 0) || any(sample_uv > 1)) { visibility += 1; continue; }
-            float depth = TextureHandle(handle).Sample2D<float>(sample_uv).r;
-            visibility += depth <= p.z + 1e-6 ? 1 : 0;
+            float depth = TextureHandle(handle).SampleLevel<float>(sample_uv,0).r;
+            visibility += depth <= p.z + max(1e-8,abs(p.z)*1e-6) ? 1 : 0;
         }
     return visibility / 9;
 }
-float GaussianShadowVisibility(Moer::GaussianShadowData data, uint4 maps, float3 world) {
+float GaussianShadowVisibility(Moer::GaussianShadowData data, uint4 maps, float3 world, bool mesh_shadow = false) {
     if (data.config.x == 0) return 1;
     float3 toward_light = data.config.x == 1 ? data.light.xyz : data.light.xyz - world;
     float length_squared = dot(toward_light, toward_light);
@@ -48,8 +60,16 @@ float GaussianShadowVisibility(Moer::GaussianShadowData data, uint4 maps, float3
     [unroll] for (int y=-1;y<=1;++y)
         [unroll] for (int x=-1;x<=1;++x) {
             float3 sample_dir = normalize(direction + (x*tangent+y*bitangent)*(2.0/data.config.z));
-            float d = TextureHandle(maps.x).SampleCube<float>(sample_dir).r;
-            visibility += d <= fragment_depth + 1e-6 ? 1 : 0;
+            // Adapt only the GS receiver to legacy Mesh face orientation. Each PCF tap
+            // chooses its face before the flip, including taps crossing a cube seam.
+            if(mesh_shadow && data.light_indices.z != 0) {
+                float3 a = abs(sample_dir);
+                if(a.x >= a.y && a.x >= a.z) {sample_dir.y = -sample_dir.y;sample_dir.x *= 1.000001;}
+                else if(a.y >= a.z) {sample_dir.z = -sample_dir.z;sample_dir.y *= 1.000001;}
+                else {sample_dir.y = -sample_dir.y;sample_dir.z *= 1.000001;}
+            }
+            float d = TextureHandle(maps.x).SampleLevelCube<float>(sample_dir,0).r;
+            visibility += d <= fragment_depth + max(1e-8,abs(fragment_depth)*1e-6) ? 1 : 0;
         }
     return visibility/9;
 }

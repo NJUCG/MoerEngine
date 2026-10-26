@@ -111,7 +111,7 @@ bool LoadGaussianSceneFile(
             };
             settings.display_mode =
                 static_cast<EGaussianDisplayMode>(bounded_integer(value.at("display_mode"), 1));
-            settings.debug_view = static_cast<EGaussianDebugView>(bounded_integer(value.at("debug_view"), 2));
+            settings.debug_view = static_cast<EGaussianDebugView>(bounded_integer(value.at("debug_view"), 4));
             settings.tile_pair_capacity = bounded_integer(value.at("tile_pair_capacity"), 1u << 24);
             if (value.contains("shadow_alpha_cutoff")) settings.shadow_alpha_cutoff = Number(value.at("shadow_alpha_cutoff"));
             if (value.contains("shadow_receive_strength")) settings.shadow_receive_strength = Number(value.at("shadow_receive_strength"));

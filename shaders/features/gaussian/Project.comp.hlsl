@@ -64,7 +64,7 @@ void main(uint3 thread_id : SV_DispatchThreadID) {
     cutoff_power += 1e-4 * max(1.0, abs(cutoff_power));
     output.center_depth = float4(center, depth, cutoff_power);
     output.conic_opacity = float4(c, -b, a, opacity) / float4(determinant_cov.xxx, 1);
-    output.color = float4(GaussianSH(gaussian, direction, min(instance.range.z, 3u)) * instance.color_opacity.xyz, 0);
+    output.color = float4(GaussianSH(gaussian, direction, min(instance.range.z, 3u)) * instance.color_opacity.xyz, 1);
     output.tile_rect = rect;
     projected[work_id] = output;
     uint tile_count = 0;

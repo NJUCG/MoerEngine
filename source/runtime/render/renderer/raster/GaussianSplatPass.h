@@ -22,6 +22,9 @@ public:
         TextureRef              opaque_depth{};
         bool                    is_engine_linear = true;
         bool                    needs_reference  = false;
+        BufferRef               shadow_data{};
+        BindlessArrayRef        shadow_bindless{};
+        Array<TextureRef>       shadow_maps{};
     };
     struct GraphResources {
         RenderGraph::TextureHandle color{}, transmittance{}, reference{}, display{};
@@ -42,7 +45,8 @@ public:
         RenderGraph&               graph,
         RecordParameters           parameters,
         GraphResources             resources,
-        RenderGraph::TextureHandle opaque_depth
+        RenderGraph::TextureHandle opaque_depth,
+        RenderGraph::TokenHandle   shadow_maps = {}
     );
     const TextureRef& GetDisplay() const;
     const BufferRef&  GetRanges() const;
@@ -69,7 +73,9 @@ public:
         GaussianViewSettings    settings         = {},
         TextureRef              opaque_depth     = {},
         bool                    is_engine_linear = false,
-        bool                    needs_reference  = false
+        bool                    needs_reference  = false,
+        BufferRef               shadow_data      = {},
+        BindlessArrayRef        shadow_bindless  = {}
     );
     TextureRef           RecordDisplay(CommandList& commands, GaussianViewSettings settings = {});
     const TextureRef&    GetColor() const;

@@ -4,7 +4,7 @@
 #include <entt/entt.hpp>
 
 namespace Moer {
-// v6 appends Gaussian data after the unchanged v5 entity/mesh payload.
+// v7 adds shadow flags/settings to the v6 extension; the v5 Mesh payload is unchanged.
 bool WriteGaussianCacheExtension(
     SceneCacheBinaryWriter&    writer,
     const entt::registry&      registry,

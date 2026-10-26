@@ -1052,7 +1052,11 @@ void EditorUI::ShowGaussianSettings(Scene& scene) {
     if (requested_aa != effective_aa)
         ImGui::TextDisabled("Gaussian temporal data unavailable; using spatial AA.");
     int debug_view = static_cast<int>(settings.debug_view);
-    has_changed |= ImGui::Combo("View", &debug_view, "Color\0Transmittance\0Tile coverage\0");
+    has_changed |= ImGui::Combo(
+        "View",
+        &debug_view,
+        "Color\0Transmittance\0Tile coverage\0Mesh shadow visibility\0Gaussian shadow depth\0"
+    );
     settings.debug_view = static_cast<EGaussianDebugView>(debug_view);
     int pair_capacity   = static_cast<int>(settings.tile_pair_capacity);
     has_changed |= ImGui::InputInt("Tile-pair capacity", &pair_capacity, 65536, 1048576);
@@ -1096,6 +1100,9 @@ void EditorUI::ShowGaussianSettings(Scene& scene) {
     );
     if (status.has_gpu_time) {
         ImGui::Text("Last GS GPU: %.3f ms | Composite: %.3f ms", status.gpu_ms, status.composite_gpu_ms);
+        ImGui::Text(
+            "Shadow cast: %.3f ms | Receive: %.3f ms", status.shadow_cast_gpu_ms, status.shadow_receive_gpu_ms
+        );
         ImGui::Text(
             "Project/bin: %.3f | Sort: %.3f | Accumulate: %.3f ms",
             status.projection_gpu_ms,

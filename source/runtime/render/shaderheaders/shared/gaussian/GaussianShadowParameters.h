@@ -19,9 +19,10 @@ struct GaussianShadowData {
     float4 light;         // direction towards a directional light, or point-light position
     uint4  gaussian_maps; // four cascades; cube uses x
     uint4  mesh_maps;
-    uint4  config;  // mode: 0=invalid, 1=CSM, 2=cube; cascade count; resolution; cast enabled
-    float4 options; // alpha cutoff, receive strength, world bias, blend enabled
-    float4 clips;   // light near/far, view near/far
+    uint4  config;        // mode: 0=invalid, 1=CSM, 2=cube; cascade count; resolution; cast enabled
+    uint4  light_indices; // selected GPU slots: directional, point; legacy Mesh cube V flip; reserved
+    float4 options;       // alpha cutoff, receive strength, world bias, blend enabled
+    float4 clips;         // light near/far, view near/far
 };
 struct GaussianShadowDraw {
 #ifdef __cplusplus
@@ -33,7 +34,7 @@ struct GaussianShadowDraw {
     float4 options; // cutoff
 };
 #ifdef __cplusplus
-static_assert(sizeof(GaussianShadowData) == 576);
+static_assert(sizeof(GaussianShadowData) == 592);
 static_assert(sizeof(GaussianShadowDraw) == 96);
 #endif
 }

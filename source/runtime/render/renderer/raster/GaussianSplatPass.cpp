@@ -1,8 +1,10 @@
 #include "GaussianSplatPass.h"
+#include "GaussianShadowPass.h"
 #include "PixelFormat.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <stdexcept>
 
@@ -23,6 +25,17 @@ public:
     DEFINE_SHADER_BUFFER(tile_counts);
     DEFINE_SHADER_BUFFER(status);
     DEFINE_SHADER_ARGS(param, camera, gaussians, instances, projected, tile_counts, status);
+};
+class GaussianReceiveShadowPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(GaussianReceiveShadowPipeline);
+    DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
+    DEFINE_SHADER_BUFFER(projected);
+    DEFINE_SHADER_BUFFER(gaussians);
+    DEFINE_SHADER_BUFFER(instances);
+    DEFINE_SHADER_BUFFER(shadow_views);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(param, projected, gaussians, instances, shadow_views, bdls);
 };
 class GaussianScanBlocksPipeline : public ComputePipeline {
 public:
@@ -139,6 +152,7 @@ public:
 struct GaussianSplatPass::Impl {
     uint                           m_pair_capacity;
     GaussianProjectPipeline        m_project;
+    GaussianReceiveShadowPipeline  m_receive_shadow;
     GaussianScanBlocksPipeline     m_scanblocks;
     GaussianScanAddPipeline        m_scanadd;
     GaussianFinalizePipeline       m_finalize;
@@ -168,7 +182,14 @@ struct GaussianSplatPass::Impl {
     uint2                  m_readback_resolution{};
     QueryFuture            m_timing_future;
     QueryFuture            m_stage_timing[3];
+    QueryFuture            m_receive_timing;
     void                   Poll() {
+        if (m_receive_timing.Valid() && m_receive_timing.Status() != QueryStatus::Pending) {
+            auto result = m_receive_timing.Get();
+            if (auto* timing = std::get_if<TimestampQueryResult>(&result.payload))
+                m_telemetry.shadow_receive_gpu_ms = timing->duration_ns / 1000000.;
+            m_receive_timing = {};
+        }
         double* stages[] = {
             &m_telemetry.projection_gpu_ms, &m_telemetry.sorting_gpu_ms, &m_telemetry.accumulation_gpu_ms
         };
@@ -327,7 +348,9 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     GaussianViewSettings    view_settings,
     TextureRef              opaque_depth,
     bool                    is_engine_linear,
-    bool                    needs_reference
+    bool                    needs_reference,
+    BufferRef               shadow_data,
+    BindlessArrayRef        shadow_bindless
 ) {
     auto& state = *m_impl;
     if (resolution.x == 0 || resolution.y == 0)
@@ -496,6 +519,8 @@ TextureRef GaussianSplatPass::RecordAccumulation(
             .Dispatch(uint3(Groups(instance.range.y), 1, 1), "Gaussian project");
         work_offset += instance.range.y;
     }
+    if (shadow_data)
+        commands.AddCallback([shadow_data, shadow_bindless]() {});
     uint   scan_count       = work_count;
     auto   input            = state.m_counts;
     size_t scan_level_count = 0;
@@ -537,6 +562,44 @@ TextureRef GaussianSplatPass::RecordAccumulation(
         )
         .Dispatch(uint3(Groups(work_count), 1, 1), "Gaussian emit pairs");
     end_stage(0);
+    state.m_telemetry.shadow_receive_gpu_ms = shadow_data ? state.m_telemetry.shadow_receive_gpu_ms : 0;
+    QueryToken receive_token;
+    work_offset   = 0;
+    bool received = false;
+    for (uint instance_id = 0; instance_id < scene->GetInstances().size(); ++instance_id) {
+        const auto& instance = scene->GetInstances()[instance_id];
+        if (!(instance.range.w & visibility_mask) || !instance.range.y)
+            continue;
+        param.job = uint4(instance.range.x, instance_id, work_offset, instance.range.y);
+        if (shadow_data && shadow_bindless && (instance.range.w & 8u) && is_engine_linear) {
+            received = true;
+            if (!receive_token.Valid() && !state.m_receive_timing.Valid()) {
+                receive_token          = commands.BeginTimestampQuery("Gaussian shadow receiving");
+                state.m_receive_timing = receive_token.GetFuture();
+            }
+            if (!state.m_receive_shadow.handle.IsValid())
+                state.m_receive_shadow = ShaderManager::Get().Compute<GaussianReceiveShadowPipeline>(
+                    "features/gaussian/ReceiveShadow.comp.hlsl"
+                );
+            commands.UpdateBindlessArray(shadow_bindless);
+            commands
+                .Compute(
+                    state.m_receive_shadow,
+                    param,
+                    state.m_projected->GetView(),
+                    scene->GetGaussianBuffer()->GetView(),
+                    scene->GetInstanceBuffer()->GetView(),
+                    shadow_data->GetView(),
+                    shadow_bindless
+                )
+                .Dispatch(uint3(Groups(instance.range.y), 1, 1), "Gaussian receive Mesh shadow");
+        }
+        work_offset += instance.range.y;
+    }
+    if (receive_token.Valid())
+        commands.EndTimestampQuery(receive_token);
+    if (!received)
+        state.m_telemetry.shadow_receive_gpu_ms = 0;
     begin_stage(1);
     for (uint digit_id = 0; digit_id < 8; ++digit_id) {
         param.job          = uint4(digit_id, 0, 0, 0);
@@ -583,7 +646,14 @@ TextureRef GaussianSplatPass::RecordAccumulation(
         .Dispatch(uint3(Groups(state.m_pair_capacity), 1, 1), "Gaussian tile ranges");
     end_stage(1);
     begin_stage(2);
-    param.job = uint4(uint(is_engine_linear), uint(needs_reference), uint(bool(opaque_depth)), 0);
+    // The sign bit selects visibility debug; the remaining bits store nonnegative strength.
+    param.job = uint4(
+        uint(is_engine_linear),
+        uint(needs_reference),
+        uint(bool(opaque_depth)),
+        (std::bit_cast<uint>(view_settings.shadow_receive_strength) & 0x7fffffffu) |
+            (view_settings.debug_view == EGaussianDebugView::ShadowVisibility ? 0x80000000u : 0u)
+    );
     commands
         .Compute(
             state.m_splat,
@@ -696,8 +766,12 @@ void GaussianSplatPass::Record(CommandList& commands, const RecordParameters& pa
         parameters.settings,
         parameters.opaque_depth,
         parameters.is_engine_linear,
-        parameters.needs_reference
+        parameters.needs_reference,
+        parameters.shadow_data,
+        parameters.shadow_bindless
     );
+    if (parameters.shadow_data)
+        commands.AddCallback([parameters]() {});
     if (parameters.needs_reference) {
         auto settings       = parameters.settings;
         settings.debug_view = EGaussianDebugView::Color;
@@ -719,7 +793,8 @@ RenderGraph::PassHandle GaussianSplatPass::AddToGraph(
     RenderGraph&               graph,
     RecordParameters           parameters,
     GraphResources             resources,
-    RenderGraph::TextureHandle opaque_depth
+    RenderGraph::TextureHandle opaque_depth,
+    RenderGraph::TokenHandle   shadow_maps
 ) {
     Array<RenderGraph::BufferHandle> scratch;
     auto                             add_buffer = [&](const BufferRef& buffer) {
@@ -748,9 +823,27 @@ RenderGraph::PassHandle GaussianSplatPass::AddToGraph(
                 "gs_scene_" + std::to_string(inputs.size()), buffer, {.byte_size = buffer->GetByteSize()}
             ));
     }
+    Array<RenderGraph::TextureHandle> shadow_textures;
+    for (const auto& map : parameters.shadow_maps)
+        shadow_textures.push_back(graph.ImportTexture(
+            "gaussian_shadow_read_" + std::to_string(shadow_textures.size()), map, DescribeShadowTexture(map)
+        ));
+    RenderGraph::BufferHandle shadow_buffer{};
+    if (parameters.shadow_data)
+        shadow_buffer = graph.ImportBuffer(
+            "gaussian_shadow_views_receiver",
+            parameters.shadow_data,
+            {.byte_size = parameters.shadow_data->GetByteSize()}
+        );
     return graph.AddRecordPass(
         "GaussianRaster",
         [=](RenderGraph::PassBuilder& builder) {
+            for (const auto handle : shadow_textures)
+                builder.Read(handle);
+            if (shadow_maps.IsValid())
+                builder.Read(shadow_maps);
+            if (shadow_buffer.IsValid())
+                builder.Read(shadow_buffer);
             builder.Read(opaque_depth)
                 .Write(resources.color)
                 .Write(resources.transmittance)
