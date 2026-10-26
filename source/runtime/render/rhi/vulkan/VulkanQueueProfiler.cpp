@@ -1,7 +1,6 @@
 #include "VulkanQueueTiming.h"
 #include "VulkanQueue.h"
 #include "VulkanDevice.h"
-#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
 #include "log/LogSystem.h"
 #include "rhi/RHIThreadHeartbeat.h"
 

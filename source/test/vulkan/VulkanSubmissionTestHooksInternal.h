@@ -1,6 +1,7 @@
 #pragma once
 
-#include "VulkanSubmissionDiagnostics.h"
+#include "VulkanSubmissionTestHooks.h"
+#include "rhi/vulkan/VulkanQueue.h"
 
 #include <cstddef>
 
@@ -85,5 +86,37 @@ void NotifyVulkanBatchPreflightRejected(
 const VulkanScriptedQueryPreparationOverrideForTesting* GetVulkanScriptedQueryPreparationOverrideForTesting() noexcept;
 const VulkanScriptedTimestampValidBitsOverrideForTesting* GetVulkanScriptedTimestampValidBitsOverrideForTesting() noexcept;
 const VulkanScriptedPresentOverrideForTesting* GetVulkanScriptedPresentOverrideForTesting() noexcept;
+
+inline void InvokePresentSourceRejectionCallbackForTesting(
+    const VulkanScriptedPresentOverrideForTesting* _override
+) noexcept {
+    if (_override != nullptr &&
+        _override->before_source_rejection != nullptr) {
+        _override->before_source_rejection(_override->context);
+    }
+}
+
+template<typename SubmitCallable>
+VulkanRuntimeSubmissionResult ExecuteObservedSubmissionBoundary(
+    const VulkanSubmissionBoundaryIdentity& _identity,
+    SubmitCallable&&                 _submit,
+    const PresentReceiptRef&         _present_receipt = {}
+) noexcept {
+    NotifyVulkanSubmissionBoundary(
+        _identity,
+        EVulkanSubmissionBoundaryPhase::Dispatch
+    );
+    VulkanRuntimeSubmissionResult result = _submit();
+    NotifyVulkanSubmissionBoundary(
+        _identity,
+        EVulkanSubmissionBoundaryPhase::Terminal,
+        &result,
+        _present_receipt ?
+            _present_receipt->ResolutionAttemptCount() :
+            0
+    );
+    return result;
+}
+
 
 } // namespace Moer::Render

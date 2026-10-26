@@ -205,6 +205,11 @@ python tools/threading/run_matrix.py --set full --dry-run --base-config template
 
 ## Pass Criteria
 
+Vulkan integration tests require a build configured with
+`cmake -S . -B build -DMOER_VULKAN_TEST_SUPPORT=ON` before building
+`TestRHIParallelRecordVulkan`. Test observers and scripted overrides are excluded
+from ordinary builds; this option defaults to `OFF`.
+
 A run passes only when all of the following are true:
 
 - The expected GT/RT/RHI mode markers appear in the log.

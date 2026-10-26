@@ -1,6 +1,8 @@
 #include "VulkanQueue.h"
 #include "VulkanDevice.h"
-#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
+#if MOER_VULKAN_TEST_SUPPORT
+#include "vulkan/VulkanSubmissionTestHooksInternal.h"
+#endif
 #include "log/LogSystem.h"
 #include "rhi/RHIThreadHeartbeat.h"
 
@@ -56,7 +58,9 @@ VulkanOperationResult VkNativeQueue::SubmitEmpty(
     context.queue      = queue;
     const VulkanOperationResult outcome =
         device.SubmitOnQueue(queue, submit_info, _fence, context);
+#if MOER_VULKAN_TEST_SUPPORT
     NotifyVulkanNativeSubmission(type, queue, outcome, true);
+#endif
     wait_infos.clear();
     signal_infos.clear();
     return outcome;
@@ -123,7 +127,9 @@ VulkanOperationResult VkNativeQueue::Submit(
     }
     const VulkanOperationResult outcome =
         device.SubmitOnQueue(queue, submit_info, _fence, context);
+#if MOER_VULKAN_TEST_SUPPORT
     NotifyVulkanNativeSubmission(type, queue, outcome, false);
+#endif
     wait_infos.clear();
     signal_infos.clear();
     return outcome;

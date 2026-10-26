@@ -70,9 +70,23 @@ alone does not authorize reuse of GPU storage.
 
 `VulkanHeaderContract` checks the shared Vulkan header contract, and
 `VulkanDescriptorBufferAllocatorContract` exercises allocation, concurrent
-recording, rollback, and retirement without requiring a Vulkan GPU.
+recording, atomic allocation failure, and retirement without requiring a Vulkan GPU.
 `VulkanFailureContract` verifies failure propagation with assertions disabled;
 `VulkanRaytracingInstanceContract` covers growth, slot reuse and invalid frees.
+
+Integration-test observers, scripted failures, and submission probes live in
+`source/test/vulkan`. Ordinary builds exclude their registration state and
+runtime branches. On a Vulkan-capable platform, explicitly enable them before
+building the integration executable:
+
+```sh
+cmake -S . -B build -DMOER_VULKAN_TEST_SUPPORT=ON
+cmake --build build --target TestRHIParallelRecordVulkan
+```
+
+Set `MOER_VULKAN_TEST_SUPPORT=OFF` (the default) to return to the ordinary build.
+An observer's storage must still outlive all observed work; enabling test support
+does not change submission ownership or callback lifetime rules.
 
 The macOS Render target currently excludes the Vulkan backend. A successful
 macOS engine build or CPU contract test does not validate Vulkan GPU execution.

@@ -1,7 +1,9 @@
 #include "VulkanQueueInternal.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
-#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
+#if MOER_VULKAN_TEST_SUPPORT
+#include "vulkan/VulkanSubmissionTestHooksInternal.h"
+#endif
 #include "log/LogSystem.h"
 #include "misc/RAII.h"
 #include "platform/Platform.h"
@@ -294,6 +296,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
 
         uint32 effective_timestamp_valid_bits =
             device.GetTimestampValidBits(EQueueType::Copy);
+#if MOER_VULKAN_TEST_SUPPORT
         if (timestamp_query_slot_count != 0) {
             const VulkanScriptedTimestampValidBitsOverrideForTesting*
                 scripted_override =
@@ -309,6 +312,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
                 );
             }
         }
+#endif
         const EVulkanTimestampQueryResetMode timestamp_reset_mode =
             device.GetTimestampQueryResetMode(
                 EQueueType::Copy,
@@ -1085,11 +1089,13 @@ void VkCopyQueue::CompleteAll(uint64 _timeline) {
                 completion_groups.emplace_back(std::move(group));
             }
         }
+#if MOER_VULKAN_TEST_SUPPORT
         NotifyVulkanQueueLocalSyncWait(
             EQueueType::Copy,
             target_retirement_serial,
             completion_groups.size()
         );
+#endif
         settled_cv.wait(
             lock,
             [this, _timeline, target_retirement_serial]() {

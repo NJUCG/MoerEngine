@@ -17,7 +17,9 @@
 #include "VulkanRHIResource.h"
 #include "VulkanSwapChain.h"
 #include "diagnostics/VulkanSerialGolden.h"
-#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
+#if MOER_VULKAN_TEST_SUPPORT
+#include "vulkan/VulkanSubmissionTestHooksInternal.h"
+#endif
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
 #include "misc/RAII.h"
@@ -88,15 +90,6 @@ struct VulkanPresentSourceContract {
     bool        valid{false};
     const char* reason{"unknown present-source contract failure"};
 };
-
-void InvokePresentSourceRejectionCallbackForTesting(
-    const VulkanScriptedPresentOverrideForTesting* _override
-) noexcept {
-    if (_override != nullptr &&
-        _override->before_source_rejection != nullptr) {
-        _override->before_source_rejection(_override->context);
-    }
-}
 
 [[nodiscard]] VulkanOperationResult ClassifyPresentSourceRejection(
     VulkanDevice& _device,
@@ -3878,9 +3871,11 @@ bool WaitForSubmittedDependencies(
     const std::atomic_bool* _continue_waiting
 ) {
     if (!_wait_events.empty()) {
+#if MOER_VULKAN_TEST_SUPPORT
         NotifyVulkanSubmissionDependencyWaitBegin(
             _queue, static_cast<uint32>(_wait_events.size())
         );
+#endif
     }
     for (const WaitEvent& event : _wait_events) {
         auto* fence = reinterpret_cast<VulkanTimeline*>(event.timeline_handle);
@@ -5411,12 +5406,16 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
             return {.outcome = {EVulkanOperationStatus::Rejected, vk_device.GetFirstFaultResult()}};
         }
         TextureRef                                     source_texture{_source.texture};
+#if MOER_VULKAN_TEST_SUPPORT
         const VulkanScriptedPresentOverrideForTesting* scripted_override =
             GetVulkanScriptedPresentOverrideForTesting();
+#endif
         const VulkanPresentSourceContract source_contract =
             ValidatePresentSourceContract(_source, _swapchain.Get());
         if (!source_contract.valid) {
+#if MOER_VULKAN_TEST_SUPPORT
             InvokePresentSourceRejectionCallbackForTesting(scripted_override);
+#endif
             bool                        recoverable_rejection = false;
             const VulkanOperationResult rejection =
                 ClassifyPresentSourceRejection(vk_device, recoverable_rejection);
@@ -5436,9 +5435,14 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
             };
         }
         auto* vk_source_texture = static_cast<VulkanTexture*>(_source.texture);
-        if (!vk_source_texture->IsPresentationSourceReady() &&
-            (scripted_override == nullptr || scripted_override->require_present_source_ready)) {
+        if (!vk_source_texture->IsPresentationSourceReady()
+#if MOER_VULKAN_TEST_SUPPORT
+            && (scripted_override == nullptr || scripted_override->require_present_source_ready)
+#endif
+        ) {
+#if MOER_VULKAN_TEST_SUPPORT
             InvokePresentSourceRejectionCallbackForTesting(scripted_override);
+#endif
             bool                        recoverable_rejection = false;
             const VulkanOperationResult rejection =
                 ClassifyPresentSourceRejection(vk_device, recoverable_rejection);
@@ -5460,6 +5464,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
         auto                         execution_lease = runtime_execution_gate.Acquire();
         std::unique_lock<std::mutex> execution_lock(exec_mtx);
         const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+#if MOER_VULKAN_TEST_SUPPORT
         if (scripted_override != nullptr) {
             VulkanScriptedPresentResult scripted =
                 scripted_override->callback(scripted_override->context, current_timeline);
@@ -5506,6 +5511,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
                 .recoverable_rejection = false,
             };
         }
+#endif
         return PresentNow(
             std::move(_swapchain),
             std::move(source_texture),
@@ -7786,6 +7792,7 @@ void VkCommandQueue::ExecuteNow(
     //Get Allocators for buffer, texture and commandlist
     auto  command_context_ptr = std::move(AcquireCommandContext());
     auto& vk_command_context  = *command_context_ptr;
+#if MOER_VULKAN_TEST_SUPPORT
     if (timestamp_query_slot_count != 0) {
         const VulkanScriptedQueryPreparationOverrideForTesting*
             scripted_override =
@@ -7812,6 +7819,7 @@ void VkCommandQueue::ExecuteNow(
             }
         }
     }
+#endif
     try {
         // Explicit Query commands force this source onto the serial recorder.
         // Size (and lazily create) its query pools before Begin() so
@@ -8459,7 +8467,9 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         // Retain Copy inputs through the ordinary GPU completion callbacks.
         recorded.submit.callbacks.emplace_back([swapchain = std::move(_sc),
                                                 source    = std::move(_source_texture)] {});
+#if MOER_VULKAN_TEST_SUPPORT
         const auto* scripted_override = GetVulkanScriptedPresentOverrideForTesting();
+#endif
         const auto  source_contract   = ValidatePresentSourceContract(_view, sc);
         if (vk_device.IsFaulted()) {
             vk_device.RecordRejectedPresent();
@@ -8469,7 +8479,9 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
             );
         } else if (!source_contract.valid ||
                    !static_cast<VulkanTexture*>(_view.texture)->IsPresentationSourceReady()) {
+#if MOER_VULKAN_TEST_SUPPORT
             InvokePresentSourceRejectionCallbackForTesting(scripted_override);
+#endif
             final_outcome = ClassifyPresentSourceRejection(vk_device, recoverable_rejection);
             vk_device.RecordRejectedPresent();
             AccumulatePresentReceiptOutcome(
@@ -9301,11 +9313,13 @@ void VkCommandQueue::CompleteAll(uint64 _timeline) {
                 completion_groups.emplace_back(std::move(group));
             }
         }
+#if MOER_VULKAN_TEST_SUPPORT
         NotifyVulkanQueueLocalSyncWait(
             queue.GetType(),
             target_retirement_serial,
             completion_groups.size()
         );
+#endif
         queue_cv.wait(
             lock,
             [this, _timeline, target_retirement_serial]() {

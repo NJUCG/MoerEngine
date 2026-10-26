@@ -44,8 +44,13 @@ add_library(Moer::Render ALIAS ${target_name})
 if (MOER_VULKAN_TEST_SUPPORT AND NOT APPLE)
     target_sources(${target_name} PRIVATE
         "${moer_source_dir}/test/vulkan/VulkanSubmissionProbe.cpp"
+        "${moer_source_dir}/test/vulkan/VulkanSubmissionTestHooks.cpp"
     )
+    target_include_directories(${target_name} PRIVATE "${moer_source_dir}/test")
 endif()
+target_compile_definitions(${target_name} PUBLIC
+    MOER_VULKAN_TEST_SUPPORT=$<BOOL:${MOER_VULKAN_TEST_SUPPORT}>
+)
 
 # Public dependency contract for every header under rhi/vulkan. Keeping Volk,
 # Vulkan platform declarations, and VMA includes on one interface target makes

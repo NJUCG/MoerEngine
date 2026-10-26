@@ -11,7 +11,9 @@
 #include "taskgraph/TaskGraph.h"
 #include "VulkanDevice.h"
 #include "VulkanQueue.h"
-#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
+#if MOER_VULKAN_TEST_SUPPORT
+#include "vulkan/VulkanSubmissionTestHooksInternal.h"
+#endif
 #include "VulkanTranslateWaveScheduler.h"
 
 #include <algorithm>
@@ -27,28 +29,6 @@
 namespace Moer::Render {
 using namespace VulkanSubmissionDetail;
 namespace {
-
-template<typename SubmitCallable>
-VulkanRuntimeSubmissionResult ExecuteObservedSubmissionBoundary(
-    const VulkanSubmissionBoundaryIdentity& _identity,
-    SubmitCallable&&                 _submit,
-    const PresentReceiptRef&         _present_receipt = {}
-) noexcept {
-    NotifyVulkanSubmissionBoundary(
-        _identity,
-        EVulkanSubmissionBoundaryPhase::Dispatch
-    );
-    VulkanRuntimeSubmissionResult result = _submit();
-    NotifyVulkanSubmissionBoundary(
-        _identity,
-        EVulkanSubmissionBoundaryPhase::Terminal,
-        &result,
-        _present_receipt ?
-            _present_receipt->ResolutionAttemptCount() :
-            0
-    );
-    return result;
-}
 
 GraphEventRef MakeCompletedEvent() {
     GraphEventRef event = GraphEvent::CreateGraphEvent();
@@ -794,7 +774,9 @@ GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
         });
     }
     cv.notify_one();
+#if MOER_VULKAN_TEST_SUPPORT
     NotifyVulkanBackendSyncWait();
+#endif
     completion->Wait();
     return MakeCompletedEvent();
 }
@@ -1621,6 +1603,7 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
 
     if (submit_result.WasSubmitted()) {
         assert(submit_result.completion.has_value());
+#if MOER_VULKAN_TEST_SUPPORT
         NotifyVulkanSourceSubmitted(
             _batch->sequence,
             static_cast<uint32>(_source_index),
@@ -1631,6 +1614,7 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
             slot.async_queue_scope,
             slot.cross_native_predecessor_wait
         );
+#endif
         if (slot.queue == EQueueType::Copy) {
             last_copy_timeline = std::max(
                 last_copy_timeline,
@@ -1894,7 +1878,9 @@ void VulkanSubmissionExecutor::ProcessBatch(
             preflight.source_index,
             preflight.command_index
         );
+#if MOER_VULKAN_TEST_SUPPORT
         NotifyVulkanBatchPreflightRejected(_batch.sequence, false);
+#endif
         // Validation runs before the ordinary admission decision so a later
         // malformed batch can be discovered while an earlier pipeline batch
         // is still owned by Submission. Commit that accepted prefix before
@@ -1931,7 +1917,9 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 executable_preflight.source_index,
                 executable_preflight.command_index
             );
+#if MOER_VULKAN_TEST_SUPPORT
             NotifyVulkanBatchPreflightRejected(_batch.sequence, true);
+#endif
             DrainPipelineBatches();
             LatchHardFailure(
                 StreamPosition{_batch.sequence, 0},
@@ -2479,6 +2467,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         slot.queue_type
                     ).native_queue_id;
                 slot.attempted = true;
+#if MOER_VULKAN_TEST_SUPPORT
                 NotifyVulkanSourceTranslation(
                     _batch.sequence,
                     static_cast<uint32>(slot.source_index),
@@ -2490,6 +2479,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     slot.async_queue_scope,
                     EVulkanSourceTranslationPhase::Begin
                 );
+#endif
                 slot.recorded =
                     TranslateSourceForRuntime(
                         slot.queue_type,
@@ -2513,6 +2503,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     parallel_record_planned   = sample.planned;
                     parallel_record_effective = sample.effective;
                 }
+#if MOER_VULKAN_TEST_SUPPORT
                 NotifyVulkanSourceTranslation(
                     _batch.sequence,
                     static_cast<uint32>(slot.source_index),
@@ -2529,6 +2520,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     parallel_record_planned,
                     parallel_record_effective
                 );
+#endif
             };
         auto fail_group = [&](size_t           failure_source,
                               VkResult         failure_result,
@@ -2835,6 +2827,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                     &pre_completion
                                 );
                             packet->emplace<std::monostate>();
+#if MOER_VULKAN_TEST_SUPPORT
                             if (result.WasSubmitted()) {
                                 NotifyVulkanSourceSubmitted(
                                     batch_sequence,
@@ -2847,6 +2840,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                     source_metadata.cross_native_predecessor_wait
                                 );
                             }
+#endif
                             return result;
                         });
                 } catch (...) {
@@ -3012,6 +3006,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                             );
                         };
                         VulkanRuntimeSubmissionResult result =
+#if MOER_VULKAN_TEST_SUPPORT
                             serial_control ?
                                 ExecuteObservedSubmissionBoundary(
                                     VulkanSubmissionBoundaryIdentity{
@@ -3024,7 +3019,9 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                     },
                                     submit
                                 ) :
-                                submit();
+#endif
+                            submit();
+#if MOER_VULKAN_TEST_SUPPORT
                         if (result.WasSubmitted()) {
                             NotifyVulkanSourceSubmitted(
                                 batch_sequence,
@@ -3037,6 +3034,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                 source_metadata.cross_native_predecessor_wait
                             );
                         }
+#endif
                         return result;
                     }
                 );
@@ -3184,6 +3182,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                             );
                         };
                         VulkanRuntimeSubmissionResult result =
+#if MOER_VULKAN_TEST_SUPPORT
                             serial_control ?
                                 ExecuteObservedSubmissionBoundary(
                                     VulkanSubmissionBoundaryIdentity{
@@ -3196,7 +3195,9 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                     },
                                     submit
                                 ) :
-                                submit();
+#endif
+                            submit();
+#if MOER_VULKAN_TEST_SUPPORT
                         if (result.WasSubmitted()) {
                             NotifyVulkanSourceSubmitted(
                                 batch_sequence,
@@ -3209,6 +3210,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                 source_metadata.cross_native_predecessor_wait
                             );
                         }
+#endif
                         return result;
                     }
                 );
@@ -3325,6 +3327,12 @@ void VulkanSubmissionExecutor::ProcessBatch(
                             static_cast<uint32>(_batch.submits.size()),
                         bridge_dependency_wait_count
                     ]() mutable {
+                        auto submit = [&graphics_queue, packet]() mutable {
+                                return graphics_queue.SubmitRecordedForRuntime(
+                                    std::move(*packet)
+                                );
+                            };
+#if MOER_VULKAN_TEST_SUPPORT
                         return ExecuteObservedSubmissionBoundary(
                             VulkanSubmissionBoundaryIdentity{
                                 .batch_sequence  = batch_sequence,
@@ -3335,13 +3343,11 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                         PresentBridge,
                                 .dependency_wait_count =
                                     bridge_dependency_wait_count,
-                            },
-                            [&graphics_queue, packet]() mutable {
-                                return graphics_queue.SubmitRecordedForRuntime(
-                                    std::move(*packet)
-                                );
-                            }
+                            }, submit
                         );
+#else
+                        return submit();
+#endif
                     }
                 );
             } catch (...) {
@@ -3394,15 +3400,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     static_cast<uint32>(_batch.submits.size() + 1)
             ]() mutable {
                 const PresentReceiptRef receipt = present->receipt;
-                return ExecuteObservedSubmissionBoundary(
-                    VulkanSubmissionBoundaryIdentity{
-                        .batch_sequence  = batch_sequence,
-                        .operation_index = operation_index,
-                        .queue            = EQueueType::Graphics,
-                        .kind =
-                            EVulkanSubmissionBoundaryKind::Present,
-                    },
-                    [&graphics_queue, present]() mutable {
+                auto submit = [&graphics_queue, present]() mutable {
                         return graphics_queue.PresentForRuntime(
                             std::move(present->swapchain),
                             present->source,
@@ -3411,9 +3409,20 @@ void VulkanSubmissionExecutor::ProcessBatch(
                             // barrier can resolve it.
                             present->receipt
                         );
-                    },
-                    receipt
+                    };
+#if MOER_VULKAN_TEST_SUPPORT
+                return ExecuteObservedSubmissionBoundary(
+                    VulkanSubmissionBoundaryIdentity{
+                        .batch_sequence  = batch_sequence,
+                        .operation_index = operation_index,
+                        .queue            = EQueueType::Graphics,
+                        .kind =
+                            EVulkanSubmissionBoundaryKind::Present,
+                    }, submit, receipt
                 );
+#else
+                return submit();
+#endif
             }
         );
         // PresentForRuntime has now terminalized or retained the copied receipt.

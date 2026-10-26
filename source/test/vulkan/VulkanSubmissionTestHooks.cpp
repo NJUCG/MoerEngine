@@ -1,4 +1,4 @@
-#include "VulkanSubmissionDiagnosticsInternal.h"
+#include "VulkanSubmissionTestHooksInternal.h"
 
 #include "platform/Platform.h"
 #include "rhi/RHI.h"

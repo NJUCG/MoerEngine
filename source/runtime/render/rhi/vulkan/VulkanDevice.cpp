@@ -15,7 +15,9 @@
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanSwapChain.h"
-#include "diagnostics/VulkanSubmissionDiagnosticsInternal.h"
+#if MOER_VULKAN_TEST_SUPPORT
+#include "vulkan/VulkanSubmissionTestHooksInternal.h"
+#endif
 #include "plugin/VulkanCooperativeSupport.h"
 #include "plugin/VulkanNrdPlugin.h"
 #include "vulkanextension/VulkanExtension.h"
@@ -1174,7 +1176,9 @@ void VulkanDevice::WaitIdle() {
     }
 
     const VulkanOperationContext context{.operation = EVulkanFaultOperation::DeviceWaitIdle};
+#if MOER_VULKAN_TEST_SUPPORT
     NotifyVulkanDeviceIdleWait(context);
+#endif
     const VkResult               result = vkDeviceWaitIdle(m_device);
     if (result != VK_SUCCESS) {
         if (TryBeginFirstFault(result)) {
