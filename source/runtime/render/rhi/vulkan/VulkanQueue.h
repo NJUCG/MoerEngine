@@ -375,23 +375,24 @@ public:
 private:
     friend class VulkanSubmissionExecutor;
 
-    struct CurrentVulkanRecordedSubmit {
-        CurrentVulkanRecordedSubmit(
+    // Owns a request from Translate entry until it is handed to Completion,
+    // including preparation failures which never produced native commands.
+    struct PendingSubmission {
+        PendingSubmission(
             CmdSubmit&&                   _submit,
             const VulkanOperationContext& _context,
             uint64                        _timeline
         ) noexcept :
             submit(std::move(_submit)), context(_context), timeline(_timeline) {}
 
-        CurrentVulkanRecordedSubmit(const CurrentVulkanRecordedSubmit&) = delete;
-        CurrentVulkanRecordedSubmit& operator=(const CurrentVulkanRecordedSubmit&) = delete;
-        CurrentVulkanRecordedSubmit(CurrentVulkanRecordedSubmit&&) noexcept = default;
-        CurrentVulkanRecordedSubmit& operator=(CurrentVulkanRecordedSubmit&&) noexcept = default;
+        PendingSubmission(const PendingSubmission&) = delete;
+        PendingSubmission& operator=(const PendingSubmission&) = delete;
+        PendingSubmission(PendingSubmission&&) noexcept = default;
+        PendingSubmission& operator=(PendingSubmission&&) noexcept = default;
 
         CmdSubmit                            submit;
         VulkanOperationContext               context;
         uint64                               timeline{0};
-        bool                                 has_commands{false};
         Array<VulkanCommandList*>            ordered_cmd_lists;
         Array<VkSemaphoreSubmitInfo>         native_waits;
         Array<VkSemaphoreSubmitInfo>         native_signals;
@@ -401,12 +402,13 @@ private:
         VulkanBatchCompletionTicket          batch_completion{};
         VulkanPresentationSourceStateProgram presentation_source_program;
         RHITransferableOwnershipGate::Lease  execution_lease{};
-        VulkanOperationResult                retirement_outcome{
+        VulkanOperationResult                submission_outcome{
             EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
         };
         bool recoverable_rejection{false};
-        bool native_submit_resolved{false};
-        bool completion_committed{false};
+        // Resolved includes rejection before vkQueueSubmit2; it does not mean GPU acceptance.
+        bool submission_resolved{false};
+        bool completion_enqueued{false};
     };
 
     struct CompletionEvent {
@@ -430,13 +432,13 @@ private:
     [[nodiscard]] bool ClaimRuntimeOwnership();
     void ReleaseRuntimeOwnership() noexcept;
     void CancelRuntimeDependencyWaits() noexcept;
-    std::optional<CurrentVulkanRecordedSubmit> TranslateForRuntime(CmdSubmit&& _submit) noexcept;
+    [[nodiscard]] PendingSubmission TranslateForRuntime(CmdSubmit&& _submit) noexcept;
     VulkanRuntimeSubmissionResult SubmitRecordedForRuntime(
-        CurrentVulkanRecordedSubmit           _recorded,
+        PendingSubmission           _recorded,
         const VulkanRuntimePreCompletionHook* _pre_completion = nullptr
     ) noexcept;
     void RejectRecordedForRuntime(
-        CurrentVulkanRecordedSubmit&& _recorded,
+        PendingSubmission&& _recorded,
         VkResult                      _result,
         bool                          _recoverable
     ) noexcept;
@@ -453,14 +455,15 @@ private:
     ) noexcept;
 
     // Recording, native submission and transfer to Completion.
-    void RecordSubmissionCommands(
-        CmdSubmit&&                                _submit,
-        uint64                                     _timeline,
-        uint64                                     _serial,
-        std::optional<CurrentVulkanRecordedSubmit>& _recorded
-    );
+    void RecordSubmissionCommands(PendingSubmission& _pending);
+    void RejectRecording(
+        PendingSubmission& _pending,
+        const VulkanOperationResult& _outcome,
+        std::string_view _reason
+    ) noexcept;
+    void FinishRecordingProfile(const CmdSubmit& _submit, double _elapsed_ms) noexcept;
     VulkanOperationResult SubmitRecorded(
-        CurrentVulkanRecordedSubmit& _recorded,
+        PendingSubmission& _recorded,
         const std::atomic_bool*      _continue_waiting = nullptr
     );
     VulkanRuntimeSubmissionResult PresentSwapchain(
@@ -472,7 +475,7 @@ private:
         uint64            _serial
     ) noexcept;
     void CommitRuntimeSubmitCompletion(
-        CurrentVulkanRecordedSubmit& _recorded,
+        PendingSubmission& _recorded,
         const VulkanOperationResult& _outcome
     ) noexcept;
     UniquePtr<VulkanCommandContext> AcquireCommandContext();

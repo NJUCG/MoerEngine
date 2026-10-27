@@ -1208,7 +1208,7 @@ CmdSubmit* VulkanSubmissionExecutor::GetRecordedSourceSubmit(
     RecordedSourcePacket& _packet
 ) noexcept {
     if (auto* packet =
-            std::get_if<VkCommandQueue::CurrentVulkanRecordedSubmit>(
+            std::get_if<VkCommandQueue::PendingSubmission>(
                 &_packet
             )) {
         return &packet->submit;
@@ -1252,16 +1252,10 @@ VulkanSubmissionExecutor::TranslateSourceForRuntime(
         );
         auto recorded =
             queue.TranslateForRuntime(std::move(_submit));
-        if (recorded) {
-            recorded->batch_completion =
-                std::move(_completion_ticket);
-            return RecordedSourcePacket{
-                std::in_place_type<
-                    VkCommandQueue::CurrentVulkanRecordedSubmit>,
-                std::move(*recorded)
-            };
-        }
-        return {};
+        recorded.batch_completion = std::move(_completion_ticket);
+        return RecordedSourcePacket{
+            std::in_place_type<VkCommandQueue::PendingSubmission>, std::move(recorded)
+        };
     }
 
     RejectSourceForRuntime(
@@ -1300,7 +1294,7 @@ VulkanSubmissionExecutor::SubmitRecordedSourceForRuntime(
     ) {
         if (auto* packet =
                 std::get_if<
-                    VkCommandQueue::CurrentVulkanRecordedSubmit>(
+                    VkCommandQueue::PendingSubmission>(
                     &_packet
                 )) {
             auto& queue = static_cast<VkCommandQueue&>(
@@ -1356,7 +1350,7 @@ void VulkanSubmissionExecutor::RejectRecordedSourceForRuntime(
         return;
     }
     if (auto* packet =
-            std::get_if<VkCommandQueue::CurrentVulkanRecordedSubmit>(
+            std::get_if<VkCommandQueue::PendingSubmission>(
                 &_packet
             )) {
         EQueueType packet_queue = packet->context.queue_type;
@@ -3097,43 +3091,18 @@ void VulkanSubmissionExecutor::ProcessBatch(
             auto& queue = static_cast<VkCommandQueue&>(
                 RenderDevice::Get().GetCommandQueue(entry.queue)
             );
-            std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit> recorded =
+            VkCommandQueue::PendingSubmission recorded =
                 queue.TranslateForRuntime(std::move(entry.submit));
-            if (recorded) {
-                recorded->batch_completion =
-                    rejection_publication->CompletionTicket(source_index);
-            }
+            recorded.batch_completion = rejection_publication->CompletionTicket(source_index);
             // Translation reserves a logical queue timeline and always
             // publishes a CPU completion marker, including rejected paths.
             used_queues[static_cast<size_t>(entry.queue)] = true;
-            if (!recorded) {
-                _exception_state.first_unconsumed_source = source_index + 1;
-                LOG_ERROR(
-                    "[RHIExecutor][Vulkan] batch={} source_queue={} translation failed",
-                    _batch.sequence,
-                    static_cast<uint32>(entry.queue)
-                );
-                VulkanDevice& vk_device = queue.vk_device;
-                const VkResult result = vk_device.IsFaulted() ?
-                                            vk_device.GetFirstFaultResult() :
-                                            VK_ERROR_UNKNOWN;
-                rejection_publication->PublishSuffix(
-                    source_index,
-                    static_cast<int32>(result),
-                    false,
-                    "command translation failure"
-                );
-                reject_remaining(
-                    source_index + 1, result, "command translation failure"
-                );
-                return;
-            }
             VulkanRuntimeSubmissionResult submit_result{};
             try {
                 submit_result = ExecuteOnSubmissionThread(
                     [
                         &queue,
-                        packet = &*recorded,
+                        packet = &recorded,
                         batch_sequence = _batch.sequence,
                         source_index = static_cast<uint32>(source_index),
                         source_metadata = materialization.sources[source_index],
@@ -3209,7 +3178,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     "command Submission handoff failed before Completion notification"
                 );
                 queue.RejectRecordedForRuntime(
-                    std::move(*recorded), VK_ERROR_UNKNOWN, false
+                    std::move(recorded), VK_ERROR_UNKNOWN, false
                 );
                 submit_result.outcome = {
                     EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
@@ -3286,24 +3255,15 @@ void VulkanSubmissionExecutor::ProcessBatch(
         if (!bridge.wait_events.empty() || alias_completion_marker) {
             const uint32 bridge_dependency_wait_count =
                 static_cast<uint32>(bridge.wait_events.size());
-            std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit> recorded =
+            VkCommandQueue::PendingSubmission recorded =
                 graphics_queue.TranslateForRuntime(std::move(bridge));
             used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
-            if (!recorded) {
-                const VkResult result = graphics_queue.vk_device.IsFaulted() ?
-                                            graphics_queue.vk_device.GetFirstFaultResult() :
-                                            VK_ERROR_UNKNOWN;
-                reject_remaining(
-                    _batch.submits.size(), result, "Present bridge translation failure"
-                );
-                return;
-            }
             VulkanRuntimeSubmissionResult bridge_result{};
             try {
                 bridge_result = ExecuteOnSubmissionThread(
                     [
                         &graphics_queue,
-                        packet = &*recorded,
+                        packet = &recorded,
                         batch_sequence = _batch.sequence,
                         operation_index =
                             static_cast<uint32>(_batch.submits.size()),
@@ -3339,7 +3299,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     std::current_exception()
                 );
                 graphics_queue.RejectRecordedForRuntime(
-                    std::move(*recorded), VK_ERROR_UNKNOWN, false
+                    std::move(recorded), VK_ERROR_UNKNOWN, false
                 );
                 bridge_result.outcome = {
                     EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
