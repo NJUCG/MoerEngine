@@ -133,7 +133,7 @@ VulkanRecordedSubmission VulkanCommandQueue::ReserveSubmission(CmdSubmit&& _subm
     return pending;
 }
 
-VulkanRuntimeSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
+VulkanSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
     VulkanRecordedSubmission              _recorded,
     const VulkanRuntimePreCompletionHook* _pre_completion
 ) noexcept {
@@ -169,7 +169,7 @@ VulkanRuntimeSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
         _recorded.recoverable_rejection = false;
     }
 
-    VulkanRuntimeSubmissionResult runtime_result{
+    VulkanSubmissionResult runtime_result{
         .outcome               = *_recorded.submission_outcome,
         .recoverable_rejection = _recorded.recoverable_rejection,
     };

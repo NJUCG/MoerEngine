@@ -248,7 +248,7 @@ void RasterTool::ExecuteScenePendingCommands(
     commands.Signal(accepted, 1);
     const bool modern_graphics_profiling =
         commands.HasGpuScopeRecorder() || commands.IsLegacyGpuProfilingSuppressedForGeneration();
-    Array<RHIBackendSubmissionBatchEntry> submissions{};
+    Array<RHISubmissionRequest>           submissions{};
     CmdSubmit                             graphics_submit = commands.Submit();
     if (!modern_graphics_profiling) {
         graphics_submit.TickProfiling();

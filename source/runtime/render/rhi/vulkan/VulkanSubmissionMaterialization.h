@@ -152,6 +152,6 @@ inline CmdSubmit MakeEmptySubmit() {
 }
 
 VulkanSegmentMaterializationResult
-MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTopology& _queue_topology);
+MaterializeMultiSegmentBatch(RHISubmissionBatch& _batch, const RHIQueueTopology& _queue_topology);
 
 } // namespace Moer::Render::VulkanSubmissionDetail

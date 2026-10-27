@@ -7,7 +7,7 @@
 
 namespace Moer::Render {
 
-struct VulkanRuntimeSubmissionResult;
+struct VulkanSubmissionResult;
 
 // Called by the runtime owners at the existing operation boundaries. Notifications
 // are synchronous; they do not schedule work or extend observer lifetimes.
@@ -44,10 +44,10 @@ void NotifyVulkanSubmissionDependencyWaitBegin(
 void NotifyVulkanBackendSyncWait() noexcept;
 
 void NotifyVulkanSubmissionBoundary(
-    const VulkanSubmissionBoundaryIdentity&    _identity,
-    EVulkanSubmissionBoundaryPhase       _phase,
-    const VulkanRuntimeSubmissionResult* _result = nullptr,
-    uint32 _present_receipt_resolution_attempts = 0
+    const VulkanSubmissionBoundaryIdentity& _identity,
+    EVulkanSubmissionBoundaryPhase          _phase,
+    const VulkanSubmissionResult*           _result                              = nullptr,
+    uint32                                  _present_receipt_resolution_attempts = 0
 ) noexcept;
 
 void NotifyVulkanSourceSubmitted(
@@ -94,16 +94,16 @@ inline void InvokePresentSourceRejectionCallbackForTesting(
 }
 
 template<typename SubmitCallable>
-VulkanRuntimeSubmissionResult ExecuteObservedSubmissionBoundary(
+VulkanSubmissionResult ExecuteObservedSubmissionBoundary(
     const VulkanSubmissionBoundaryIdentity& _identity,
-    SubmitCallable&&                 _submit,
-    const PresentReceiptRef&         _present_receipt = {}
+    SubmitCallable&&                        _submit,
+    const PresentReceiptRef&                _present_receipt = {}
 ) noexcept {
     NotifyVulkanSubmissionBoundary(
         _identity,
         EVulkanSubmissionBoundaryPhase::Dispatch
     );
-    VulkanRuntimeSubmissionResult result = _submit();
+    VulkanSubmissionResult result = _submit();
     NotifyVulkanSubmissionBoundary(
         _identity,
         EVulkanSubmissionBoundaryPhase::Terminal,

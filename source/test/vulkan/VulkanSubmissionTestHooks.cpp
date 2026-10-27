@@ -307,10 +307,10 @@ void NotifyVulkanBackendSyncWait() noexcept {
 }
 
 void NotifyVulkanSubmissionBoundary(
-    const VulkanSubmissionBoundaryIdentity&    _identity,
-    EVulkanSubmissionBoundaryPhase       _phase,
-    const VulkanRuntimeSubmissionResult* _result,
-    uint32 _present_receipt_resolution_attempts
+    const VulkanSubmissionBoundaryIdentity& _identity,
+    EVulkanSubmissionBoundaryPhase          _phase,
+    const VulkanSubmissionResult*           _result,
+    uint32                                  _present_receipt_resolution_attempts
 ) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&

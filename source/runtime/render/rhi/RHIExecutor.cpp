@@ -148,7 +148,7 @@ void InvokeCleanupCallbacks(
     _callbacks.clear();
 }
 
-bool BatchHasWork(const RHIBackendSubmissionBatch& _batch) {
+bool BatchHasWork(const RHISubmissionBatch& _batch) {
     return !_batch.submits.empty() || _batch.present.has_value();
 }
 
@@ -172,14 +172,14 @@ void ResolveRejectedPresent(RHIPresentRequest* _present) noexcept {
 // not reach a GPU queue.  Keep this path backend-neutral and, importantly, run
 // user code only after all executor locks have been released.
 void FinalizeRejectedSubmissions(
-    Array<RHIBackendSubmissionBatchEntry>&& _submits,
-    std::string_view                         _reason,
-    RHIPresentRequest*                       _present = nullptr
+    Array<RHISubmissionRequest>&& _submits,
+    std::string_view              _reason,
+    RHIPresentRequest*            _present = nullptr
 ) noexcept {
     size_t callback_count       = 0;
     size_t success_callback_cnt = 0;
     size_t signal_count         = 0;
-    for (const RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (const RHISubmissionRequest& entry : _submits) {
         callback_count += entry.submit.callbacks.size();
         success_callback_cnt += entry.submit.success_callbacks.size();
         signal_count += entry.submit.signal_events.size();
@@ -205,7 +205,7 @@ void FinalizeRejectedSubmissions(
     // wait on a query from a later submit without depending on callback order.
     const GpuCompletionPublishBatch completion_batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         const GpuCompletionPublishBatch entry_batch =
             entry.submit.gpu_completion_publish_batch.Valid() ?
                 entry.submit.gpu_completion_publish_batch :
@@ -216,7 +216,7 @@ void FinalizeRejectedSubmissions(
     }
     const QueryPublishBatch query_batch =
         QueryBackendAccess::BeginPublishBatch();
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         const QueryPublishBatch entry_batch =
             entry.submit.query_publish_batch.Valid() ?
                 entry.submit.query_publish_batch :
@@ -227,7 +227,7 @@ void FinalizeRejectedSubmissions(
     // Publication wakes Wait/Get but deliberately does not release callbacks.
     // Signals must be terminal before callback notification, while publication
     // first prevents a synchronous Fence::Reject hook from self-deadlocking.
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         entry.submit.RejectPendingSignals();
     }
 
@@ -237,14 +237,14 @@ void FinalizeRejectedSubmissions(
     // notification so user code can safely wait for the receipt.
     ResolveRejectedPresent(_present);
 
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         entry.submit.NotifyPendingGpuCompletions(
             entry.submit.gpu_completion_publish_batch.Valid() ?
                 entry.submit.gpu_completion_publish_batch :
                 completion_batch
         );
     }
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         entry.submit.NotifyPendingQueries(
             entry.submit.query_publish_batch.Valid() ?
                 entry.submit.query_publish_batch :
@@ -252,7 +252,7 @@ void FinalizeRejectedSubmissions(
         );
     }
 
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         for (std::function<void()>& callback : entry.submit.callbacks) {
             if (!callback) {
                 continue;
@@ -282,17 +282,15 @@ void FinalizeRejectedSubmissions(
 // already-materialized submits and the untouched suffix must become terminal
 // before any Query or ordinary cleanup callback is allowed to run.
 void FinalizeRejectedCommandListGroup(
-    Array<CommandList>&                         _command_lists,
-    const Array<GpuCompletionCancellationView>&
-                                                _completion_cancellations,
-    const Array<QueryCancellationView>&         _query_cancellations,
-    Array<CommandList::RecordingRejectionPreparation>&
-                                                _rejection_preparations,
-    Array<PreparedCommandListRejection>&         _prepared,
-    const Array<size_t>&                        _materialized_source_indices,
-    Array<RHIBackendSubmissionBatchEntry>&&     _submits,
-    RHIPresentRequest*                          _present,
-    std::string_view                            _reason
+    Array<CommandList>&                                _command_lists,
+    const Array<GpuCompletionCancellationView>&        _completion_cancellations,
+    const Array<QueryCancellationView>&                _query_cancellations,
+    Array<CommandList::RecordingRejectionPreparation>& _rejection_preparations,
+    Array<PreparedCommandListRejection>&               _prepared,
+    const Array<size_t>&                               _materialized_source_indices,
+    Array<RHISubmissionRequest>&&                      _submits,
+    RHIPresentRequest*                                 _present,
+    std::string_view                                   _reason
 ) noexcept {
     assert(
         _completion_cancellations.size() == _command_lists.size() &&
@@ -327,7 +325,7 @@ void FinalizeRejectedCommandListGroup(
             _reason, completion_batch
         );
     }
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         const GpuCompletionPublishBatch entry_batch =
             entry.submit.gpu_completion_publish_batch.Valid() ?
                 entry.submit.gpu_completion_publish_batch :
@@ -350,7 +348,7 @@ void FinalizeRejectedCommandListGroup(
          _query_cancellations) {
         (void)cancellation.PublishCancellation(_reason, query_batch);
     }
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         const QueryPublishBatch entry_batch =
             entry.submit.query_publish_batch.Valid() ?
                 entry.submit.query_publish_batch :
@@ -367,7 +365,7 @@ void FinalizeRejectedCommandListGroup(
 
     // Every sibling host state is terminal before synchronous Fence rejection.
     // Callback tickets remain retained until the notification phase below.
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         entry.submit.RejectPendingSignals();
     }
     for (PreparedCommandListRejection& source : _prepared) {
@@ -386,7 +384,7 @@ void FinalizeRejectedCommandListGroup(
         cancellation.NotifyCancellation(completion_batch);
         cancellation.NotifyPublishedCancellation();
     }
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         entry.submit.NotifyPendingGpuCompletions(
             entry.submit.gpu_completion_publish_batch.Valid() ?
                 entry.submit.gpu_completion_publish_batch :
@@ -406,7 +404,7 @@ void FinalizeRejectedCommandListGroup(
         cancellation.NotifyCancellation(query_batch);
         cancellation.NotifyPublishedCancellation();
     }
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+    for (RHISubmissionRequest& entry : _submits) {
         entry.submit.NotifyPendingQueries(
             entry.submit.query_publish_batch.Valid() ?
                 entry.submit.query_publish_batch :
@@ -614,10 +612,7 @@ void TerminalizeRecordingSourceQueries(
     }
 }
 
-void FinalizeRejectedBackendBatch(
-    RHIBackendSubmissionBatch&& _batch,
-    std::string_view             _reason
-) noexcept {
+void FinalizeRejectedBackendBatch(RHISubmissionBatch&& _batch, std::string_view _reason) noexcept {
     RHIPresentRequest* present =
         _batch.present.has_value() ? &*_batch.present : nullptr;
     FinalizeRejectedSubmissions(
@@ -804,14 +799,13 @@ void FinalizeCancelledRecordingSources(
 }
 
 void FinalizeFailedRecordingSources(
-    Array<RHIRecordingSource>&& _sources,
-    std::string_view             _reason,
-    Array<CommandList::RecordingRejectionPreparation>&
-                                 _rejection_preparations,
-    Array<PreparedCommandListRejection>& _prepared,
-    Array<uint8>&               _terminal_snapshot,
-    Array<RHIBackendSubmissionBatchEntry> _materialized_submits = {},
-    std::span<const size_t> _metadata_signal_transfer_prefixes = {}
+    Array<RHIRecordingSource>&&                        _sources,
+    std::string_view                                   _reason,
+    Array<CommandList::RecordingRejectionPreparation>& _rejection_preparations,
+    Array<PreparedCommandListRejection>&               _prepared,
+    Array<uint8>&                                      _terminal_snapshot,
+    Array<RHISubmissionRequest>                        _materialized_submits              = {},
+    std::span<const size_t>                            _metadata_signal_transfer_prefixes = {}
 ) noexcept {
     // Reject is emitted only after every producer gate is terminal. This is
     // the ownership point at which failed/partial CommandLists are immutable
@@ -888,7 +882,7 @@ void FinalizeFailedRecordingSources(
             _reason, completion_batch
         );
     }
-    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+    for (RHISubmissionRequest& entry : _materialized_submits) {
         const GpuCompletionPublishBatch entry_batch =
             entry.submit.gpu_completion_publish_batch.Valid() ?
                 entry.submit.gpu_completion_publish_batch :
@@ -912,7 +906,7 @@ void FinalizeFailedRecordingSources(
             _reason, query_batch
         );
     }
-    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+    for (RHISubmissionRequest& entry : _materialized_submits) {
         const QueryPublishBatch entry_batch =
             entry.submit.query_publish_batch.Valid() ?
                 entry.submit.query_publish_batch :
@@ -934,7 +928,7 @@ void FinalizeFailedRecordingSources(
     RejectRecordingSignalMetadata(
         _sources, {}, _metadata_signal_transfer_prefixes
     );
-    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+    for (RHISubmissionRequest& entry : _materialized_submits) {
         entry.submit.RejectPendingSignals();
     }
     for (PreparedCommandListRejection& source : _prepared) {
@@ -950,7 +944,7 @@ void FinalizeFailedRecordingSources(
         source.gpu_completion_cancellation.
             NotifyPublishedCancellation();
     }
-    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+    for (RHISubmissionRequest& entry : _materialized_submits) {
         entry.submit.NotifyPendingGpuCompletions(
             entry.submit.gpu_completion_publish_batch.Valid() ?
                 entry.submit.gpu_completion_publish_batch :
@@ -968,7 +962,7 @@ void FinalizeFailedRecordingSources(
         source.query_cancellation.NotifyCancellation(query_batch);
         source.query_cancellation.NotifyPublishedCancellation();
     }
-    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+    for (RHISubmissionRequest& entry : _materialized_submits) {
         entry.submit.NotifyPendingQueries(
             entry.submit.query_publish_batch.Valid() ?
                 entry.submit.query_publish_batch :
@@ -981,7 +975,7 @@ void FinalizeFailedRecordingSources(
         }
     }
 
-    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+    for (RHISubmissionRequest& entry : _materialized_submits) {
         cleanup_callback_count += entry.submit.callbacks.size();
         InvokeCleanupCallbacks(
             entry.submit.callbacks,
@@ -1012,13 +1006,13 @@ void FinalizeFailedRecordingSources(
     }
 }
 
-struct ReadySubmissionPayload {
-    Array<RHIBackendSubmissionBatchEntry> submits{};
+struct SubmissionRequestPayload {
+    Array<RHISubmissionRequest>            submits{};
     ERHIExecSubmitFlags                    flags{ERHIExecSubmitFlags::FlushGPU};
     std::optional<RHIPresentRequest>       present{};
 };
 
-struct RecordingSubmissionPayload {
+struct RecordingSourcePayload {
     Array<RHIRecordingSource> sources{};
     Array<CommandList::RecordingRejectionPreparation>
                               rejection_preparations{};
@@ -1061,7 +1055,7 @@ private:
 // ownership path isolated instead of weakening the Vulkan topology contract.
 class LegacyQueueBackendExecutor final : public RHIBackendExecutor {
 public:
-    void Enqueue(RHIBackendSubmissionBatch&& _batch) override {
+    void Enqueue(RHISubmissionBatch&& _batch) override {
         std::optional<EQueueType> last_queue{};
         uint64                    ordered_copy_timeline = 0;
         {
@@ -1072,7 +1066,7 @@ public:
 
         const RHIQueueTopology queue_topology =
             RenderDevice::Get().GetQueueTopology();
-        for (const RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
+        for (const RHISubmissionRequest& entry : _batch.submits) {
             if (SubmitHasWork(entry.submit) &&
                 !queue_topology.Resolve(entry.queue).available) {
                 throw std::runtime_error(
@@ -1093,7 +1087,7 @@ public:
         // retire; each native Completion packet still owns callback release.
         const GpuCompletionPublishBatch completion_batch =
             GpuCompletionBackendAccess::BeginPublishBatch();
-        for (RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
+        for (RHISubmissionRequest& entry : _batch.submits) {
             if (!entry.submit.gpu_completion_tokens.empty()) {
                 entry.submit.PublishPendingGpuCompletionErrors(
                     "D3D12 GPU completion futures are unsupported",
@@ -1107,7 +1101,7 @@ public:
         // never reported as a timestamp capability failure.
         const QueryPublishBatch query_batch =
             QueryBackendAccess::BeginPublishBatch();
-        for (RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
+        for (RHISubmissionRequest& entry : _batch.submits) {
             if (!entry.submit.query_tokens.empty()) {
                 const QueryPublishBatch effective_batch =
                     entry.submit.query_publish_batch.Valid() ?
@@ -1140,7 +1134,7 @@ public:
             }
         });
 
-        for (RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
+        for (RHISubmissionRequest& entry : _batch.submits) {
             if (!SubmitHasWork(entry.submit)) {
                 continue;
             }
@@ -1312,10 +1306,10 @@ std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor(uint32 _submission_bat
     return {};
 }
 
-RHISubmissionTopologyPlan BuildBatchTopology(const RHIBackendSubmissionBatch& _batch) {
+RHISubmissionTopologyPlan BuildBatchTopology(const RHISubmissionBatch& _batch) {
     Array<RHISourceSubmitDescription> descriptions{};
     descriptions.reserve(_batch.submits.size());
-    for (const RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
+    for (const RHISubmissionRequest& entry : _batch.submits) {
         descriptions.emplace_back(RHISourceSubmitDescription{
             .root_queue       = entry.queue,
             .command_count    = entry.submit.cmds.size(),
@@ -1327,10 +1321,10 @@ RHISubmissionTopologyPlan BuildBatchTopology(const RHIBackendSubmissionBatch& _b
     return BuildRHISubmissionTopology(descriptions, _batch.sequence);
 }
 
-std::exception_ptr TryPublishBackendBatch(
+std::exception_ptr TryEnqueueSubmissionBatch(
     const std::shared_ptr<RHIBackendExecutor>& _backend,
-    RHIBackendSubmissionBatch&                 _batch,
-    RHIBackendSubmissionBatch&                 _failed_batch
+    RHISubmissionBatch&                        _batch,
+    RHISubmissionBatch&                        _failed_batch
 ) noexcept {
     try {
         _batch.topology = BuildBatchTopology(_batch);
@@ -1433,7 +1427,7 @@ void RHIExecutor::StartUp(uint32 _submission_batch_window) {
     executor.lifecycle_state     = ELifecycleState::Running;
 }
 
-std::shared_ptr<RHIBackendExecutor> RHIExecutor::GetBackendExecutorLocked() {
+std::shared_ptr<RHIBackendExecutor> RHIExecutor::GetOrCreateBackendExecutorLocked() {
     if (!backend_executor) {
         std::shared_ptr<RHIBackendExecutor> created =
             CreateBackendExecutor(submission_batch_window);
@@ -1445,8 +1439,8 @@ std::shared_ptr<RHIBackendExecutor> RHIExecutor::GetBackendExecutorLocked() {
     return backend_executor;
 }
 
-RHIBackendSubmissionBatch RHIExecutor::TakePendingBatchLocked() {
-    RHIBackendSubmissionBatch batch{};
+RHISubmissionBatch RHIExecutor::TakePendingSubmissionBatchLocked() {
+    RHISubmissionBatch batch{};
     batch.submits  = std::move(pending_submits);
     batch.present  = std::move(pending_present);
     pending_submits.clear();
@@ -1463,25 +1457,21 @@ void RHIExecutor::Submit(
     ERHIExecSubmitFlags _flags,
     RHIPresentRequest*  _present
 ) {
-    Array<RHIBackendSubmissionBatchEntry> submits;
+    Array<RHISubmissionRequest> submits;
     submits.emplace_back(_queue, std::move(_submit));
     Submit(std::move(submits), _flags, _present);
 }
 
 void RHIExecutor::Submit(
-    Array<RHIBackendSubmissionBatchEntry>&& _submits,
-    ERHIExecSubmitFlags                      _flags,
-    RHIPresentRequest*                       _present
+    Array<RHISubmissionRequest>&& _submits,
+    ERHIExecSubmitFlags           _flags,
+    RHIPresentRequest*            _present
 ) {
     const bool present_valid = _present == nullptr ||
                                (_present->swapchain && _present->source.texture != nullptr);
-    const bool queues_valid = std::all_of(
-        _submits.begin(),
-        _submits.end(),
-        [](const RHIBackendSubmissionBatchEntry& entry) {
-            return IsSubmissionQueue(entry.queue);
-        }
-    );
+    const bool queues_valid = std::all_of(_submits.begin(), _submits.end(), [](const RHISubmissionRequest& entry) {
+        return IsSubmissionQueue(entry.queue);
+    });
     if (!present_valid || !queues_valid) {
         FinalizeRejectedSubmissions(
             std::move(_submits),
@@ -1491,7 +1481,7 @@ void RHIExecutor::Submit(
         return;
     }
 
-    auto payload     = std::make_shared<ReadySubmissionPayload>();
+    auto payload     = std::make_shared<SubmissionRequestPayload>();
     payload->submits = std::move(_submits);
     payload->flags   = _flags;
     if (_present != nullptr) {
@@ -1516,11 +1506,7 @@ void RHIExecutor::Submit(
                     );
                     return;
                 }
-                SubmitReady(
-                    std::move(payload->submits),
-                    payload->flags,
-                    present
-                );
+                ProcessSubmissionRequests(std::move(payload->submits), payload->flags, present);
             },
         });
     } catch (...) {
@@ -1535,20 +1521,16 @@ void RHIExecutor::Submit(
     }
 }
 
-void RHIExecutor::SubmitReady(
-    Array<RHIBackendSubmissionBatchEntry>&& _submits,
-    ERHIExecSubmitFlags                      _flags,
-    RHIPresentRequest*                       _present
+void RHIExecutor::ProcessSubmissionRequests(
+    Array<RHISubmissionRequest>&& _submits,
+    ERHIExecSubmitFlags           _flags,
+    RHIPresentRequest*            _present
 ) {
     const bool legacy_multi_segment_source =
         RenderDevice::Get().GetRHIType() != ERHIType::Vulkan &&
-        std::any_of(
-            _submits.begin(),
-            _submits.end(),
-            [](const RHIBackendSubmissionBatchEntry& entry) {
-                return entry.submit.segments.size() > 1;
-            }
-        );
+        std::any_of(_submits.begin(), _submits.end(), [](const RHISubmissionRequest& entry) {
+            return entry.submit.segments.size() > 1;
+        });
     if (legacy_multi_segment_source) {
         FinalizeRejectedSubmissions(
             std::move(_submits),
@@ -1563,11 +1545,7 @@ void RHIExecutor::SubmitReady(
     // it.  `_flags` controls the backend flush depth, not whether the sealed
     // batch becomes visible to the backend FIFO.
     if (_present != nullptr) {
-        static_assert(
-            std::is_nothrow_move_constructible_v<
-                RHIBackendSubmissionBatchEntry
-            >
-        );
+        static_assert(std::is_nothrow_move_constructible_v<RHISubmissionRequest>);
         static_assert(
             std::is_nothrow_move_constructible_v<RHIPresentRequest>
         );
@@ -1585,8 +1563,8 @@ void RHIExecutor::SubmitReady(
             return;
         }
 
-        RHIBackendSubmissionBatch          batch{};
-        RHIBackendSubmissionBatch          failed_batch{};
+        RHISubmissionBatch                  batch{};
+        RHISubmissionBatch                  failed_batch{};
         std::shared_ptr<RHIBackendExecutor> backend{};
         std::exception_ptr                  backend_creation_failure{};
         std::exception_ptr                  backend_publication_failure{};
@@ -1607,8 +1585,7 @@ void RHIExecutor::SubmitReady(
                         staging_failure = std::current_exception();
                     }
                     if (!staging_failure) {
-                        for (RHIBackendSubmissionBatchEntry& entry :
-                             _submits) {
+                        for (RHISubmissionRequest& entry : _submits) {
                             pending_submits.emplace_back(
                                 std::move(entry)
                             );
@@ -1617,23 +1594,19 @@ void RHIExecutor::SubmitReady(
                         try {
                             // Construct the backend before detaching the
                             // accepted payload from executor ownership.
-                            backend = GetBackendExecutorLocked();
-                            batch   = TakePendingBatchLocked();
+                            backend = GetOrCreateBackendExecutorLocked();
+                            batch   = TakePendingSubmissionBatchLocked();
                         } catch (...) {
                             backend_creation_failure =
                                 std::current_exception();
-                            failed_batch = TakePendingBatchLocked();
+                            failed_batch = TakePendingSubmissionBatchLocked();
                         }
                     }
                 }
             }
             if (!rejected && !staging_failure &&
                 !backend_creation_failure) {
-                backend_publication_failure = TryPublishBackendBatch(
-                    backend,
-                    batch,
-                    failed_batch
-                );
+                backend_publication_failure = TryEnqueueSubmissionBatch(backend, batch, failed_batch);
                 if (!backend_publication_failure &&
                     HasRHIExecSubmitFlag(_flags, ERHIExecSubmitFlags::FlushGPU)) {
                     backend->Flush(ERHIFlushDepth::SubmitGPU);
@@ -1694,7 +1667,7 @@ void RHIExecutor::SubmitReady(
                 staging_failure = std::current_exception();
             }
             if (!staging_failure) {
-                for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+                for (RHISubmissionRequest& entry : _submits) {
                     pending_submits.emplace_back(std::move(entry));
                 }
             }
@@ -1718,7 +1691,7 @@ void RHIExecutor::SubmitReady(
         return;
     }
     if (HasRHIExecSubmitFlag(_flags, ERHIExecSubmitFlags::FlushGPU)) {
-        FlushReady(ERHIFlushDepth::SubmitGPU);
+        ProcessFlushRequest(ERHIFlushDepth::SubmitGPU);
     }
 }
 
@@ -1744,7 +1717,7 @@ void RHIExecutor::Submit(
         );
     }
 
-    Array<RHIBackendSubmissionBatchEntry> submits{};
+    Array<RHISubmissionRequest>          submits{};
     Array<GpuCompletionCancellationView> completion_cancellations{};
     Array<QueryCancellationView> query_cancellations{};
     Array<CommandList::RecordingRejectionPreparation>
@@ -1920,7 +1893,7 @@ void RHIExecutor::SubmitRecording(
     }
 
     if (_sources.empty()) {
-        Array<RHIBackendSubmissionBatchEntry> submits{};
+        Array<RHISubmissionRequest> submits{};
         Submit(std::move(submits), _flags, nullptr);
         return;
     }
@@ -1966,7 +1939,7 @@ void RHIExecutor::SubmitRecording(
         }
     }
 
-    auto payload     = std::make_shared<RecordingSubmissionPayload>();
+    auto payload     = std::make_shared<RecordingSourcePayload>();
     payload->sources = std::move(_sources);
     payload->rejection_preparations =
         std::move(rejection_preparations);
@@ -2004,7 +1977,7 @@ void RHIExecutor::SubmitRecording(
                 return;
             }
 
-            Array<RHIBackendSubmissionBatchEntry> submits{};
+            Array<RHISubmissionRequest> submits{};
             Array<size_t> materialized_source_indices{};
             Array<size_t> metadata_signal_transfer_prefixes{};
             try {
@@ -2174,7 +2147,7 @@ void RHIExecutor::SubmitRecording(
             }
 
             payload->sources.clear();
-            SubmitReady(std::move(submits), payload->flags, nullptr);
+            ProcessSubmissionRequests(std::move(submits), payload->flags, nullptr);
                 },
             }
         );
@@ -2188,7 +2161,7 @@ void RHIExecutor::SubmitRecording(
 }
 
 void RHIExecutor::Present(RHIPresentRequest&& _present, bool _flush) {
-    Array<RHIBackendSubmissionBatchEntry> submits{};
+    Array<RHISubmissionRequest> submits{};
     Submit(
         std::move(submits),
         _flush ? ERHIExecSubmitFlags::FlushGPU : ERHIExecSubmitFlags::None,
@@ -2201,13 +2174,13 @@ void RHIExecutor::Flush(ERHIFlushDepth _depth) {
         .prerequisites = {},
         .resolve = [this, _depth](ERHIRecordingHandoffResult _result) {
             if (_result == ERHIRecordingHandoffResult::Consume) {
-                FlushReady(_depth);
+                ProcessFlushRequest(_depth);
             }
         },
     });
 }
 
-void RHIExecutor::FlushReady(ERHIFlushDepth _depth) {
+void RHIExecutor::ProcessFlushRequest(ERHIFlushDepth _depth) {
     {
         std::lock_guard lock(submit_mutex);
         if (lifecycle_state != ELifecycleState::Running) {
@@ -2215,8 +2188,8 @@ void RHIExecutor::FlushReady(ERHIFlushDepth _depth) {
         }
     }
 
-    RHIBackendSubmissionBatch          batch{};
-    RHIBackendSubmissionBatch          failed_batch{};
+    RHISubmissionBatch                  batch{};
+    RHISubmissionBatch                  failed_batch{};
     std::shared_ptr<RHIBackendExecutor> backend;
     std::exception_ptr                  backend_creation_failure{};
     std::exception_ptr                  backend_publication_failure{};
@@ -2231,11 +2204,11 @@ void RHIExecutor::FlushReady(ERHIFlushDepth _depth) {
                 !pending_submits.empty() || pending_present.has_value();
             if (has_pending_work) {
                 try {
-                    backend = GetBackendExecutorLocked();
-                    batch   = TakePendingBatchLocked();
+                    backend = GetOrCreateBackendExecutorLocked();
+                    batch   = TakePendingSubmissionBatchLocked();
                 } catch (...) {
                     backend_creation_failure = std::current_exception();
-                    failed_batch             = TakePendingBatchLocked();
+                    failed_batch             = TakePendingSubmissionBatchLocked();
                 }
             } else {
                 backend = backend_executor;
@@ -2243,11 +2216,7 @@ void RHIExecutor::FlushReady(ERHIFlushDepth _depth) {
         }
         if (!backend_creation_failure) {
             if (BatchHasWork(batch)) {
-                backend_publication_failure = TryPublishBackendBatch(
-                    backend,
-                    batch,
-                    failed_batch
-                );
+                backend_publication_failure = TryEnqueueSubmissionBatch(backend, batch, failed_batch);
             }
             if (!backend_publication_failure && backend) {
                 backend->Flush(_depth);
@@ -2287,7 +2256,7 @@ void RHIExecutor::Sync(ERHISyncDepth _depth) {
             [this, _depth, completion](ERHIRecordingHandoffResult _result) {
                 try {
                     if (_result == ERHIRecordingHandoffResult::Consume) {
-                        SyncReady(_depth);
+                        ProcessSyncRequest(_depth);
                     } else if (_depth == ERHISyncDepth::Present) {
                         throw std::runtime_error("Present sync cancelled before backend publication");
                     }
@@ -2300,7 +2269,7 @@ void RHIExecutor::Sync(ERHISyncDepth _depth) {
     completion->Wait();
 }
 
-void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
+void RHIExecutor::ProcessSyncRequest(ERHISyncDepth _depth) {
     {
         std::lock_guard lock(submit_mutex);
         if (lifecycle_state != ELifecycleState::Running) {
@@ -2312,14 +2281,14 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
     }
 
     std::shared_ptr<RHIBackendExecutor> backend{};
-    RHIBackendSubmissionBatch           failed_batch{};
+    RHISubmissionBatch                   failed_batch{};
     std::exception_ptr                   backend_creation_failure{};
     std::exception_ptr                   backend_publication_failure{};
     bool                                sync_registered = false;
     auto finish_sync_call = [this, &sync_registered, &backend] {
         // A zero active-sync count is the shutdown handoff point. Release this
         // call's backend ownership before publishing that point so StartUp can
-        // never race a stale queue-ownership lease, even if SyncReady is later
+        // never race a stale queue-ownership lease, even if ProcessSyncRequest is later
         // called from something other than the joined handoff worker.
         backend.reset();
         if (!sync_registered) {
@@ -2336,7 +2305,7 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
     ScopeExit finish_sync_guard(std::move(finish_sync_call));
     {
         std::lock_guard dispatch_lock(dispatch_mutex);
-        RHIBackendSubmissionBatch batch{};
+        RHISubmissionBatch batch{};
         {
             std::lock_guard lock(submit_mutex);
             if (lifecycle_state == ELifecycleState::Running) {
@@ -2344,11 +2313,11 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
                     !pending_submits.empty() || pending_present.has_value();
                 if (has_pending_work) {
                     try {
-                        backend = GetBackendExecutorLocked();
-                        batch   = TakePendingBatchLocked();
+                        backend = GetOrCreateBackendExecutorLocked();
+                        batch   = TakePendingSubmissionBatchLocked();
                     } catch (...) {
                         backend_creation_failure = std::current_exception();
-                        failed_batch             = TakePendingBatchLocked();
+                        failed_batch             = TakePendingSubmissionBatchLocked();
                     }
                 } else {
                     backend = backend_executor;
@@ -2361,11 +2330,7 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
         }
         if (!backend_creation_failure) {
             if (BatchHasWork(batch)) {
-                backend_publication_failure = TryPublishBackendBatch(
-                    backend,
-                    batch,
-                    failed_batch
-                );
+                backend_publication_failure = TryEnqueueSubmissionBatch(backend, batch, failed_batch);
             }
             if (!backend_publication_failure && backend) {
                 backend->Flush(ERHIFlushDepth::SubmitGPU);
@@ -2454,7 +2419,7 @@ void RHIExecutor::ShutDown() {
     ScopeExit finish_shutdown_guard(std::move(finish_shutdown));
 
     // Publish backend cancellation before joining the handoff owner. That
-    // owner may currently be inside SyncReady waiting behind a Submission
+    // owner may currently be inside ProcessSyncRequest waiting behind a Submission
     // dependency which can no longer acquire a producer during shutdown.
     if (backend_to_cancel) {
         backend_to_cancel->BeginShutdown();
@@ -2463,12 +2428,12 @@ void RHIExecutor::ShutDown() {
     // Stop accepting handoffs before taking the final pending batch. The
     // worker's stop token interrupts an unfinished recording gate, rejects it
     // and every later FIFO operation, and joins without depending on producer
-    // progress. Any callback already inside SubmitReady/SyncReady is allowed
+    // progress. Any callback already inside ProcessSubmissionRequests/ProcessSyncRequest is allowed
     // to finish before backend ownership is detached below.
     executor.recording_handoff.ShutDown();
 
-    RHIBackendSubmissionBatch           batch{};
-    RHIBackendSubmissionBatch           failed_batch{};
+    RHISubmissionBatch                   batch{};
+    RHISubmissionBatch                   failed_batch{};
     std::exception_ptr                   backend_creation_failure{};
     std::exception_ptr                   backend_publication_failure{};
     {
@@ -2480,21 +2445,17 @@ void RHIExecutor::ShutDown() {
                 executor.pending_present.has_value();
             if (has_pending_work) {
                 try {
-                    executor.GetBackendExecutorLocked();
-                    batch = executor.TakePendingBatchLocked();
+                    executor.GetOrCreateBackendExecutorLocked();
+                    batch = executor.TakePendingSubmissionBatchLocked();
                 } catch (...) {
                     backend_creation_failure = std::current_exception();
-                    failed_batch = executor.TakePendingBatchLocked();
+                    failed_batch             = executor.TakePendingSubmissionBatchLocked();
                 }
             }
             backend = std::move(executor.backend_executor);
         }
         if (!backend_creation_failure && BatchHasWork(batch) && backend) {
-            backend_publication_failure = TryPublishBackendBatch(
-                backend,
-                batch,
-                failed_batch
-            );
+            backend_publication_failure = TryEnqueueSubmissionBatch(backend, batch, failed_batch);
         }
         if (!backend_creation_failure && !backend_publication_failure &&
             backend) {

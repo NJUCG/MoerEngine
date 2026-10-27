@@ -24,13 +24,13 @@ struct RHIRecordingSubmitMetadata {
     // Shutdown leaves this metadata untouched while either the producer or
     // optional commit gate is Pending. Those fences remain with the opaque
     // graph owner until the complete ownership boundary becomes terminal.
-    Array<RHIRecordingFencePoint>              wait_fences{};
-    Array<RHIRecordingFencePoint>              signal_fences{};
+    Array<RHIRecordingFencePoint> wait_fences{};
+    Array<RHIRecordingFencePoint> signal_fences{};
     /**
      * Non-zero scopes opt a contiguous graph transaction into dependency-led
      * cross-native-queue overlap. Zero preserves the legacy total GPU order.
      */
-    uint64                                     async_queue_scope{0};
+    uint64 async_queue_scope{0};
 };
 
 // One independently recorded source. completion must be signalled only after
@@ -44,28 +44,25 @@ struct RHIRecordingSubmitMetadata {
 // RHIExecutor::Flush, Sync or ShutDown while recording; those are
 // ordering/lifecycle boundaries owned by the submitting thread.
 struct RHIRecordingSource {
-    SharedPtr<CommandList>       command_list{};
-    RHIRecordingGateView         completion{};
-    RHIRecordingGateView         commit{};
-    RHIRecordingSubmitMetadata   submit_metadata{};
+    SharedPtr<CommandList>     command_list{};
+    RHIRecordingGateView       completion{};
+    RHIRecordingGateView       commit{};
+    RHIRecordingSubmitMetadata submit_metadata{};
     // Stable, thread-safe cancellation seam for the CommandList generation
     // being recorded. Shutdown may cancel pending host futures through these
     // views without reading or destroying a producer-owned command stream.
     // Publishing Error only bounds host waiters: it neither completes the
     // completion/commit gates nor transfers CommandList ownership. An opaque
     // producer must still stop mutation and Signal()/Fail() its gate.
-    GpuCompletionCancellationView
-                                gpu_completion_cancellation{};
-    QueryCancellationView        query_cancellation{};
+    GpuCompletionCancellationView gpu_completion_cancellation{};
+    QueryCancellationView         query_cancellation{};
 };
 
-using RHIDirectCommandListMaterializationCallbackForTesting =
-    void (*)(void*, size_t);
+using RHIDirectCommandListMaterializationCallbackForTesting = void (*)(void*, size_t);
 
 struct RHIDirectCommandListMaterializationOverrideForTesting {
-    void* context{nullptr};
-    RHIDirectCommandListMaterializationCallbackForTesting
-        before_source{nullptr};
+    void*                                                 context{nullptr};
+    RHIDirectCommandListMaterializationCallbackForTesting before_source{nullptr};
 };
 
 // Narrow deterministic seam for exercising the mixed direct-submit rollback:
@@ -75,36 +72,34 @@ struct RHIDirectCommandListMaterializationOverrideForTesting {
 // immutable while installed. Successful removal waits for every callback that
 // already acquired the override, so the caller may then destroy both override
 // and context safely.
-[[nodiscard]] RENDER_API bool
-TryInstallRHIDirectCommandListMaterializationOverrideForTesting(
+[[nodiscard]] RENDER_API bool TryInstallRHIDirectCommandListMaterializationOverrideForTesting(
     const RHIDirectCommandListMaterializationOverrideForTesting* _override
 ) noexcept;
-[[nodiscard]] RENDER_API bool
-RemoveRHIDirectCommandListMaterializationOverrideForTesting(
+[[nodiscard]] RENDER_API bool RemoveRHIDirectCommandListMaterializationOverrideForTesting(
     const RHIDirectCommandListMaterializationOverrideForTesting* _override
 ) noexcept;
 
 class RENDER_API RHIExecutor {
 public:
     static RHIExecutor& Get();
-    static void StartUp();
-    static void StartUp(uint32 _submission_batch_window);
+    static void         StartUp();
+    static void         StartUp(uint32 _submission_batch_window);
 
     void Submit(
-        EQueueType             _queue,
-        CmdSubmit&&            _submit,
-        ERHIExecSubmitFlags    _flags   = ERHIExecSubmitFlags::FlushGPU,
-        RHIPresentRequest*     _present = nullptr
+        EQueueType          _queue,
+        CmdSubmit&&         _submit,
+        ERHIExecSubmitFlags _flags   = ERHIExecSubmitFlags::FlushGPU,
+        RHIPresentRequest*  _present = nullptr
     );
     void Submit(
-        Array<RHIBackendSubmissionBatchEntry>&& _submits,
-        ERHIExecSubmitFlags                      _flags   = ERHIExecSubmitFlags::FlushGPU,
-        RHIPresentRequest*                       _present = nullptr
+        Array<RHISubmissionRequest>&& _submits,
+        ERHIExecSubmitFlags           _flags   = ERHIExecSubmitFlags::FlushGPU,
+        RHIPresentRequest*            _present = nullptr
     );
     void Submit(
-        Array<CommandList>&&   _command_lists,
-        ERHIExecSubmitFlags    _flags   = ERHIExecSubmitFlags::FlushGPU,
-        RHIPresentRequest*     _present = nullptr
+        Array<CommandList>&& _command_lists,
+        ERHIExecSubmitFlags  _flags   = ERHIExecSubmitFlags::FlushGPU,
+        RHIPresentRequest*   _present = nullptr
     );
 
     // Recording handoff API. Sources remain shared and mutable until their
@@ -126,16 +121,14 @@ public:
         RHIRecordingGateRef             _batch_completion,
         ERHIExecSubmitFlags             _flags = ERHIExecSubmitFlags::FlushGPU
     );
-    void SubmitRecording(
-        Array<RHIRecordingSource>&& _sources,
-        ERHIExecSubmitFlags         _flags = ERHIExecSubmitFlags::FlushGPU
-    );
+    void
+    SubmitRecording(Array<RHIRecordingSource>&& _sources, ERHIExecSubmitFlags _flags = ERHIExecSubmitFlags::FlushGPU);
     void Present(RHIPresentRequest&& _present, bool _flush = true);
 
     void Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU);
     // Blocking lifecycle boundaries must not be called recursively from an
     // RHI completion callback whose completion they are waiting for.
-    void Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI);
+    void        Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI);
     static void ShutDown();
 
 private:
@@ -145,31 +138,31 @@ private:
         Stopping,
     };
 
-    std::shared_ptr<RHIBackendExecutor> GetBackendExecutorLocked();
-    RHIBackendSubmissionBatch          TakePendingBatchLocked();
-    void SubmitReady(
-        Array<RHIBackendSubmissionBatchEntry>&& _submits,
-        ERHIExecSubmitFlags                      _flags,
-        RHIPresentRequest*                       _present
-    );
-    void FlushReady(ERHIFlushDepth _depth);
-    void SyncReady(ERHISyncDepth _depth);
+    std::shared_ptr<RHIBackendExecutor> GetOrCreateBackendExecutorLocked();
+    RHISubmissionBatch                  TakePendingSubmissionBatchLocked();
 
-    std::mutex                              submit_mutex;
-    std::condition_variable                 lifecycle_cv;
-    std::mutex                              dispatch_mutex;
-    std::shared_ptr<RHIBackendExecutor>     backend_executor{};
-    Array<RHIBackendSubmissionBatchEntry>   pending_submits{};
-    std::optional<RHIPresentRequest>         pending_present{};
-    uint64                                   next_batch_sequence{1};
-    size_t                                   active_sync_calls{0};
-    uint64                                   shutdown_generation{0};
-    uint64                                   completed_shutdown_generation{0};
-    uint32                                   submission_batch_window{
-        RHISubmissionPipelinePolicy::DefaultBatchWindow
-    };
-    ELifecycleState                          lifecycle_state{ELifecycleState::Stopped};
-    RHIExecutorRecordingHandoffQueue         recording_handoff{};
+    // Run on the Executor worker after preceding recording handoffs resolve.
+    void ProcessSubmissionRequests(
+        Array<RHISubmissionRequest>&& _submits,
+        ERHIExecSubmitFlags           _flags,
+        RHIPresentRequest*            _present
+    );
+    void ProcessFlushRequest(ERHIFlushDepth _depth);
+    void ProcessSyncRequest(ERHISyncDepth _depth);
+
+    std::mutex                          submit_mutex;
+    std::condition_variable             lifecycle_cv;
+    std::mutex                          dispatch_mutex;
+    std::shared_ptr<RHIBackendExecutor> backend_executor{};
+    Array<RHISubmissionRequest>         pending_submits{};
+    std::optional<RHIPresentRequest>    pending_present{};
+    uint64                              next_batch_sequence{1};
+    size_t                              active_sync_calls{0};
+    uint64                              shutdown_generation{0};
+    uint64                              completed_shutdown_generation{0};
+    uint32                              submission_batch_window{RHISubmissionPipelinePolicy::DefaultBatchWindow};
+    ELifecycleState                     lifecycle_state{ELifecycleState::Stopped};
+    RHIExecutorRecordingHandoffQueue    recording_handoff{};
 };
 
 } // namespace Moer::Render

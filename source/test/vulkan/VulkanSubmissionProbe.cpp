@@ -107,7 +107,7 @@ VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForT
         source_signal
     );
 
-    RHIBackendSubmissionBatch batch{};
+    RHISubmissionBatch batch{};
     batch.sequence = 0x504831394D41544Cull;
     const RHISourceSubmitDescription description{
         .root_queue      = EQueueType::Graphics,

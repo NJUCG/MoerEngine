@@ -335,6 +335,13 @@ Vulkan 只接受 `Compiled` 命令流；任何非空的非 compiled 提交和推
 Vulkan 提交统一由 `RHIExecutor` 调度：Translate 只录制并交接拥有资源的提交包，Submission
 独占原生提交，Completion 在 GPU 完成后发布结果并回收。Queue 不再保存另一套 RHI 工作队列；
 直接调用 Queue 的 `Execute/Present/Wait` 会被拒绝，依赖随提交包交给 Executor。
+RHI 层的 `RHISubmissionRequest` 表示一份带逻辑队列选择的 `CmdSubmit`，
+`RHISubmissionBatch` 将一组请求、拓扑和可选 Present 一起交给后端。
+`Submit` 接管请求并排入 Executor 工作队列，`ProcessSubmissionRequests` 在该线程暂存或发布请求；
+`ProcessFlushRequest` 和 `ProcessSyncRequest` 分别处理发布与同步边界。
+Vulkan 的 `RunTranslateThread` 和 `RunSubmissionThread` 对应后端的两条工作线程。
+其内部 `WorkerRequest` 包含批次提交、同步或停止操作，`CpuTaskCompletion` 通知 CPU 工作完成；
+`VulkanSubmissionResult` 表示原生提交是否接受及可用的完成等待点，GPU 完成仍由队列 timeline 确认。
 完成队列只接收拥有本次资源的完成包，不再逐条分派回调、Context 或 descriptor lease。
 `ReserveSubmission` 从入口起以独立的 `VulkanRecordedSubmission` / `VulkanRecordedCopySubmission`
 持有请求并预留逻辑队列序号，Executor 再调用 `VulkanCommandRecorder::Record`。录制失败也保留这个拥有资源的包，

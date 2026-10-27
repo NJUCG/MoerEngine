@@ -49,7 +49,7 @@ struct VulkanPresentationSourceStateProgram {
 // Result returned to the upper submission runtime.  A queue timeline is only
 // publishable as a dependency when vkQueueSubmit/SubmitEmpty actually accepted
 // the work; retry/recreate/rejected paths deliberately carry no completion.
-struct VulkanRuntimeSubmissionResult {
+struct VulkanSubmissionResult {
     VulkanOperationResult    outcome{};
     std::optional<WaitEvent> completion{};
     bool                     recoverable_rejection{false};
@@ -68,7 +68,7 @@ struct VulkanRuntimeSubmissionResult {
     }
 };
 
-using VulkanRuntimePreCompletionCallback = void (*)(void*, const VulkanRuntimeSubmissionResult&) noexcept;
+using VulkanRuntimePreCompletionCallback = void (*)(void*, const VulkanSubmissionResult&) noexcept;
 
 struct VulkanRuntimePreCompletionHook {
     void*                              context{nullptr};

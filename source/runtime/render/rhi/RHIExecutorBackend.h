@@ -13,10 +13,7 @@ enum class ERHIExecSubmitFlags : uint8_t {
     FlushGPU = 1 << 0,
 };
 
-constexpr bool HasRHIExecSubmitFlag(
-    ERHIExecSubmitFlags _flags,
-    ERHIExecSubmitFlags _flag
-) noexcept {
+constexpr bool HasRHIExecSubmitFlag(ERHIExecSubmitFlags _flags, ERHIExecSubmitFlags _flag) noexcept {
     return (static_cast<uint8_t>(_flags) & static_cast<uint8_t>(_flag)) != 0;
 }
 
@@ -36,23 +33,18 @@ struct RHIPresentRequest {
     TextureView       source{};
     PresentReceiptRef receipt{};
 
-    RHIPresentRequest() = default;
-    RHIPresentRequest(const RHIPresentRequest&) = default;
-    RHIPresentRequest& operator=(
-        const RHIPresentRequest&
-    ) = default;
+    RHIPresentRequest()                                    = default;
+    RHIPresentRequest(const RHIPresentRequest&)            = default;
+    RHIPresentRequest& operator=(const RHIPresentRequest&) = default;
 
-    RHIPresentRequest(RHIPresentRequest&& _other) noexcept :
-        source(_other.source) {
+    RHIPresentRequest(RHIPresentRequest&& _other) noexcept : source(_other.source) {
         swapchain.Swap(_other.swapchain);
         source_texture.Swap(_other.source_texture);
         receipt.swap(_other.receipt);
         _other.source = {};
     }
 
-    RHIPresentRequest& operator=(
-        RHIPresentRequest&& _other
-    ) noexcept {
+    RHIPresentRequest& operator=(RHIPresentRequest&& _other) noexcept {
         if (this == &_other) {
             return *this;
         }
@@ -63,49 +55,40 @@ struct RHIPresentRequest {
         return *this;
     }
 
-    RHIPresentRequest(
-        SwapchainRef      _swapchain,
-        TextureView       _source,
-        PresentReceiptRef _receipt = {}
-    ) :
+    RHIPresentRequest(SwapchainRef _swapchain, TextureView _source, PresentReceiptRef _receipt = {}) :
         swapchain(std::move(_swapchain)),
         source_texture(_source.texture),
         source(_source),
         receipt(std::move(_receipt)) {}
 };
 
-struct RHIBackendSubmissionBatchEntry {
+// One frontend command submission and its root logical queue. The backend may
+// split its command segments into several native submissions.
+struct RHISubmissionRequest {
     EQueueType queue{EQueueType::Ignore};
     CmdSubmit  submit;
 
-    RHIBackendSubmissionBatchEntry(EQueueType _queue, CmdSubmit&& _submit) :
-        queue(_queue), submit(std::move(_submit)) {}
+    RHISubmissionRequest(EQueueType _queue, CmdSubmit&& _submit) : queue(_queue), submit(std::move(_submit)) {}
 
-    RHIBackendSubmissionBatchEntry(RHIBackendSubmissionBatchEntry&&) noexcept = default;
-    RHIBackendSubmissionBatchEntry& operator=(RHIBackendSubmissionBatchEntry&&) noexcept = default;
-    RHIBackendSubmissionBatchEntry(const RHIBackendSubmissionBatchEntry&) = delete;
-    RHIBackendSubmissionBatchEntry& operator=(const RHIBackendSubmissionBatchEntry&) = delete;
+    RHISubmissionRequest(RHISubmissionRequest&&) noexcept            = default;
+    RHISubmissionRequest& operator=(RHISubmissionRequest&&) noexcept = default;
+    RHISubmissionRequest(const RHISubmissionRequest&)                = delete;
+    RHISubmissionRequest& operator=(const RHISubmissionRequest&)     = delete;
 };
 
-struct RHIBackendSubmissionBatch {
-    uint64                                   sequence{0};
-    Array<RHIBackendSubmissionBatchEntry>    submits{};
-    std::optional<RHIPresentRequest>          present{};
-    RHISubmissionTopologyPlan                 topology{};
+// Ordered requests published together, with an optional Present and the
+// topology used to schedule their native submissions.
+struct RHISubmissionBatch {
+    uint64                          sequence{0};
+    Array<RHISubmissionRequest>      submits{};
+    std::optional<RHIPresentRequest> present{};
+    RHISubmissionTopologyPlan        topology{};
 
-    RHIBackendSubmissionBatch() = default;
-    RHIBackendSubmissionBatch(
-        RHIBackendSubmissionBatch&&
-    ) noexcept = default;
-    RHIBackendSubmissionBatch& operator=(
-        RHIBackendSubmissionBatch&&
-    ) noexcept = default;
-    RHIBackendSubmissionBatch(
-        const RHIBackendSubmissionBatch&
-    ) = delete;
-    RHIBackendSubmissionBatch& operator=(
-        const RHIBackendSubmissionBatch&
-    ) = delete;
+    RHISubmissionBatch()                                      = default;
+    RHISubmissionBatch(RHISubmissionBatch&&) noexcept           = default;
+    RHISubmissionBatch& operator=(RHISubmissionBatch&&) noexcept = default;
+    RHISubmissionBatch(const RHISubmissionBatch&)               = delete;
+    RHISubmissionBatch& operator=(const RHISubmissionBatch&)    = delete;
 };
 
 class RHIBackendExecutor {
@@ -115,14 +98,14 @@ public:
     // RHIExecutor serializes Enqueue/Flush publication order. Sync may run
     // concurrently after its preceding batches have been published, so each
     // backend must safely linearize Sync against later Enqueue/Flush calls.
-    virtual void          Enqueue(RHIBackendSubmissionBatch&& _batch) = 0;
-    virtual GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) = 0;
+    virtual void          Enqueue(RHISubmissionBatch&& _batch)                    = 0;
+    virtual GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI)           = 0;
     virtual void          Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU) = 0;
     // Publish non-blocking cancellation before RHIExecutor waits for
     // concurrent Sync callers. Backends without cancellable host waits may
     // keep the default no-op implementation.
-    virtual void          BeginShutdown() noexcept {}
-    virtual void          ShutDown() = 0;
+    virtual void BeginShutdown() noexcept {}
+    virtual void ShutDown() = 0;
 };
 
 } // namespace Moer::Render

@@ -5243,7 +5243,7 @@ void RunAsyncQueueParallelTranslateSmoke() {
         copy_submit.async_queue_scope = async_queue_scope;
         copy_submit.Signal(copy_done.Get(), 1);
 
-        Array<RHIBackendSubmissionBatchEntry> submits{};
+        Array<RHISubmissionRequest> submits{};
         submits.emplace_back(
             EQueueType::Graphics,
             std::move(graphics_front_submit)
@@ -5595,7 +5595,7 @@ void RunMultiSegmentSourceExecution() {
         };
         submit.Signal(source_done.Get(), 1);
 
-        Array<RHIBackendSubmissionBatchEntry> batch{};
+        Array<RHISubmissionRequest> batch{};
         batch.emplace_back(EQueueType::Graphics, std::move(submit));
         RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
 
@@ -5775,7 +5775,7 @@ void RunMultiSegmentCopyRoundTrip() {
     };
     submit.Signal(source_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(EQueueType::Graphics, std::move(submit));
     RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -5916,7 +5916,7 @@ void RunMultiSegmentRecoverableRejection() {
     rejected_submit.Wait(rejected_dependency.Get(), 1);
     rejected_submit.Signal(rejected_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
+    Array<RHISubmissionRequest> rejected_batch{};
     rejected_batch.emplace_back(EQueueType::Graphics, std::move(rejected_submit));
     RHIExecutor::Get().Submit(std::move(rejected_batch), ERHIExecSubmitFlags::FlushGPU);
     if (ResourceCast(rejected_done.Get())->Wait(1) ||
@@ -6070,7 +6070,7 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
     };
     submit.Signal(source_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(EQueueType::Graphics, std::move(submit));
     RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -6272,7 +6272,7 @@ void RunParallelTranslateFailureRetirement() {
     copy_submit.async_queue_scope = async_queue_scope;
     copy_submit.Signal(copy_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> failing_batch{};
+    Array<RHISubmissionRequest> failing_batch{};
     failing_batch.emplace_back(EQueueType::Graphics, std::move(graphics_submit));
     failing_batch.emplace_back(EQueueType::Copy, std::move(copy_submit));
     RHIExecutor::Get().Submit(std::move(failing_batch), ERHIExecSubmitFlags::FlushGPU);
@@ -6415,7 +6415,7 @@ void RunParallelTranslateRecoverableRejection() {
     compute_submit.async_queue_scope = async_queue_scope;
     compute_submit.Signal(compute_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
+    Array<RHISubmissionRequest> rejected_batch{};
     rejected_batch.emplace_back(EQueueType::Graphics, std::move(graphics_submit));
     rejected_batch.emplace_back(EQueueType::Compute, std::move(compute_submit));
     RHIExecutor::Get().Submit(std::move(rejected_batch), ERHIExecSubmitFlags::FlushGPU);
@@ -7707,7 +7707,7 @@ void RunRuntimeRejectCompletionOwnership() {
         }
     });
 
-    Array<RHIBackendSubmissionBatchEntry> submits{};
+    Array<RHISubmissionRequest> submits{};
     submits.emplace_back(EQueueType::Graphics, std::move(graphics_submit));
     submits.emplace_back(EQueueType::Copy, std::move(copy_submit));
     RHIExecutor::Get().Submit(
@@ -13055,7 +13055,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         translation_capture
     );
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(scoped_submit)
     );
@@ -14132,7 +14132,7 @@ void RunTimestampQuerySuccessfulBatchPublication() {
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(first_submit)
     );
@@ -14481,7 +14481,7 @@ void RunTimestampQueryCrossQueueBatchPublication() {
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(graphics_submit)
     );
@@ -14795,7 +14795,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(multi_submit)
     );
@@ -15073,7 +15073,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(graphics_submit)
     );
@@ -15617,7 +15617,7 @@ void RunTimestampQueryPreparationRejection() {
         ScopedScriptedQueryPreparationOverride scripted_override(
             scripted_capture
         );
-        Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
+        Array<RHISubmissionRequest> rejected_batch{};
         rejected_batch.emplace_back(
             EQueueType::Graphics, std::move(rejected_submit)
         );
@@ -15686,7 +15686,7 @@ void RunTimestampQueryPreparationRejection() {
     );
     recovered_submit.async_queue_scope = async_queue_scope;
     recovered_submit.Signal(recovered_done.Get(), 1);
-    Array<RHIBackendSubmissionBatchEntry> recovered_batch{};
+    Array<RHISubmissionRequest> recovered_batch{};
     recovered_batch.emplace_back(
         EQueueType::Graphics, std::move(recovered_submit)
     );
@@ -15828,7 +15828,7 @@ void RunTimestampQueryPreflightRejection() {
         success_callbacks[1].fetch_add(1, std::memory_order_relaxed);
     });
 
-    Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
+    Array<RHISubmissionRequest> rejected_batch{};
     rejected_batch.emplace_back(EQueueType::Graphics, std::move(submit));
     rejected_batch.emplace_back(
         EQueueType::Graphics,
@@ -16063,7 +16063,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
 
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest>    batch{};
     batch.emplace_back(EQueueType::Graphics, std::move(prefix_submit));
     batch.emplace_back(EQueueType::Graphics, std::move(suffix_submit));
     RHIExecutor::Get().Submit(
@@ -16365,7 +16365,7 @@ void RunTimestampQuerySerialRecordFailure() {
     sibling_submit.async_queue_scope = async_queue_scope;
     sibling_submit.Signal(sibling_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(failing_submit)
     );

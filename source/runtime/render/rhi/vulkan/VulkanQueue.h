@@ -116,7 +116,7 @@ private:
 
     [[nodiscard]] VulkanRecordedSubmission ReserveSubmission(CmdSubmit&& _submit) noexcept;
 
-    VulkanRuntimeSubmissionResult SubmitRecordedForRuntime(
+    VulkanSubmissionResult SubmitRecordedForRuntime(
         VulkanRecordedSubmission              _recorded,
         const VulkanRuntimePreCompletionHook* _pre_completion = nullptr
     ) noexcept;
@@ -127,13 +127,13 @@ private:
         bool                        _recoverable,
         VulkanBatchCompletionTicket _batch_completion = {}
     ) noexcept;
-    VulkanRuntimeSubmissionResult
+    VulkanSubmissionResult
     PresentForRuntime(SwapchainRef _swapchain, TextureView _source, PresentReceiptRef _receipt) noexcept;
 
     // Native submission and transfer to Completion.
     VulkanOperationResult
     SubmitRecorded(VulkanRecordedSubmission& _recorded, const std::atomic_bool* _continue_waiting = nullptr);
-    VulkanRuntimeSubmissionResult PresentSwapchain(
+    VulkanSubmissionResult PresentSwapchain(
         SwapchainRef&&    _swapchain,
         TextureRef&&      _source_texture,
         TextureView       _source_view,
@@ -219,7 +219,7 @@ private:
     void                          EnableRuntimeDependencyWaits() noexcept;
     void                          CancelRuntimeDependencyWaits() noexcept;
     VulkanRecordedCopySubmission  ReserveSubmission(CmdSubmit&& _submit) noexcept;
-    VulkanRuntimeSubmissionResult SubmitRecordedForRuntime(
+    VulkanSubmissionResult SubmitRecordedForRuntime(
         VulkanRecordedCopySubmission          _recorded,
         const VulkanRuntimePreCompletionHook* _pre_completion = nullptr
     ) noexcept;

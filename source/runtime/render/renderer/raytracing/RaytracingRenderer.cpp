@@ -212,7 +212,7 @@ void ExecuteSceneUpdate(
     // Upload graphs publish SRV/Sampled/ASRead boundaries before returning.
     const bool modern_graphics_profiling =
         scene_cmd_list.HasGpuScopeRecorder() || scene_cmd_list.IsLegacyGpuProfilingSuppressedForGeneration();
-    Array<RHIBackendSubmissionBatchEntry> submissions{};
+    Array<RHISubmissionRequest>           submissions{};
     CmdSubmit                             graphics_submit = scene_cmd_list.Submit();
     if (!modern_graphics_profiling) {
         graphics_submit.TickProfiling();

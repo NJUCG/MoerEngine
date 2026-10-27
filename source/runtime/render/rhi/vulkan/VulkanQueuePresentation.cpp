@@ -734,8 +734,11 @@ void CommitAcceptedPresentationSourceStateTransaction(VulkanPresentationSourceSt
     CommitAcceptedPresentationSourceStateDelta(_transaction.delta);
 }
 
-VulkanRuntimeSubmissionResult
-VulkanCommandQueue::PresentForRuntime(SwapchainRef _swapchain, TextureView _source, PresentReceiptRef _receipt) noexcept {
+VulkanSubmissionResult VulkanCommandQueue::PresentForRuntime(
+    SwapchainRef      _swapchain,
+    TextureView       _source,
+    PresentReceiptRef _receipt
+) noexcept {
     assert(executor_claimed.load(std::memory_order_acquire) && "runtime Present requires an exclusively claimed queue");
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission && "runtime Present must run on the Submission owner"
@@ -878,7 +881,7 @@ void VulkanCommandQueue::Present(SwapchainRef, TextureView, PresentReceiptRef _r
     ResolvePresentReceiptNoexcept(_receipt, false, EPresentStatus::Rejected, EPresentStage::Validation);
 }
 
-VulkanRuntimeSubmissionResult VulkanCommandQueue::PresentSwapchain(
+VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
     SwapchainRef&&    _swapchain,
     TextureRef&&      _source_texture,
     TextureView       _source_view,
@@ -1084,7 +1087,7 @@ VulkanRuntimeSubmissionResult VulkanCommandQueue::PresentSwapchain(
         AccumulatePresentReceiptOutcome(receipt_status, receipt_stage, final_outcome, EPresentStage::Submit);
     }
     ResolvePresentReceiptNoexcept(_receipt, present_accepted, receipt_status, receipt_stage);
-    VulkanRuntimeSubmissionResult result{
+    VulkanSubmissionResult result{
         .outcome               = final_outcome,
         .recoverable_rejection = recoverable_rejection,
     };

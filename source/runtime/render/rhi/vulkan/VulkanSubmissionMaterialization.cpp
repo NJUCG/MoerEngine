@@ -17,7 +17,7 @@ struct VulkanOriginalSourceMaterialization {
 } // namespace
 
 VulkanSegmentMaterializationResult
-MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTopology& _queue_topology) {
+MaterializeMultiSegmentBatch(RHISubmissionBatch& _batch, const RHIQueueTopology& _queue_topology) {
     VulkanSegmentMaterializationResult result{};
     result.original_source_count = _batch.submits.size();
 
@@ -48,11 +48,11 @@ MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTo
     }
 
     Array<VulkanOriginalSourceMaterialization> source_materializations(_batch.submits.size());
-    Array<RHIBackendSubmissionBatchEntry>      executable_sources{};
+    Array<RHISubmissionRequest>                executable_sources{};
     executable_sources.reserve(executable_source_count);
 
     for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
-        RHIBackendSubmissionBatchEntry& source_entry  = _batch.submits[source_index];
+        RHISubmissionRequest&           source_entry  = _batch.submits[source_index];
         CmdSubmit&                      source_submit = source_entry.submit;
         const RHISourceSubmitPlan&      source_plan   = _batch.topology.source_plans[source_index];
 
@@ -182,7 +182,7 @@ MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTo
     Array<RHISourceSubmitDescription> descriptions{};
     descriptions.reserve(executable_source_count);
     for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
-        const RHIBackendSubmissionBatchEntry&      source_entry    = _batch.submits[source_index];
+        const RHISubmissionRequest&                source_entry    = _batch.submits[source_index];
         const VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
         if (!materialization.multi_segment) {
             descriptions.emplace_back(RHISourceSubmitDescription{
@@ -197,7 +197,7 @@ MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTo
         }
 
         for (size_t segment_index = 0; segment_index < materialization.executable_count; ++segment_index) {
-            const RHIBackendSubmissionBatchEntry& executable_entry =
+            const RHISubmissionRequest& executable_entry =
                 executable_sources[materialization.executable_begin + segment_index];
             descriptions.emplace_back(RHISourceSubmitDescription{
                 .root_queue       = executable_entry.queue,
@@ -216,7 +216,7 @@ MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTo
     }
 
     for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
-        RHIBackendSubmissionBatchEntry&      source_entry    = _batch.submits[source_index];
+        RHISubmissionRequest&                source_entry    = _batch.submits[source_index];
         VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
         if (!materialization.multi_segment) {
             executable_sources[materialization.executable_begin].submit = std::move(source_entry.submit);

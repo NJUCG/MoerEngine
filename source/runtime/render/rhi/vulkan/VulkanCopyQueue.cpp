@@ -6,6 +6,9 @@
 #include "platform/Platform.h"
 #include "rhi/RHIExecutorBackend.h"
 #include "rhi/RHIThreadHeartbeat.h"
+#if MOER_VULKAN_TEST_SUPPORT
+#include "vulkan/VulkanSubmissionTestHooksInternal.h"
+#endif
 
 #include <algorithm>
 #include <thread>
@@ -141,7 +144,7 @@ VulkanRecordedCopySubmission VulkanCopyQueue::ReserveSubmission(CmdSubmit&& _sub
     return recorded;
 }
 
-VulkanRuntimeSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(
+VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(
     VulkanRecordedCopySubmission          _recorded,
     const VulkanRuntimePreCompletionHook* _pre_completion
 ) noexcept {
@@ -324,7 +327,7 @@ VulkanRuntimeSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(
         _recorded.recoverable_rejection = false;
         _recorded.native_submit_resolved = true;
     }
-    VulkanRuntimeSubmissionResult runtime_result{
+    VulkanSubmissionResult runtime_result{
         .outcome               = _recorded.retirement_outcome,
         .recoverable_rejection = _recorded.recoverable_rejection,
     };
