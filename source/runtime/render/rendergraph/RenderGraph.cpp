@@ -1263,24 +1263,21 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
         return {};
     }
 
-    // Repeated imports of one named physical object are idempotent. Check all
-    // names first so an early physical alias cannot hide a later name collision.
-    for (const auto& resource : resources) {
-        const bool same_name = resource.name == resource_name ||
-                               std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) !=
-                                   resource.aliases.end();
-        if (same_name && (!physical_identity || resource.physical_identity != physical_identity)) {
-            declaration_errors.emplace_back(
-                "duplicate resource or alias name: " + std::string(resource_name)
-            );
-            return {};
-        }
+    // Names and physical identities are independent: an existing physical
+    // resource must not hide a name already owned by another resource.
+    const auto named = resource_names.find(resource_name);
+    if (named != resource_names.end() &&
+        (!physical_identity || resources[named->second].physical_identity != physical_identity)) {
+        declaration_errors.emplace_back(
+            "duplicate resource or alias name: " + std::string(resource_name)
+        );
+        return {};
     }
-    for (uint32_t index = 0; index < resources.size(); ++index) {
+    const auto physical = imported_resource_ids.find(physical_identity);
+    const uint32_t index = named != resource_names.end() ? named->second :
+                           physical != imported_resource_ids.end() ? physical->second : InvalidIndex;
+    if (index != InvalidIndex) {
         auto& resource = resources[index];
-        if (physical_identity == nullptr || resource.physical_identity != physical_identity) {
-            continue;
-        }
         if (!resource.imported) {
             declaration_errors.emplace_back(
                 "physical identity aliases transient resource: " + std::string(resource_name)
@@ -1315,10 +1312,9 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
             resource.buffer_desc = *buffer_desc;
             resource.typed_desc  = true;
         }
-        if (resource.name != resource_name &&
-            std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) ==
-                resource.aliases.end()) {
+        if (named == resource_names.end()) {
             resource.aliases.emplace_back(resource_name);
+            resource_names.emplace(resource.aliases.back(), index);
         }
         return ResourceHandle{index, graph_id};
     }
@@ -1337,7 +1333,12 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
         resource.typed_desc  = true;
     }
     resources.emplace_back(std::move(resource));
-    return ResourceHandle{static_cast<uint32_t>(resources.size() - 1), graph_id};
+    const auto resource_id = static_cast<uint32_t>(resources.size() - 1);
+    resource_names.emplace(resources.back().name, resource_id);
+    if (physical_identity != nullptr) {
+        imported_resource_ids.emplace(physical_identity, resource_id);
+    }
+    return ResourceHandle{resource_id, graph_id};
 }
 
 RenderGraph::ResourceHandle RenderGraph::CreateTransient(std::string_view resource_name, ResourceKind kind) {
@@ -1461,13 +1462,9 @@ RenderGraph::ResourceHandle RenderGraph::CreateTransientInternal(
         );
         return {};
     }
-    for (const auto& resource : resources) {
-        if (resource.name == resource_name ||
-            std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) !=
-                resource.aliases.end()) {
-            declaration_errors.emplace_back("duplicate resource name: " + std::string(resource_name));
-            return {};
-        }
+    if (resource_names.contains(resource_name)) {
+        declaration_errors.emplace_back("duplicate resource name: " + std::string(resource_name));
+        return {};
     }
 
     ResourceDeclaration resource{};
@@ -1483,7 +1480,9 @@ RenderGraph::ResourceHandle RenderGraph::CreateTransientInternal(
         resource.typed_desc  = true;
     }
     resources.emplace_back(std::move(resource));
-    return ResourceHandle{static_cast<uint32_t>(resources.size() - 1), graph_id};
+    const auto resource_id = static_cast<uint32_t>(resources.size() - 1);
+    resource_names.emplace(resources.back().name, resource_id);
+    return ResourceHandle{resource_id, graph_id};
 }
 
 void RenderGraph::Export(ResourceHandle resource) {
@@ -3269,7 +3268,9 @@ bool RenderGraph::InvalidateCompile() {
         declaration_errors.emplace_back("graph declarations cannot be mutated after execution");
         return false;
     }
-    if (setup_dispatched) {
+    // Declarations only invalidate an existing compile result once. A graph
+    // being built has no compiled lifetimes or transient bindings to discard.
+    if (compiled || !compile_error.empty()) {
         compiled = false;
         compile_error.clear();
         compiled_plan.Clear();
@@ -3278,18 +3279,12 @@ bool RenderGraph::InvalidateCompile() {
             resource.first_use = InvalidIndex;
             resource.last_use  = InvalidIndex;
         }
+    }
+    if (setup_dispatched) {
         declaration_errors.emplace_back(
             "graph declarations cannot be mutated after asynchronous setup dispatch"
         );
         return false;
-    }
-    compiled = false;
-    compile_error.clear();
-    compiled_plan.Clear();
-    ReleaseNonExportedTransientBindings();
-    for (auto& resource : resources) {
-        resource.first_use = InvalidIndex;
-        resource.last_use  = InvalidIndex;
     }
     return true;
 }

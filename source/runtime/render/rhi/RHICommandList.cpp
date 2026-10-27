@@ -761,7 +761,15 @@ void CommandList::AppendRecorded(CommandList&& _source) {
                 "frontend CommandList merge exceeds container capacity"
             );
         }
-        destination.reserve(destination.size() + input.size());
+        const size_t required = destination.size() + input.size();
+        if (required > destination.capacity()) {
+            // Exact-size reserves on every appended pass repeatedly move the
+            // entire frame prefix. Preserve amortized growth while reserving
+            // before any source payload is moved.
+            const size_t capacity = destination.capacity();
+            const size_t growth = std::min(capacity / 2, destination.max_size() - capacity);
+            destination.reserve(std::max(required, capacity + growth));
+        }
     };
     reserve_append(commands, source.cmds);
     reserve_append(callbacks, source.callbacks);

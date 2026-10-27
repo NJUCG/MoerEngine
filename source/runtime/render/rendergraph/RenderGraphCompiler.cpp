@@ -700,6 +700,10 @@ bool RenderGraphCompiler::BuildAtomicCells() {
 }
 
 bool RenderGraphCompiler::BuildSemanticDependencies() {
+    // Reuse cell storage across passes, and visit only resources that the
+    // current pass accesses. Unused resources have no per-pass state to merge.
+    std::vector<std::vector<CellUsage>> usages(graph.resources.size());
+    std::vector<uint32_t> accessed_resources;
     for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         const auto& pass = graph.passes[pass_index];
         for (const auto dependency : pass.explicit_dependencies) {
@@ -713,14 +717,14 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
             );
         }
 
-        std::vector<std::vector<CellUsage>> usages(graph.resources.size());
-        for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
-            usages[resource_index].resize(resource_cells[resource_index].size());
-        }
-
+        accessed_resources.clear();
         for (const auto& access : normalized_accesses[pass_index]) {
             auto&       resource_usages = usages[access.resource.resource_id];
             const auto& cells           = resource_cells[access.resource.resource_id];
+            if (resource_usages.empty()) {
+                resource_usages.resize(cells.size());
+                accessed_resources.push_back(access.resource.resource_id);
+            }
             bool        matched         = false;
             for (uint32_t cell_index = 0; cell_index < cells.size(); ++cell_index) {
                 if (!RangesOverlap(access.range, cells[cell_index].range)) {
@@ -739,7 +743,10 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
             }
         }
 
-        for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+        // Keep the compiler's deterministic resource order independent of the
+        // order in which a pass declared its accesses.
+        std::sort(accessed_resources.begin(), accessed_resources.end());
+        for (const uint32_t resource_index : accessed_resources) {
             auto&      resource_usages = usages[resource_index];
             const bool writes_resource =
                 std::any_of(resource_usages.begin(), resource_usages.end(), [](const CellUsage& usage) {
@@ -1034,6 +1041,7 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     cell.ownership_established_pass = pass_index;
                 }
             }
+            resource_usages.clear();
         }
     }
 

@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1218,8 +1219,20 @@ private:
     [[nodiscard]] bool IsValidResource(ResourceHandle resource) const;
     [[nodiscard]] bool IsValidPass(PassHandle pass) const;
 
+    struct ResourceNameHash {
+        using is_transparent = void;
+
+        size_t operator()(std::string_view value) const noexcept {
+            return std::hash<std::string_view>{}(value);
+        }
+    };
+
     std::string                      name{};
     std::vector<ResourceDeclaration> resources{};
+    // Graph-local declaration indexes. Names include aliases; only imports
+    // have a physical identity while declarations remain mutable.
+    std::unordered_map<std::string, uint32_t, ResourceNameHash, std::equal_to<>> resource_names{};
+    std::unordered_map<const void*, uint32_t> imported_resource_ids{};
     std::vector<PassDeclaration>     passes{};
     std::vector<SetupPassDeclaration> setup_passes{};
     SharedPtr<SetupBatchState>        setup_batch{};

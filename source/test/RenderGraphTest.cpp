@@ -491,6 +491,37 @@ void TestImportedAliasIdentityAndDump(TestSuite& suite) {
     );
 }
 
+void TestResourceNameAndIdentityNamespaces(TestSuite& suite) {
+    constexpr std::string_view test_name = "resource name and identity namespaces";
+    int physical_a = 0;
+    int physical_b = 0;
+    for (bool alias_second : {false, true}) {
+        RenderGraph graph("NameCollision");
+        const auto first = graph.Import("First", RenderGraph::ResourceKind::Texture, &physical_a);
+        const auto second = graph.Import("Second", RenderGraph::ResourceKind::Texture, &physical_b);
+        const auto* identity = alias_second ? &physical_b : &physical_a;
+        const auto alias = graph.Import("Alias", RenderGraph::ResourceKind::Texture, identity);
+        suite.Check(alias == (alias_second ? second : first), test_name,
+                    "a new alias must preserve resource identity");
+        suite.Check(!graph.Import(alias_second ? "First" : "Second",
+                                  RenderGraph::ResourceKind::Texture, identity).IsValid(),
+                    test_name, "an existing physical identity must not hide another resource's name");
+        suite.Check(!graph.CreateTransient("Alias", RenderGraph::ResourceKind::Texture).IsValid(),
+                    test_name, "an imported alias reserves its name against transient resources");
+        suite.Check(!graph.Import("Alias", RenderGraph::ResourceKind::Texture,
+                                  alias_second ? &physical_a : &physical_b).IsValid(),
+                    test_name, "aliases must reject a different physical identity");
+    }
+    RenderGraph graph("NullIdentities");
+    const auto first = graph.ImportToken("First");
+    const auto second = graph.ImportToken("Second");
+    suite.Check(first != second, test_name, "null physical identities must not alias unrelated resources");
+    suite.Check(!graph.ImportToken("First").IsValid(), test_name, "a null identity cannot justify name reuse");
+    graph.CreateTransient("Transient", RenderGraph::ResourceKind::Buffer);
+    suite.Check(!graph.Import("Transient", RenderGraph::ResourceKind::Buffer, &physical_a).IsValid(),
+                test_name, "transient names share the declaration namespace");
+}
+
 [[nodiscard]] std::string BuildHazardDump(TestSuite& suite, std::string_view test_name) {
     RenderGraph graph("Hazards");
     int         physical_buffer = 0;
@@ -6643,6 +6674,7 @@ int main() {
     TestUiFrameGraphTailContract(suite);
     TestUiFrameGraphRejectsInvalidPhysicalContracts(suite);
     TestImportedAliasIdentityAndDump(suite);
+    TestResourceNameAndIdentityNamespaces(suite);
     TestHazardsAndDeterministicDump(suite);
     TestTransientReadBeforeProducerFailsWithoutCallbacks(suite);
     TestCrossGraphHandlesAreRejected(suite);
