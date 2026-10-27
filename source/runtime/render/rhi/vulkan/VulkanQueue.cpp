@@ -3583,60 +3583,6 @@ QueryPublishBatch PublishUnsubmittedQueryErrors(
     return query_batch;
 }
 
-static void TerminalizeRejectedSubmit(
-    VulkanDevice&    _device,
-    CmdSubmit&&      _submit,
-    VkResult         _result,
-    std::string_view _context
-) noexcept {
-    if (_result == VK_SUCCESS) {
-        _result = VK_ERROR_UNKNOWN;
-    }
-
-    _device.RecordRejectedSubmit();
-    FinalizeRejectedBindlessUpdates(_submit);
-    const GpuCompletionPublishBatch completion_batch =
-        _submit.gpu_completion_publish_batch.Valid() ?
-            _submit.gpu_completion_publish_batch :
-            GpuCompletionBackendAccess::BeginPublishBatch();
-    const QueryPublishBatch query_batch =
-        _submit.query_publish_batch.Valid() ?
-            _submit.query_publish_batch :
-            QueryBackendAccess::BeginPublishBatch();
-    _submit.PublishPendingGpuCompletionErrors(
-        _context, completion_batch
-    );
-    _submit.PublishPendingQueryErrors(_context, query_batch);
-    Array<SignalEvent> rejected_signals =
-        std::move(_submit.signal_events);
-    Array<FenceRef> rejected_signal_keepalives =
-        std::move(_submit.signal_rejection_keepalives);
-    _submit.signal_events.clear();
-    _submit.signal_rejection_keepalives.clear();
-    TerminalizeUnsubmittedSignals(
-        _device,
-        rejected_signals,
-        VulkanOperationResult{EVulkanOperationStatus::Rejected, _result}
-    );
-    _submit.NotifyPendingGpuCompletions(completion_batch);
-    _submit.NotifyPendingQueries(query_batch);
-
-    // Completion callbacks are the only user code retained on a rejected
-    // packet. Success callbacks are intentionally destroyed without running.
-    // Drop command/cached payload first, matching normal queue retirement and
-    // giving unhanded bindless updates their destructor rollback opportunity.
-    Array<std::function<void()>> callbacks = std::move(_submit.callbacks);
-    _submit.success_callbacks.clear();
-    _submit.cmds.clear();
-    _submit.cached_args.clear();
-    _submit.segments.clear();
-    _submit.wait_events.clear();
-    _submit.debug_label.clear();
-
-    InvokeCallbacksNoexcept(callbacks, _context);
-    (void)rejected_signal_keepalives;
-}
-
 VkCommandQueue::VkCommandQueue(
     VulkanDevice& _device,
     EQueueType    _type,
@@ -3820,74 +3766,15 @@ bool VkCommandQueue::ClaimLegacyOwnership(std::string_view _operation) {
 }
 
 WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
-    if (!ClaimLegacyOwnership("Execute")) {
-        TerminalizeRejectedSubmit(
-            vk_device,
-            std::move(_submit),
-            VK_ERROR_UNKNOWN,
-            "[VulkanQueue] rejected mixed Runtime/Legacy submit"
+    try {
+        LOG_ERROR(
+            "[RHIExecutor][Vulkan] direct Execute is unsupported; "
+            "publish work through RHIExecutor"
         );
-        return {uint64(timeline), last_frame.load(std::memory_order_acquire)};
+    } catch (...) {
     }
-    if (vk_device.IsFaulted()) {
-        TerminalizeRejectedSubmit(
-            vk_device,
-            std::move(_submit),
-            vk_device.GetFirstFaultResult(),
-            "[VulkanQueue] rejected submit"
-        );
-        return {uint64(timeline), last_frame.load(std::memory_order_acquire)};
-    }
-    if (rhi_thread_enabled) {
-        std::chrono::steady_clock::time_point caller_started{};
-        if (thread_profile) {
-            caller_started = std::chrono::steady_clock::now();
-        }
-        uint64 current_timeline;
-        {
-            std::unique_lock<std::mutex> lock(rhi_work_mutex);
-            current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-            const uint64 serial = ++enqueued_rhi_work;
-            const uint32 enqueue_depth = uint32(rhi_work_queue.size() + 1);
-            const auto enqueued_at = thread_profile ? std::chrono::steady_clock::now()
-                                                    : std::chrono::steady_clock::time_point{};
-            rhi_work_queue.emplace_back(
-                std::in_place_type<RhiExecuteWork>,
-                std::move(_submit),
-                current_timeline,
-                serial,
-                enqueued_at,
-                enqueue_depth
-            );
-            if (thread_profile) {
-                std::get<RhiExecuteWork>(rhi_work_queue.back()).caller_ms =
-                    RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
-            }
-        }
-        rhi_work_cv.notify_one();
-        return {uint64(timeline), current_timeline};
-    }
-
-    RHIThreadRoleScope submission_owner(
-        ERHIThreadRole::Submission
-    );
-    RHIThreadHeartbeatScope heartbeat(
-        ERHIThreadRole::Submission,
-        HeartbeatDomainForQueue(queue.GetType()),
-        ERHIHeartbeatStage::Translate
-    );
-    std::unique_lock<std::mutex> lock(exec_mtx);
-    const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (thread_profile) {
-        const auto work_started = std::chrono::steady_clock::now();
-        ExecuteNow(std::move(_submit), current_timeline, current_timeline);
-        const double work_ms =
-            RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
-        RecordThreadingProfile(ERhiWorkKind::Execute, work_ms, 0.0, work_ms, 0);
-    } else {
-        ExecuteNow(std::move(_submit), current_timeline, current_timeline);
-    }
-    return {uint64(timeline), current_timeline};
+    RejectForRuntime(std::move(_submit), VK_ERROR_UNKNOWN, true);
+    return {0, 0};
 }
 
 std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit>
@@ -4066,7 +3953,8 @@ void VkCommandQueue::RejectForRuntime(
     bool        _recoverable,
     VulkanBatchCompletionTicket _batch_completion
 ) noexcept {
-    ResetSplitProfilingCpuFrame();
+    // This request never acquired recording ownership. Reject only its own
+    // work; an active Translate/Submission packet may still own profiling state.
     const VulkanOperationResult outcome =
         MakeUnsubmittedOutcome(_result, _recoverable);
     vk_device.RecordRejectedSubmit();
@@ -5069,84 +4957,18 @@ void VkCommandQueue::ExecuteNow(
     }
 }
 
-void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view, PresentReceiptRef _receipt) {
-    TextureRef source_texture{_view.texture};
-
-    if (!ClaimLegacyOwnership("Present")) {
-        ResolvePresentReceiptNoexcept(_receipt, false, EPresentStatus::Rejected, EPresentStage::Validation);
-        return;
-    }
-    if (vk_device.IsFaulted()) {
-        vk_device.RecordRejectedPresent();
-        ResolvePresentReceiptNoexcept(_receipt, false, EPresentStatus::Faulted, EPresentStage::Validation);
-        return;
-    }
-
-    if (rhi_thread_enabled) {
-        std::chrono::steady_clock::time_point caller_started{};
-        if (thread_profile) {
-            caller_started = std::chrono::steady_clock::now();
-        }
-        {
-            std::unique_lock<std::mutex> lock(rhi_work_mutex);
-            const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-            const uint64 serial           = ++enqueued_rhi_work;
-            const uint32 enqueue_depth    = uint32(rhi_work_queue.size() + 1);
-            const auto enqueued_at = thread_profile ? std::chrono::steady_clock::now()
-                                                    : std::chrono::steady_clock::time_point{};
-            rhi_work_queue.emplace_back(
-                std::in_place_type<RhiPresentWork>,
-                std::move(_sc),
-                std::move(source_texture),
-                _view,
-                std::move(_receipt),
-                current_timeline,
-                serial,
-                enqueued_at,
-                enqueue_depth
-            );
-            if (thread_profile) {
-            std::get<RhiPresentWork>(rhi_work_queue.back()).caller_ms =
-                RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
-            }
-        }
-        rhi_work_cv.notify_one();
-        return;
-    }
-
-    RHIThreadRoleScope submission_owner(
-        ERHIThreadRole::Submission
-    );
-    RHIThreadHeartbeatScope heartbeat(
-        ERHIThreadRole::Submission,
-        HeartbeatDomainForQueue(queue.GetType()),
-        ERHIHeartbeatStage::Present
-    );
-    std::unique_lock<std::mutex> lock(exec_mtx);
-    const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (thread_profile) {
-        const auto work_started = std::chrono::steady_clock::now();
-        PresentNow(
-            std::move(_sc),
-            std::move(source_texture),
-            _view,
-            std::move(_receipt),
-            current_timeline,
-            current_timeline
+void VkCommandQueue::Present(SwapchainRef, TextureView, PresentReceiptRef _receipt) {
+    try {
+        LOG_ERROR(
+            "[RHIExecutor][Vulkan] direct Present is unsupported; "
+            "publish work through RHIExecutor"
         );
-        const double work_ms =
-            RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
-        RecordThreadingProfile(ERhiWorkKind::Present, work_ms, 0.0, work_ms, 0);
-    } else {
-        PresentNow(
-            std::move(_sc),
-            std::move(source_texture),
-            _view,
-            std::move(_receipt),
-            current_timeline,
-            current_timeline
-        );
+    } catch (...) {
     }
+    vk_device.RecordRejectedPresent();
+    ResolvePresentReceiptNoexcept(
+        _receipt, false, EPresentStatus::Rejected, EPresentStage::Validation
+    );
 }
 
 VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(

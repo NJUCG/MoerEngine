@@ -279,11 +279,15 @@ def timestamp_query_success_batch_line() -> str:
         "callbacks=exactly_once runtime=recovered replay=0\n"
     )
 
-def present_legacy_owner_line() -> str:
+def direct_queue_rejection_line() -> str:
     return (
-        "[TESTCASE][PASS] name=LegacyDirectPresentOwnerBoundary "
-        "rhi_thread=false owner=Submission thread=caller "
-        "receipt=exactly_once native_present=0\n"
+        "[TESTCASE][PASS] name=DirectQueueEntryRejection "
+        "phases=unclaimed,runtime execute=rejected present=rejected "
+        "completion_event=invalid fence=rejected query=Error gpu_completion=Error "
+        "ordinary_callback=exactly_once query_callback=exactly_once "
+        "completion_callback=exactly_once success_callback=0 owner=Completion "
+        "lifetime=retired receipt=exactly_once native_submit=0 native_present=0 "
+        "runtime=recovered replay=0\n"
     )
 
 def timestamp_query_line() -> str:
@@ -1412,9 +1416,9 @@ class VulkanRunnerTests(unittest.TestCase):
                 present_hard_line(),
             ),
             (
-                "present-legacy-owner",
-                "--present-legacy-owner",
-                present_legacy_owner_line(),
+                "direct-queue-rejection",
+                "--direct-queue-rejection",
+                direct_queue_rejection_line(),
             ),
             (
                 "rt-export-rejection",
@@ -1500,7 +1504,7 @@ class VulkanRunnerTests(unittest.TestCase):
                 "pipeline-window2",
                 "present-boundary",
                 "present-hard",
-                "present-legacy-owner",
+                "direct-queue-rejection",
                 "rt-export-rejection",
                 "readback-future",
                 "occlusion-query",
@@ -1515,12 +1519,31 @@ class VulkanRunnerTests(unittest.TestCase):
         self.assertEqual(len(set(modes)), 19)
         self.assertEqual(set(modes), set(runner.VULKAN_TEST_CASE_BY_MODE))
 
+    def test_direct_queue_rejection_requires_every_boundary_guarantee(self) -> None:
+        valid = direct_queue_rejection_line()
+        fields = (
+            "phases=unclaimed,runtime", "execute=rejected", "present=rejected",
+            "completion_event=invalid", "fence=rejected", "query=Error",
+            "gpu_completion=Error", "ordinary_callback=exactly_once",
+            "query_callback=exactly_once", "completion_callback=exactly_once",
+            "success_callback=0", "owner=Completion", "lifetime=retired",
+            "receipt=exactly_once", "native_submit=0", "native_present=0",
+            "runtime=recovered", "replay=0",
+        )
+        for field in fields:
+            with self.subTest(field=field):
+                key = field.split("=", 1)[0]
+                with self.assertRaises(runner.VulkanTestError):
+                    runner._require_direct_queue_rejection(
+                        valid.replace(field, key + "=missing")
+                    )
+
     def test_new_focused_modes_reject_weakened_terminal_contracts(self) -> None:
         cases = (
             (
-                "present-legacy-owner",
-                present_legacy_owner_line().replace(
-                    "owner=Submission", "owner=Completion"
+                "direct-queue-rejection",
+                direct_queue_rejection_line().replace(
+                    "owner=Completion", "owner=Submission"
                 ),
             ),
             (

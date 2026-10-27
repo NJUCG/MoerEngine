@@ -1580,7 +1580,7 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--pipeline-window2" &&
             argument != "--present-boundary" &&
             argument != "--present-hard" &&
-            argument != "--present-legacy-owner" &&
+            argument != "--direct-queue-rejection" &&
             argument != "--rt-export-rejection" &&
             argument != "--readback-future" &&
             argument != "--occlusion-query" &&
@@ -12022,62 +12022,171 @@ void RunPresentPipelineBoundary() {
     }
 }
 
-void RunLegacyDirectPresentOwnerBoundary() {
+void RunDirectQueueEntryRejection() {
     using namespace std::chrono_literals;
 
     auto& device = RenderDevice::Get();
     auto& graphics_queue = static_cast<VkCommandQueue&>(
         device.GetCommandQueue(EQueueType::Graphics)
     );
-    const uint32 caller_thread =
-        Platform::GetCurrentThreadID();
-    SwapchainRef swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
-    };
-    ScriptedPresentCapture capture(
-        VulkanScriptedPresentResult{
-            .outcome = {
-                EVulkanOperationStatus::Rejected,
-                VK_ERROR_UNKNOWN,
-            },
-        }
+    // Exercise the public boundary before any executor can own this queue.
+    // StartUp alone is insufficient for the second phase: backend creation is
+    // lazy, so an accepted submission below first establishes Runtime ownership.
+    RHIExecutor::ShutDown();
+    NativeSubmissionCapture native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    SwapchainRef swapchain{MoerNew(HeadlessScriptedSwapchain)()};
+    ScriptedPresentCapture present_capture({});
+    ScopedScriptedPresentOverride present_override(
+        present_capture, false, false, true
     );
-    ScopedScriptedPresentOverride scripted_override(
-        capture,
-        false,
-        false,
-        true
-    );
-    PresentReceiptRef receipt = MakeShared<PresentReceipt>();
 
-    graphics_queue.Present(
-        swapchain,
-        TextureView{},
-        receipt
-    );
-    const PresentReceiptResult result =
-        receipt->WaitForSubmission(5s);
-    graphics_queue.Sync();
-
-    if (!result.resolved || result.submitted ||
-        result.recreate_swapchain ||
-        receipt->ResolutionAttemptCount() != 1 ||
-        capture.source_rejection_hook_count.load(
-            std::memory_order_acquire
-        ) != 1 ||
-        capture.thread_id.load(std::memory_order_acquire) !=
-            caller_thread ||
-        capture.wrong_owner.load(std::memory_order_acquire) ||
-        capture.count.load(std::memory_order_acquire) != 0) {
-        throw std::runtime_error(
-            "legacy direct Present did not execute on the caller-side Submission owner"
+    const auto expect_direct_rejection = [&] {
+        const size_t native_before = native_capture.Count();
+        FenceRef rejected_signal = device.CreateFence();
+        std::atomic<uint32> ordinary_callbacks{0};
+        std::atomic<uint32> success_callbacks{0};
+        std::atomic<uint32> completion_callbacks{0};
+        std::atomic<uint32> query_callbacks{0};
+        std::atomic<uint32> callback_errors{0};
+        auto retained_owner = std::make_shared<uint32>(7);
+        std::weak_ptr<uint32> weak_owner = retained_owner;
+        QueryFuture query_future{};
+        CommandList commands(EQueueType::Graphics);
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        commands.KeepAlive(retained_owner);
+        GpuCompletionFuture completion = commands.TrackGpuCompletion(
+            "DirectQueueEntryRejectedCompletion"
         );
-    }
+        commands.Signal(rejected_signal, 1);
+        // Recording order must not allow an ordinary callback to observe
+        // pending query/completion results, even when rejection skips Translate.
+        commands.AddCallback([&] {
+            const auto query_result = query_future.TryGet();
+            if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
+                !rejected_signal->IsRejected(1) ||
+                completion.Status() != GpuCompletionStatus::Error ||
+                !query_result.has_value() ||
+                query_result->status != QueryStatus::Error ||
+                completion_callbacks.load(std::memory_order_acquire) != 1 ||
+                query_callbacks.load(std::memory_order_acquire) != 1 ||
+                weak_owner.expired()) {
+                callback_errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            ordinary_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        QueryToken query = commands.BeginTimestampQuery(
+            "DirectQueueEntryRejectedTimestamp"
+        );
+        query_future = query.GetFuture();
+        commands.EndTimestampQuery(query);
+        completion.Then([&](const GpuCompletionResult& result) {
+            const auto query_result = query_future.TryGet();
+            if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
+                result.status != GpuCompletionStatus::Error ||
+                result.error_reason.empty() ||
+                !rejected_signal->IsRejected(1) ||
+                !query_result.has_value() ||
+                query_result->status != QueryStatus::Error ||
+                weak_owner.expired()) {
+                callback_errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            completion_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        query_future.Then([&](const QueryResult& result) {
+            if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
+                result.status != QueryStatus::Error ||
+                result.error_reason.empty() ||
+                !rejected_signal->IsRejected(1) ||
+                completion.Status() != GpuCompletionStatus::Error ||
+                weak_owner.expired()) {
+                callback_errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            query_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        commands.AddSuccessCallback([&] {
+            success_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        retained_owner.reset();
+        const WaitEvent completion_event = graphics_queue.Execute(commands.Submit());
+        graphics_queue.Sync();
+        if (completion_event.timeline_handle != 0 || completion_event.value != 0 ||
+            !rejected_signal->IsRejected(1) || rejected_signal->GetValue() != 0 ||
+            ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+            success_callbacks.load(std::memory_order_acquire) != 0 ||
+            completion_callbacks.load(std::memory_order_acquire) != 1 ||
+            query_callbacks.load(std::memory_order_acquire) != 1 ||
+            callback_errors.load(std::memory_order_acquire) != 0 ||
+            !weak_owner.expired()) {
+            throw std::runtime_error(
+                "direct Execute did not reject and retire every notification and owner"
+            );
+        }
+
+        PresentReceiptRef receipt = MakeShared<PresentReceipt>();
+        graphics_queue.Present(swapchain, TextureView{}, receipt);
+        const PresentReceiptResult result = receipt->WaitForSubmission(5s);
+        if (!result.resolved || result.submitted || result.recreate_swapchain ||
+            result.status != EPresentStatus::Rejected ||
+            result.stage != EPresentStage::Validation ||
+            receipt->ResolutionAttemptCount() != 1 ||
+            present_capture.count.load(std::memory_order_acquire) != 0 ||
+            present_capture.source_rejection_hook_count.load(std::memory_order_acquire) != 0) {
+            throw std::runtime_error(
+                "direct Present entered the native path or left an unresolved receipt"
+            );
+        }
+        graphics_queue.Sync();
+        if (ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+            success_callbacks.load(std::memory_order_acquire) != 0 ||
+            completion_callbacks.load(std::memory_order_acquire) != 1 ||
+            query_callbacks.load(std::memory_order_acquire) != 1 ||
+            receipt->ResolutionAttemptCount() != 1 ||
+            native_capture.Overflowed() || native_capture.Count() != native_before) {
+            throw std::runtime_error(
+                "direct queue rejection replayed notifications or submitted native work"
+            );
+        }
+    };
+
+    FenceRef accepted_signal = device.CreateFence();
+    std::atomic<uint32> accepted_callbacks{0};
+    const auto submit_through_executor = [&](uint64 value) {
+        const size_t native_before = native_capture.Count();
+        CommandList commands(EQueueType::Graphics);
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        GpuCompletionFuture completion = commands.TrackGpuCompletion(
+            "DirectQueueEntryRuntimeRecovery"
+        );
+        commands.Signal(accepted_signal, value);
+        commands.AddSuccessCallback([&] {
+            accepted_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit());
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (completion.Status() != GpuCompletionStatus::Ready ||
+            accepted_signal->IsRejected(value) || accepted_signal->GetValue() < value ||
+            accepted_callbacks.load(std::memory_order_acquire) != value ||
+            native_capture.Overflowed() || native_capture.Count() != native_before + 1) {
+            throw std::runtime_error(
+                "direct rejection poisoned a later executor-owned submission"
+            );
+        }
+    };
+
+    expect_direct_rejection();
+    RHIExecutor::StartUp();
+    submit_through_executor(1);
+    expect_direct_rejection();
+    submit_through_executor(2);
     LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=LegacyDirectPresentOwnerBoundary "
-        "rhi_thread=false owner=Submission thread=caller "
-        "receipt=exactly_once native_present=0"
+        "[TESTCASE][PASS] name=DirectQueueEntryRejection "
+        "phases=unclaimed,runtime execute=rejected present=rejected "
+        "completion_event=invalid fence=rejected query=Error gpu_completion=Error "
+        "ordinary_callback=exactly_once query_callback=exactly_once "
+        "completion_callback=exactly_once success_callback=0 owner=Completion "
+        "lifetime=retired receipt=exactly_once native_submit=0 native_present=0 "
+        "runtime=recovered replay=0"
     );
 }
 
@@ -17005,11 +17114,11 @@ int main(int argc, const char** argv) {
             HasArgument(argc, argv, "--present-boundary");
         const bool present_hard =
             HasArgument(argc, argv, "--present-hard");
-        const bool present_legacy_owner =
-            HasArgument(argc, argv, "--present-legacy-owner");
+        const bool direct_queue_rejection =
+            HasArgument(argc, argv, "--direct-queue-rejection");
         const uint32 focused_present_mode_count = static_cast<uint32>(present_boundary) +
                                                   static_cast<uint32>(present_hard) +
-                                                  static_cast<uint32>(present_legacy_owner);
+                                                  static_cast<uint32>(direct_queue_rejection);
         if (focused_present_mode_count > 1) {
             throw std::invalid_argument(
                 "focused Present modes are mutually exclusive"
@@ -17052,7 +17161,7 @@ int main(int argc, const char** argv) {
             .rhi_type           = ERHIType::Vulkan,
             .name               = "RHIParallelRecordVulkanTest",
             .rhi_api_version    = "1.3",
-            .rhi_thread         = !present_legacy_owner,
+            .rhi_thread         = true,
             .rhi_bypass         = false,
 
             .submission_batch_window                = submission_batch_window,
@@ -17101,8 +17210,8 @@ int main(int argc, const char** argv) {
             return 0;
         }
 
-        if (present_legacy_owner) {
-            RunLegacyDirectPresentOwnerBoundary();
+        if (direct_queue_rejection) {
+            RunDirectQueueEntryRejection();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();

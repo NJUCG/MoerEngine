@@ -47,7 +47,7 @@ VULKAN_TEST_CASES = (
     VulkanTestCase("pipeline-window2", ("--pipeline-window2",)),
     VulkanTestCase("present-boundary", ("--present-boundary",)),
     VulkanTestCase("present-hard", ("--present-hard",)),
-    VulkanTestCase("present-legacy-owner", ("--present-legacy-owner",)),
+    VulkanTestCase("direct-queue-rejection", ("--direct-queue-rejection",)),
     VulkanTestCase("rt-export-rejection", ("--rt-export-rejection",)),
     VulkanTestCase("readback-future", ("--readback-future",)),
     VulkanTestCase("occlusion-query", ("--occlusion-query",)),
@@ -1356,20 +1356,36 @@ def _number_pair(value: str | None) -> tuple[float, float] | None:
         return None
     return pair
 
-def _require_present_legacy_owner(text: str) -> None:
-    marker = _testcase_marker("LegacyDirectPresentOwnerBoundary", text)
+def _require_direct_queue_rejection(text: str) -> None:
+    marker = _testcase_marker("DirectQueueEntryRejection", text)
     _require(
         marker is not None and marker[0] == "PASS",
-        "present-legacy-owner: missing legacy owner PASS marker",
+        "direct-queue-rejection: missing rejection PASS marker",
     )
     _, fields = marker
+    expected = {
+        "phases": "unclaimed,runtime",
+        "execute": "rejected",
+        "present": "rejected",
+        "completion_event": "invalid",
+        "fence": "rejected",
+        "query": "Error",
+        "gpu_completion": "Error",
+        "ordinary_callback": "exactly_once",
+        "query_callback": "exactly_once",
+        "completion_callback": "exactly_once",
+        "success_callback": "0",
+        "owner": "Completion",
+        "lifetime": "retired",
+        "receipt": "exactly_once",
+        "native_submit": "0",
+        "native_present": "0",
+        "runtime": "recovered",
+        "replay": "0",
+    }
     _require(
-        fields.get("rhi_thread") == "false"
-        and fields.get("owner") == "Submission"
-        and fields.get("thread") == "caller"
-        and fields.get("receipt") == "exactly_once"
-        and fields.get("native_present") == "0",
-        "present-legacy-owner: incomplete direct Present ownership contract",
+        all(fields.get(key) == value for key, value in expected.items()),
+        "direct-queue-rejection: incomplete rejection and retirement contract",
     )
 
 def _require_timestamp_query(text: str) -> None:
@@ -1625,8 +1641,8 @@ def validate_log(mode: str, text: str) -> None:
                  (marker[0] == "PASS" and marker[1].get("layers") == "readback_verified")),
                  "multiview: missing layer readback contract")
         return
-    if mode == "present-legacy-owner":
-        _require_present_legacy_owner(text)
+    if mode == "direct-queue-rejection":
+        _require_direct_queue_rejection(text)
         return
     if mode == "readback-future":
         _require_owning_readback_future(text)
