@@ -3721,13 +3721,11 @@ VkCommandQueue::TranslateForRuntime(CmdSubmit&& _submit) noexcept {
         std::unique_lock<std::mutex> execution_lock(exec_mtx);
         current_timeline =
             last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-        ExecuteNow(
+        RecordSubmissionCommands(
             std::move(_submit),
             current_timeline,
             current_timeline,
-            &recorded,
-            true,
-            nullptr
+            recorded
         );
     } catch (const std::exception& error) {
         try {
@@ -3793,13 +3791,12 @@ VulkanRuntimeSubmissionResult VkCommandQueue::SubmitRecordedForRuntime(
     if (!_recorded.native_submit_resolved) {
         try {
             std::unique_lock<std::mutex> execution_lock(exec_mtx);
-            const CurrentVulkanSubmitResult submit_result =
+            const VulkanOperationResult submit_result =
                 SubmitRecorded(
                     _recorded,
-                    &runtime_dependency_waits_enabled,
-                    true
+                    &runtime_dependency_waits_enabled
                 );
-            if (split_profiling_frame && !submit_result.outcome.Succeeded()) {
+            if (split_profiling_frame && !submit_result.Succeeded()) {
                 ResetSplitProfilingCpuFrame();
             }
         } catch (const std::exception& error) {
@@ -4089,14 +4086,13 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
             };
         }
 #endif
-        return PresentNow(
+        return PresentSwapchain(
             std::move(_swapchain),
             std::move(source_texture),
             _source,
             std::move(_receipt),
             current_timeline,
-            current_timeline,
-            true
+            current_timeline
         );
     } catch (...) {
         vk_device.RecordRejectedPresent();
@@ -4118,11 +4114,9 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
     }
 }
 
-VkCommandQueue::CurrentVulkanSubmitResult
-VkCommandQueue::SubmitRecorded(
+VulkanOperationResult VkCommandQueue::SubmitRecorded(
     CurrentVulkanRecordedSubmit& _recorded,
-    const std::atomic_bool*       _continue_waiting,
-    bool                          _defer_completion
+    const std::atomic_bool*       _continue_waiting
 ) {
     assert(
         !_recorded.native_submit_resolved &&
@@ -4268,17 +4262,7 @@ VkCommandQueue::SubmitRecorded(
             }
         }
     }
-    const uint32 ordered_cmd_list_count =
-        static_cast<uint32>(_recorded.ordered_cmd_lists.size());
-
-    if (!_defer_completion) {
-        CommitRuntimeSubmitCompletion(_recorded, submit_outcome);
-    }
-
-    return {
-        .outcome                = submit_outcome,
-        .ordered_cmd_list_count = ordered_cmd_list_count,
-    };
+    return submit_outcome;
 }
 
 void VkCommandQueue::CommitRuntimeSubmitCompletion(
@@ -4370,13 +4354,11 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
     queue_cv.notify_one();
 }
 
-void VkCommandQueue::ExecuteNow(
+void VkCommandQueue::RecordSubmissionCommands(
     CmdSubmit&& _submit,
     uint64 _timeline,
     uint64 _serial,
-    std::optional<CurrentVulkanRecordedSubmit>* _out_recorded,
-    bool _runtime_owner,
-    bool* _out_terminalized
+    std::optional<CurrentVulkanRecordedSubmit>& _recorded
 ) {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Translate &&
@@ -4408,16 +4390,7 @@ void VkCommandQueue::ExecuteNow(
             EVulkanOperationStatus::Rejected, rejected_result
         };
         rejected.native_submit_resolved = true;
-        if (_out_recorded != nullptr) {
-            _out_recorded->emplace(std::move(rejected));
-        } else {
-            CommitRuntimeSubmitCompletion(
-                rejected, rejected.retirement_outcome
-            );
-            if (_out_terminalized != nullptr) {
-                *_out_terminalized = true;
-            }
-        }
+        _recorded.emplace(std::move(rejected));
         return;
     }
 
@@ -4454,7 +4427,7 @@ void VkCommandQueue::ExecuteNow(
             if (_abandoned_command_context != nullptr && *_abandoned_command_context) {
                 // Complete every allocation before CmdSubmit moves into the
                 // terminal packet. If reserve/emplace fails, the submit is
-                // still owned by ExecuteNow and cannot notify on Translate.
+                // still owned by recording and cannot notify on Translate.
                 abandoned_command_contexts.reserve(1);
                 abandoned_command_contexts.emplace_back(std::move(*_abandoned_command_context));
             }
@@ -4469,20 +4442,11 @@ void VkCommandQueue::ExecuteNow(
                 _outcome.result != VK_ERROR_DEVICE_LOST;
             rejected.native_submit_resolved = true;
             vk_device.RecordRejectedSubmit();
-            if (_out_recorded != nullptr) {
-                assert(
-                    !_out_recorded->has_value() &&
-                    "pre-record rejection cannot overwrite a recorded packet"
-                );
-                _out_recorded->emplace(std::move(rejected));
-                return;
-            }
-            CommitRuntimeSubmitCompletion(
-                rejected, rejected.retirement_outcome
+            assert(
+                !_recorded.has_value() &&
+                "pre-record rejection cannot overwrite a recorded packet"
             );
-            if (_out_terminalized != nullptr) {
-                *_out_terminalized = true;
-            }
+            _recorded.emplace(std::move(rejected));
         };
 
     VulkanPresentationSourceStateProgram
@@ -4745,16 +4709,7 @@ void VkCommandQueue::ExecuteNow(
             EVulkanOperationStatus::Rejected, _result
         };
         rejected.native_submit_resolved = true;
-        if (_out_recorded != nullptr) {
-            _out_recorded->emplace(std::move(rejected));
-        } else {
-            CommitRuntimeSubmitCompletion(
-                rejected, rejected.retirement_outcome
-            );
-            if (_out_terminalized != nullptr) {
-                *_out_terminalized = true;
-            }
-        }
+        _recorded.emplace(std::move(rejected));
     };
 
     auto record_serial_commands = [&] {
@@ -4860,26 +4815,14 @@ void VkCommandQueue::ExecuteNow(
     recorded_submit.command_contexts  = std::move(serial_command_contexts);
     recorded_submit.descriptor_lease  = std::move(descriptor_lease);
     recorded_submit.deferred_releases = std::move(deferred_releases);
-    CurrentVulkanSubmitResult submit_result{};
-    if (_out_recorded != nullptr) {
-        _out_recorded->emplace(std::move(recorded_submit));
-    } else {
-        submit_result = SubmitRecorded(recorded_submit);
-    }
+    _recorded.emplace(std::move(recorded_submit));
 
     if (has_cmd && complete_profiling_frame) {
         timer.Stop();
         profiler_storage.RegisterCpuTimestamp("Queue Execution", timer.ElapsedMilliseconds());
         profiler_storage.AdvanceFrame();
-    } else if (has_cmd && emits_profiling_queries) {
-        const bool submission_accepted = _out_recorded != nullptr || submit_result.outcome.Succeeded();
-        if (!submission_accepted) {
-            ResetSplitProfilingCpuFrame();
-        } else {
-            if (ends_profiling_frame) {
-                EndSplitProfilingCpuFrame();
-            }
-        }
+    } else if (has_cmd && ends_profiling_frame) {
+        EndSplitProfilingCpuFrame();
     }
 }
 
@@ -4897,14 +4840,13 @@ void VkCommandQueue::Present(SwapchainRef, TextureView, PresentReceiptRef _recei
     );
 }
 
-VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
+VulkanRuntimeSubmissionResult VkCommandQueue::PresentSwapchain(
     SwapchainRef&&    _sc,
     TextureRef&&      _source_texture,
     TextureView       _view,
     PresentReceiptRef _receipt,
     uint64            _timeline,
-    uint64            _serial,
-    bool              _runtime_owner
+    uint64            _serial
 ) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
@@ -5035,13 +4977,13 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 recorded.deferred_releases = TakeDeferredReleases();
                 // Keep Copy inputs alive until Present has been issued, even
                 // if GPU execution finishes immediately.
-                const auto copy_result = SubmitRecorded(recorded, nullptr, true);
-                final_outcome          = copy_result.outcome;
+                const VulkanOperationResult copy_result = SubmitRecorded(recorded);
+                final_outcome          = copy_result;
                 recoverable_rejection  = recorded.recoverable_rejection;
                 AccumulatePresentReceiptOutcome(
                     receipt_status, receipt_stage, final_outcome, EPresentStage::Submit
                 );
-                if (copy_result.outcome.Succeeded()) {
+                if (copy_result.Succeeded()) {
                     const auto result = sc->Present(queue.GetHandle(), idx, _timeline, _serial);
                     present_accepted  = result.accepted;
                     AccumulatePresentReceiptOutcome(

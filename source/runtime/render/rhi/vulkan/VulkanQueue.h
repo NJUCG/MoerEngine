@@ -503,23 +503,15 @@ private:
         bool                                    completion_committed{false};
     };
 
-    struct CurrentVulkanSubmitResult {
-        VulkanOperationResult outcome{};
-        uint32                ordered_cmd_list_count{0};
-    };
-
-    void                       ExecuteNow(
+    void RecordSubmissionCommands(
         CmdSubmit&& _submit,
         uint64 _timeline,
         uint64 _serial,
-        std::optional<CurrentVulkanRecordedSubmit>* _out_recorded = nullptr,
-        bool _runtime_owner = false,
-        bool* _out_terminalized = nullptr
+        std::optional<CurrentVulkanRecordedSubmit>& _recorded
     );
-    CurrentVulkanSubmitResult SubmitRecorded(
+    VulkanOperationResult SubmitRecorded(
         CurrentVulkanRecordedSubmit& _recorded,
-        const std::atomic_bool*       _continue_waiting = nullptr,
-        bool                          _defer_completion = false
+        const std::atomic_bool*       _continue_waiting = nullptr
     );
     std::optional<CurrentVulkanRecordedSubmit>
         TranslateForRuntime(CmdSubmit&& _submit) noexcept;
@@ -546,14 +538,13 @@ private:
         TextureView _source,
         PresentReceiptRef _receipt
     ) noexcept;
-    VulkanRuntimeSubmissionResult PresentNow(
+    VulkanRuntimeSubmissionResult PresentSwapchain(
         SwapchainRef&& _swapchain,
         TextureRef&&   _source_texture,
         TextureView    _source_view,
         PresentReceiptRef _receipt,
         uint64         _timeline,
-        uint64         _serial,
-        bool           _runtime_owner = false
+        uint64         _serial
     ) noexcept;
     void                       CompletionThreadMain();
     Array<RHIResource*>        TakeDeferredReleases();
