@@ -2,6 +2,9 @@
 #include "VulkanSubmissionExecutor.h"
 #include "VulkanSubmissionMaterialization.h"
 
+#include "VulkanCommandRecorder.h"
+#include "VulkanDevice.h"
+#include "VulkanQueue.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
@@ -9,8 +12,6 @@
 #include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "taskgraph/TaskGraph.h"
-#include "VulkanDevice.h"
-#include "VulkanQueue.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
 #endif
@@ -1207,16 +1208,10 @@ bool VulkanSubmissionExecutor::HasRecordedSourcePacket(
 CmdSubmit* VulkanSubmissionExecutor::GetRecordedSourceSubmit(
     RecordedSourcePacket& _packet
 ) noexcept {
-    if (auto* packet =
-            std::get_if<VulkanCommandQueue::PendingSubmission>(
-                &_packet
-            )) {
+    if (auto* packet = std::get_if<VulkanRecordedSubmission>(&_packet)) {
         return &packet->submit;
     }
-    if (auto* packet =
-            std::get_if<VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>(
-                &_packet
-            )) {
+    if (auto* packet = std::get_if<VulkanRecordedCopySubmission>(&_packet)) {
         return &packet->submit;
     }
     return nullptr;
@@ -1229,20 +1224,11 @@ VulkanSubmissionExecutor::TranslateSourceForRuntime(
     VulkanBatchCompletionTicket _completion_ticket
 ) noexcept {
     if (_queue == EQueueType::Copy) {
-        auto& copy_queue =
-            static_cast<VulkanCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-        auto recorded =
-            copy_queue.TranslateForRuntime(std::move(_submit));
-        if (recorded) {
-            recorded->batch_completion =
-                std::move(_completion_ticket);
-            return RecordedSourcePacket{
-                std::in_place_type<
-                    VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>,
-                std::move(*recorded)
-            };
-        }
-        return {};
+        auto&                        copy_queue = static_cast<VulkanCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+        VulkanRecordedCopySubmission recorded   = copy_queue.ReserveSubmission(std::move(_submit));
+        recorded.batch_completion               = std::move(_completion_ticket);
+        copy_queue.device.GetCommandRecorder(EQueueType::Copy).Record(recorded);
+        return RecordedSourcePacket{std::in_place_type<VulkanRecordedCopySubmission>, std::move(recorded)};
     }
 
     if (_queue == EQueueType::Graphics ||
@@ -1250,12 +1236,10 @@ VulkanSubmissionExecutor::TranslateSourceForRuntime(
         auto& queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(_queue)
         );
-        auto recorded =
-            queue.TranslateForRuntime(std::move(_submit));
-        recorded.batch_completion = std::move(_completion_ticket);
-        return RecordedSourcePacket{
-            std::in_place_type<VulkanCommandQueue::PendingSubmission>, std::move(recorded)
-        };
+        VulkanRecordedSubmission recorded = queue.ReserveSubmission(std::move(_submit));
+        recorded.batch_completion         = std::move(_completion_ticket);
+        queue.vk_device.GetCommandRecorder(_queue).Record(recorded);
+        return RecordedSourcePacket{std::in_place_type<VulkanRecordedSubmission>, std::move(recorded)};
     }
 
     RejectSourceForRuntime(
@@ -1275,11 +1259,7 @@ VulkanSubmissionExecutor::SubmitRecordedSourceForRuntime(
     const VulkanRuntimePreCompletionHook* _pre_completion
 ) noexcept {
     if (_queue == EQueueType::Copy) {
-        if (auto* packet =
-                std::get_if<
-                    VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>(
-                    &_packet
-                )) {
+        if (auto* packet = std::get_if<VulkanRecordedCopySubmission>(&_packet)) {
             auto& copy_queue =
                 static_cast<VulkanCopyQueue&>(
                     RenderDevice::Get().GetCopyQueue()
@@ -1292,11 +1272,7 @@ VulkanSubmissionExecutor::SubmitRecordedSourceForRuntime(
         _queue == EQueueType::Graphics ||
         _queue == EQueueType::Compute
     ) {
-        if (auto* packet =
-                std::get_if<
-                    VulkanCommandQueue::PendingSubmission>(
-                    &_packet
-                )) {
+        if (auto* packet = std::get_if<VulkanRecordedSubmission>(&_packet)) {
             auto& queue = static_cast<VulkanCommandQueue&>(
                 RenderDevice::Get().GetCommandQueue(_queue)
             );
@@ -1332,10 +1308,7 @@ void VulkanSubmissionExecutor::RejectRecordedSourceForRuntime(
     if (_result == VK_SUCCESS) {
         _result = VK_ERROR_UNKNOWN;
     }
-    if (auto* packet =
-            std::get_if<VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>(
-                &_packet
-            )) {
+    if (auto* packet = std::get_if<VulkanRecordedCopySubmission>(&_packet)) {
         assert(
             _queue == EQueueType::Copy &&
             "Copy recorded packet queue tag mismatch"
@@ -1349,10 +1322,7 @@ void VulkanSubmissionExecutor::RejectRecordedSourceForRuntime(
         );
         return;
     }
-    if (auto* packet =
-            std::get_if<VulkanCommandQueue::PendingSubmission>(
-                &_packet
-            )) {
+    if (auto* packet = std::get_if<VulkanRecordedSubmission>(&_packet)) {
         EQueueType packet_queue = packet->context.queue_type;
         if (packet_queue != EQueueType::Graphics &&
             packet_queue != EQueueType::Compute) {
@@ -2914,52 +2884,22 @@ void VulkanSubmissionExecutor::ProcessBatch(
             );
         if (entry.queue == EQueueType::Copy) {
             auto& copy_queue = static_cast<VulkanCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-            std::optional<VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>
-                recorded =
-                    copy_queue.TranslateForRuntime(std::move(entry.submit));
-            if (recorded) {
-                recorded->batch_completion =
-                    rejection_publication->CompletionTicket(source_index);
-            }
+            VulkanRecordedCopySubmission recorded   = copy_queue.ReserveSubmission(std::move(entry.submit));
+            recorded.batch_completion               = rejection_publication->CompletionTicket(source_index);
+            copy_queue.device.GetCommandRecorder(EQueueType::Copy).Record(recorded);
             used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
-            if (!recorded) {
-                _exception_state.first_unconsumed_source =
-                    source_index + 1;
-                const VkResult result = copy_queue.device.IsFaulted() ?
-                                            copy_queue.device.GetFirstFaultResult() :
-                                            VK_ERROR_UNKNOWN;
-                LOG_ERROR(
-                    "[RHIExecutor][Vulkan] batch={} Copy translation failed result={}",
-                    _batch.sequence,
-                    static_cast<int32>(result)
-                );
-                rejection_publication->PublishSuffix(
-                    source_index,
-                    static_cast<int32>(result),
-                    false,
-                    "Copy translation failure"
-                );
-                reject_remaining(
-                    source_index + 1,
-                    result,
-                    "Copy translation failure"
-                );
-                return;
-            }
 
             VulkanRuntimeSubmissionResult submit_result{};
             try {
-                submit_result = ExecuteOnSubmissionThread(
-                    [
-                        &copy_queue,
-                        packet = &*recorded,
-                        batch_sequence = _batch.sequence,
-                        source_index = static_cast<uint32>(source_index),
-                        source_metadata = materialization.sources[source_index],
-                        async_scope,
-                        serial_control,
-                        rejection_publication
-                    ]() mutable {
+                submit_result =
+                    ExecuteOnSubmissionThread([&copy_queue,
+                                               packet          = &recorded,
+                                               batch_sequence  = _batch.sequence,
+                                               source_index    = static_cast<uint32>(source_index),
+                                               source_metadata = materialization.sources[source_index],
+                                               async_scope,
+                                               serial_control,
+                                               rejection_publication]() mutable {
                         RuntimePreCompletionPublication
                             pre_completion_publication{
                                 .rejection_publication =
@@ -3012,8 +2952,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         }
 #endif
                         return result;
-                    }
-                );
+                    });
             } catch (...) {
                 ReportRequestFailure(
                     ERequestKind::Submit,
@@ -3026,9 +2965,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     false,
                     "Copy Submission handoff failed before Completion notification"
                 );
-                copy_queue.RejectRecordedForRuntime(
-                    std::move(*recorded), VK_ERROR_UNKNOWN, false
-                );
+                copy_queue.RejectRecordedForRuntime(std::move(recorded), VK_ERROR_UNKNOWN, false);
                 submit_result.outcome = {
                     EVulkanOperationStatus::Rejected,
                     VK_ERROR_UNKNOWN
@@ -3091,9 +3028,9 @@ void VulkanSubmissionExecutor::ProcessBatch(
             auto& queue = static_cast<VulkanCommandQueue&>(
                 RenderDevice::Get().GetCommandQueue(entry.queue)
             );
-            VulkanCommandQueue::PendingSubmission recorded =
-                queue.TranslateForRuntime(std::move(entry.submit));
-            recorded.batch_completion = rejection_publication->CompletionTicket(source_index);
+            VulkanRecordedSubmission recorded = queue.ReserveSubmission(std::move(entry.submit));
+            recorded.batch_completion         = rejection_publication->CompletionTicket(source_index);
+            queue.vk_device.GetCommandRecorder(entry.queue).Record(recorded);
             // Translation reserves a logical queue timeline and always
             // publishes a CPU completion marker, including rejected paths.
             used_queues[static_cast<size_t>(entry.queue)] = true;
@@ -3255,8 +3192,8 @@ void VulkanSubmissionExecutor::ProcessBatch(
         if (!bridge.wait_events.empty() || alias_completion_marker) {
             const uint32 bridge_dependency_wait_count =
                 static_cast<uint32>(bridge.wait_events.size());
-            VulkanCommandQueue::PendingSubmission recorded =
-                graphics_queue.TranslateForRuntime(std::move(bridge));
+            VulkanRecordedSubmission recorded = graphics_queue.ReserveSubmission(std::move(bridge));
+            graphics_queue.vk_device.GetCommandRecorder(EQueueType::Graphics).Record(recorded);
             used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
             VulkanRuntimeSubmissionResult bridge_result{};
             try {

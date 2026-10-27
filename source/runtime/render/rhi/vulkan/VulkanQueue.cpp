@@ -1,4 +1,5 @@
 #include "VulkanQueue.h"
+#include "VulkanCommandRecorder.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanQueueInternal.h"
@@ -22,9 +23,7 @@ void VulkanCommandQueue::Wait(WaitEvent) {
 VulkanCommandQueue::VulkanCommandQueue(VulkanDevice& _device, EQueueType _type) :
     CommandQueue(),
     vk_device(_device),
-    queue(_type, _device),
-    timestamp_pool(_device, VK_QUERY_TYPE_TIMESTAMP, s_queue_max_frame_in_flight * s_query_max_storage * 4, _type),
-    profiler_storage(timestamp_pool) {
+    queue(_type, _device) {
     timeline = MoerNew(VulkanTimeline(vk_device));
 
     try {
@@ -61,13 +60,6 @@ VulkanCommandQueue::~VulkanCommandQueue() {
     queue_cv.notify_all();
     completion_thread.join();
 
-    Array<VulkanCommandContext*> recycled_command_contexts;
-    command_contexts.PopAll(recycled_command_contexts);
-    for (auto* command_context : recycled_command_contexts) {
-        MoerDelete(command_context);
-    }
-
-    command_context_quarantine.clear();
     MoerDelete(timeline);
     vk_device.RecordQueueSyncComplete();
 }
@@ -111,12 +103,12 @@ WaitEvent VulkanCommandQueue::Execute(CmdSubmit&& _submit) {
     return {0, 0};
 }
 
-VulkanCommandQueue::PendingSubmission VulkanCommandQueue::TranslateForRuntime(CmdSubmit&& _submit) noexcept {
+VulkanRecordedSubmission VulkanCommandQueue::ReserveSubmission(CmdSubmit&& _submit) noexcept {
     assert(executor_claimed.load(std::memory_order_acquire));
     assert(GetCurrentRHIThreadRole() == ERHIThreadRole::Translate);
 
-    auto              execution_lease = runtime_execution_gate.Acquire();
-    PendingSubmission pending{
+    auto                     execution_lease = runtime_execution_gate.Acquire();
+    VulkanRecordedSubmission pending{
         std::move(_submit),
         VulkanOperationContext{
             .operation  = EVulkanFaultOperation::QueueSubmit,
@@ -131,39 +123,18 @@ VulkanCommandQueue::PendingSubmission VulkanCommandQueue::TranslateForRuntime(Cm
         pending.timeline            = last_reserved_timeline.fetch_add(1, std::memory_order_relaxed) + 1;
         pending.context.timeline    = pending.timeline;
         pending.context.work_serial = pending.timeline;
-        RecordSubmissionCommands(pending);
-    } catch (const std::exception& error) {
-        RejectRecording(pending, {EVulkanOperationStatus::Faulted, VK_ERROR_UNKNOWN}, error.what());
     } catch (...) {
-        RejectRecording(
-            pending, {EVulkanOperationStatus::Faulted, VK_ERROR_UNKNOWN}, "unexpected command recording failure"
-        );
+        pending.submission_outcome = VulkanOperationResult{EVulkanOperationStatus::Faulted, VK_ERROR_UNKNOWN};
+        vk_device.RecordRejectedSubmit();
+        LogQueueErrorNoexcept("[VulkanQueue] failed to reserve a submission timeline");
     }
     // Both ready and rejected requests retain their owners until Submission
     // publishes the batch outcome and hands the packet to Completion.
     return pending;
 }
 
-void VulkanCommandQueue::RejectRecording(
-    PendingSubmission&           _pending,
-    const VulkanOperationResult& _outcome,
-    std::string_view             _reason
-) noexcept {
-    LogQueueErrorNoexcept(
-        "[VulkanQueue] recording rejected: timeline={} reason={} VkResult={}",
-        _pending.timeline,
-        _reason,
-        static_cast<int32>(_outcome.result)
-    );
-    ResetSplitProfilingCpuFrame();
-    _pending.submission_outcome    = _outcome;
-    _pending.recoverable_rejection = _outcome.status == EVulkanOperationStatus::Rejected && !vk_device.IsFaulted() &&
-                                     _outcome.result != VK_ERROR_DEVICE_LOST;
-    vk_device.RecordRejectedSubmit();
-}
-
 VulkanRuntimeSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
-    PendingSubmission                     _recorded,
+    VulkanRecordedSubmission              _recorded,
     const VulkanRuntimePreCompletionHook* _pre_completion
 ) noexcept {
     assert(
@@ -180,7 +151,7 @@ VulkanRuntimeSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
             std::unique_lock<std::mutex> execution_lock(exec_mtx);
             const VulkanOperationResult  submit_result = SubmitRecorded(_recorded, &runtime_dependency_waits_enabled);
             if (split_profiling_frame && !submit_result.Succeeded()) {
-                ResetSplitProfilingCpuFrame();
+                vk_device.GetCommandRecorder(queue.GetType()).ResetProfiling();
             }
         } catch (const std::exception& error) {
             LogQueueErrorNoexcept(
@@ -212,20 +183,20 @@ VulkanRuntimeSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
         CommitRuntimeSubmitCompletion(_recorded, *_recorded.submission_outcome);
     }
     if (split_profiling_frame && !_recorded.submission_outcome->Succeeded()) {
-        ResetSplitProfilingCpuFrame();
+        vk_device.GetCommandRecorder(queue.GetType()).ResetProfiling();
     }
     return runtime_result;
 }
 
 void VulkanCommandQueue::RejectRecordedForRuntime(
-    PendingSubmission&& _recorded,
-    VkResult            _result,
-    bool                _recoverable
+    VulkanRecordedSubmission&& _recorded,
+    VkResult                   _result,
+    bool                       _recoverable
 ) noexcept {
     assert(
         _recorded.execution_lease.OwnsGate() && "a failed Translate -> Submission handoff must retain queue ownership"
     );
-    ResetSplitProfilingCpuFrame();
+    vk_device.GetCommandRecorder(queue.GetType()).ResetProfiling();
     if (!_recorded.submission_outcome.has_value()) {
         vk_device.RecordRejectedSubmit();
         _recorded.submission_outcome    = MakeUnsubmittedOutcome(_result, _recoverable);
@@ -304,7 +275,7 @@ void VulkanCommandQueue::RejectForRuntime(
 }
 
 VulkanOperationResult
-VulkanCommandQueue::SubmitRecorded(PendingSubmission& _pending, const std::atomic_bool* _continue_waiting) {
+VulkanCommandQueue::SubmitRecorded(VulkanRecordedSubmission& _pending, const std::atomic_bool* _continue_waiting) {
     assert(
         !_pending.submission_outcome.has_value() && !_pending.completion_enqueued &&
         "a terminal submission cannot be replayed"
@@ -373,7 +344,7 @@ VulkanCommandQueue::SubmitRecorded(PendingSubmission& _pending, const std::atomi
 }
 
 void VulkanCommandQueue::CommitRuntimeSubmitCompletion(
-    PendingSubmission&           _recorded,
+    VulkanRecordedSubmission&    _recorded,
     const VulkanOperationResult& _outcome
 ) noexcept {
     assert(!_recorded.completion_enqueued);
@@ -476,29 +447,8 @@ void VulkanCommandQueue::Sync() {
     }
 }
 
-UniquePtr<VulkanCommandContext> VulkanCommandQueue::AcquireCommandContext() {
-    // Completion publishes only successfully completed and reset command contexts
-    // into this pool. Pool membership is therefore the reuse gate; if
-    // Completion is delayed by unrelated CPU callbacks, allocate overflow
-    // storage instead of stalling the Translate owner.
-    UniquePtr<VulkanCommandContext> command_context(command_contexts.Pop());
-    if (command_context) {
-        return command_context;
-    }
-    return MakeUnique<VulkanCommandContext>(&vk_device, queue.GetType());
-}
-
-Array<RHIResource*> VulkanCommandQueue::TakeDeferredReleases() {
-    if (queue.GetType() != EQueueType::Graphics) {
-        return {};
-    }
-
-    Array<RHIResource*> deleted_resources;
-    // Recorded and submitted commands retain their resources through
-    // RHICommandLifetime until Completion finishes all callback tiers.
-    vk_device.deferred_release_queue.PopAll(deleted_resources);
-
-    return deleted_resources;
+ProfileData VulkanCommandQueue::GetProfilerEntry() {
+    return vk_device.GetCommandRecorder(queue.GetType()).GetProfilerEntry();
 }
 
 } // namespace Moer::Render

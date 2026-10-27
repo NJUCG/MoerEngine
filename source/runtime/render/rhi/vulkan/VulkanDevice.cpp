@@ -2,19 +2,20 @@
 // Created by 74535 on 2023/10/2.
 //
 
-#include "VulkanEnumTranslator.h"
-#include "VulkanBindlessArray.h"
-#include "VulkanRaytracingResource.h"
-#include "VulkanTimeline.h"
 #include "VulkanDevice.h"
 #include "PixelFormat.h"
+#include "VulkanBindlessArray.h"
 #include "VulkanCommandList.h"
+#include "VulkanCommandRecorder.h"
 #include "VulkanDebugCallback.h"
+#include "VulkanEnumTranslator.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
+#include "VulkanRaytracingResource.h"
 #include "VulkanSwapChain.h"
+#include "VulkanTimeline.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
 #endif
@@ -567,6 +568,10 @@ void VulkanDevice::CreateDevice() {
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue_handle);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue_handle);
 
+    m_graphics_command_recorder = MakeUnique<VulkanCommandRecorder>(*this, EQueueType::Graphics);
+    m_compute_command_recorder  = MakeUnique<VulkanCommandRecorder>(*this, EQueueType::Compute);
+    m_copy_command_recorder     = MakeUnique<VulkanCommandRecorder>(*this, EQueueType::Copy);
+
     m_graphics_command_queue = MakeUnique<VulkanCommandQueue>(*this, EQueueType::Graphics);
     SetResourceName(uint64(m_graphics_queue_handle), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
     m_compute_command_queue = MakeUnique<VulkanCommandQueue>(*this, EQueueType::Compute);
@@ -804,6 +809,9 @@ void VulkanDevice::Destroy() {
     m_compute_command_queue.reset();
     m_graphics_command_queue.reset();
     m_copy_queue.reset();
+    m_compute_command_recorder.reset();
+    m_graphics_command_recorder.reset();
+    m_copy_command_recorder.reset();
     shutdown_sync_completed.store(
         queue_sync_complete_count.load(std::memory_order_acquire) >= 3,
         std::memory_order_release
@@ -1521,6 +1529,19 @@ CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) {
             assert(false && "Unknown queue type.");
     }
     return *m_graphics_command_queue;
+}
+
+VulkanCommandRecorder& VulkanDevice::GetCommandRecorder(EQueueType _type) {
+    switch (_type) {
+        case EQueueType::Graphics:
+            return *m_graphics_command_recorder;
+        case EQueueType::Compute:
+            return *m_compute_command_recorder;
+        case EQueueType::Copy:
+            return *m_copy_command_recorder;
+        default:
+            throw std::invalid_argument("Unsupported Vulkan command recorder queue type");
+    }
 }
 
 RHIQueueTopology VulkanDevice::GetQueueTopology() const {

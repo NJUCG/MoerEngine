@@ -336,15 +336,24 @@ Vulkan 提交统一由 `RHIExecutor` 调度：Translate 只录制并交接拥有
 独占原生提交，Completion 在 GPU 完成后发布结果并回收。Queue 不再保存另一套 RHI 工作队列；
 直接调用 Queue 的 `Execute/Present/Wait` 会被拒绝，依赖随提交包交给 Executor。
 完成队列只接收拥有本次资源的完成包，不再逐条分派回调、Context 或 descriptor lease。
-`TranslateForRuntime` 从入口起以 `PendingSubmission` 持有请求，录制失败也返回这个拥有资源的包，
+`ReserveSubmission` 从入口起以独立的 `VulkanRecordedSubmission` / `VulkanRecordedCopySubmission`
+持有请求并预留逻辑队列序号，Executor 再调用 `VulkanCommandRecorder::Record`。录制失败也保留这个拥有资源的包，
 继续由 Submission 发布批次结果，再交给 Completion 收尾，避免局部变量析构提前触发通知。
 `submission_outcome` 为空表示尚未决定提交结果，有值表示已接受或已拒绝；它不表示 GPU 已完成。
 原生提交成功后先保存结果，再发布其他状态，后续 CPU bookkeeping 异常不能把已接受的工作误当作未提交。
 
-Queue 的实现按职责分文件，仍由原有队列与提交包拥有状态：`VulkanQueue.cpp` 保留主流程与交接，
-`VulkanCommandRecording.cpp` 准备并录制原生命令，`VulkanQueueCompletion.cpp` 确认 GPU 完成并回收，
-`VulkanQueuePresentation.cpp` 处理呈现来源契约和交换链，`VulkanQueueProfiler.cpp` 保存统计逻辑。
-`VulkanQueueInternal.*` 只共享依赖等待、结果发布等实现函数，不另设状态所有者。
+录制与提交由 Executor 显式串联：预留序号 → Recorder 录制 → Queue 提交 → Completion 收尾。
+Device 为 Graphics、Compute、Copy 各持有一个 Recorder；原来的 Context 池、隔离区和录制统计迁入 Recorder，
+没有增加第二份池或工作线程。录制中的 Context 随提交包转交，Completion 发布查询结果并执行 Context 回调后，
+才调用 Recorder 的 `RecycleContexts` 复用或隔离。Device 先排空并销毁 Queue，再销毁 Recorder。
+原来的 transferable lease 随提交包覆盖录制到提交决策，仍用于串行保护同一逻辑队列的可变录制状态。
+
+`VulkanCommandRecording.cpp` 实现命令 visitor 与 Graphics/Compute 录制，`VulkanCopyCommandRecording.cpp`
+处理 Copy 校验与录制；它们属于 Recorder，不再实现 Queue 成员。
+`VulkanSubmission.h` 定义三阶段共享的拥有资源的交接包，Recorder 头文件不依赖 Queue。
+`VulkanQueueCompletion.cpp` 确认 GPU 完成并收尾；`VulkanQueuePresentation.cpp` 保留交换链获取、呈现状态事务
+及获取图像后才能录制的私有复制操作。`VulkanCommandProfiler.*` 由 Recorder 持有，Queue 仅转发查询接口。
+`VulkanQueueInternal.*` 共享依赖等待、结果发布等实现函数，不另设状态所有者。
 
 提交顺序由 Executor 保证，共享 `VkQueue`
 的 host 锁仍负责原生队列互斥。同步边界先排空 Executor 的录制与提交，再等待 Queue 的完成

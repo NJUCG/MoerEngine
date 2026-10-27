@@ -1,9 +1,9 @@
 #pragma once
 
+#include "VulkanSubmission.h"
+#include "VulkanSubmissionRequestDispatch.h"
 #include "rhi/RHIExecutorBackend.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
-#include "VulkanQueue.h"
-#include "VulkanSubmissionRequestDispatch.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -126,10 +126,7 @@ private:
         size_t                                     reject_from{0};
     };
 
-    using RecordedSourcePacket = std::variant<
-        std::monostate,
-        VulkanCommandQueue::PendingSubmission,
-        VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>;
+    using RecordedSourcePacket = std::variant<std::monostate, VulkanRecordedSubmission, VulkanRecordedCopySubmission>;
 
     struct PipelineSourceSlot {
         EQueueType queue{EQueueType::Ignore};

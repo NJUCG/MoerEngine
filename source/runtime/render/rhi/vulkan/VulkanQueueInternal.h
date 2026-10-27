@@ -1,7 +1,8 @@
 #pragma once
 
 #include "VulkanBindlessArray.h"
-#include "VulkanQueue.h"
+#include "VulkanSubmission.h"
+#include "VulkanTimeline.h"
 #include "log/LogSystem.h"
 
 #include <utility>
@@ -82,14 +83,5 @@ QueryPublishBatch PublishUnsubmittedQueryErrors(
     VulkanCommandContextBatch* _command_contexts,
     std::string_view           _reason
 ) noexcept;
-
-[[nodiscard]] bool SupportsVulkanCompiledCommands(const CmdSubmit& submit, EQueueType queue);
-
-void RecordVulkanCopyCommands(
-    VulkanDevice&         device,
-    VulkanCommandContext& vk_command_context,
-    CmdSubmit&            submit,
-    bool                  suppress_timestamp_queries
-);
 
 } // namespace Moer::Render

@@ -1,4 +1,4 @@
-#include "VulkanQueue.h"
+#include "VulkanCommandProfiler.h"
 #include "VulkanDevice.h"
 #include "log/LogSystem.h"
 
@@ -75,9 +75,7 @@ void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
     );
 
     memset(
-        queries_used + s_max_num_profiler_queries_per_frame * cur_frame / 8,
-        0,
-        s_max_num_profiler_queries_per_frame / 8
+        queries_used + s_max_num_profiler_queries_per_frame * cur_frame / 8, 0, s_max_num_profiler_queries_per_frame / 8
     );
 }
 
@@ -88,9 +86,7 @@ int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {
     }
     if (name2sample.size() >= s_query_max_storage) {
         LOG_ERROR(
-            "GPU profiler query-name capacity ({}) exhausted; skipping timestamp scope '{}'.",
-            s_query_max_storage,
-            name
+            "GPU profiler query-name capacity ({}) exhausted; skipping timestamp scope '{}'.", s_query_max_storage, name
         );
         return -1;
     }
@@ -135,53 +131,61 @@ void ProfilerStorage::EndProfilerSession(
     assert(IsQueryUsed(idx - 1) == true && "Query not used");
 }
 
-void VulkanCommandQueue::BeginSplitProfilingCpuFrame() {
-    ResetSplitProfilingCpuFrame();
-    split_profiling_cpu_frame.active  = true;
-    split_profiling_cpu_frame.started = std::chrono::steady_clock::now();
+VulkanCommandProfiler::VulkanCommandProfiler(VulkanDevice& _device, EQueueType _queue_type) :
+    timestamp_pool(
+        _device,
+        VK_QUERY_TYPE_TIMESTAMP,
+        s_queue_max_frame_in_flight * s_query_max_storage * 4,
+        _queue_type
+    ),
+    storage(timestamp_pool) {}
+
+void VulkanCommandProfiler::BeginSplitFrame() {
+    ResetSplitFrame();
+    split_frame.active  = true;
+    split_frame.started = std::chrono::steady_clock::now();
 }
 
-void VulkanCommandQueue::EndSplitProfilingCpuFrame() {
-    if (!split_profiling_cpu_frame.active) {
-        split_profiling_cpu_frame.active  = true;
-        split_profiling_cpu_frame.started = std::chrono::steady_clock::now();
+void VulkanCommandProfiler::EndSplitFrame() {
+    if (!split_frame.active) {
+        split_frame.active  = true;
+        split_frame.started = std::chrono::steady_clock::now();
     }
 
-    const double execute_ms = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - split_profiling_cpu_frame.started
-    ).count();
-    profiler_storage.RegisterCpuTimestamp("Queue Execution", execute_ms);
-    profiler_storage.AdvanceFrame();
-    ResetSplitProfilingCpuFrame();
+    const double execute_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - split_frame.started).count();
+    storage.RegisterCpuTimestamp("Queue Execution", execute_ms);
+    storage.AdvanceFrame();
+    ResetSplitFrame();
 }
 
-void VulkanCommandQueue::ResetSplitProfilingCpuFrame() {
-    split_profiling_cpu_frame = {};
+void VulkanCommandProfiler::ResetSplitFrame() noexcept {
+    split_frame = {};
 }
 
-void VulkanCommandQueue::FinishRecordingProfile(const CmdSubmit& _submit, double _elapsed_ms) noexcept {
+void VulkanCommandProfiler::FinishRecording(const CmdSubmit& _submit, double _elapsed_ms) noexcept {
     if (_submit.cmds.empty()) {
         return;
     }
     try {
         if (_submit.ProfilingPhase() == ERHIProfilingPhase::Complete) {
-            profiler_storage.RegisterCpuTimestamp("Queue Execution", _elapsed_ms);
-            profiler_storage.AdvanceFrame();
+            storage.RegisterCpuTimestamp("Queue Execution", _elapsed_ms);
+            storage.AdvanceFrame();
         } else if (_submit.EndsProfilingFrame()) {
-            EndSplitProfilingCpuFrame();
+            EndSplitFrame();
         }
     } catch (...) {
         // Optional CPU statistics cannot invalidate an already recorded packet.
-        ResetSplitProfilingCpuFrame();
+        ResetSplitFrame();
         try {
-            LOG_WARNING("[VulkanQueue] failed to record CPU profiling statistics");
+            LOG_WARNING("[VulkanCommandProfiler] failed to record CPU profiling statistics");
         } catch (...) {
         }
     }
 }
 
-ProfileData VulkanCommandQueue::GetProfilerEntry() {
-    std::unique_lock<std::mutex> lock(profiler_mutex);
-    return cached_profiler_entry;
+ProfileData VulkanCommandProfiler::GetProfilerEntry() {
+    std::unique_lock<std::mutex> lock(mutex);
+    return cached_entry;
 }
 } // namespace Moer::Render

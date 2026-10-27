@@ -1,8 +1,10 @@
 #include "VulkanBarrier.h"
+#include "VulkanCommandRecorder.h"
 #include "VulkanCustomCommand.h"
 #include "VulkanDevice.h"
 #include "VulkanEnumTranslator.h"
 #include "VulkanMacroUtils.h"
+#include "VulkanQueue.h"
 #include "VulkanQueueInternal.h"
 #include "VulkanSwapChain.h"
 #include "log/LogSystem.h"
@@ -825,10 +827,10 @@ VulkanCommandQueue::PresentForRuntime(SwapchainRef _swapchain, TextureView _sour
                 .timeline    = current_timeline,
                 .work_serial = current_timeline,
             };
-            PendingSubmission recorded{CmdSubmit{{}, {}, {}, {}}, context, current_timeline};
+            VulkanRecordedSubmission recorded{CmdSubmit{{}, {}, {}, {}}, context, current_timeline};
             recorded.submit.callbacks.emplace_back([swapchain = std::move(_swapchain),
                                                     source    = std::move(source_texture)] {});
-            recorded.deferred_releases  = TakeDeferredReleases();
+            recorded.deferred_releases  = vk_device.GetCommandRecorder(queue.GetType()).TakeDeferredReleases();
             recorded.submission_outcome = scripted.outcome;
             CommitRuntimeSubmitCompletion(recorded, scripted.outcome);
             ResolvePresentReceiptNoexcept(
@@ -893,7 +895,7 @@ VulkanRuntimeSubmissionResult VulkanCommandQueue::PresentSwapchain(
         .timeline    = _timeline,
         .work_serial = _serial,
     };
-    PendingSubmission     recorded{CmdSubmit{{}, {}, {}, {}}, context, _timeline};
+    VulkanRecordedSubmission recorded{CmdSubmit{{}, {}, {}, {}}, context, _timeline};
     auto*                 swapchain = ResourceCast(_swapchain.Get());
     VulkanOperationResult final_outcome{EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN};
     bool                  present_accepted      = false;
@@ -926,7 +928,9 @@ VulkanRuntimeSubmissionResult VulkanCommandQueue::PresentSwapchain(
                 source_contract.valid ? "producer export is not ready" : source_contract.reason
             );
         } else {
-            recorded.command_contexts.submitted.push_back(AcquireCommandContext());
+            recorded.command_contexts.submitted.push_back(
+                vk_device.GetCommandRecorder(queue.GetType()).AcquireContext()
+            );
             auto&      command_context = *recorded.command_contexts.submitted.back();
             const auto acquire         = swapchain->AcquireNextImage(
                 command_context.GetImageReadySemaphore(), kPresentAcquireTimeoutNanoseconds
@@ -1029,7 +1033,7 @@ VulkanRuntimeSubmissionResult VulkanCommandQueue::PresentSwapchain(
                         .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                     }
                 );
-                recorded.deferred_releases = TakeDeferredReleases();
+                recorded.deferred_releases = vk_device.GetCommandRecorder(queue.GetType()).TakeDeferredReleases();
                 // Keep Copy inputs alive until Present has been issued, even
                 // if GPU execution finishes immediately.
                 const VulkanOperationResult copy_result = SubmitRecorded(recorded);
@@ -1047,7 +1051,7 @@ VulkanRuntimeSubmissionResult VulkanCommandQueue::PresentSwapchain(
                     }
                 }
             } else {
-                recorded.deferred_releases = TakeDeferredReleases();
+                recorded.deferred_releases = vk_device.GetCommandRecorder(queue.GetType()).TakeDeferredReleases();
             }
         }
     } catch (const VulkanCallError& error) {

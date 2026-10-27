@@ -15,15 +15,30 @@
 | `VulkanPipeline.cpp` | Pipeline-owned layouts and binding metadata. |
 | `VulkanRaytracingResource.cpp` | BLAS/TLAS storage, stable scene instance slots and generation of instance updates. |
 | `VulkanNativeQueue.cpp` | Native queue submission and semaphore/label operations. |
-| `VulkanQueue.cpp` | Graphics queue execution and compiled command recording and backend-private staging protocols. |
+| `VulkanQueue.cpp` | Reserve logical submission values, submit native commands, reject requests and hand ownership to Completion. |
+| `VulkanCommandRecorder.*` | Device-owned recording workspace per logical queue; owns reusable/quarantined Contexts and recording profiles. |
+| `VulkanCommandRecording.cpp` | Validate and replay compiled Graphics/Compute RHI commands into Vulkan command buffers. |
+| `VulkanCopyCommandRecording.cpp` | Validate Copy queries and record Copy commands using the same Recorder workspace model. |
+| `VulkanSubmission.h` | Owning packets shared by Recorder, Submission and Completion, independent of queue wrapper types. |
+| `VulkanQueueCompletion.cpp` | Confirm GPU outcomes, publish results/callbacks and return safe Contexts to Recorder. |
+| `VulkanQueuePresentation.cpp` | Presentation-source transactions, swapchain acquisition and presentation-private command recording. |
 | `VulkanBarrier.cpp` | Validate and translate explicit ranges, stages, accesses, layouts and ownership transfers. |
 | `VulkanCopyQueue.cpp` | Copy queue handoff, submission and completion. |
-| `VulkanQueueProfiler.cpp` | Timestamp collection and CPU recording profiles. |
+| `VulkanCommandProfiler.*` | Recorder-owned timestamp collection and CPU recording profiles. |
 | `VulkanSurfaceSupport.cpp` | Swapchain surface support queries. |
 
-The queue split preserves the existing queue, recorded-submit and completion
-owners. `VulkanQueueInternal.h` only declares operations shared by the queue
-implementations; it introduces no additional runtime owner. Application dependency scheduling belongs to RDG. Vulkan rejects nonempty
+Executor explicitly sequences queue reservation, Recorder recording, queue
+submission and Completion retirement. Device owns one Recorder per logical
+queue; the previous queue-owned Context pools and profiles move there, without
+duplicating storage or adding a worker. Active Contexts remain owned by submission
+packets. Completion returns them only after GPU confirmation, query publication
+and Context callbacks; failed work follows the existing abandon/quarantine rules.
+Device drains and destroys queues before destroying Recorders.
+
+The existing transferable gate lease travels with the packet from reservation
+through the native submission decision. It serializes mutable recording state,
+not GPU execution. `VulkanQueueInternal.h` only declares shared submission helpers;
+it introduces no additional runtime owner. Application dependency scheduling belongs to RDG. Vulkan rejects nonempty
 non-Compiled submissions and inferred barriers; no backend reorderer, tracker
 or preferred-state restore remains.
 

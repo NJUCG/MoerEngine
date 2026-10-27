@@ -28,6 +28,7 @@ namespace Moer::Render {
 
 class VulkanCommandQueue;
 class VulkanCopyQueue;
+class VulkanCommandRecorder;
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
@@ -106,6 +107,8 @@ public:
     CommandQueue& GetCommandQueue(EQueueType _type) override;
 
     CopyQueue& GetCopyQueue() override;
+
+    VulkanCommandRecorder& GetCommandRecorder(EQueueType _type);
 
     RHIQueueTopology GetQueueTopology() const override;
     void WaitIdle() override;
@@ -308,6 +311,7 @@ public:
 
 private:
     friend VulkanCommandQueue;
+    friend VulkanCommandRecorder;
 #if MOER_VULKAN_TEST_SUPPORT
     friend struct VulkanFaultInjection;
 #endif
@@ -415,6 +419,10 @@ private:
     VulkanDescriptorHeapFunctions                           descriptor_heap_functions;
     std::array<VkSamplerCreateInfo, bindless_sampler_count> immutable_sampler_infos{};
     std::optional<VulkanDescriptorHeap> m_global_descriptor_heap;
+    // Recording workspaces outlive queues, whose Completion workers return contexts.
+    UniquePtr<VulkanCommandRecorder> m_graphics_command_recorder{};
+    UniquePtr<VulkanCommandRecorder> m_compute_command_recorder{};
+    UniquePtr<VulkanCommandRecorder> m_copy_command_recorder{};
     UniquePtr<VulkanCommandQueue> m_graphics_command_queue{};
     UniquePtr<VulkanCommandQueue> m_compute_command_queue{};
     UniquePtr<VulkanCopyQueue>    m_copy_queue{};

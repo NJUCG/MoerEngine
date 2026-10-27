@@ -1,5 +1,7 @@
 #include "PixelFormat.h"
 #include "VulkanBarrier.h"
+#include "VulkanCommandProfiler.h"
+#include "VulkanCommandRecorder.h"
 #include "VulkanCustomCommand.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
@@ -349,7 +351,7 @@ std::shared_ptr<const VulkanDescriptorRecordingPlan> PrepareDescriptorRecordingP
     return plan;
 }
 
-class VulkanCommandRecorder : VulkanDeviceObject {
+class VulkanCommandVisitor : VulkanDeviceObject {
     VulkanCommandList&     cmd_list;
     VulkanCommandContext&  command_context;
     const TCachedArgArray& cached_args;
@@ -374,7 +376,7 @@ class VulkanCommandRecorder : VulkanDeviceObject {
     };
 
 public:
-    VulkanCommandRecorder(
+    VulkanCommandVisitor(
         VulkanDevice&          _device,
         VulkanCommandContext&  _command_context,
         VulkanCommandList&     _cmd_list,
@@ -1343,7 +1345,7 @@ public:
                 Visit(static_cast<const VkCustomDispatchCmd&>(_cmd));
                 break;
             default:
-                assert(false && "Custom Command Not Supported for VulkanCommandRecorder");
+                assert(false && "Custom Command Not Supported for VulkanCommandVisitor");
         }
         cmd_list.EndLabel();
     }
@@ -1359,7 +1361,7 @@ public:
 // Validate before native recording or consuming command payloads. Build/update
 // commands retain their backend-private protocols; application dependencies
 // must already be compiled into the submission.
-bool SupportsVulkanCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
+bool VulkanCommandRecorder::SupportsCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
     if (!submit.cmds.empty() && submit.resource_state_ownership != ERHIResourceStateOwnership::Compiled) {
         return false;
     }
@@ -1417,7 +1419,7 @@ bool SupportsVulkanCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
 void RecordCompiledBindlessUpdate(
     VulkanDevice&                 device,
     VulkanCommandList&            native,
-    VulkanCommandRecorder&        visitor,
+    VulkanCommandVisitor&         visitor,
     const UpdateBindlessArrayCmd& command
 ) {
     auto*              table = static_cast<VulkanBindlessArray*>(command.Handle());
@@ -1474,7 +1476,7 @@ void RecordCompiledBindlessUpdate(
 
 void RecordCompiledTlasUpdate(
     VulkanCommandList&              native,
-    VulkanCommandRecorder&          visitor,
+    VulkanCommandVisitor&           visitor,
     const UpdateRaytracingSceneCmd& command
 ) {
     if (command.InstancesToUpdate().empty() && !command.ForceUpdate()) {
@@ -1702,12 +1704,12 @@ struct VulkanCommandPreparation {
 };
 
 void RecordCompiledCommands(
-    VulkanDevice&          device,
-    VulkanCommandContext&  context,
-    CmdSubmit&             submit,
-    VulkanCommandRecorder& visitor,
-    EQueueType             queue,
-    bool                   suppress_timestamp_queries = false
+    VulkanDevice&         device,
+    VulkanCommandContext& context,
+    CmdSubmit&            submit,
+    VulkanCommandVisitor& visitor,
+    EQueueType            queue,
+    bool                  suppress_timestamp_queries = false
 ) {
     VulkanCommandPreparation preparation{device, context.GetTemporaryBufferAllocator(), queue};
     for (const auto& command : submit.cmds) {
@@ -1793,14 +1795,13 @@ void RecordCompiledCommands(
     }
 }
 
-void RecordVulkanCopyCommands(
-    VulkanDevice&         device,
+void VulkanCommandRecorder::RecordCopyCommands(
     VulkanCommandContext& context,
     CmdSubmit&            submit,
     bool                  suppress_timestamp_queries
 ) {
     auto&                 native = context.GetCommandList();
-    VulkanCommandRecorder visitor(device, context, native, submit.cached_args);
+    VulkanCommandVisitor  visitor(device, context, native, submit.cached_args);
     VK_CHECK_RESULT(native.Begin());
     native.BeginLabel("Copy", {0.0f, 1.0f, 1.0f, 1.0f});
     RecordCompiledCommands(device, context, submit, visitor, EQueueType::Copy, suppress_timestamp_queries);
@@ -1849,11 +1850,6 @@ QueryRequirements ValidateRecordingRequest(VulkanDevice& device, const CmdSubmit
             "submission did not provide a compiled resource plan", VK_ERROR_FEATURE_NOT_PRESENT
         };
     }
-    if (!SupportsVulkanCompiledCommands(submit, queue)) {
-        throw VulkanCommandRecordingFailure{
-            "compiled submission contains an unsupported command or inferred barrier", VK_ERROR_FEATURE_NOT_PRESENT
-        };
-    }
     return {static_cast<uint32>(timestamps), static_cast<uint32>(occlusions)};
 }
 
@@ -1883,19 +1879,22 @@ void PrepareQueryPools(
 
 } // namespace
 
-void VulkanCommandQueue::RecordSubmissionCommands(PendingSubmission& pending) {
+void VulkanCommandRecorder::RecordCommands(VulkanRecordedSubmission& pending) {
     assert(GetCurrentRHIThreadRole() == ERHIThreadRole::Translate);
-    if (vk_device.IsFaulted()) {
-        RejectRecording(
-            pending, {EVulkanOperationStatus::Rejected, vk_device.GetFirstFaultResult()}, "device is faulted"
-        );
+    if (device.IsFaulted()) {
+        RejectRecording(pending, {EVulkanOperationStatus::Rejected, device.GetFirstFaultResult()}, "device is faulted");
         return;
     }
 
     QueryRequirements queries;
     try {
-        pending.presentation_source_program = BuildPresentationSourceStateProgram(pending.submit, queue.GetType());
-        queries                             = ValidateRecordingRequest(vk_device, pending.submit, queue.GetType());
+        pending.presentation_source_program = BuildPresentationSourceStateProgram(pending.submit, queue_type);
+        queries                             = ValidateRecordingRequest(device, pending.submit, queue_type);
+        if (!SupportsCompiledCommands(pending.submit, queue_type)) {
+            throw VulkanCommandRecordingFailure{
+                "compiled submission contains an unsupported command or inferred barrier", VK_ERROR_FEATURE_NOT_PRESENT
+            };
+        }
     } catch (const VulkanCommandRecordingFailure& failure) {
         RejectRecording(pending, {EVulkanOperationStatus::Rejected, failure.result}, failure.reason);
         return;
@@ -1908,28 +1907,25 @@ void VulkanCommandQueue::RecordSubmissionCommands(PendingSubmission& pending) {
     }
 
     std::shared_ptr<const VulkanDescriptorRecordingPlan> descriptor_plan;
-    if (queue.GetType() != EQueueType::Copy) {
-        try {
-            pending.descriptor_lease = vk_device.GetGlobalDescriptorHeap().CreateDescriptorBufferLease();
-            descriptor_plan          = PrepareDescriptorRecordingPlan(vk_device, pending.submit, pending.descriptor_lease);
-        } catch (const std::bad_alloc&) {
-            RejectRecording(
-                pending,
-                {EVulkanOperationStatus::Rejected, VK_ERROR_OUT_OF_HOST_MEMORY},
-                "descriptor reservation metadata allocation failed"
-            );
-            return;
-        }
-        if (!descriptor_plan) {
-            RejectRecording(
-                pending,
-                vk_device.IsFaulted() ?
-                    VulkanOperationResult{EVulkanOperationStatus::Faulted, vk_device.GetFirstFaultResult()} :
-                    VulkanOperationResult{EVulkanOperationStatus::Rejected, VK_ERROR_OUT_OF_POOL_MEMORY},
-                "descriptor batch does not fit available storage"
-            );
-            return;
-        }
+    try {
+        pending.descriptor_lease = device.GetGlobalDescriptorHeap().CreateDescriptorBufferLease();
+        descriptor_plan          = PrepareDescriptorRecordingPlan(device, pending.submit, pending.descriptor_lease);
+    } catch (const std::bad_alloc&) {
+        RejectRecording(
+            pending,
+            {EVulkanOperationStatus::Rejected, VK_ERROR_OUT_OF_HOST_MEMORY},
+            "descriptor reservation metadata allocation failed"
+        );
+        return;
+    }
+    if (!descriptor_plan) {
+        RejectRecording(
+            pending,
+            device.IsFaulted() ? VulkanOperationResult{EVulkanOperationStatus::Faulted, device.GetFirstFaultResult()} :
+                                 VulkanOperationResult{EVulkanOperationStatus::Rejected, VK_ERROR_OUT_OF_POOL_MEMORY},
+            "descriptor batch does not fit available storage"
+        );
+        return;
     }
 
     // Establish resource ownership before recording. The reserved vectors let
@@ -1937,28 +1933,28 @@ void VulkanCommandQueue::RecordSubmissionCommands(PendingSubmission& pending) {
     pending.command_contexts.abandoned.reserve(1);
     pending.command_contexts.submitted.reserve(1);
     pending.ordered_cmd_lists.reserve(1);
-    pending.command_contexts.abandoned.emplace_back(AcquireCommandContext());
+    pending.command_contexts.abandoned.emplace_back(AcquireContext());
     VulkanCommandContext& context = *pending.command_contexts.abandoned.back();
     try {
-        PrepareQueryPools(context, queries, queue.GetType(), pending.timeline);
+        PrepareQueryPools(context, queries, queue_type, pending.timeline);
     } catch (const VulkanCommandRecordingFailure& failure) {
         RejectRecording(pending, {EVulkanOperationStatus::Rejected, failure.result}, failure.reason);
         return;
     } catch (const std::exception& error) {
-        const bool faulted = vk_device.IsFaulted();
+        const bool faulted = device.IsFaulted();
         RejectRecording(
             pending,
             {faulted ? EVulkanOperationStatus::Faulted : EVulkanOperationStatus::Rejected,
-             faulted ? vk_device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY},
+             faulted ? device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY},
             error.what()
         );
         return;
     } catch (...) {
-        const bool faulted = vk_device.IsFaulted();
+        const bool faulted = device.IsFaulted();
         RejectRecording(
             pending,
             {faulted ? EVulkanOperationStatus::Faulted : EVulkanOperationStatus::Rejected,
-             faulted ? vk_device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY},
+             faulted ? device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY},
             "query pool preparation failed"
         );
         return;
@@ -1966,7 +1962,7 @@ void VulkanCommandQueue::RecordSubmissionCommands(PendingSubmission& pending) {
 
     const auto fail_recording = [&](std::string_view reason, VkResult result) {
         // Native recording can have CPU-side effects. Do not replay this request.
-        vk_device.TryLatchFirstFault(pending.context, result, false, false, true);
+        device.TryLatchFirstFault(pending.context, result, false, false, true);
         RejectRecording(pending, {EVulkanOperationStatus::Rejected, result}, reason);
         pending.deferred_releases = TakeDeferredReleases();
     };
@@ -1993,11 +1989,11 @@ void VulkanCommandQueue::RecordSubmissionCommands(PendingSubmission& pending) {
     }
     pending.command_contexts.submitted.emplace_back(std::move(pending.command_contexts.abandoned.back()));
     pending.command_contexts.abandoned.clear();
-    FinishRecordingProfile(pending.submit, elapsed_ms);
+    profiler->FinishRecording(pending.submit, elapsed_ms);
 }
 
-double VulkanCommandQueue::RecordPreparedCommands(
-    PendingSubmission&                                          _pending,
+double VulkanCommandRecorder::RecordPreparedCommands(
+    VulkanRecordedSubmission&                                   _pending,
     const std::shared_ptr<const VulkanDescriptorRecordingPlan>& _descriptor_plan
 ) {
     const CmdSubmit&      submit                   = _pending.submit;
@@ -2008,8 +2004,8 @@ double VulkanCommandQueue::RecordPreparedCommands(
     const bool            ends_profiling_frame     = submit.EndsProfilingFrame();
     const bool            complete_profiling_frame = submit.ProfilingPhase() == ERHIProfilingPhase::Complete;
     Timer                 timer;
-    VulkanCommandRecorder visitor(
-        vk_device, context, command_list, submit.cached_args, &profiler_storage, submit.EmitsProfilingQueries()
+    VulkanCommandVisitor  visitor(
+        device, context, command_list, submit.cached_args, &profiler->storage, submit.EmitsProfilingQueries()
     );
     if (has_cmd) {
         command_list.SetDescriptorRecordingPlan(_descriptor_plan);
@@ -2018,44 +2014,42 @@ double VulkanCommandQueue::RecordPreparedCommands(
             throw VulkanCommandRecordingFailure{"command-buffer-begin-failed", begin_result};
         }
         if (begins_profiling_frame) {
-            profiler_storage.CollectProfiling(command_list.GetHandle());
+            profiler->storage.CollectProfiling(command_list.GetHandle());
 
             {
-                std::unique_lock<std::mutex> profiler_lock(profiler_mutex);
-                cached_profiler_entry = profiler_storage.GetProfilerEntry();
+                std::unique_lock<std::mutex> profiler_lock(profiler->mutex);
+                profiler->cached_entry = profiler->storage.GetProfilerEntry();
             }
-            profiler_storage.BeginProfilerSession(command_list, "Graphics Exec");
+            profiler->storage.BeginProfilerSession(command_list, "Graphics Exec");
 
             if (complete_profiling_frame) {
-                ResetSplitProfilingCpuFrame();
+                profiler->ResetSplitFrame();
                 timer.Start();
             } else {
-                BeginSplitProfilingCpuFrame();
+                profiler->BeginSplitFrame();
             }
         }
 
-        const std::string_view queue_label = !submit.debug_label.empty()             ? std::string_view(submit.debug_label) :
-                                             queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
-                                             queue.GetType() == EQueueType::Compute  ? "Compute Exec" :
-                                                                                       "Copy Exec";
+        const std::string_view queue_label = !submit.debug_label.empty()        ? std::string_view(submit.debug_label) :
+                                             queue_type == EQueueType::Graphics ? "Graphics Exec" :
+                                             queue_type == EQueueType::Compute  ? "Compute Exec" :
+                                                                                  "Copy Exec";
         const float4           queue_label_color =
             !submit.debug_label.empty() ? submit.debug_label_color : float4{1.0f, 0.0f, 0.0f, 1.0f};
         command_list.BeginLabel(queue_label, queue_label_color);
     }
 
-    RecordCompiledCommands(vk_device, context, _pending.submit, visitor, queue.GetType());
+    RecordCompiledCommands(device, context, _pending.submit, visitor, queue_type);
     if (has_cmd) {
         if (ends_profiling_frame) {
-            profiler_storage.EndProfilerSession(command_list, "Graphics Exec");
+            profiler->storage.EndProfilerSession(command_list, "Graphics Exec");
         }
         command_list.EndLabel();
         const VkResult end_result = command_list.End();
         if (end_result != VK_SUCCESS) {
             throw VulkanCommandRecordingFailure{"command-buffer-end-failed", end_result};
         }
-        if (queue.GetType() != EQueueType::Copy) {
-            vk_device.GetGlobalDescriptorHeap().FlushDescriptorWrites(_pending.descriptor_lease);
-        }
+        device.GetGlobalDescriptorHeap().FlushDescriptorWrites(_pending.descriptor_lease);
     }
 
     if (has_cmd && complete_profiling_frame) {

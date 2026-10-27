@@ -1,8 +1,10 @@
-#include "rhi/vulkan/VulkanTimeline.h"
 #include "Core.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
+#include "renderer/raster/BloomPass.h"
+#include "renderer/raster/TonemappingPass.h"
+#include "renderer/raytracing/RaytracingExportSubmission.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rendergraph/RenderGraphPassParameters.h"
@@ -12,18 +14,17 @@
 #include "rhi/RHIGpuScope.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
 #include "rhi/RHIThreadOwnership.h"
+#include "rhi/vulkan/VulkanCommandProfiler.h"
 #include "rhi/vulkan/VulkanCustomCommand.h"
 #include "rhi/vulkan/VulkanDevice.h"
 #include "rhi/vulkan/VulkanQueue.h"
 #include "rhi/vulkan/VulkanRHIResource.h"
-#include "vulkan/VulkanSubmissionTestHooks.h"
-#include "vulkan/VulkanSubmissionProbe.h"
-#include "vulkan/VulkanFaultInjection.h"
-#include "renderer/raytracing/RaytracingExportSubmission.h"
-#include "renderer/raster/TonemappingPass.h"
-#include "renderer/raster/BloomPass.h"
+#include "rhi/vulkan/VulkanTimeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
+#include "vulkan/VulkanFaultInjection.h"
+#include "vulkan/VulkanSubmissionProbe.h"
+#include "vulkan/VulkanSubmissionTestHooks.h"
 
 #include <algorithm>
 #include <atomic>
@@ -767,7 +768,7 @@ private:
             return;
         }
 
-        // TranslateForRuntime has returned, but Submission has not yet
+        // Recorder has returned, but Submission has not yet
         // consumed that result. The terminal-packet path therefore cannot
         // have enqueued Completion yet. The regressed path enqueued the
         // current source directly before reporting Failed; while this gate is

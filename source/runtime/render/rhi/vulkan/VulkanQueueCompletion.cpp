@@ -1,5 +1,7 @@
+#include "VulkanCommandRecorder.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
+#include "VulkanQueue.h"
 #include "VulkanQueueInternal.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
@@ -215,37 +217,6 @@ VulkanCommandQueue::ResolveGpuCompletion(VulkanSubmitCompletionBatch& _batch, ui
     return {batch_gpu_success, batch_release_safe, completion_result, recoverable_rejection};
 }
 
-void VulkanCommandQueue::RecycleCommandContexts(VulkanCommandContextBatch& _contexts, bool recycle_batch) {
-    if (recycle_batch) {
-        for (auto& command_context : _contexts.submitted) {
-            recycle_batch = command_context->Reset() && recycle_batch;
-        }
-    }
-    if (recycle_batch && !vk_device.IsFaulted()) {
-        for (auto& command_context : _contexts.submitted) {
-            command_contexts.Push(command_context.release());
-        }
-    } else {
-        for (auto& command_context : _contexts.submitted) {
-            if (!command_context) {
-                continue;
-            }
-            vk_device.RecordAllocatorQuarantine();
-            vk_device.RecordSkippedCommandPoolReset();
-            command_context_quarantine.emplace_back(std::move(command_context));
-        }
-    }
-    for (auto& command_context : _contexts.abandoned) {
-        if (!vk_device.IsFaulted() && command_context->ResetAbandoned()) {
-            command_contexts.Push(command_context.release());
-        } else if (command_context) {
-            vk_device.RecordAllocatorQuarantine();
-            vk_device.RecordSkippedCommandPoolReset();
-            command_context_quarantine.emplace_back(std::move(command_context));
-        }
-    }
-}
-
 void VulkanCommandQueue::ProcessCompletion(CompletionEvent& _completion) {
     const uint64 event_timeline = _completion.timeline;
     {
@@ -353,7 +324,7 @@ void VulkanCommandQueue::ProcessCompletion(CompletionEvent& _completion) {
             batch.submit.query_tokens.clear();
         }
 
-        RecycleCommandContexts(batch.command_contexts, recycle_batch);
+        vk_device.GetCommandRecorder(queue.GetType()).RecycleContexts(batch.command_contexts, recycle_batch);
 
         if (grouped_completion.has_value()) {
             VulkanBatchCompletionTicket ticket = std::move(batch.batch_completion);
