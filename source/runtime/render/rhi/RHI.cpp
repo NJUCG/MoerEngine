@@ -12,7 +12,7 @@
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIThreadHeartbeat.h"
 #include "shader/ShaderResourceManager.h"

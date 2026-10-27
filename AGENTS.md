@@ -78,6 +78,9 @@ source/
         RHI.h, RHIResource.h     #   Core types (BufferRef, TextureRef, EBufferUsageFlags)
         RHICommon.h              #   Enums (EBufferUsageFlags, EPixelFormat, etc.)
         RHICommand.h             #   Command list / draw dispatching
+        executor/                #   Submission admission, recording handoff and backend dispatch
+          RHIExecutor.cpp/h      #     Public entry points, batch publication and lifecycle
+          testing/               #     Executor test hooks, separate from the public API
         vulkan/                  #   Vulkan backend
           VulkanDevice.cpp/h     #     Device setup, capabilities and resource entry points
           VulkanPipelineCreation.cpp # Shader reflection, native pipeline construction

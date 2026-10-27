@@ -10,7 +10,7 @@
 #include "rendergraph/RenderGraphPassParameters.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIGpuScope.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
 #include "rhi/RHIThreadOwnership.h"

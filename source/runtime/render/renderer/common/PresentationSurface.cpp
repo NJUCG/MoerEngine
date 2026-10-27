@@ -2,7 +2,7 @@
 #include "GraphResourceBoundary.h"
 
 #include "RenderThread.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 
 #include <cassert>
 #include <exception>

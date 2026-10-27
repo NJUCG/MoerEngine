@@ -2,7 +2,7 @@
 
 #include "VulkanSubmission.h"
 #include "VulkanSubmissionRequestDispatch.h"
-#include "rhi/RHIExecutorBackend.h"
+#include "rhi/executor/RHIExecutorBackend.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
 
 #include <atomic>

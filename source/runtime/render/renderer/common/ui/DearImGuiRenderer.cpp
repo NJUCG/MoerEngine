@@ -15,7 +15,7 @@
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"

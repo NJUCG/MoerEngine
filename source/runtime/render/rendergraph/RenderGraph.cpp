@@ -5,7 +5,7 @@
 #include "rendergraph/RenderGraphCompiler.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHI.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "taskgraph/TaskGraph.h"
 

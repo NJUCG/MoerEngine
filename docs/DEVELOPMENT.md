@@ -339,6 +339,18 @@ RHI 层的 `RHISubmissionRequest` 表示一份带逻辑队列选择的 `CmdSubmi
 `RHISubmissionBatch` 将一组请求、拓扑和可选 Present 一起交给后端。
 `Submit` 接管请求并排入 Executor 工作队列，`ProcessSubmissionRequests` 在该线程暂存或发布请求；
 `ProcessFlushRequest` 和 `ProcessSyncRequest` 分别处理发布与同步边界。
+Executor 模块集中在 `source/runtime/render/rhi/executor/`，调用方通过
+`rhi/executor/RHIExecutor.h` 使用公共入口。实现按责任分开：
+`RHIExecutor.cpp` 保留入口、批次发布和生命周期；
+`RHIExecutorRecording.cpp` 负责将录制结果封装为提交请求并应用元数据；
+`RHIExecutorRejection.cpp` 负责失败、取消时的结果通知和清理；
+`RHIExecutorBackend.cpp` 负责后端工厂及非 Vulkan 队列适配。
+`RHIExecutorRecordingHandoff` 负责等待录制完成并按序处理请求；
+`RHIExecutorInternal.h` 只声明实现文件间共享的辅助函数。
+测试钩子放在模块内的 `executor/testing/`，不再由公共 `RHIExecutor.h` 暴露。
+Vulkan 执行器保留在 `rhi/vulkan/`；公共线程设施和提交拓扑仍由 RHI 层共享。
+提交、Flush、Sync 和关闭共用批次发布过程；待发布批次始终保留未被后端接收的数据，
+失败通知在锁外完成。Present 的接纳和发布仍在同一发布锁范围内，防止后续操作越过它。
 Vulkan 的 `RunTranslateThread` 和 `RunSubmissionThread` 对应后端的两条工作线程。
 其内部 `WorkerRequest` 包含批次提交、同步或停止操作，`CpuTaskCompletion` 通知 CPU 工作完成；
 `VulkanSubmissionResult` 表示原生提交是否接受及可用的完成等待点，GPU 完成仍由队列 timeline 确认。

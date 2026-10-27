@@ -6,7 +6,7 @@
 #include "misc/Alignment.h"
 #include "misc/RAII.h"
 #include "rhi/RHIBindlessUpdateLifecycle.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 
 #include <algorithm>
 #include <format>

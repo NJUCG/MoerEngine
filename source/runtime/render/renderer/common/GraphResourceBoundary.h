@@ -2,7 +2,7 @@
 
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include <unordered_set>
 
 namespace Moer::Render {

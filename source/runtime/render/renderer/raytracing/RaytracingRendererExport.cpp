@@ -3,7 +3,7 @@
 
 #include "RTResource.h"
 #include "RaytracingExportSubmission.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "taskgraph/TaskGraph.h"
 
 #include <stb/stb_image_write.h>

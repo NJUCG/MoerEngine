@@ -8,7 +8,7 @@
 #include "renderer/EditorConfig.h"
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHI.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"

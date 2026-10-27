@@ -8,7 +8,7 @@
 #include "misc/ScopedLogTimer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIResource.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"

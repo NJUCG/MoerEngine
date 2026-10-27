@@ -4,7 +4,7 @@
 #include "VulkanQueueInternal.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
-#include "rhi/RHIExecutorBackend.h"
+#include "rhi/executor/RHIExecutorBackend.h"
 #include "rhi/RHIThreadHeartbeat.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"

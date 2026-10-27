@@ -3,7 +3,7 @@
 #include "RenderThread.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 
 namespace Moer::Render {
 

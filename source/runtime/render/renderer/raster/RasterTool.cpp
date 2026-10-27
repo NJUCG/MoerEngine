@@ -6,7 +6,7 @@
 #include "misc/Timer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "scene/Scene.h"
 
 #include <cassert>

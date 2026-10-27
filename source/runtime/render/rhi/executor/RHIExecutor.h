@@ -1,8 +1,8 @@
 #pragma once
 
 #include "RenderAPI.h"
-#include "rhi/RHIExecutorBackend.h"
-#include "rhi/RHIExecutorRecordingHandoff.h"
+#include "rhi/executor/RHIExecutorBackend.h"
+#include "rhi/executor/RHIExecutorRecordingHandoff.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
 
 #include <condition_variable>
@@ -58,27 +58,6 @@ struct RHIRecordingSource {
     QueryCancellationView         query_cancellation{};
 };
 
-using RHIDirectCommandListMaterializationCallbackForTesting = void (*)(void*, size_t);
-
-struct RHIDirectCommandListMaterializationOverrideForTesting {
-    void*                                                 context{nullptr};
-    RHIDirectCommandListMaterializationCallbackForTesting before_source{nullptr};
-};
-
-// Narrow deterministic seam for exercising the mixed direct-submit rollback:
-// the callback runs immediately before a non-empty CommandList is sealed. It
-// may throw to emulate CommandList::Submit allocation failure, but must not
-// re-enter RHI or remove its own override. Storage is caller-owned and
-// immutable while installed. Successful removal waits for every callback that
-// already acquired the override, so the caller may then destroy both override
-// and context safely.
-[[nodiscard]] RENDER_API bool TryInstallRHIDirectCommandListMaterializationOverrideForTesting(
-    const RHIDirectCommandListMaterializationOverrideForTesting* _override
-) noexcept;
-[[nodiscard]] RENDER_API bool RemoveRHIDirectCommandListMaterializationOverrideForTesting(
-    const RHIDirectCommandListMaterializationOverrideForTesting* _override
-) noexcept;
-
 class RENDER_API RHIExecutor {
 public:
     static RHIExecutor& Get();
@@ -121,8 +100,10 @@ public:
         RHIRecordingGateRef             _batch_completion,
         ERHIExecSubmitFlags             _flags = ERHIExecSubmitFlags::FlushGPU
     );
-    void
-    SubmitRecording(Array<RHIRecordingSource>&& _sources, ERHIExecSubmitFlags _flags = ERHIExecSubmitFlags::FlushGPU);
+    void SubmitRecording(
+        Array<RHIRecordingSource>&& _sources,
+        ERHIExecSubmitFlags         _flags = ERHIExecSubmitFlags::FlushGPU
+    );
     void Present(RHIPresentRequest&& _present, bool _flush = true);
 
     void Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU);
@@ -138,6 +119,9 @@ private:
         Stopping,
     };
 
+    struct PendingBatchPublication;
+    // Caller holds submit_mutex; publication additionally requires dispatch_mutex.
+    PendingBatchPublication             PreparePendingBatchLocked();
     std::shared_ptr<RHIBackendExecutor> GetOrCreateBackendExecutorLocked();
     RHISubmissionBatch                  TakePendingSubmissionBatchLocked();
 

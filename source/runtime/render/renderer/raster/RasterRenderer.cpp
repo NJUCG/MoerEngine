@@ -30,7 +30,7 @@
 #include "profile/RenderProfileCapture.h"
 #include "renderer/common/UiFrameGraphPass.h"
 #include "rendergraph/RenderGraph.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "scene/testcase/SceneTestCaseDispatcher.h"
 #include "scene/testcase/SceneTestCaseRunner.h"
 #include "window/WindowContext.h"

@@ -1,4 +1,5 @@
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
+#include "rhi/executor/testing/RHIExecutorTestHooksInternal.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
 

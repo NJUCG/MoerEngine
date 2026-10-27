@@ -8,7 +8,7 @@
 #include <GLFW/glfw3native.h>
 
 #include "rhi/RHI.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIImpl.h"
 #include "rhi/metal/MetalDevice.h"
 #include "config/ConfigManager.h"

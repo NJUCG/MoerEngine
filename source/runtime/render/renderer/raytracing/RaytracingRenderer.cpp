@@ -10,7 +10,7 @@
 #include "profile/RenderProfileCapture.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIResource.h"
 #include "rhi/plugin/NrdPlugin.h"
 #include "renderer/common/UiFrameGraphPass.h"
