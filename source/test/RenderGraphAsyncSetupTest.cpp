@@ -207,10 +207,11 @@ struct ChildProcessResult {
 #endif
 
 void AddNoOpPass(RenderGraph& graph, std::string_view name = "NoOp") {
-    graph.AddPass(
+    graph.AddRecordPass(
         name,
         [](RenderGraph::PassBuilder& builder) { builder.SideEffect(); },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 }
 
@@ -639,7 +640,7 @@ void TestFailureJoinAndStableRetry(TestSuite& suite) {
         [&](CommandList&) {
             record_calls.fetch_add(1, std::memory_order_relaxed);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     std::thread releaser([&] {
@@ -686,7 +687,7 @@ void TestFailureJoinAndStableRetry(TestSuite& suite) {
         "Compile retry re-executed one-shot setup work"
     );
     suite.Check(
-        !graph.ExecuteFrontendRecordingPlan({}, {}, true) &&
+        !graph.ExecuteFrontendRecordingPlan({}, true) &&
             record_calls.load(std::memory_order_relaxed) == 0,
         test_name,
         "recording ran after setup/compiler failure"
@@ -1002,7 +1003,7 @@ void TestParallelRecordingReadsOnePreparedValue(TestSuite& suite) {
                     record_count.fetch_add(1, std::memory_order_relaxed);
                     inflight.fetch_sub(1);
                 },
-                RenderGraph::PassExecutionClass::ParallelRecordEligible
+                RenderGraph::PassRecordPolicy::ParallelAllowed
             );
         };
         add_consumer("FirstConsumer", first_token);
@@ -1011,7 +1012,6 @@ void TestParallelRecordingReadsOnePreparedValue(TestSuite& suite) {
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         size_t published_sources = 0;
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             true,
             [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
@@ -1090,7 +1090,8 @@ void TestExplicitPreparedPassComposition(TestSuite& suite) {
             static_assert(std::is_const_v<
                           std::remove_reference_t<decltype(immutable_parameters)>>);
             record_value.store(immutable_parameters, std::memory_order_release);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(
@@ -1107,7 +1108,6 @@ void TestExplicitPreparedPassComposition(TestSuite& suite) {
         graph.GetCompileError()
     );
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         true,
         [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}
@@ -1148,7 +1148,7 @@ void TestSharedSetupResultFeedsRecordPasses(TestSuite& suite) {
             [prepared, &first_value](CommandList&) {
                 first_value.store(prepared.Get(), std::memory_order_release);
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         second_pass = graph.AddRecordPass(
             "SecondConsumer",
@@ -1158,7 +1158,7 @@ void TestSharedSetupResultFeedsRecordPasses(TestSuite& suite) {
             [prepared, &second_value](CommandList&) {
                 second_value.store(prepared.Get() + 1, std::memory_order_release);
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 
@@ -1176,7 +1176,6 @@ void TestSharedSetupResultFeedsRecordPasses(TestSuite& suite) {
         graph.GetCompileError()
     );
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         true,
         [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}

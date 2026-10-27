@@ -170,13 +170,13 @@ bool CompositionPass::AddPasses(
     );
     graph.SetInitialState(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.SetInitialState(
         graph_resources.hdr_color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -186,9 +186,9 @@ bool CompositionPass::AddPasses(
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
-                .Write(constants, RenderGraph::BufferState::TransferDestination);
+                       RenderGraph::GpuWorkType::Transfer
+            )
+                .Write(constants, RenderGraph::BufferAccessType::TransferDestination);
         },
         [owner, command](CommandList& cmd_list) {
             ScopedGpuMarker marker(
@@ -198,7 +198,7 @@ bool CompositionPass::AddPasses(
             );
             RecordConstantsUpload(cmd_list, *owner, command);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.AddRecordPass(
@@ -207,62 +207,62 @@ bool CompositionPass::AddPasses(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Compute
+                    RenderGraph::GpuWorkType::Compute
                 )
-                .Read(constants, RenderGraph::BufferState::ShaderResource)
+                .Read(constants, RenderGraph::BufferAccessType::ShaderRead)
                 .Read(graph_resources.frame_setup.ready)
                 .Write(
                     graph_resources.hdr_color,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .ReadWrite(
                     graph_resources.motion,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Read(
                     graph_resources.current_view_depth,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.current_diffuse_albedo,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.current_specular_roughness,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.current_normal,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.emission,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.diffuse_lighting,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.specular_lighting,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 );
             if (nrd_active) {
                 builder
                     .Read(
                         graph_resources.denoised_diffuse_lighting,
-                        RenderGraph::TextureState::Sampled
+                        RenderGraph::TextureAccessType::Sampled
                     )
                     .Read(
                         graph_resources.denoised_specular_lighting,
-                        RenderGraph::TextureState::Sampled
+                        RenderGraph::TextureAccessType::Sampled
                     )
                     .Read(graph_resources.nrd_ready);
             }
             if (graph_resources.env_map.IsValid()) {
                 builder.Read(
                     graph_resources.env_map,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 );
             }
         },
@@ -275,18 +275,18 @@ bool CompositionPass::AddPasses(
             );
             RecordComposition(cmd_list, *owner, command, resources);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
         graph_resources.hdr_color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

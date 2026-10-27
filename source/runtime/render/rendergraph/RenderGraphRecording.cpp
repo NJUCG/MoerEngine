@@ -19,24 +19,6 @@ namespace Moer::Render {
 
 namespace {
 
-[[nodiscard]] const char* RecordingClassName(
-    RenderGraph::PassExecutionClass execution
-) noexcept {
-    switch (execution) {
-        case RenderGraph::PassExecutionClass::MainThread:
-            return "main-thread";
-        case RenderGraph::PassExecutionClass::CpuPrepare:
-            return "cpu-prepare";
-        case RenderGraph::PassExecutionClass::ExternalControl:
-            return "external-control";
-        case RenderGraph::PassExecutionClass::SerialRecord:
-            return "serial-record";
-        case RenderGraph::PassExecutionClass::ParallelRecordEligible:
-            return "parallel-record";
-    }
-    return "unknown";
-}
-
 [[nodiscard]] RHIQueueBinding GraphicsQueueBinding(
     const RenderGraph::QueueBinding& binding
 ) noexcept {
@@ -107,7 +89,7 @@ RenderGraph::ExecutedPassInfo RenderGraph::MakeExecutedPassInfo(
         .name            = pass.name,
         .domain          = pass.domain,
         .side_effect     = pass.side_effect,
-        .execution_class = pass.execution_class,
+        .record_policy = pass.record_policy,
         .translate_execution_class = pass.translate_execution_class,
     };
 }
@@ -322,16 +304,7 @@ private:
     ) {
         const PassHandle pass_handle = unit.pass;
         const auto&      pass = graph.passes[pass_handle.pass_id];
-        if (unit.record_execution_class != PassExecutionClass::SerialRecord &&
-            unit.record_execution_class !=
-                PassExecutionClass::ParallelRecordEligible) {
-            return Fail(
-                "merged recording only supports record-class passes; pass '" +
-                pass.name + "' uses " +
-                    RecordingClassName(unit.record_execution_class)
-            );
-        }
-        if (!pass.record || pass.execute) {
+        if (!pass.record) {
             return Fail(
                 "merged recording pass has an invalid callback shape: " +
                 pass.name
@@ -549,8 +522,8 @@ private:
         }
 
         const bool can_dispatch_parallel =
-            group.record_execution_class ==
-                PassExecutionClass::ParallelRecordEligible &&
+            group.record_policy ==
+                PassRecordPolicy::ParallelAllowed &&
             parallel_recording_enabled && TaskGraph::IsInitialized() &&
             jobs.size() > 1;
         GraphEventArray record_task_events{};

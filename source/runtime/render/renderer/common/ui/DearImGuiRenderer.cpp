@@ -952,38 +952,40 @@ void RenderGuiDrawPacket(
     // The parent pass owns image access. This small graph owns only the UI's
     // private upload-ring buffers and leaves them at their documented read states.
     RenderGraph graph("UI.PrivateBuffers", RenderGraph::QueueTopology::FromRHI());
-    const auto  import = [&](const char* name, const BufferRef& buffer, RenderGraph::BufferState state) {
+    const auto  import = [&](const char* name, const BufferRef& buffer, RenderGraph::BufferAccessType state) {
         auto handle = graph.ImportBuffer(name, buffer, {.byte_size = buffer->GetByteSize()});
         graph.SetInitialState(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
         graph.Export(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
         return handle;
     };
     const auto vertex =
-        import("Vertices", render_buffers.vertex_buffer, RenderGraph::BufferState::VertexBuffer);
-    const auto index = import("Indices", render_buffers.index_buffer, RenderGraph::BufferState::IndexBuffer);
+        import("Vertices", render_buffers.vertex_buffer, RenderGraph::BufferAccessType::VertexBuffer);
+    const auto index = import("Indices", render_buffers.index_buffer, RenderGraph::BufferAccessType::IndexBuffer);
     const auto args =
-        import("Arguments", render_buffers.argument_buffer, RenderGraph::BufferState::ShaderResource);
+        import("Arguments", render_buffers.argument_buffer, RenderGraph::BufferAccessType::ShaderRead);
     graph.AddRecordPass(
         "UI.Upload",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Write(vertex, RenderGraph::BufferState::TransferDestination)
-                .Write(index, RenderGraph::BufferState::TransferDestination)
-                .Write(args, RenderGraph::BufferState::TransferDestination);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(vertex, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(index, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(args, RenderGraph::BufferAccessType::TransferDestination);
         },
         [&](CommandList& commands) {
             UploadGuiDrawData(commands, _draw_packet, arguments, render_buffers);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.AddRecordPass(
         "UI.Draw",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(vertex, RenderGraph::BufferState::VertexBuffer)
-                .Read(index, RenderGraph::BufferState::IndexBuffer)
-                .Read(args, RenderGraph::BufferState::ShaderResource)
+            builder.Read(vertex, RenderGraph::BufferAccessType::VertexBuffer)
+                .Read(index, RenderGraph::BufferAccessType::IndexBuffer)
+                .Read(args, RenderGraph::BufferAccessType::ShaderRead)
                 .SideEffect();
         },
-        record_draw
+        record_draw,
+        RenderGraph::PassRecordPolicy::Serial
     );
     if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(_cmd_list, false)) {
         throw std::runtime_error("UI private graph failed: " + graph.GetCompileError());

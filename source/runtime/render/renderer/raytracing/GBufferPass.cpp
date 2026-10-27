@@ -160,9 +160,9 @@ bool GBufferPass::AddPasses(
     const auto tlas = graph_resources.frame_setup.current_tlas;
 
     const auto initial_texture =
-        [&](RenderGraph::TextureHandle texture,
-            RenderGraph::TextureState  texture_state,
-            RenderGraph::AccessMode    access) {
+        [&](RenderGraph::TextureHandle     texture,
+            RenderGraph::TextureAccessType texture_state,
+            RenderGraph::AccessMode        access) {
             graph.SetInitialState(
                 texture,
                 texture_state,
@@ -172,44 +172,43 @@ bool GBufferPass::AddPasses(
         };
     initial_texture(
         graph_resources.current_view_depth,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::AccessMode::Read
     );
     initial_texture(
         graph_resources.current_diffuse_albedo,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::AccessMode::Read
     );
     initial_texture(
         graph_resources.current_specular_roughness,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::AccessMode::Read
     );
     initial_texture(
         graph_resources.current_normal,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::AccessMode::Read
     );
     initial_texture(
         graph_resources.emission,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::AccessMode::Read
     );
     initial_texture(
         graph_resources.motion,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::AccessMode::Read
     );
     initial_texture(
         graph_resources.clip_depth,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::AccessMode::Read
     );
-    initial_texture(graph_resources.normal_roughness,
-                    RenderGraph::TextureState::Sampled, RenderGraph::AccessMode::Read);
+    initial_texture(graph_resources.normal_roughness, RenderGraph::TextureAccessType::Sampled, RenderGraph::AccessMode::Read);
     graph.SetInitialState(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -218,9 +217,9 @@ bool GBufferPass::AddPasses(
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
-                .Write(constants, RenderGraph::BufferState::TransferDestination);
+                       RenderGraph::GpuWorkType::Transfer
+            )
+                .Write(constants, RenderGraph::BufferAccessType::TransferDestination);
         },
         [this, command](CommandList& cmd_list) {
             ScopedGpuMarker marker(
@@ -230,7 +229,7 @@ bool GBufferPass::AddPasses(
             );
             RecordConstantsUpload(cmd_list, command);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.AddRecordPass(
@@ -238,38 +237,38 @@ bool GBufferPass::AddPasses(
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Compute
-                   )
-                .Read(constants, RenderGraph::BufferState::ShaderResource)
-                .Read(tlas, RenderGraph::BufferState::AccelerationStructureRead)
+                       RenderGraph::GpuWorkType::Compute
+            )
+                .Read(constants, RenderGraph::BufferAccessType::ShaderRead)
+                .Read(tlas, RenderGraph::BufferAccessType::AccelerationStructureRead)
                 .Read(graph_resources.frame_setup.ready)
                 .Write(
                     graph_resources.current_view_depth,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(
                     graph_resources.current_diffuse_albedo,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(
                     graph_resources.current_specular_roughness,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(
                     graph_resources.current_normal,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(
                     graph_resources.emission,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(
                     graph_resources.motion,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(
                     graph_resources.clip_depth,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 );
         },
         [this, command, resources](CommandList& cmd_list) {
@@ -281,7 +280,7 @@ bool GBufferPass::AddPasses(
             );
             RecordTraceGBuffer(cmd_list, command, resources);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.AddRecordPass(
@@ -289,24 +288,24 @@ bool GBufferPass::AddPasses(
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                 RenderGraph::QueueRole::Graphics,
-                RenderGraph::PipelineType::Compute
+                RenderGraph::GpuWorkType::Compute
             );
             builder
                 .ReadWrite(
                     graph_resources.current_specular_roughness,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Read(
                     graph_resources.current_normal,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.current_view_depth,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Write(
                     graph_resources.normal_roughness,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 );
         },
         [this, command, resources](CommandList& cmd_list) {
@@ -317,13 +316,13 @@ bool GBufferPass::AddPasses(
             );
             RecordPostProcessGBuffer(cmd_list, command, resources);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     const auto export_texture =
-        [&](RenderGraph::TextureHandle texture,
-            RenderGraph::TextureState  texture_state,
-            RenderGraph::AccessMode    access) {
+        [&](RenderGraph::TextureHandle     texture,
+            RenderGraph::TextureAccessType texture_state,
+            RenderGraph::AccessMode        access) {
             graph.Export(
                 texture,
                 texture_state,
@@ -341,23 +340,23 @@ bool GBufferPass::AddPasses(
          }) {
         export_texture(
             texture,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::AccessMode::Read
         );
     }
     export_texture(
         graph_resources.clip_depth,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::AccessMode::Read
     );
     export_texture(
         graph_resources.normal_roughness,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

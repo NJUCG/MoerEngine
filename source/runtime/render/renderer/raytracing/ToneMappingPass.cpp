@@ -357,9 +357,8 @@ bool ToneMappingPass::AddPasses(
         [&](RenderGraph::BufferHandle buffer) {
             graph.SetInitialState(
                 buffer,
-                initialized ?
-                    RenderGraph::BufferState::ShaderResource :
-                    RenderGraph::BufferState::Undefined,
+                initialized ? RenderGraph::BufferBoundaryState{RenderGraph::BufferAccessType::ShaderRead} :
+                              RenderGraph::BufferBoundaryState{RenderGraph::BufferBoundary::Undefined},
                 initialized ?
                     RenderGraph::QueueRole::Graphics :
                     RenderGraph::QueueRole::None,
@@ -374,16 +373,15 @@ bool ToneMappingPass::AddPasses(
 
     graph.SetInitialState(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    graph.SetInitialState(graph_resources.ldr_color, RenderGraph::TextureState::Sampled,
-                          RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.SetInitialState(graph_resources.ldr_color, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
     if (!lut_is_source) {
         graph.SetInitialState(
             lut,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -395,11 +393,11 @@ bool ToneMappingPass::AddPasses(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Copy
+                    RenderGraph::GpuWorkType::Transfer
                 )
                 .Write(
                     constants,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 );
         },
         [owner, command](CommandList& cmd_list) {
@@ -410,7 +408,7 @@ bool ToneMappingPass::AddPasses(
             );
             RecordConstantsUpload(cmd_list, *owner, command);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     if (command.reset_exposure) {
@@ -420,11 +418,11 @@ bool ToneMappingPass::AddPasses(
                 builder
                     .ExecuteOn(
                         RenderGraph::QueueRole::Graphics,
-                        RenderGraph::PipelineType::Copy
+                        RenderGraph::GpuWorkType::Transfer
                     )
                     .Write(
                         exposure,
-                        RenderGraph::BufferState::TransferDestination
+                        RenderGraph::BufferAccessType::TransferDestination
                     );
             },
             [owner](CommandList& cmd_list) {
@@ -435,7 +433,7 @@ bool ToneMappingPass::AddPasses(
                 );
                 RecordResetExposure(cmd_list, *owner);
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 
@@ -445,11 +443,11 @@ bool ToneMappingPass::AddPasses(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Copy
+                    RenderGraph::GpuWorkType::Transfer
                 )
                 .Write(
                     histogram,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 );
         },
         [owner](CommandList& cmd_list) {
@@ -460,7 +458,7 @@ bool ToneMappingPass::AddPasses(
             );
             RecordResetHistogram(cmd_list, *owner);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.AddRecordPass(
@@ -469,19 +467,19 @@ bool ToneMappingPass::AddPasses(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Compute
+                    RenderGraph::GpuWorkType::Compute
                 )
                 .Read(
                     constants,
-                    RenderGraph::BufferState::ShaderResource
+                    RenderGraph::BufferAccessType::ShaderRead
                 )
                 .Read(
                     graph_resources.resolved_color,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .ReadWrite(
                     histogram,
-                    RenderGraph::BufferState::UnorderedAccess
+                    RenderGraph::BufferAccessType::Storage
                 );
         },
         [owner, command, resources](CommandList& cmd_list) {
@@ -492,7 +490,7 @@ bool ToneMappingPass::AddPasses(
             );
             RecordHistogram(cmd_list, *owner, command, resources);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.AddRecordPass(
@@ -501,19 +499,19 @@ bool ToneMappingPass::AddPasses(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Compute
+                    RenderGraph::GpuWorkType::Compute
                 )
                 .Read(
                     constants,
-                    RenderGraph::BufferState::ShaderResource
+                    RenderGraph::BufferAccessType::ShaderRead
                 )
                 .Read(
                     histogram,
-                    RenderGraph::BufferState::ShaderResource
+                    RenderGraph::BufferAccessType::ShaderRead
                 )
                 .ReadWrite(
                     exposure,
-                    RenderGraph::BufferState::UnorderedAccess
+                    RenderGraph::BufferAccessType::Storage
                 );
         },
         [owner](CommandList& cmd_list) {
@@ -524,7 +522,7 @@ bool ToneMappingPass::AddPasses(
             );
             RecordExposure(cmd_list, *owner);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.AddRecordPass(
@@ -533,28 +531,28 @@ bool ToneMappingPass::AddPasses(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Graphics
+                    RenderGraph::GpuWorkType::Graphics
                 )
                 .Read(
                     constants,
-                    RenderGraph::BufferState::ShaderResource
+                    RenderGraph::BufferAccessType::ShaderRead
                 )
                 .Read(
                     graph_resources.resolved_color,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     exposure,
-                    RenderGraph::BufferState::ShaderResource
+                    RenderGraph::BufferAccessType::ShaderRead
                 )
                 .Write(
                     graph_resources.ldr_color,
-                    RenderGraph::TextureState::RenderTarget
+                    RenderGraph::TextureAccessType::ColorAttachment
                 );
             if (!lut_is_source) {
                 builder.Read(
                     lut,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 );
             }
         },
@@ -567,43 +565,43 @@ bool ToneMappingPass::AddPasses(
             );
             RecordRender(cmd_list, *owner, resources);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         graph_resources.ldr_color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         histogram,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         exposure,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     if (!lut_is_source) {
         graph.Export(
             lut,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );

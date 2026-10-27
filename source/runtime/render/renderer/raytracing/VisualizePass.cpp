@@ -177,13 +177,13 @@ bool VisualizePass::AddPasses(
     );
     graph.SetInitialState(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.SetInitialState(
         graph_resources.debug_color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -194,11 +194,11 @@ bool VisualizePass::AddPasses(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Copy
+                    RenderGraph::GpuWorkType::Transfer
                 )
                 .Write(
                     constants,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 );
         },
         [owner, command](CommandList& cmd_list) {
@@ -209,7 +209,7 @@ bool VisualizePass::AddPasses(
             );
             RecordConstantsUpload(cmd_list, *owner, command);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.AddRecordPass(
@@ -218,55 +218,55 @@ bool VisualizePass::AddPasses(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Compute
+                    RenderGraph::GpuWorkType::Compute
                 )
                 .Read(
                     constants,
-                    RenderGraph::BufferState::ShaderResource
+                    RenderGraph::BufferAccessType::ShaderRead
                 )
                 .Read(
                     graph_resources.ldr_color,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.diffuse_lighting,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.specular_lighting,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.current_view_depth,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.clip_depth,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.emission,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.current_normal,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.current_specular_roughness,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.motion,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.normal_roughness,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Write(
                     graph_resources.debug_color,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(graph_resources.presentation_ready);
         },
@@ -279,18 +279,18 @@ bool VisualizePass::AddPasses(
             );
             RecordVisualize(cmd_list, *owner, command, resources);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
         graph_resources.debug_color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

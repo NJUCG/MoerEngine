@@ -95,12 +95,12 @@ struct ProducerParameters {
     DEFINE_RG_TEXTURE_ACCESS(
         texture,
         RenderGraph::AccessMode::Write,
-        RenderGraph::TextureState::TransferDestination
+        RenderGraph::TextureAccessType::TransferDestination
     );
     DEFINE_RG_BUFFER_ACCESS(
         buffer,
         RenderGraph::AccessMode::Write,
-        RenderGraph::BufferState::TransferDestination
+        RenderGraph::BufferAccessType::TransferDestination
     );
     DEFINE_RG_TOKEN_ACCESS(token, RenderGraph::AccessMode::Write);
 
@@ -111,7 +111,7 @@ struct NestedTextureParameters {
     DEFINE_RG_TEXTURE_ACCESS(
         texture,
         RenderGraph::AccessMode::Read,
-        RenderGraph::TextureState::Sampled
+        RenderGraph::TextureAccessType::Sampled
     );
 
     DEFINE_RG_PARAMETER_ACCESS(texture);
@@ -124,7 +124,7 @@ struct ConsumerParameters {
     DEFINE_RG_OPTIONAL_TEXTURE_ACCESS(
         absent_texture,
         RenderGraph::AccessMode::Read,
-        RenderGraph::TextureState::Sampled
+        RenderGraph::TextureAccessType::Sampled
     );
 
     DEFINE_RG_PARAMETER_ACCESS(nested, buffers, token, absent_texture);
@@ -136,11 +136,11 @@ struct PlanResult {
     std::string error{};
     std::string graph_dump{};
     std::string lowered_dump{};
-    RenderGraph::PassExecutionClass consumer_execution =
-        RenderGraph::PassExecutionClass::MainThread;
+    RenderGraph::PassRecordPolicy consumer_execution =
+        RenderGraph::PassRecordPolicy::Serial;
     Moer::Render::ERHITranslateExecutionClass consumer_translate =
         Moer::Render::ERHITranslateExecutionClass::Parallel;
-    uint32_t               consumer_workload = 0;
+
     RenderGraph::QueueRole consumer_queue = RenderGraph::QueueRole::None;
 };
 
@@ -184,14 +184,14 @@ PlanResult BuildPlan(
 
     graph.SetInitialState(
         texture,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         texture_range
     );
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         buffer_range
@@ -210,13 +210,12 @@ PlanResult BuildPlan(
             [](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Copy,
-                           RenderGraph::PipelineType::Copy
+                           RenderGraph::GpuWorkType::Transfer
                        )
                     .SideEffect();
             },
             [](CommandList&, const ProducerParameters&) {},
-            RenderGraph::PassExecutionClass::ParallelRecordEligible,
-            3
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     } else {
         graph.AddRecordPass(
@@ -224,24 +223,23 @@ PlanResult BuildPlan(
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Copy,
-                           RenderGraph::PipelineType::Copy
-                       )
+                           RenderGraph::GpuWorkType::Transfer
+                )
                     .SideEffect()
                     .Write(
                         texture,
-                        RenderGraph::TextureState::TransferDestination,
+                        RenderGraph::TextureAccessType::TransferDestination,
                         texture_range
                     )
                     .Write(
                         buffer,
-                        RenderGraph::BufferState::TransferDestination,
+                        RenderGraph::BufferAccessType::TransferDestination,
                         buffer_range
                     )
                     .Write(token);
             },
             [](CommandList&) {},
-            RenderGraph::PassExecutionClass::ParallelRecordEligible,
-            3
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 
@@ -252,14 +250,14 @@ PlanResult BuildPlan(
         parameters.buffers.emplace_back(
             Moer::Render::RGBufferAccessElement::Read(
                 buffer,
-                RenderGraph::BufferState::ShaderResource,
+                RenderGraph::BufferAccessType::ShaderRead,
                 buffer_read_range
             )
         );
         parameters.buffers.emplace_back(
             Moer::Render::RGBufferAccessElement::ReadWrite(
                 buffer,
-                RenderGraph::BufferState::UnorderedAccess,
+                RenderGraph::BufferAccessType::Storage,
                 buffer_read_write_range
             )
         );
@@ -270,14 +268,13 @@ PlanResult BuildPlan(
             [](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Compute
+                           RenderGraph::GpuWorkType::Compute
                        )
                     .SideEffect()
                     .TranslateSerialControl();
             },
             [](CommandList&, const ConsumerParameters&) {},
-            RenderGraph::PassExecutionClass::ParallelRecordEligible,
-            11
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     } else {
         graph.AddRecordPass(
@@ -285,43 +282,42 @@ PlanResult BuildPlan(
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Compute
-                       )
+                           RenderGraph::GpuWorkType::Compute
+                )
                     .SideEffect()
                     .TranslateSerialControl()
                     .Read(
                         texture,
-                        RenderGraph::TextureState::Sampled,
+                        RenderGraph::TextureAccessType::Sampled,
                         texture_range
                     )
                     .Read(
                         buffer,
-                        RenderGraph::BufferState::ShaderResource,
+                        RenderGraph::BufferAccessType::ShaderRead,
                         buffer_read_range
                     )
                     .ReadWrite(
                         buffer,
-                        RenderGraph::BufferState::UnorderedAccess,
+                        RenderGraph::BufferAccessType::Storage,
                         buffer_read_write_range
                     )
                     .Read(token);
             },
             [](CommandList&) {},
-            RenderGraph::PassExecutionClass::ParallelRecordEligible,
-            11
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 
     graph.Export(
         texture,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Storage,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Read,
         texture_range
     );
     graph.Export(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Read,
         buffer_range
@@ -337,11 +333,10 @@ PlanResult BuildPlan(
     const auto& plan  = graph.GetCompiledPlan();
     if (plan.frontend_record_units.size() == 2) {
         result.consumer_execution =
-            plan.frontend_record_units[1].record_execution_class;
+            plan.frontend_record_units[1].record_policy;
         result.consumer_translate =
             plan.frontend_record_units[1].native_translate_class;
-        result.consumer_workload =
-            plan.frontend_record_units[1].estimated_record_work;
+
         result.consumer_queue =
             plan.frontend_record_units[1].target_queue.role;
     }
@@ -379,10 +374,9 @@ void TestParameterizedAccessMatchesManualPlan(TestSuite& suite) {
     );
     suite.Check(
         dsl.consumer_execution ==
-                RenderGraph::PassExecutionClass::ParallelRecordEligible &&
+                RenderGraph::PassRecordPolicy::ParallelAllowed &&
             dsl.consumer_translate ==
                 Moer::Render::ERHITranslateExecutionClass::SerialControl &&
-            dsl.consumer_workload == 11 &&
             dsl.consumer_queue == RenderGraph::QueueRole::Compute,
         test_name,
         "parameter expansion must preserve explicit recording and queue policy"
@@ -393,7 +387,7 @@ struct RequiredTextureParameters {
     DEFINE_RG_TEXTURE_ACCESS(
         texture,
         RenderGraph::AccessMode::Read,
-        RenderGraph::TextureState::Sampled
+        RenderGraph::TextureAccessType::Sampled
     );
     DEFINE_RG_PARAMETER_ACCESS(texture);
 };
@@ -402,7 +396,7 @@ struct OptionalTextureParameters {
     DEFINE_RG_OPTIONAL_TEXTURE_ACCESS(
         texture,
         RenderGraph::AccessMode::Read,
-        RenderGraph::TextureState::Sampled
+        RenderGraph::TextureAccessType::Sampled
     );
     DEFINE_RG_PARAMETER_ACCESS(texture);
 };
@@ -416,7 +410,8 @@ void TestRequiredAndOptionalHandleContracts(TestSuite& suite) {
         "Required",
         RequiredTextureParameters{},
         [](RenderGraph::PassBuilder& builder) { builder.SideEffect(); },
-        [](CommandList&, const RequiredTextureParameters&) {}
+        [](CommandList&, const RequiredTextureParameters&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !required.Compile() &&
@@ -430,7 +425,8 @@ void TestRequiredAndOptionalHandleContracts(TestSuite& suite) {
         "Absent",
         OptionalTextureParameters{},
         [](RenderGraph::PassBuilder& builder) { builder.SideEffect(); },
-        [](CommandList&, const OptionalTextureParameters&) {}
+        [](CommandList&, const OptionalTextureParameters&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         absent.Compile(),
@@ -445,7 +441,8 @@ void TestRequiredAndOptionalHandleContracts(TestSuite& suite) {
         "Engaged",
         std::move(engaged_parameters),
         [](RenderGraph::PassBuilder& builder) { builder.SideEffect(); },
-        [](CommandList&, const OptionalTextureParameters&) {}
+        [](CommandList&, const OptionalTextureParameters&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !engaged.Compile() &&
@@ -467,7 +464,8 @@ void TestNullableRecordFailsAtDeclaration(TestSuite& suite) {
         "EmptyFunction",
         OptionalTextureParameters{},
         [&](RenderGraph::PassBuilder&) { setup_called = true; },
-        NullableRecord{}
+        NullableRecord{},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !empty_function_pass.IsValid() && !setup_called &&
@@ -485,7 +483,8 @@ void TestNullableRecordFailsAtDeclaration(TestSuite& suite) {
         "NullFunction",
         OptionalTextureParameters{},
         [](RenderGraph::PassBuilder&) {},
-        null_record
+        null_record,
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !null_function_pass.IsValid() && !null_function.Compile() &&
@@ -565,15 +564,13 @@ void TestMoveOnlyParameterLifetimeAndParallelRecord(TestSuite& suite) {
                     record_count.fetch_add(1, std::memory_order_relaxed);
                 }
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible,
-            7
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         size_t published_source_count = 0;
         Moer::TaskSystem::Init();
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             true,
             [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {

@@ -131,62 +131,62 @@ bool NrdDenoisePass::AddPasses(
 
     graph.SetInitialState(
         graph_resources.denoised_diffuse_lighting,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.SetInitialState(
         graph_resources.denoised_specular_lighting,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
 
     const auto ready = graph.CreateTransientToken("RT.NRD.ready");
-    const auto pass = graph.AddRecordPass(
+    const auto pass  = graph.AddRecordPass(
         "RT.NRD",
         [=](RenderGraph::PassBuilder& builder) {
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Compute
+                    RenderGraph::GpuWorkType::Compute
                 )
                 .Read(graph_resources.frame_setup.ready)
                 .Read(
                     graph_resources.normal_roughness,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.current_view_depth,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.diffuse_lighting,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     graph_resources.specular_lighting,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .ReadWrite(
                     graph_resources.denoised_diffuse_lighting,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .ReadWrite(
                     graph_resources.denoised_specular_lighting,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(ready)
                 .SideEffect()
-                .SerialRecord()
+
                 .TranslateSerialControl();
             // REBLUR temporal stabilization writes adjusted motion vectors.
             // Its private transitions remain inside NRD, but the write hazard
             // must be visible to the graph and to subsequent motion readers.
             if (Ext::IsReblurDenoiser(command.frame->GetDenoiser())) {
-                builder.ReadWrite(graph_resources.motion, RenderGraph::TextureState::UnorderedAccess);
+                builder.ReadWrite(graph_resources.motion, RenderGraph::TextureAccessType::Storage);
             } else {
-                builder.Read(graph_resources.motion, RenderGraph::TextureState::Sampled);
+                builder.Read(graph_resources.motion, RenderGraph::TextureAccessType::Sampled);
             }
         },
         [command](CommandList& cmd_list) {
@@ -198,7 +198,7 @@ bool NrdDenoisePass::AddPasses(
             );
             Process(cmd_list, command);
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     if (!pass.IsValid()) {
         return false;
@@ -208,13 +208,13 @@ bool NrdDenoisePass::AddPasses(
     graph_resources.nrd_pass  = pass;
     graph.Export(
         graph_resources.denoised_diffuse_lighting,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         graph_resources.denoised_specular_lighting,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

@@ -30,25 +30,26 @@ inline void RecordGraphicsBufferUpload(
     const auto  buffer = graph.ImportBuffer("Destination", owner, {.byte_size = owner->GetByteSize()});
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.AddRecordPass(
         "Upload",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Write(buffer, RenderGraph::BufferState::TransferDestination);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(buffer, RenderGraph::BufferAccessType::TransferDestination);
         },
         [=](CommandList& list) {
             list.CopyFrom(data, destination, name);
-        }
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     RecordGraphicsUploadGraph(graph, commands);
 }
@@ -75,14 +76,14 @@ inline void RecordNewGraphicsTextureUpload(
     };
     graph.SetInitialState(
         texture,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         range
     );
     graph.Export(
         texture,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read,
         range
@@ -90,12 +91,13 @@ inline void RecordNewGraphicsTextureUpload(
     graph.AddRecordPass(
         "Upload",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Write(texture, RenderGraph::TextureState::TransferDestination, range);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(texture, RenderGraph::TextureAccessType::TransferDestination, range);
         },
         [=](CommandList& list) {
             list.CopyFrom(data, destination, name);
-        }
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     RecordGraphicsUploadGraph(graph, commands);
 }

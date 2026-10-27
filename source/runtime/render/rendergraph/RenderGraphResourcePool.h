@@ -56,7 +56,7 @@ struct RENDER_API RGTransientBufferDesc {
  * completion callbacks naturally keep in-flight allocations unavailable.
  *
  * Custom pools and all resources acquired from them must be reset or destroyed
- * before RenderDevice::Dispose(). The device automatically resets only Global().
+ * before RenderDevice::Dispose(). The device unspecifiedally resets only Global().
  */
 class RENDER_API RenderGraphResourcePool {
 public:

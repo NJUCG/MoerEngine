@@ -11,7 +11,6 @@ namespace Moer::Render::Raytracing {
 
 namespace {
 
-
 template<typename RefType>
 void AppendUnique(Array<RefType>& refs, RefType ref) {
     if (!ref) {
@@ -178,7 +177,7 @@ bool RaytracingFrameSetupPass::AddPasses(
         );
         graph.SetInitialState(
             graph_resources.previous_tlas,
-            RenderGraph::BufferState::AccelerationStructureRead,
+            RenderGraph::BufferAccessType::AccelerationStructureRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -189,7 +188,7 @@ bool RaytracingFrameSetupPass::AddPasses(
     // a separate allocation-address registry.
     graph.SetInitialState(
         graph_resources.current_tlas,
-        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::BufferAccessType::AccelerationStructureRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -209,7 +208,7 @@ bool RaytracingFrameSetupPass::AddPasses(
             if (first_import) {
                 graph.SetInitialState(
                     handle,
-                    RenderGraph::BufferState::ShaderResource,
+                    RenderGraph::BufferAccessType::ShaderRead,
                     RenderGraph::QueueRole::Graphics,
                     RenderGraph::AccessMode::Read
                 );
@@ -275,7 +274,7 @@ bool RaytracingFrameSetupPass::AddPasses(
     );
 
     Array<RenderGraph::TextureHandle> unique_scene_textures;
-    Array<RenderGraph::TextureState>  unique_scene_texture_states;
+    Array<RenderGraph::TextureAccessType> unique_scene_texture_states;
     graph_resources.scene.material_textures.reserve(
         payload->scene_resources.material_textures.size()
     );
@@ -304,19 +303,20 @@ bool RaytracingFrameSetupPass::AddPasses(
         if (first_import) {
             graph.SetInitialState(
                 handle,
-                RenderGraph::TextureState::Sampled,
+                RenderGraph::TextureAccessType::Sampled,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read
             );
             unique_scene_textures.emplace_back(handle);
-            unique_scene_texture_states.emplace_back(RenderGraph::TextureState::Sampled);
+            unique_scene_texture_states.emplace_back(RenderGraph::TextureAccessType::Sampled);
         }
     }
 
+    // Capturing pending bindless updates consumes shared CPU state in order.
     graph_resources.update_bindless = graph.AddRecordPass(
         "RT.FrameSetup.UpdateBindless",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                 .Write(graph_resources.bindless)
                 .SideEffect();
         },
@@ -328,18 +328,18 @@ bool RaytracingFrameSetupPass::AddPasses(
             );
             cmd_list.UpdateBindlessArray(payload->bindless_array);
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     graph_resources.normalize_scene = graph.AddRecordPass(
         "RT.FrameSetup.NormalizeSceneBindings",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                 .DependsOn(graph_resources.update_bindless)
                 .Read(graph_resources.bindless)
                 .SideEffect();
             for (const auto buffer : unique_scene_buffers) {
-                builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+                builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
             }
             for (size_t index = 0;
                  index < unique_scene_textures.size();
@@ -351,14 +351,14 @@ bool RaytracingFrameSetupPass::AddPasses(
             }
         },
         [](CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(graph_resources.bindless);
     for (const auto buffer : unique_scene_buffers) {
         graph.Export(
             buffer,
-            RenderGraph::BufferState::ShaderResource,
+            RenderGraph::BufferAccessType::ShaderRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -387,7 +387,7 @@ bool RaytracingFrameSetupPass::AddPasses(
             );
             graph.SetInitialState(
                 geometry,
-                RenderGraph::BufferState::AccelerationStructureRead,
+                RenderGraph::BufferAccessType::AccelerationStructureRead,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read
             );
@@ -400,19 +400,19 @@ bool RaytracingFrameSetupPass::AddPasses(
                 auto& setup_builder =
                     builder.ExecuteOn(
                                RenderGraph::QueueRole::Graphics,
-                               RenderGraph::PipelineType::Compute
+                               RenderGraph::GpuWorkType::Compute
                            )
                     .DependsOn(graph_resources.normalize_scene)
                     .Read(graph_resources.bindless);
                 setup_builder
                     .Write(
                         graph_resources.current_tlas,
-                        RenderGraph::BufferState::AccelerationStructureWrite
+                        RenderGraph::BufferAccessType::AccelerationStructureWrite
                     );
                 for (const auto geometry : geometry_buffers) {
                     builder.Read(
                         geometry,
-                        RenderGraph::BufferState::AccelerationStructureBuildInput
+                        RenderGraph::BufferAccessType::AccelerationStructureBuildInput
                     );
                 }
             },
@@ -434,7 +434,7 @@ bool RaytracingFrameSetupPass::AddPasses(
                 );
                 cmd_list.PopScopeWithTimeScope();
             },
-            RenderGraph::PassExecutionClass::SerialRecord
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 
@@ -444,13 +444,13 @@ bool RaytracingFrameSetupPass::AddPasses(
             auto& finalize_builder =
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Compute
-                       )
+                           RenderGraph::GpuWorkType::Compute
+                )
                     .DependsOn(graph_resources.normalize_scene)
                     .Read(graph_resources.bindless)
                     .Read(
                         graph_resources.current_tlas,
-                        RenderGraph::BufferState::AccelerationStructureRead
+                        RenderGraph::BufferAccessType::AccelerationStructureRead
                     )
                     .Write(graph_resources.ready)
                     .SideEffect();
@@ -461,7 +461,7 @@ bool RaytracingFrameSetupPass::AddPasses(
                 graph_resources.current_tlas) {
                 finalize_builder.Read(
                     graph_resources.previous_tlas,
-                    RenderGraph::BufferState::AccelerationStructureRead
+                    RenderGraph::BufferAccessType::AccelerationStructureRead
                 );
             }
         },
@@ -470,12 +470,12 @@ bool RaytracingFrameSetupPass::AddPasses(
             // transaction gate, including no-build frames.
             (void)payload;
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
         graph_resources.current_tlas,
-        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::BufferAccessType::AccelerationStructureRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -483,7 +483,7 @@ bool RaytracingFrameSetupPass::AddPasses(
         graph_resources.current_tlas) {
         graph.Export(
             graph_resources.previous_tlas,
-            RenderGraph::BufferState::AccelerationStructureRead,
+            RenderGraph::BufferAccessType::AccelerationStructureRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -492,7 +492,7 @@ bool RaytracingFrameSetupPass::AddPasses(
         for (const auto geometry : geometry_buffers) {
             graph.Export(
                 geometry,
-                RenderGraph::BufferState::AccelerationStructureRead,
+                RenderGraph::BufferAccessType::AccelerationStructureRead,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read
             );

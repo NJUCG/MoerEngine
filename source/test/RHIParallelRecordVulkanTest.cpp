@@ -183,9 +183,9 @@ public:
 };
 
 struct CompiledBindlessParameters {
-    RGBufferAccess<RenderGraph::AccessMode::Read, RenderGraph::BufferState::ShaderResource>   input;
-    RGTextureAccess<RenderGraph::AccessMode::Read, RenderGraph::TextureState::Sampled>        texture;
-    RGBufferAccess<RenderGraph::AccessMode::Write, RenderGraph::BufferState::UnorderedAccess> output;
+    RGBufferAccess<RenderGraph::AccessMode::Read, RenderGraph::BufferAccessType::ShaderRead>  input;
+    RGTextureAccess<RenderGraph::AccessMode::Read, RenderGraph::TextureAccessType::Sampled>   texture;
+    RGBufferAccess<RenderGraph::AccessMode::Write, RenderGraph::BufferAccessType::Storage>    output;
     uint                                                                                      index = 0;
     RGOptionalAccess<RGTokenAccess<RenderGraph::AccessMode::Read>> publication;
 
@@ -1908,84 +1908,83 @@ void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel, bool 
         graph.AddRecordPass(
             "PublishBindless",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                     .Write(publication).TranslateSerialControl();
             },
             [=](CommandList& commands) { commands.UpdateBindlessArray(table); },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
     for (auto handle : {input_handle, output_handle}) {
         graph.SetInitialState(
             handle,
-            RenderGraph::BufferState::Undefined,
+            RenderGraph::BufferBoundary::Undefined,
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
     }
     graph.SetInitialState(
         texture_handle,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
     graph.AddRecordPass(
         "ProduceTargets",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Write(input_handle, RenderGraph::BufferState::TransferDestination)
-                .Write(texture_handle, RenderGraph::TextureState::TransferDestination);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(input_handle, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(texture_handle, RenderGraph::TextureAccessType::TransferDestination);
         },
         [=](CommandList& commands) {
             commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{41}), input->GetView());
             commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{0xffffffffu}), texture->GetView());
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ReadKnownBindlessTargets",
         parameters,
         [](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute);
         },
         [=, &pipeline](CommandList& commands, const CompiledBindlessParameters& parameters) {
             commands.Compute(pipeline, output, table, parameters.index, 2.0f).Dispatch(uint3(1, 1, 1));
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     ReadbackFuture readback;
     graph.AddRecordPass(
         "Readback",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Read(output_handle, RenderGraph::BufferState::TransferSource)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Read(output_handle, RenderGraph::BufferAccessType::TransferSource)
                 .SideEffect();
         },
         [&](CommandList& commands) {
             readback = commands.Readback(output->GetView());
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.Export(
         input_handle,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         texture_handle,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         output_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     if (!graph.Compile() || !graph.ExecuteFrontendRecordingPlan(
-                                {},
                                 {},
                                 parallel,
                                 {},
@@ -2008,10 +2007,10 @@ void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel, bool 
 void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
     using Graph = RenderGraph;
     struct Parameters {
-        RGAccessArray<RGBufferAccess<Graph::AccessMode::Read, Graph::BufferState::ShaderResource>> buffers;
-        RGAccessArray<RGTextureAccess<Graph::AccessMode::Read, Graph::TextureState::Sampled>>      textures;
-        RGBufferAccess<Graph::AccessMode::Read, Graph::BufferState::ShaderResource>                selector;
-        RGBufferAccess<Graph::AccessMode::Write, Graph::BufferState::UnorderedAccess>              output;
+        RGAccessArray<RGBufferAccess<Graph::AccessMode::Read, Graph::BufferAccessType::ShaderRead>> buffers;
+        RGAccessArray<RGTextureAccess<Graph::AccessMode::Read, Graph::TextureAccessType::Sampled>>  textures;
+        RGBufferAccess<Graph::AccessMode::Read, Graph::BufferAccessType::ShaderRead>                selector;
+        RGBufferAccess<Graph::AccessMode::Write, Graph::BufferAccessType::Storage>                  output;
         RGTokenAccess<Graph::AccessMode::Read> publication;
 
         void DeclareRGAccess(RGParameterAccessCollector& accesses) const {
@@ -2063,7 +2062,8 @@ void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
         auto initial_buffer = [&](Graph::BufferHandle handle, bool existing) {
             graph.SetInitialState(
                 handle,
-                existing ? Graph::BufferState::ShaderResource : Graph::BufferState::Undefined,
+                existing ? Graph::BufferBoundaryState{Graph::BufferAccessType::ShaderRead} :
+                           Graph::BufferBoundaryState{Graph::BufferBoundary::Undefined},
                 existing ? Graph::QueueRole::Graphics : Graph::QueueRole::None,
                 existing ? Graph::AccessMode::Read : Graph::AccessMode::None
             );
@@ -2079,7 +2079,8 @@ void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
             initial_buffer(buffer, existing);
             graph.SetInitialState(
                 texture,
-                existing ? Graph::TextureState::Sampled : Graph::TextureState::Undefined,
+                existing ? Graph::TextureBoundaryState{Graph::TextureAccessType::Sampled} :
+                           Graph::TextureBoundaryState{Graph::TextureBoundary::Undefined},
                 existing ? Graph::QueueRole::Graphics : Graph::QueueRole::None,
                 existing ? Graph::AccessMode::Read : Graph::AccessMode::None
             );
@@ -2087,23 +2088,23 @@ void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
             params.textures.emplace_back(texture);
             graph.Export(
                 buffer,
-                Graph::BufferState::ShaderResource,
+                Graph::BufferAccessType::ShaderRead,
                 Graph::QueueRole::Graphics,
                 Graph::AccessMode::Read
             );
             graph.Export(
-                texture, Graph::TextureState::Sampled, Graph::QueueRole::Graphics, Graph::AccessMode::Read
+                texture, Graph::TextureAccessType::Sampled, Graph::QueueRole::Graphics, Graph::AccessMode::Read
             );
         }
         graph.AddRecordPass(
             "ProduceCandidates",
             [=](Graph::PassBuilder& builder) {
-                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Copy)
-                    .Write(params.selector.resource, Graph::BufferState::TransferDestination);
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Transfer)
+                    .Write(params.selector.resource, Graph::BufferAccessType::TransferDestination);
                 for (const auto& access : params.buffers)
-                    builder.Write(access.resource, Graph::BufferState::TransferDestination);
+                    builder.Write(access.resource, Graph::BufferAccessType::TransferDestination);
                 for (const auto& access : params.textures)
-                    builder.Write(access.resource, Graph::TextureState::TransferDestination);
+                    builder.Write(access.resource, Graph::TextureAccessType::TransferDestination);
             },
             [=](CommandList& commands) {
                 commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{indices.back()}), selector->GetView());
@@ -2114,58 +2115,57 @@ void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
                     commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{0xffffffffu}), textures[i]->GetView());
                 }
             },
-            Graph::PassExecutionClass::ParallelRecordEligible
+            Graph::PassRecordPolicy::ParallelAllowed
         );
         graph.AddRecordPass(
             "PublishCandidates",
             [=](Graph::PassBuilder& builder) {
-                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Compute)
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Compute)
                     .Write(params.publication.resource)
                     .TranslateSerialControl();
             },
             [=](CommandList& commands) {
                 commands.UpdateBindlessArray(table);
             },
-            Graph::PassExecutionClass::ParallelRecordEligible
+            Graph::PassRecordPolicy::ParallelAllowed
         );
         graph.AddRecordPass(
             "ReadGpuSelectedCandidate",
             params,
             [](Graph::PassBuilder& builder) {
-                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Compute);
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Compute);
             },
             [=, &pipeline](CommandList& commands, const Parameters&) {
                 commands.Compute(pipeline, output, table, selector_index, 2.0f).Dispatch(uint3(1, 1, 1));
             },
-            Graph::PassExecutionClass::ParallelRecordEligible
+            Graph::PassRecordPolicy::ParallelAllowed
         );
         graph.AddRecordPass(
             "Readback",
             [=](Graph::PassBuilder& builder) {
-                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Copy)
-                    .Read(params.output.resource, Graph::BufferState::TransferSource)
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Transfer)
+                    .Read(params.output.resource, Graph::BufferAccessType::TransferSource)
                     .SideEffect();
             },
             [&, output, generation](CommandList& commands) {
                 readbacks[generation] = commands.Readback(output->GetView());
             },
-            Graph::PassExecutionClass::ParallelRecordEligible
+            Graph::PassRecordPolicy::ParallelAllowed
         );
         graph.Export(
             params.selector.resource,
-            Graph::BufferState::ShaderResource,
+            Graph::BufferAccessType::ShaderRead,
             Graph::QueueRole::Graphics,
             Graph::AccessMode::Read
         );
         graph.Export(
             params.output.resource,
-            Graph::BufferState::TransferSource,
+            Graph::BufferAccessType::TransferSource,
             Graph::QueueRole::Graphics,
             Graph::AccessMode::Read
         );
         if (!graph.Compile() ||
             !graph.ExecuteFrontendRecordingPlan(
-                {},
                 {},
                 parallel,
                 {},
@@ -2251,19 +2251,19 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
             };
             for (auto resource : {resources.input, resources.downsample_chain, resources.upsample_chain}) {
                 graph.SetInitialState(
-                    resource, Graph::TextureState::Undefined, Graph::QueueRole::None, Graph::AccessMode::None
+                    resource, Graph::TextureBoundary::Undefined, Graph::QueueRole::None, Graph::AccessMode::None
                 );
             }
             graph.AddRecordPass(
                 "Upload",
                 [=](Graph::PassBuilder& builder) {
-                    builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Copy)
-                        .Write(resources.input, Graph::TextureState::TransferDestination);
+                    builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Transfer)
+                        .Write(resources.input, Graph::TextureAccessType::TransferDestination);
                 },
                 [=](CommandList& commands) {
                     commands.CopyFrom(OwnedBytes(pixels), input->GetView());
                 },
-                Graph::PassExecutionClass::ParallelRecordEligible
+                Graph::PassRecordPolicy::ParallelAllowed
             );
             auto prepared = graph.AddSetupPass("Bloom.Prepare", params, [](const auto& value) {
                 return value;
@@ -2272,37 +2272,37 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
             graph.AddRecordPass(
                 "Readback",
                 [=](Graph::PassBuilder& builder) {
-                    builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::PipelineType::Copy)
-                        .Read(resources.input, Graph::TextureState::TransferSource)
-                        .Read(resources.downsample_chain, Graph::TextureState::TransferSource)
+                    builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Transfer)
+                        .Read(resources.input, Graph::TextureAccessType::TransferSource)
+                        .Read(resources.downsample_chain, Graph::TextureAccessType::TransferSource)
                         .SideEffect();
                     if (mip_count > 1) {
                         builder.Read(
                             resources.upsample_chain,
-                            Graph::TextureState::TransferSource,
+                            Graph::TextureAccessType::TransferSource,
                             Graph::TextureRange::Mips(0, mip_count - 1)
                         );
                     }
                 },
                 readback,
-                Graph::PassExecutionClass::ParallelRecordEligible
+                Graph::PassRecordPolicy::ParallelAllowed
             );
             graph.Export(
                 resources.input,
-                Graph::TextureState::TransferSource,
+                Graph::TextureAccessType::TransferSource,
                 Graph::QueueRole::Graphics,
                 Graph::AccessMode::Read
             );
             graph.Export(
                 resources.downsample_chain,
-                Graph::TextureState::TransferSource,
+                Graph::TextureAccessType::TransferSource,
                 Graph::QueueRole::Graphics,
                 Graph::AccessMode::Read
             );
             if (mip_count > 1) {
                 graph.Export(
                     resources.upsample_chain,
-                    Graph::TextureState::TransferSource,
+                    Graph::TextureAccessType::TransferSource,
                     Graph::QueueRole::Graphics,
                     Graph::AccessMode::Read,
                     Graph::TextureRange::Mips(0, mip_count - 1)
@@ -2319,9 +2319,12 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
                 }
                 RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
             } else if (!graph.ExecuteFrontendRecordingPlan(
-                           {}, {}, parallel, {},
+                           {},
+                           parallel,
+                           {},
                            Graph::ActiveRecordingOptions{
-                               .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled})) {
+                               .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled}
+                       )) {
                 throw std::runtime_error("compiled bloom graph failed: " + graph.GetCompileError());
             }
         }
@@ -2421,7 +2424,7 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         for (auto texture : {resources.input, resources.tonemapping_output}) {
             graph.SetInitialState(
                 texture,
-                RenderGraph::TextureState::Undefined,
+                RenderGraph::TextureBoundary::Undefined,
                 RenderGraph::QueueRole::None,
                 RenderGraph::AccessMode::None
             );
@@ -2429,7 +2432,7 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         for (auto buffer : {resources.histogram, resources.exposure}) {
             graph.SetInitialState(
                 buffer,
-                RenderGraph::BufferState::Undefined,
+                RenderGraph::BufferBoundary::Undefined,
                 RenderGraph::QueueRole::None,
                 RenderGraph::AccessMode::None
             );
@@ -2437,15 +2440,15 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         graph.AddRecordPass(
             "Upload",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                    .Write(resources.input, RenderGraph::TextureState::TransferDestination)
-                    .Write(resources.exposure, RenderGraph::BufferState::TransferDestination);
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(resources.input, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(resources.exposure, RenderGraph::BufferAccessType::TransferDestination);
             },
             [=](CommandList& commands) {
                 commands.CopyFrom(OwnedBytes(pixels), input->GetView());
                 commands.CopyFrom(OwnedBytes(std::array<float, 1>{1.0f}), params.exposure->GetView());
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         UniquePtr<BloomPass> bloom;
         if (with_bloom) {
@@ -2466,20 +2469,20 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
             for (const auto chain : {bloom_resources.downsample_chain, bloom_resources.upsample_chain}) {
                 graph.SetInitialState(
                     chain,
-                    RenderGraph::TextureState::Undefined,
+                    RenderGraph::TextureBoundary::Undefined,
                     RenderGraph::QueueRole::None,
                     RenderGraph::AccessMode::None
                 );
             }
             graph.Export(
                 bloom_resources.downsample_chain,
-                RenderGraph::TextureState::Sampled,
+                RenderGraph::TextureAccessType::Sampled,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read
             );
             graph.Export(
                 bloom_resources.upsample_chain,
-                RenderGraph::TextureState::Sampled,
+                RenderGraph::TextureAccessType::Sampled,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read,
                 RenderGraph::TextureRange::Mips(0, mip_count - 1)
@@ -2501,10 +2504,10 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         graph.AddRecordPass(
             "Readback",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                    .Read(resources.tonemapping_output, RenderGraph::TextureState::TransferSource)
-                    .Read(resources.histogram, RenderGraph::BufferState::TransferSource)
-                    .Read(resources.exposure, RenderGraph::BufferState::TransferSource)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(resources.tonemapping_output, RenderGraph::TextureAccessType::TransferSource)
+                    .Read(resources.histogram, RenderGraph::BufferAccessType::TransferSource)
+                    .Read(resources.exposure, RenderGraph::BufferAccessType::TransferSource)
                     .SideEffect();
             },
             [&](CommandList& commands) {
@@ -2512,31 +2515,30 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
                 histogram_readback = commands.Readback(params.histogram->GetView());
                 exposure_readback  = commands.Readback(params.exposure->GetView());
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         graph.Export(
             resources.input,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
         graph.Export(
             resources.tonemapping_output,
-            RenderGraph::TextureState::TransferSource,
+            RenderGraph::TextureAccessType::TransferSource,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
         for (auto buffer : {resources.histogram, resources.exposure}) {
             graph.Export(
                 buffer,
-                RenderGraph::BufferState::TransferSource,
+                RenderGraph::BufferAccessType::TransferSource,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read
             );
         }
         if (!graph.Compile() ||
             !graph.ExecuteFrontendRecordingPlan(
-                {},
                 {},
                 record_parallel,
                 {},
@@ -2606,13 +2608,13 @@ void RunActiveRdgExplicitBarrierReadback(
     );
     graph.SetInitialState(
         source_handle,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
     graph.SetInitialState(
         destination_handle,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
@@ -2622,11 +2624,11 @@ void RunActiveRdgExplicitBarrierReadback(
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     source_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -2635,19 +2637,19 @@ void RunActiveRdgExplicitBarrierReadback(
                 OwnedBytes(values), source->GetView(), "ActiveRdgUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "Copy",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
-                .Read(source_handle, RenderGraph::BufferState::TransferSource)
+                       RenderGraph::GpuWorkType::Transfer
+            )
+                .Read(source_handle, RenderGraph::BufferAccessType::TransferSource)
                 .Write(
                     destination_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -2658,18 +2660,18 @@ void RunActiveRdgExplicitBarrierReadback(
                 "ActiveRdgBufferCopy"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "Readback",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     destination_handle,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .SideEffect();
         },
@@ -2680,17 +2682,17 @@ void RunActiveRdgExplicitBarrierReadback(
                 "ActiveRdgReadback"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.Export(
         source_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         destination_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -2701,7 +2703,6 @@ void RunActiveRdgExplicitBarrierReadback(
         );
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
@@ -2744,26 +2745,26 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Copy
+                           RenderGraph::GpuWorkType::Transfer
                        )
                     .Write(graphics_done)
                     .SideEffect();
             },
             [](CommandList&) {},
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         stale_topology_graph.AddRecordPass(
             "Compute",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Copy
+                           RenderGraph::GpuWorkType::Transfer
                        )
                     .Read(graphics_done)
                     .SideEffect();
             },
             [](CommandList&) {},
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         if (!stale_topology_graph.Compile()) {
             throw std::runtime_error(
@@ -2772,7 +2773,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             );
         }
         if (stale_topology_graph.ExecuteFrontendRecordingPlan(
-                {},
                 {},
                 _parallel,
                 {},
@@ -2797,72 +2797,66 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
 
     std::atomic<uint32> caller_callbacks{0};
     RenderGraph caller_graph(
-        "ActiveRdgRejectCallerThreadMultiQueue", topology
+        "ActiveRdgSerialMultiQueue", topology
     );
     const auto caller_graphics_done =
         caller_graph.CreateTransientToken("GraphicsDone");
-    caller_graph.AddPass(
+    caller_graph.AddRecordPass(
             "Graphics",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Copy
+                           RenderGraph::GpuWorkType::Transfer
                        )
                     .Write(caller_graphics_done)
                     .SideEffect();
             },
-            [&] {
+            [&](Moer::Render::CommandList&) {
                 caller_callbacks.fetch_add(1, std::memory_order_relaxed);
-            }
-    );
-    caller_graph.AddPass(
+            },
+            RenderGraph::PassRecordPolicy::Serial
+        );
+    caller_graph.AddRecordPass(
             "Compute",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Copy
+                           RenderGraph::GpuWorkType::Transfer
                        )
                     .Read(caller_graphics_done)
                     .SideEffect();
             },
-            [&] {
+            [&](Moer::Render::CommandList&) {
                 caller_callbacks.fetch_add(1, std::memory_order_relaxed);
-            }
-    );
+            },
+            RenderGraph::PassRecordPolicy::Serial
+        );
     if (!caller_graph.Compile()) {
         throw std::runtime_error(
-            "caller-thread multi-queue rejection graph failed to compile: " +
+            "serial multi-queue graph failed to compile: " +
             caller_graph.GetCompileError()
         );
     }
-    CommandList caller_commands(EQueueType::Graphics);
-    caller_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    if (caller_graph.ExecuteFrontendRecordingPlan(
-            {},
+    if (!caller_graph.ExecuteFrontendRecordingPlan(
             {},
             _parallel,
             {},
             RenderGraph::ActiveRecordingOptions{
                 .enabled = true,
-                .main_thread_command_list = &caller_commands,
             }
         )) {
         throw std::runtime_error(
-            "active RDG accepted caller-thread multi-queue endpoints"
+            "active RDG failed serial multi-queue recording: " + caller_graph.GetCompileError()
         );
     }
-    if (caller_callbacks.load(std::memory_order_relaxed) != 0 ||
-        !caller_commands.IsEmpty() ||
-        caller_graph.GetCompileError().find(
-            "managed recording handoff"
-        ) == std::string::npos) {
+    if (caller_callbacks.load(std::memory_order_relaxed) != 2) {
         throw std::runtime_error(
-            "caller-thread multi-queue rejection was not immutable and diagnostic"
+            "serial multi-queue callbacks did not execute exactly once"
         );
     }
     LOG_INFO(
-        "[TESTCASE][PASS] name=ActiveRdgRejectCallerThreadMultiQueue "
-        "callbacks=0 command_stream=empty execution=rejected"
+        "[TESTCASE][PASS] name=ActiveRdgSerialMultiQueue "
+        "callbacks=2 command_stream=managed execution=recorded"
     );
 
     const EBufferUsageFlags usage =
@@ -2926,7 +2920,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         for (const auto handle : {graphics_handle, compute_handle}) {
             independent_graph.SetInitialState(
                 handle,
-                RenderGraph::BufferState::Undefined,
+                RenderGraph::BufferBoundary::Undefined,
                 RenderGraph::QueueRole::None,
                 RenderGraph::AccessMode::None
             );
@@ -2936,20 +2930,18 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Copy
-                       )
+                           RenderGraph::GpuWorkType::Transfer
+                )
                     .Write(
                         graphics_handle,
-                        RenderGraph::BufferState::TransferDestination
+                        RenderGraph::BufferAccessType::TransferDestination
                     )
                     .SideEffect();
             },
-            [
-                &graphics_independent,
-                &graphics_record_started,
-                &compute_record_started,
-                _parallel
-            ](CommandList& commands) {
+            [&graphics_independent,
+             &graphics_record_started,
+             &compute_record_started,
+             _parallel](CommandList& commands) {
                 if (_parallel) {
                     graphics_record_started.release();
                     if (!compute_record_started.try_acquire_for(
@@ -2966,27 +2958,25 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                     "ActiveRdgIndependentGraphicsRoot"
                 );
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         independent_graph.AddRecordPass(
             "ComputeRoot",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Copy
-                       )
+                           RenderGraph::GpuWorkType::Transfer
+                )
                     .Write(
                         compute_handle,
-                        RenderGraph::BufferState::TransferDestination
+                        RenderGraph::BufferAccessType::TransferDestination
                     )
                     .SideEffect();
             },
-            [
-                &compute_independent,
-                &graphics_record_started,
-                &compute_record_started,
-                _parallel
-            ](CommandList& commands) {
+            [&compute_independent,
+             &graphics_record_started,
+             &compute_record_started,
+             _parallel](CommandList& commands) {
                 if (_parallel) {
                     compute_record_started.release();
                     if (!graphics_record_started.try_acquire_for(
@@ -3003,17 +2993,17 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                     "ActiveRdgIndependentComputeRoot"
                 );
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         independent_graph.Export(
             graphics_handle,
-            RenderGraph::BufferState::TransferDestination,
+            RenderGraph::BufferAccessType::TransferDestination,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Write
         );
         independent_graph.Export(
             compute_handle,
-            RenderGraph::BufferState::TransferDestination,
+            RenderGraph::BufferAccessType::TransferDestination,
             RenderGraph::QueueRole::Compute,
             RenderGraph::AccessMode::Write
         );
@@ -3031,7 +3021,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             );
         }
         if (!independent_graph.ExecuteFrontendRecordingPlan(
-                {},
                 {},
                 _parallel,
                 {},
@@ -3125,7 +3114,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         for (const auto handle : {source_handle, destination_handle}) {
             physical_graph.SetInitialState(
                 handle,
-                RenderGraph::BufferState::Undefined,
+                RenderGraph::BufferBoundary::Undefined,
                 RenderGraph::QueueRole::None,
                 RenderGraph::AccessMode::None
             );
@@ -3135,11 +3124,11 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Copy
-                       )
+                           RenderGraph::GpuWorkType::Transfer
+                )
                     .Write(
                         source_handle,
-                        RenderGraph::BufferState::TransferDestination
+                        RenderGraph::BufferAccessType::TransferDestination
                     )
                     .SideEffect();
             },
@@ -3150,22 +3139,22 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                     "ActiveRdgDistinctNativeGraphicsWrite"
                 );
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         const auto compute_read_pass = physical_graph.AddRecordPass(
             "ComputeReadShared",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Copy
-                       )
+                           RenderGraph::GpuWorkType::Transfer
+                )
                     .Read(
                         source_handle,
-                        RenderGraph::BufferState::TransferSource
+                        RenderGraph::BufferAccessType::TransferSource
                     )
                     .Write(
                         destination_handle,
-                        RenderGraph::BufferState::TransferDestination
+                        RenderGraph::BufferAccessType::TransferDestination
                     )
                     .SideEffect();
             },
@@ -3176,17 +3165,17 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                     "ActiveRdgDistinctNativeComputeRead"
                 );
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         physical_graph.Export(
             source_handle,
-            RenderGraph::BufferState::TransferSource,
+            RenderGraph::BufferAccessType::TransferSource,
             RenderGraph::QueueRole::Compute,
             RenderGraph::AccessMode::Read
         );
         physical_graph.Export(
             destination_handle,
-            RenderGraph::BufferState::TransferDestination,
+            RenderGraph::BufferAccessType::TransferDestination,
             RenderGraph::QueueRole::Compute,
             RenderGraph::AccessMode::Write
         );
@@ -3311,7 +3300,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         }
         if (!physical_graph.ExecuteFrontendRecordingPlan(
                 {},
-                {},
                 _parallel,
                 {},
                 RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -3387,7 +3375,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
          }) {
         graph.SetInitialState(
             handle,
-            RenderGraph::BufferState::Undefined,
+            RenderGraph::BufferBoundary::Undefined,
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
@@ -3400,11 +3388,11 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     graphics_root_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .Write(graphics_root_done)
                 .SideEffect();
@@ -3416,18 +3404,18 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 "ActiveRdgAsyncGraphicsRoot"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ComputeIndependent",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     compute_independent_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3438,18 +3426,18 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 "ActiveRdgAsyncComputeIndependent"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "GraphicsIndependent",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     graphics_independent_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3460,19 +3448,19 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 "ActiveRdgAsyncGraphicsIndependent"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ComputeDependent",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(graphics_root_done)
                 .Write(
                     compute_dependent_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3483,30 +3471,30 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 "ActiveRdgAsyncComputeDependent"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
         graphics_root_handle,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
     graph.Export(
         compute_independent_handle,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Write
     );
     graph.Export(
         graphics_independent_handle,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
     graph.Export(
         compute_dependent_handle,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Write
     );
@@ -3531,7 +3519,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         );
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
@@ -3675,7 +3662,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
          }) {
         graph.SetInitialState(
             handle,
-            RenderGraph::BufferState::Undefined,
+            RenderGraph::BufferBoundary::Undefined,
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
@@ -3686,11 +3673,11 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     source_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3701,22 +3688,22 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
                 "ActiveRdgGraphicsCopyRoundTripUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto copy_to_intermediate = graph.AddRecordPass(
         "CopyToIntermediate",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Copy,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     source_handle,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .Write(
                     intermediate_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3727,22 +3714,22 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
                 "ActiveRdgGraphicsCopyRoundTripToCopy"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto graphics_copy_to_destination = graph.AddRecordPass(
         "GraphicsCopyToDestination",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     intermediate_handle,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .Write(
                     destination_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3753,18 +3740,18 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
                 "ActiveRdgGraphicsCopyRoundTripToGraphics"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "GraphicsReadback",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     destination_handle,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .SideEffect();
         },
@@ -3775,23 +3762,23 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
                 "ActiveRdgGraphicsCopyRoundTripReadback"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.Export(
         source_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Copy,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         intermediate_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         destination_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -3985,7 +3972,6 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
 
     if (!graph.ExecuteFrontendRecordingPlan(
             {},
-            {},
             _parallel,
             {},
             RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -4044,11 +4030,11 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     first,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -4065,18 +4051,18 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
                 "ActiveRdgAliasFirstUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "WriteAliasSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     second,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -4093,18 +4079,18 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
                 "ActiveRdgAliasSecondUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ReadAliasSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     second,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .SideEffect();
         },
@@ -4121,7 +4107,7 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
                 "ActiveRdgAliasReadback"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     if (!graph.Compile()) {
@@ -4144,7 +4130,6 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
         throw std::runtime_error("transient alias descriptor byte size mismatch");
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
@@ -4217,11 +4202,11 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     first,
-                    RenderGraph::TextureState::TransferDestination
+                    RenderGraph::TextureAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -4238,18 +4223,18 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
                 "ActiveRdgTextureAliasFirstUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "WriteTextureAliasSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     second,
-                    RenderGraph::TextureState::TransferDestination
+                    RenderGraph::TextureAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -4266,18 +4251,18 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
                 "ActiveRdgTextureAliasSecondUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ReadTextureAliasSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     second,
-                    RenderGraph::TextureState::TransferSource
+                    RenderGraph::TextureAccessType::TransferSource
                 )
                 .SideEffect();
         },
@@ -4294,7 +4279,7 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
                 "ActiveRdgTextureAliasReadback"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     if (!graph.Compile()) {
@@ -4312,7 +4297,6 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
         );
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
@@ -4426,7 +4410,7 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
     range.aspects = RenderGraph::TextureAspect::Color;
     graph.SetInitialState(
         texture_handle,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         range
@@ -4436,11 +4420,11 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     texture_handle,
-                    RenderGraph::TextureState::TransferDestination,
+                    RenderGraph::TextureAccessType::TransferDestination,
                     range
                 )
                 .SideEffect();
@@ -4451,11 +4435,11 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
                 float4{0.125f, 0.25f, 0.5f, 1.0f}
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.Export(
         texture_handle,
-        RenderGraph::TextureState::TransferDestination,
+        RenderGraph::TextureAccessType::TransferDestination,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write,
         range
@@ -4467,7 +4451,6 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
         );
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},

@@ -33,8 +33,8 @@ static_assert(MipExtent(1, 13) == 1);
 
 RenderGraph::TextureHandle ImportSampledTexture(RenderGraph& graph, const char* name, Texture* texture) {
     const auto handle = ImportRTGraphTexture(graph, name, TextureRef(texture));
-    graph.SetInitialState(handle, RenderGraph::TextureState::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
-    graph.Export(handle, RenderGraph::TextureState::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.SetInitialState(handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.Export(handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
     return handle;
 }
 
@@ -95,14 +95,19 @@ void ShaderUtils::GenerateLowDiscrepancySequence(
 
     RenderGraph graph("RT.NeighborOffsets", RenderGraph::QueueTopology::FromRHI());
     const auto output = ImportRTGraphBuffer(graph, "Offsets", BufferRef(_output.GetBuffer()));
-    graph.SetInitialState(output, RenderGraph::BufferState::ShaderResource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
-    graph.Export(output, RenderGraph::BufferState::ShaderResource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
-    graph.AddRecordPass("Upload", [=](RenderGraph::PassBuilder& builder) {
-        builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-            .Write(output, RenderGraph::BufferState::TransferDestination);
-    }, [data = std::move(data), _output](CommandList& commands) {
-        commands.CopyFrom(std::span<const byte>(reinterpret_cast<const byte*>(data.data()), data.size()), _output);
-    });
+    graph.SetInitialState(output, RenderGraph::BufferAccessType::ShaderRead, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.Export(output, RenderGraph::BufferAccessType::ShaderRead, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.AddRecordPass(
+        "Upload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(output, RenderGraph::BufferAccessType::TransferDestination);
+        },
+        [data = std::move(data), _output](CommandList& commands) {
+            commands.CopyFrom(std::span<const byte>(reinterpret_cast<const byte*>(data.data()), data.size()), _output);
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
     RecordUtilityGraph(graph, _cmd_list);
 }
 
@@ -124,14 +129,19 @@ void ShaderUtils::GenerateMipPdf(
         param.src_mip_level = i;
         param.num_mip_levels = _integrated_mips.size();
         param.src_size = uint2(width, height);
-        graph.AddRecordPass(std::format("Integrate.{}", i), [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                .Read(input, RenderGraph::TextureState::Sampled)
-                .ReadWrite(output, RenderGraph::TextureState::UnorderedAccess);
-        }, [=, this](CommandList& commands) {
-            commands.Compute(generate_mip_pdf_pipeline, _env_map, _integrated_mips, param)
-                .Dispatch(uint3(DivCeil(width, 32), DivCeil(height, 32), 1), "GenerateMipPdf");
-        });
+        graph.AddRecordPass(
+            std::format("Integrate.{}", i),
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                    .Read(input, RenderGraph::TextureAccessType::Sampled)
+                    .ReadWrite(output, RenderGraph::TextureAccessType::Storage);
+            },
+            [=, this](CommandList& commands) {
+                commands.Compute(generate_mip_pdf_pipeline, _env_map, _integrated_mips, param)
+                    .Dispatch(uint3(DivCeil(width, 32), DivCeil(height, 32), 1), "GenerateMipPdf");
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
         width = std::max(1u, width >> 5);
         height = std::max(1u, height >> 5);
     }
@@ -161,11 +171,18 @@ void ShaderUtils::GenerateMips(CommandList& commands, std::span<TextureView> mip
     const auto texture = ImportSampledTexture(graph, "Image", mips.front().GetTexture());
     for (uint i = 0; i + 1 < mips.size(); i += 5) {
         const auto chunk = mips.subspan(i, std::min<size_t>(6, mips.size() - i));
-        graph.AddRecordPass(std::format("Mips.{}", i), [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                .Read(texture, RenderGraph::TextureState::UnorderedAccess, RenderGraph::TextureRange::Mips(i, 1))
-                .Write(texture, RenderGraph::TextureState::UnorderedAccess, RenderGraph::TextureRange::Mips(i + 1, chunk.size() - 1));
-        }, [=, this](CommandList& list) { GenerateMipsChunk(list, chunk); });
+        graph.AddRecordPass(
+            std::format("Mips.{}", i),
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                    .Read(texture, RenderGraph::TextureAccessType::Storage, RenderGraph::TextureRange::Mips(i, 1))
+                    .Write(texture, RenderGraph::TextureAccessType::Storage, RenderGraph::TextureRange::Mips(i + 1, chunk.size() - 1));
+            },
+            [=, this](CommandList& list) {
+                GenerateMipsChunk(list, chunk);
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
     }
     RecordUtilityGraph(graph, commands);
 }
@@ -178,15 +195,20 @@ void ShaderUtils::SampleTextureCS(
     RenderGraph graph("RT.SampleTexture", RenderGraph::QueueTopology::FromRHI());
     const auto input = ImportSampledTexture(graph, "Input", input_texture.GetTexture());
     const auto output = ImportSampledTexture(graph, "Output", output_texture.GetTexture());
-    graph.AddRecordPass("Sample", [=](RenderGraph::PassBuilder& builder) {
-        builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-            .Read(input, RenderGraph::TextureState::Sampled)
-            .Write(output, RenderGraph::TextureState::UnorderedAccess, RenderGraph::TextureRange::Mips(output_texture.mip_level, output_texture.num_mips));
-    }, [=, this](CommandList& commands) {
-        Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
-        commands.Compute(copy_texture_pipeline, input_texture, linear_clamp_sampler, output_texture)
-            .Dispatch(uint3(DivCeil(output_texture.extent.x, 16), DivCeil(output_texture.extent.y, 16), 1), "SampleTextureCS");
-    });
+    graph.AddRecordPass(
+        "Sample",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                .Read(input, RenderGraph::TextureAccessType::Sampled)
+                .Write(output, RenderGraph::TextureAccessType::Storage, RenderGraph::TextureRange::Mips(output_texture.mip_level, output_texture.num_mips));
+        },
+        [=, this](CommandList& commands) {
+            Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
+            commands.Compute(copy_texture_pipeline, input_texture, linear_clamp_sampler, output_texture)
+                .Dispatch(uint3(DivCeil(output_texture.extent.x, 16), DivCeil(output_texture.extent.y, 16), 1), "SampleTextureCS");
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
     RecordUtilityGraph(graph, cmd_list);
 }
 

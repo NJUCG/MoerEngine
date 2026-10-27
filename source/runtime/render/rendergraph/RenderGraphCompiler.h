@@ -42,7 +42,7 @@ private:
         RenderGraph::ResourceState state{};
         RenderGraph::ExecutionDomain last_domain{
             RenderGraph::QueueRole::None,
-            RenderGraph::PipelineType::None
+            RenderGraph::GpuWorkType::None
         };
         RenderGraph::AccessMode last_mode = RenderGraph::AccessMode::None;
         bool                       initialized = false;

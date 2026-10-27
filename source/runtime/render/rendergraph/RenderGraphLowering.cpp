@@ -9,14 +9,15 @@ namespace Moer::Render {
 
 namespace {
 
-using AccessMode    = RenderGraph::AccessMode;
-using BufferState   = RenderGraph::BufferState;
+using AccessMode      = RenderGraph::AccessMode;
+using BufferAccessType  = RenderGraph::BufferAccessType;
 using ExecutionDomain = RenderGraph::ExecutionDomain;
-using PipelineType  = RenderGraph::PipelineType;
-using ResourceKind  = RenderGraph::ResourceKind;
-using ResourceState = RenderGraph::ResourceState;
-using TextureAspect = RenderGraph::TextureAspect;
-using TextureState  = RenderGraph::TextureState;
+using GpuWorkType     = RenderGraph::GpuWorkType;
+using ResourceKind    = RenderGraph::ResourceKind;
+using ResourceState   = RenderGraph::ResourceState;
+using TextureAspect   = RenderGraph::TextureAspect;
+using TextureAccessType = RenderGraph::TextureAccessType;
+using TextureBoundary   = RenderGraph::TextureBoundary;
 
 [[nodiscard]] constexpr bool HasRead(AccessMode access) {
     return access == AccessMode::Read || access == AccessMode::ReadWrite;
@@ -38,79 +39,58 @@ template<typename Enum>
 }
 
 [[nodiscard]] bool ShaderStages(
-    PipelineType             pipeline,
+    GpuWorkType             work,
     ERHIPipelineStageFlags& stages,
-    std::string&             error
+    std::string&            error
 ) {
-    switch (pipeline) {
-        case PipelineType::None:
+    switch (work) {
+        case GpuWorkType::None:
             stages = ERHIPipelineStageFlags::PS_ALL_COMMANDS;
             return true;
-        case PipelineType::Graphics:
+        case GpuWorkType::Graphics:
             stages = ERHIPipelineStageFlags::PS_ALL_GRAPHICS;
             return true;
-        case PipelineType::Compute:
+        case GpuWorkType::Compute:
             stages = ERHIPipelineStageFlags::PS_COMPUTE_SHADER;
             return true;
-        case PipelineType::RayTracing:
+        case GpuWorkType::RayTracing:
             stages = ERHIPipelineStageFlags::PS_RAY_TRACING_SHADER;
             return true;
-        case PipelineType::Copy:
-            error = "a shader resource cannot use the Copy pipeline domain";
+        case GpuWorkType::Transfer:
+            error = "shader resource access is incompatible with Transfer work";
             return false;
     }
-    error = "unrecognized pipeline domain";
+    error = "unrecognized GPU work type";
     return false;
 }
 
-[[nodiscard]] bool TextureLayoutFor(
-    TextureState    state,
-    ETextureLayout& layout,
-    std::string&    error
-) {
-    switch (state) {
-        case TextureState::Undefined:
-            layout = ETextureLayout::TEXTURE_LAYOUT_UNDEFINED;
-            return true;
-        case TextureState::TransferSource:
+[[nodiscard]] bool TextureLayoutFor(TextureAccessType type, ETextureLayout& layout, std::string& error) {
+    switch (type) {
+        case TextureAccessType::TransferSource:
             layout = ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC;
             return true;
-        case TextureState::PresentationSource:
-            layout = ETextureLayout::TEXTURE_LAYOUT_COMMON;
-            return true;
-        case TextureState::TransferDestination:
+        case TextureAccessType::TransferDestination:
             layout = ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST;
             return true;
-        case TextureState::ShaderResource:
-            layout = ETextureLayout::TEXTURE_LAYOUT_COMMON;
-            return true;
-        case TextureState::Sampled:
+        case TextureAccessType::Sampled:
             layout = ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             return true;
-        case TextureState::RenderTarget:
+        case TextureAccessType::ColorAttachment:
             layout = ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT;
             return true;
-        case TextureState::DepthStencilRead:
-            // The Vulkan command preprocessor records every depth attachment
-            // (including load-only attachments) in ATTACHMENT_OPTIMAL. Keep
-            // the explicit RDG state aligned with that physical body state.
-            // Depth textures consumed by shaders use Sampled instead.
+        case TextureAccessType::DepthStencilAttachment:
+            // Match the native attachment recording layout. AccessMode still
+            // distinguishes read-only tests from depth/stencil writes.
             layout = ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
             return true;
-        case TextureState::DepthStencilWrite:
-            layout = ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE;
-            return true;
-        case TextureState::UnorderedAccess:
+        case TextureAccessType::Storage:
             layout = ETextureLayout::TEXTURE_LAYOUT_COMMON;
             return true;
-        case TextureState::Automatic:
-            error = "Automatic texture state has no physical layout";
-            return false;
-        case TextureState::Present:
-            error = "Present layout requires an external synchronization endpoint";
+        case TextureAccessType::Unspecified:
+            error = "Unspecified texture access has no physical layout";
             return false;
     }
-    error = "unrecognized texture state";
+    error = "unrecognized texture access type";
     return false;
 }
 
@@ -125,52 +105,59 @@ template<typename Enum>
         error = "Unknown access cannot be lowered";
         return false;
     }
-    if (state.kind == ResourceKind::Token) {
+    if (RenderGraph::GetStateKind(state) == ResourceKind::Token) {
         error = "token state cannot produce a physical barrier";
         return false;
     }
-    if (state.IsAutomatic()) {
-        error = "Automatic state cannot be lowered";
+    if (RenderGraph::IsUnspecified(state)) {
+        error = "Unspecified state cannot be lowered";
         return false;
     }
 
     scope = {};
-    if (state.kind == ResourceKind::Texture) {
-        scope.has_texture_layout = true;
-        if (!TextureLayoutFor(state.texture, scope.layout, error)) {
+    if (RenderGraph::IsUndefined(state)) {
+        if (access != AccessMode::None) {
+            error = "Undefined boundary must use None access";
             return false;
         }
-        switch (state.texture) {
-            case TextureState::Undefined:
-                if (access != AccessMode::None) {
-                    error = "Undefined texture state must use None access";
-                    return false;
-                }
-                scope.stages = ERHIPipelineStageFlags::PS_NONE;
-                scope.access = ERHIAccessFlags::UNDEFINED;
-                return true;
-            case TextureState::TransferSource:
+        scope.has_texture_layout = RenderGraph::GetStateKind(state) == ResourceKind::Texture;
+        scope.layout             = ETextureLayout::TEXTURE_LAYOUT_UNDEFINED;
+        scope.stages             = ERHIPipelineStageFlags::PS_NONE;
+        scope.access             = ERHIAccessFlags::UNDEFINED;
+        return true;
+    }
+    if (RenderGraph::IsPresentationSource(state)) {
+        if (access != AccessMode::Read) {
+            error = "PresentationSource boundary must use Read access";
+            return false;
+        }
+        scope.has_texture_layout = true;
+        scope.layout             = ETextureLayout::TEXTURE_LAYOUT_COMMON;
+        scope.stages             = ERHIPipelineStageFlags::PS_TRANSFER;
+        scope.access             = ERHIAccessFlags::TRANSFER_READ;
+        return true;
+    }
+    if (const auto* texture = std::get_if<TextureAccessType>(&state)) {
+        scope.has_texture_layout = true;
+        if (!TextureLayoutFor(*texture, scope.layout, error)) {
+            return false;
+        }
+        switch (*texture) {
+            case TextureAccessType::TransferSource:
                 scope.stages = ERHIPipelineStageFlags::PS_TRANSFER;
                 scope.access = ERHIAccessFlags::TRANSFER_READ;
                 return true;
-            case TextureState::PresentationSource:
-                scope.stages = ERHIPipelineStageFlags::PS_TRANSFER;
-                scope.access = ERHIAccessFlags::TRANSFER_READ;
-                return true;
-            case TextureState::TransferDestination:
+            case TextureAccessType::TransferDestination:
                 scope.stages = ERHIPipelineStageFlags::PS_TRANSFER;
                 scope.access = ERHIAccessFlags::TRANSFER_WRITE;
                 return true;
-            case TextureState::ShaderResource:
-            case TextureState::Sampled:
-                if (!ShaderStages(domain.pipeline, scope.stages, error)) {
+            case TextureAccessType::Sampled:
+                if (!ShaderStages(domain.work, scope.stages, error)) {
                     return false;
                 }
-                // Shader reads cover sampled and storage SRV descriptors;
-                // their layouts remain distinct.
                 scope.access = ERHIAccessFlags::SHADER_READ;
                 return true;
-            case TextureState::RenderTarget:
+            case TextureAccessType::ColorAttachment:
                 scope.stages = ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT;
                 if (HasRead(access)) {
                     scope.access = Or(scope.access, ERHIAccessFlags::COLOR_ATTACHMENT_READ);
@@ -179,8 +166,7 @@ template<typename Enum>
                     scope.access = Or(scope.access, ERHIAccessFlags::COLOR_ATTACHMENT_WRITE);
                 }
                 return true;
-            case TextureState::DepthStencilRead:
-            case TextureState::DepthStencilWrite:
+            case TextureAccessType::DepthStencilAttachment:
                 scope.stages = Or(
                     ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS,
                     ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS
@@ -192,8 +178,8 @@ template<typename Enum>
                     scope.access = Or(scope.access, ERHIAccessFlags::DEPTH_STENCIL_WRITE);
                 }
                 return true;
-            case TextureState::UnorderedAccess:
-                if (!ShaderStages(domain.pipeline, scope.stages, error)) {
+            case TextureAccessType::Storage:
+                if (!ShaderStages(domain.work, scope.stages, error)) {
                     return false;
                 }
                 if (HasRead(access)) {
@@ -203,51 +189,42 @@ template<typename Enum>
                     scope.access = Or(scope.access, ERHIAccessFlags::SHADER_WRITE);
                 }
                 return true;
-            case TextureState::Automatic:
-            case TextureState::Present:
+            case TextureAccessType::Unspecified:
                 break;
         }
     } else {
         scope.has_texture_layout = false;
-        switch (state.buffer) {
-            case BufferState::Undefined:
-                if (access != AccessMode::None) {
-                    error = "Undefined buffer state must use None access";
-                    return false;
-                }
-                scope.stages = ERHIPipelineStageFlags::PS_NONE;
-                scope.access = ERHIAccessFlags::UNDEFINED;
-                return true;
-            case BufferState::TransferSource:
+        switch (std::get<BufferAccessType>(state)) {
+            case BufferAccessType::TransferSource:
                 scope.stages = ERHIPipelineStageFlags::PS_TRANSFER;
                 scope.access = ERHIAccessFlags::TRANSFER_READ;
                 return true;
-            case BufferState::TransferDestination:
+            case BufferAccessType::TransferDestination:
                 scope.stages = ERHIPipelineStageFlags::PS_TRANSFER;
                 scope.access = ERHIAccessFlags::TRANSFER_WRITE;
                 return true;
-            case BufferState::VertexBuffer:
+            case BufferAccessType::VertexBuffer:
                 scope.stages = ERHIPipelineStageFlags::PS_VERTEX_INPUT;
                 scope.access = ERHIAccessFlags::VERTEX_ATTRIBUTE_READ;
                 return true;
-            case BufferState::IndexBuffer:
+            case BufferAccessType::IndexBuffer:
                 scope.stages = ERHIPipelineStageFlags::PS_VERTEX_INPUT;
                 scope.access = ERHIAccessFlags::INDEX_READ;
                 return true;
-            case BufferState::IndirectArgument:
+            case BufferAccessType::IndirectArgument:
                 scope.stages = ERHIPipelineStageFlags::PS_DRAW_INDIRECT;
                 scope.access = ERHIAccessFlags::INDIRECT_COMMAND_READ;
                 return true;
-            case BufferState::ShaderResource:
-                if (!ShaderStages(domain.pipeline, scope.stages, error)) {
+            case BufferAccessType::ShaderRead:
+                if (!ShaderStages(domain.work, scope.stages, error)) {
                     return false;
                 }
-                // ShaderResource covers both uniform and storage-buffer reads.
+                // ShaderRead covers both uniform and storage-buffer reads.
                 // Vulkan's SHADER_READ does not include UNIFORM_READ.
                 scope.access = Or(ERHIAccessFlags::SHADER_READ, ERHIAccessFlags::UNIFORM_READ);
                 return true;
-            case BufferState::UnorderedAccess:
-                if (!ShaderStages(domain.pipeline, scope.stages, error)) {
+            case BufferAccessType::Storage:
+                if (!ShaderStages(domain.work, scope.stages, error)) {
                     return false;
                 }
                 if (HasRead(access)) {
@@ -257,24 +234,24 @@ template<typename Enum>
                     scope.access = Or(scope.access, ERHIAccessFlags::SHADER_WRITE);
                 }
                 return true;
-            case BufferState::AccelerationStructureBuildInput:
+            case BufferAccessType::AccelerationStructureBuildInput:
                 scope.stages = ERHIPipelineStageFlags::PS_ACCELERATION_STRUCTURE_BUILD;
                 // Builds read raw geometry/instance data as shader reads and
                 // referenced acceleration structures as AS reads.
                 scope.access =
                     Or(ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT, ERHIAccessFlags::SHADER_READ);
                 return true;
-            case BufferState::AccelerationStructureRead:
-                if (!ShaderStages(domain.pipeline, scope.stages, error)) {
+            case BufferAccessType::AccelerationStructureRead:
+                if (!ShaderStages(domain.work, scope.stages, error)) {
                     return false;
                 }
                 scope.access = ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT;
                 return true;
-            case BufferState::AccelerationStructureWrite:
+            case BufferAccessType::AccelerationStructureWrite:
                 scope.stages = ERHIPipelineStageFlags::PS_ACCELERATION_STRUCTURE_BUILD;
                 scope.access = ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT;
                 return true;
-            case BufferState::Automatic:
+            case BufferAccessType::Unspecified:
                 break;
         }
     }
@@ -496,12 +473,7 @@ bool RenderGraphLowering::Lower(
     std::vector<uint32_t> pass_queue_batch(
         graph.passes.size(), RenderGraph::InvalidIndex
     );
-    for (const auto& pass : graph.passes) {
-        if (pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
-            return fail("ExternalControl pass is outside the managed lowering domain: '" +
-                        pass.name + "'");
-        }
-    }
+
     std::vector<bool> execution_member(graph.passes.size(), false);
     if (compiled.execution_order.size() != graph.passes.size()) {
         return fail("execution order does not cover every declared pass");
@@ -524,8 +496,7 @@ bool RenderGraphLowering::Lower(
         if (unit.source_index != unit_index || unit.pass != pass ||
             unit.target_queue !=
                 graph.queue_topology.Resolve(declaration.domain.queue) ||
-            unit.record_execution_class != declaration.execution_class ||
-            unit.estimated_record_work != declaration.workload) {
+            unit.record_policy != declaration.record_policy) {
             return fail(
                 "recording schedule disagrees with stable execution order"
             );
@@ -534,9 +505,6 @@ bool RenderGraphLowering::Lower(
     for (uint32_t batch_index = 0; batch_index < compiled.queue_batches.size();
          ++batch_index) {
         const auto& batch = compiled.queue_batches[batch_index];
-        if (batch.external_control) {
-            return fail("external-control queue batch is outside the managed lowering domain");
-        }
         if (batch.id != batch_index || !batch.queue.available ||
             !supported_queue(batch.queue.role)) {
             return fail(
@@ -565,15 +533,8 @@ bool RenderGraphLowering::Lower(
         }
     }
     for (const auto pass : compiled.execution_order) {
-        const bool should_be_gpu =
-            graph.passes[pass.pass_id].execution_class !=
-            RenderGraph::PassExecutionClass::CpuPrepare;
-        if (gpu_pass[pass.pass_id] != should_be_gpu) {
-            return fail(
-                should_be_gpu ?
-                    "execution-order GPU pass has no queue batch" :
-                    "CpuPrepare pass unexpectedly belongs to a queue batch"
-            );
+        if (!gpu_pass[pass.pass_id]) {
+            return fail("execution-order GPU pass has no queue batch");
         }
     }
     for (uint32_t batch_index = 0; batch_index < compiled.queue_batches.size();
@@ -770,8 +731,8 @@ bool RenderGraphLowering::Lower(
             continue;
         }
         resource_has_access[access.resource.resource_id] = true;
-        if (access.state.IsAutomatic()) {
-            return fail("physical access uses Automatic state on resource '" + resource.name + "'");
+        if (RenderGraph::IsUnspecified(access.state)) {
+            return fail("physical access uses Unspecified state on resource '" + resource.name + "'");
         }
         if (!IsKnownAccess(access.mode)) {
             return fail("physical access uses Unknown access on resource '" + resource.name + "'");
@@ -780,13 +741,7 @@ bool RenderGraphLowering::Lower(
             return fail("physical access uses an unsupported logical queue on resource '" +
                         resource.name + "'");
         }
-        if (access.state.kind == ResourceKind::Texture &&
-            access.state.texture == TextureState::Present) {
-            return fail("Present state requires an external synchronization endpoint on resource '" +
-                        resource.name + "'");
-        }
-        if (access.state.kind == ResourceKind::Texture &&
-            access.state.texture == TextureState::PresentationSource) {
+        if (access.state == ResourceState{TextureBoundary::PresentationSource}) {
             return fail(
                 "PresentationSource is an export-boundary-only state on resource '" +
                 resource.name + "'"
@@ -797,34 +752,27 @@ bool RenderGraphLowering::Lower(
     auto validate_boundary = [&](const RenderGraph::ResourceDeclaration& resource,
                                  const RenderGraph::StateDeclaration&    state,
                                  bool                                    initial) {
-        if (state.state.IsAutomatic()) {
-            error = "Automatic boundary state on resource '" + resource.name + "'";
+        if (RenderGraph::IsUnspecified(state.state)) {
+            error = "Unspecified boundary state on resource '" + resource.name + "'";
             return false;
         }
         if (!IsKnownAccess(state.boundary_access)) {
             error = "Unknown boundary access on resource '" + resource.name + "'";
             return false;
         }
-        if (state.state.kind == ResourceKind::Texture &&
-            state.state.texture == TextureState::Present) {
-            error = "Present boundary requires an external synchronization endpoint on resource '" +
-                    resource.name + "'";
-            return false;
-        }
-        if (state.state.kind == ResourceKind::Texture &&
-            state.state.texture == TextureState::PresentationSource) {
+        if (state.state == ResourceState{TextureBoundary::PresentationSource}) {
             if (state.queue != RenderGraph::QueueRole::Graphics) {
                 error = "PresentationSource boundary requires the Graphics queue on resource '" +
                         resource.name + "'";
                 return false;
             }
         }
-        if (!initial && state.state.IsUndefined()) {
+        if (!initial && RenderGraph::IsUndefined(state.state)) {
             error = "Undefined state cannot be an export destination on resource '" +
                     resource.name + "'";
             return false;
         }
-        if (initial && state.state.IsUndefined()) {
+        if (initial && RenderGraph::IsUndefined(state.state)) {
             if (state.queue != RenderGraph::QueueRole::None ||
                 state.boundary_access != AccessMode::None) {
                 error = "Undefined import boundary must use queue None and access None on resource '" +
@@ -1181,18 +1129,12 @@ bool RenderGraphLowering::Lower(
             error = "barrier source state is unknown";
             return false;
         }
-        if (barrier.before_state.IsAutomatic() || barrier.after_state.IsAutomatic()) {
-            error = "barrier contains Automatic state";
+        if (RenderGraph::IsUnspecified(barrier.before_state) || RenderGraph::IsUnspecified(barrier.after_state)) {
+            error = "barrier contains Unspecified state";
             return false;
         }
         if (!IsKnownAccess(barrier.before_access) || !IsKnownAccess(barrier.after_access)) {
             error = "barrier contains Unknown access";
-            return false;
-        }
-        if (barrier.before_state.kind == ResourceKind::Texture &&
-            (barrier.before_state.texture == TextureState::Present ||
-             barrier.after_state.texture == TextureState::Present)) {
-            error = "Present barrier requires an external synchronization endpoint";
             return false;
         }
         if (barrier.dst_pass.IsValid()) {
@@ -1252,7 +1194,7 @@ bool RenderGraphLowering::Lower(
             for (const auto& source : barrier.sources) {
                 if (!graph.IsValidPass(source.pass) ||
                     !supported_queue(source.domain.queue) ||
-                    !IsKnownAccess(source.access) || source.state.IsAutomatic()) {
+                    !IsKnownAccess(source.access) || RenderGraph::IsUnspecified(source.state)) {
                     error = "barrier fan-in contains an unsupported source";
                     return false;
                 }
@@ -1290,7 +1232,7 @@ bool RenderGraphLowering::Lower(
             }
             if (resource.kind == ResourceKind::Texture) {
                 if (!TextureLayoutFor(
-                        barrier.before_state.texture,
+                        std::get<TextureAccessType>(barrier.before_state),
                         instruction.source.layout,
                         error
                     )) {
@@ -1329,7 +1271,7 @@ bool RenderGraphLowering::Lower(
             instruction.source.stages = ERHIPipelineStageFlags::PS_NONE;
             instruction.source.access = ERHIAccessFlags::UNDEFINED;
         }
-        if (instruction.discard_previous_contents && !barrier.before_state.IsUndefined()) {
+        if (instruction.discard_previous_contents && !RenderGraph::IsUndefined(barrier.before_state)) {
             error = "discard flag requires an Undefined source state";
             return false;
         }

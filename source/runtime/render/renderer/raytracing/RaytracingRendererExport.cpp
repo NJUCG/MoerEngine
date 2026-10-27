@@ -100,28 +100,28 @@ bool RaytracingRenderer::DumpTextureToFile(
         const auto  image = graph.ImportTexture("Source", texture, {});
         graph.SetInitialState(
             image,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
         graph.Export(
             image,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
         graph.AddRecordPass(
             "Readback",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                    .Read(image, RenderGraph::TextureState::TransferSource)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(image, RenderGraph::TextureAccessType::TransferSource)
                     .SideEffect()
                     .TranslateSerialControl();
             },
             [texture, &readback](CommandList& list) {
                 readback = list.Readback(texture->GetView(), "RaytracingExportReadback");
             },
-            RenderGraph::PassExecutionClass::SerialRecord
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         RecordGraphicsUploadGraph(graph, command_list);
     }

@@ -1262,7 +1262,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     "RT.FaultInjection.RecordingFailure",
                     [fault_dependency](RenderGraph::PassBuilder& builder) {
                         builder
-                            .ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                            .ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                             .DependsOn(fault_dependency)
                             .SideEffect();
                     },
@@ -1270,7 +1270,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                         throw std::runtime_error("MOER_RT_RDG_RECORDING_FAIL requested a synthetic "
                                                  "managed-record failure");
                     },
-                    RenderGraph::PassExecutionClass::ParallelRecordEligible
+                    RenderGraph::PassRecordPolicy::ParallelAllowed
                 );
                 LOG_WARNING("[RenderGraph][Injection] Raytracing managed-record failure "
                             "armed by MOER_RT_RDG_RECORDING_FAIL.");
@@ -1372,7 +1372,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                         graph_source_order_base;
                 }
                 if (graph.ExecuteFrontendRecordingPlan(
-                        {},
                         configure_recording_source,
                         state.render_graph_parallel_recording,
                         {},

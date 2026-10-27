@@ -19,6 +19,28 @@ using Moer::Render::Texture;
 using Moer::Render::TextureInfo;
 using Moer::Render::TextureRef;
 
+template<typename Type>
+concept PassTextureAccessType = requires(RenderGraph::PassBuilder& builder, RenderGraph::TextureHandle texture, Type type) {
+    builder.Read(texture, type);
+    builder.Write(texture, type);
+    builder.ReadWrite(texture, type);
+};
+
+template<typename Type>
+concept PassBufferAccessType = requires(RenderGraph::PassBuilder& builder, RenderGraph::BufferHandle buffer, Type type) {
+    builder.Read(buffer, type);
+    builder.Write(buffer, type);
+    builder.ReadWrite(buffer, type);
+};
+
+static_assert(PassTextureAccessType<RenderGraph::TextureAccessType>);
+static_assert(!PassTextureAccessType<RenderGraph::TextureBoundary>);
+static_assert(!PassTextureAccessType<RenderGraph::TextureBoundaryState>);
+static_assert(!PassTextureAccessType<RenderGraph::BufferAccessType>);
+static_assert(PassBufferAccessType<RenderGraph::BufferAccessType>);
+static_assert(!PassBufferAccessType<RenderGraph::BufferBoundary>);
+static_assert(!PassBufferAccessType<RenderGraph::TextureAccessType>);
+
 class TestSuite {
 public:
     void Check(bool condition, std::string_view test, std::string_view message) {
@@ -106,52 +128,56 @@ void TestTextureFanInAndDeterminism(TestSuite& suite) {
     const auto range = RenderGraph::TextureRange::Mips(0, 1);
     graph.SetInitialState(
         color,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         range
     );
-    const auto writer = graph.AddPass(
+    const auto writer = graph.AddRecordPass(
         "Writer",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(color, RenderGraph::TextureState::RenderTarget, range).SideEffect();
+            builder.Write(color, RenderGraph::TextureAccessType::ColorAttachment, range).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto graphics_reader = graph.AddPass(
+    const auto graphics_reader = graph.AddRecordPass(
         "GraphicsReader",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(color, RenderGraph::TextureState::ShaderResource, range).SideEffect();
+            builder.Read(color, RenderGraph::TextureAccessType::Storage, range).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_reader = graph.AddPass(
+    const auto compute_reader = graph.AddRecordPass(
         "ComputeReader",
         [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(
-                           RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Compute
-                   )
-                .Read(color, RenderGraph::TextureState::ShaderResource, range)
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::GpuWorkType::Compute
+            )
+                .Read(color, RenderGraph::TextureAccessType::Storage, range)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto uav_writer = graph.AddPass(
+    const auto uav_writer = graph.AddRecordPass(
         "UavWriter",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Compute
-                   )
-                .Write(color, RenderGraph::TextureState::UnorderedAccess, range)
+                       RenderGraph::GpuWorkType::Compute
+            )
+                .Write(color, RenderGraph::TextureAccessType::Storage, range)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read,
         range
@@ -186,16 +212,14 @@ void TestTextureFanInAndDeterminism(TestSuite& suite) {
     );
 
     const auto before_uav = first.Before(uav_writer);
-    const auto fan_in = std::find_if(
+    const auto fan_in     = std::find_if(
         before_uav.begin(),
         before_uav.end(),
         [](const RenderGraphLowering::LoweredInstruction& instruction) {
             return instruction.instruction_kind ==
                        RenderGraphLowering::InstructionKind::Barrier &&
                    instruction.after_state ==
-                       RenderGraph::ResourceState::Texture(
-                           RenderGraph::TextureState::UnorderedAccess
-                       );
+                       RenderGraph::ResourceState{RenderGraph::TextureAccessType::Storage};
         }
     );
     suite.Check(
@@ -237,27 +261,29 @@ void TestShaderResourceAndSampledLayoutsRemainDistinct(TestSuite& suite) {
     );
     graph.SetInitialState(
         color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "StorageRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(color, RenderGraph::TextureState::ShaderResource).SideEffect();
+            builder.Read(color, RenderGraph::TextureAccessType::Storage).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto sampled_read = graph.AddPass(
+    const auto sampled_read = graph.AddRecordPass(
         "SampledRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(color, RenderGraph::TextureState::Sampled).SideEffect();
+            builder.Read(color, RenderGraph::TextureAccessType::Sampled).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -305,27 +331,29 @@ void TestDepthAttachmentReadUsesBackendAttachmentLayout(TestSuite& suite) {
     );
     graph.SetInitialState(
         depth,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "DepthWrite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(depth, RenderGraph::TextureState::DepthStencilWrite).SideEffect();
+            builder.Write(depth, RenderGraph::TextureAccessType::DepthStencilAttachment).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto depth_read = graph.AddPass(
+    const auto depth_read = graph.AddRecordPass(
         "DepthRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(depth, RenderGraph::TextureState::DepthStencilRead).SideEffect();
+            builder.Read(depth, RenderGraph::TextureAccessType::DepthStencilAttachment).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         depth,
-        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::TextureAccessType::DepthStencilAttachment,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -336,23 +364,23 @@ void TestDepthAttachmentReadUsesBackendAttachmentLayout(TestSuite& suite) {
     suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
 
     const auto before_read = lowered.Before(depth_read);
-    const auto transition = std::find_if(
+    const auto transition  = std::find_if(
         before_read.begin(),
         before_read.end(),
         [](const RenderGraphLowering::LoweredInstruction& instruction) {
             return instruction.instruction_kind ==
                        RenderGraphLowering::InstructionKind::Barrier &&
                    instruction.after_state ==
-                       RenderGraph::ResourceState::Texture(
-                           RenderGraph::TextureState::DepthStencilRead
-                       );
+                       RenderGraph::ResourceState{RenderGraph::TextureAccessType::DepthStencilAttachment};
         }
     );
     suite.Check(
         transition != before_read.end() &&
             transition->destination.layout ==
                 ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE &&
-            transition->destination.access == ERHIAccessFlags::DEPTH_STENCIL_READ,
+            transition->destination.access == ERHIAccessFlags::DEPTH_STENCIL_READ &&
+            HasFlag(transition->source.access, ERHIAccessFlags::DEPTH_STENCIL_WRITE) &&
+            transition->source.layout == transition->destination.layout,
         test_name,
         "load-only depth attachments must match the backend attachment layout while retaining read access"
     );
@@ -376,21 +404,22 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
     );
     graph.SetInitialState(
         color,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    const auto writer = graph.AddPass(
+    const auto writer = graph.AddRecordPass(
         "Writer",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(color, RenderGraph::TextureState::RenderTarget)
+            builder.Write(color, RenderGraph::TextureAccessType::ColorAttachment)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         color,
-        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::TextureBoundary::PresentationSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -405,7 +434,7 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
     );
 
     const auto after_writer = lowered.After(writer);
-    const auto transition = std::find_if(
+    const auto transition   = std::find_if(
         after_writer.begin(),
         after_writer.end(),
         [](const RenderGraphLowering::LoweredInstruction& instruction) {
@@ -413,9 +442,7 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
                        RenderGraphLowering::InstructionKind::Barrier &&
                    instruction.export_boundary &&
                    instruction.after_state ==
-                       RenderGraph::ResourceState::Texture(
-                           RenderGraph::TextureState::PresentationSource
-                       );
+                       RenderGraph::ResourceState{RenderGraph::TextureBoundary::PresentationSource};
         }
     );
     suite.Check(
@@ -444,25 +471,26 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
     );
     rejected_graph.SetInitialState(
         rejected_color,
-        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::TextureBoundary::PresentationSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    rejected_graph.AddPass(
+    rejected_graph.AddRecordPass(
         "ReadImportedColor",
         [=](RenderGraph::PassBuilder& builder) {
             builder
                 .Read(
                     rejected_color,
-                    RenderGraph::TextureState::ShaderResource
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     rejected_graph.Export(
         rejected_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -490,23 +518,24 @@ void TestUntouchedImportedRangesNeedNoCommands(TestSuite& suite) {
     const auto                 image = graph.ImportTexture("Image", texture, {.mip_count = 2});
     graph.SetInitialState(
         image,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         image,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    const auto pass = graph.AddPass(
+    const auto pass = graph.AddRecordPass(
         "ReadMip0",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(image, RenderGraph::TextureState::Sampled, RenderGraph::TextureRange::Mips(0, 1))
+            builder.Read(image, RenderGraph::TextureAccessType::Sampled, RenderGraph::TextureRange::Mips(0, 1))
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(graph.Compile(), name, graph.GetCompileError());
     RenderGraphLowering::LoweredPlan plan;
@@ -528,22 +557,23 @@ void TestAccelerationBuildInputScopes(TestSuite& suite) {
     const auto                 input = graph.ImportBuffer("Input", buffer, {.byte_size = 256});
     graph.SetInitialState(
         input,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "Build",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                .Read(input, RenderGraph::BufferState::AccelerationStructureBuildInput)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                .Read(input, RenderGraph::BufferAccessType::AccelerationStructureBuildInput)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         input,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -576,27 +606,29 @@ void TestSameStateReadNeedsNoBarrier(TestSuite& suite) {
     );
     graph.SetInitialState(
         data,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    const auto first_read = graph.AddPass(
+    const auto first_read = graph.AddRecordPass(
         "FirstRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
+            builder.Read(data, RenderGraph::BufferAccessType::ShaderRead).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto second_read = graph.AddPass(
+    const auto second_read = graph.AddRecordPass(
         "SecondRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
+            builder.Read(data, RenderGraph::BufferAccessType::ShaderRead).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         data,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -633,29 +665,31 @@ void TestCrossNativeTokenSynchronization(TestSuite& suite) {
         "cross-native token synchronization is lowered";
     RenderGraph graph("CrossNativeTokenSync", RenderGraph::QueueTopology::DedicatedQueues());
     const auto token = graph.CreateTransientToken("GraphicsToCompute");
-    const auto producer = graph.AddPass(
+    const auto producer = graph.AddRecordPass(
         "GraphicsProducer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Graphics
+                       RenderGraph::GpuWorkType::Graphics
                    )
                 .Write(token)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto consumer = graph.AddPass(
+    const auto consumer = graph.AddRecordPass(
         "ComputeConsumer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Compute
+                       RenderGraph::GpuWorkType::Compute
                    )
                 .Read(token)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
@@ -686,29 +720,31 @@ void TestSameNativeTokenSynchronizationNeedsNoGpuSync(TestSuite& suite) {
         "same-native token synchronization needs no lowered GPU sync";
     RenderGraph graph("SameNativeTokenSync", RenderGraph::QueueTopology::SingleQueue());
     const auto token = graph.CreateTransientToken("GraphicsToCompute");
-    graph.AddPass(
+    graph.AddRecordPass(
         "GraphicsProducer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Graphics
+                       RenderGraph::GpuWorkType::Graphics
                    )
                 .Write(token)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "ComputeConsumer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Compute
+                       RenderGraph::GpuWorkType::Compute
                    )
                 .Read(token)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
@@ -740,32 +776,34 @@ void TestSameNativePhysicalBarrierRetainsSourceScope(TestSuite& suite) {
     );
     graph.SetInitialState(
         data,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "GraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+            builder.Write(data, RenderGraph::BufferAccessType::Storage).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto consumer = graph.AddPass(
+    const auto consumer = graph.AddRecordPass(
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Compute
-                   )
-                .Read(data, RenderGraph::BufferState::ShaderResource)
+                       RenderGraph::GpuWorkType::Compute
+            )
+                .Read(data, RenderGraph::BufferAccessType::ShaderRead)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         data,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Read
     );
@@ -775,16 +813,14 @@ void TestSameNativePhysicalBarrierRetainsSourceScope(TestSuite& suite) {
     std::string error{};
     suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
     const auto before_consumer = lowered.Before(consumer);
-    const auto barrier = std::find_if(
+    const auto barrier         = std::find_if(
         before_consumer.begin(),
         before_consumer.end(),
         [](const RenderGraphLowering::LoweredInstruction& instruction) {
             return instruction.instruction_kind ==
                        RenderGraphLowering::InstructionKind::Barrier &&
                    instruction.after_state ==
-                       RenderGraph::ResourceState::Buffer(
-                           RenderGraph::BufferState::ShaderResource
-                       );
+                       RenderGraph::ResourceState{RenderGraph::BufferAccessType::ShaderRead};
         }
     );
     suite.Check(
@@ -818,32 +854,34 @@ void TestSameFamilyQueueBarrierLowersToAcquire(TestSuite& suite) {
     );
     graph.SetInitialState(
         data,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "GraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+            builder.Write(data, RenderGraph::BufferAccessType::Storage).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto consumer = graph.AddPass(
+    const auto consumer = graph.AddRecordPass(
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Compute
-                   )
-                .Read(data, RenderGraph::BufferState::ShaderResource)
+                       RenderGraph::GpuWorkType::Compute
+            )
+                .Read(data, RenderGraph::BufferAccessType::ShaderRead)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         data,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Read
     );
@@ -891,46 +929,50 @@ void TestMixedQueueFanInRetainsLocalSourceScope(TestSuite& suite) {
     );
     graph.SetInitialState(
         data,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "InitialGraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+            builder.Write(data, RenderGraph::BufferAccessType::Storage).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto graphics_reader = graph.AddPass(
+    const auto graphics_reader = graph.AddRecordPass(
         "GraphicsRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
+            builder.Read(data, RenderGraph::BufferAccessType::ShaderRead).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_reader = graph.AddPass(
+    const auto compute_reader = graph.AddRecordPass(
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Compute
-                   )
-                .Read(data, RenderGraph::BufferState::ShaderResource)
+                       RenderGraph::GpuWorkType::Compute
+            )
+                .Read(data, RenderGraph::BufferAccessType::ShaderRead)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto final_writer = graph.AddPass(
+    const auto final_writer = graph.AddRecordPass(
         "FinalGraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+            builder.Write(data, RenderGraph::BufferAccessType::Storage).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         data,
-        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::BufferAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
@@ -990,29 +1032,31 @@ void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
     );
     graph.SetInitialState(
         data,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    const auto producer = graph.AddPass(
+    const auto producer = graph.AddRecordPass(
         "GraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(data, RenderGraph::TextureState::UnorderedAccess).SideEffect();
+            builder.Write(data, RenderGraph::TextureAccessType::Storage).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto consumer = graph.AddPass(
+    const auto consumer = graph.AddRecordPass(
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
-                .Read(data, RenderGraph::TextureState::Sampled)
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute)
+                .Read(data, RenderGraph::TextureAccessType::Sampled)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         data,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Read
     );
@@ -1152,43 +1196,47 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
         }
     );
     graph.SetInitialState(
-        data, RenderGraph::BufferState::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None
+        data, RenderGraph::BufferBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "GraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+            builder.Write(data, RenderGraph::BufferAccessType::Storage).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto graphics_reader = graph.AddPass(
+    const auto graphics_reader = graph.AddRecordPass(
         "GraphicsRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
+            builder.Read(data, RenderGraph::BufferAccessType::ShaderRead).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_reader = graph.AddPass(
+    const auto compute_reader = graph.AddRecordPass(
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
-                .Read(data, RenderGraph::BufferState::ShaderResource)
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute)
+                .Read(data, RenderGraph::BufferAccessType::ShaderRead)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto copy_writer = graph.AddPass(
+    const auto copy_writer = graph.AddRecordPass(
         "CopyWrite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy)
-                .Write(data, RenderGraph::BufferState::TransferDestination)
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::GpuWorkType::Transfer)
+                .Write(data, RenderGraph::BufferAccessType::TransferDestination)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         data,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Copy,
         RenderGraph::AccessMode::Write
     );
@@ -1331,24 +1379,26 @@ void TestMissingCrossNativeSyncFailsClosed(TestSuite& suite) {
         RenderGraph::QueueTopology::DedicatedQueues()
     );
     const auto token = graph.CreateTransientToken("GraphicsToCompute");
-    graph.AddPass(
+    graph.AddRecordPass(
         "Graphics",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(token).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "Compute",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Compute
+                       RenderGraph::GpuWorkType::Compute
                    )
                 .Read(token)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     auto& plan = const_cast<RenderGraph::CompiledPlan&>(
@@ -1382,17 +1432,18 @@ void TestUnavailableQueueFailsAtCompile(TestSuite& suite) {
     topology.compute.available = false;
     RenderGraph graph("UnavailableCompute", topology);
     const auto token = graph.CreateTransientToken("ComputeOnly");
-    graph.AddPass(
+    graph.AddRecordPass(
         "Compute",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Compute
+                       RenderGraph::GpuWorkType::Compute
                    )
                 .Write(token)
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !graph.Compile() &&
@@ -1434,20 +1485,21 @@ void TestFailClosedContracts(TestSuite& suite) {
         );
         graph.SetInitialState(
             handle,
-            RenderGraph::TextureState::Undefined,
+            RenderGraph::TextureBoundary::Undefined,
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
-        graph.AddPass(
+        graph.AddRecordPass(
             "Write",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(handle, RenderGraph::TextureState::RenderTarget).SideEffect();
+                builder.Write(handle, RenderGraph::TextureAccessType::ColorAttachment).SideEffect();
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.Export(
             handle,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureAccessType::Storage,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -1458,46 +1510,48 @@ void TestFailClosedContracts(TestSuite& suite) {
         RenderGraph graph(name);
         const auto handle =
             graph.CreateTransientBuffer("Transient", RenderGraph::BufferDesc{.byte_size = 64});
-        graph.AddPass(
+        graph.AddRecordPass(
             "Write",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Copy
-                       )
-                    .Write(handle, RenderGraph::BufferState::TransferDestination)
+                           RenderGraph::GpuWorkType::Transfer
+                )
+                    .Write(handle, RenderGraph::BufferAccessType::TransferDestination)
                     .SideEffect();
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.Export(
             handle,
-            RenderGraph::BufferState::TransferSource,
+            RenderGraph::BufferAccessType::TransferSource,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
         ExpectLowerFailure(suite, graph, name, "transient physical resource");
     }
     {
-        constexpr std::string_view name = "automatic access rejected";
+        constexpr std::string_view name   = "unspecified access rejected";
         BufferRef buffer = MoerNew(FakeBuffer)(64);
         RenderGraph graph(name);
         const auto handle =
             graph.ImportBuffer("Buffer", buffer, RenderGraph::BufferDesc{.byte_size = 64});
         graph.SetInitialState(
             handle,
-            RenderGraph::BufferState::ShaderResource,
+            RenderGraph::BufferAccessType::ShaderRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
-        graph.AddPass(
+        graph.AddRecordPass(
             "Read",
             [=](RenderGraph::PassBuilder& builder) { builder.Read(handle).SideEffect(); },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.Export(
             handle,
-            RenderGraph::BufferState::ShaderResource,
+            RenderGraph::BufferAccessType::ShaderRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -1511,80 +1565,25 @@ void TestFailClosedContracts(TestSuite& suite) {
             graph.ImportBuffer("Buffer", buffer, RenderGraph::BufferDesc{.byte_size = 64});
         graph.SetInitialState(
             handle,
-            RenderGraph::BufferState::ShaderResource,
+            RenderGraph::BufferAccessType::ShaderRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Unknown
         );
-        graph.AddPass(
+        graph.AddRecordPass(
             "Read",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.Read(handle, RenderGraph::BufferState::ShaderResource).SideEffect();
+                builder.Read(handle, RenderGraph::BufferAccessType::ShaderRead).SideEffect();
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.Export(
             handle,
-            RenderGraph::BufferState::ShaderResource,
+            RenderGraph::BufferAccessType::ShaderRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
         ExpectLowerFailure(suite, graph, name, "Unknown boundary access");
-    }
-    {
-        constexpr std::string_view name = "present boundary rejected";
-        TextureRef texture = MoerNew(FakeTexture)(1, 1, ETextureAspectFlags::COLOR);
-        RenderGraph graph(name);
-        const auto handle =
-            graph.ImportTexture("Color", texture, RenderGraph::TextureDesc{});
-        graph.SetInitialState(
-            handle,
-            RenderGraph::TextureState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None
-        );
-        graph.AddPass(
-            "Write",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(handle, RenderGraph::TextureState::RenderTarget).SideEffect();
-            },
-            [] {}
-        );
-        graph.Export(
-            handle,
-            RenderGraph::TextureState::Present,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-        ExpectLowerFailure(suite, graph, name, "Present boundary");
-    }
-    {
-        constexpr std::string_view name = "external control rejected";
-        BufferRef buffer = MoerNew(FakeBuffer)(64);
-        RenderGraph graph(name);
-        const auto handle =
-            graph.ImportBuffer("Buffer", buffer, RenderGraph::BufferDesc{.byte_size = 64});
-        graph.SetInitialState(
-            handle,
-            RenderGraph::BufferState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None
-        );
-        graph.AddPass(
-            "External",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(handle, RenderGraph::BufferState::UnorderedAccess)
-                    .ExternalControl()
-                    .SideEffect();
-            },
-            [] {}
-        );
-        graph.Export(
-            handle,
-            RenderGraph::BufferState::ShaderResource,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-        ExpectLowerFailure(suite, graph, name, "ExternalControl");
     }
     {
         constexpr std::string_view name = "incomplete state plan rejected";
@@ -1592,16 +1591,17 @@ void TestFailClosedContracts(TestSuite& suite) {
         RenderGraph graph(name);
         const auto handle =
             graph.ImportBuffer("Buffer", buffer, RenderGraph::BufferDesc{.byte_size = 64});
-        graph.AddPass(
+        graph.AddRecordPass(
             "Write",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(handle, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+                builder.Write(handle, RenderGraph::BufferAccessType::Storage).SideEffect();
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.Export(
             handle,
-            RenderGraph::BufferState::ShaderResource,
+            RenderGraph::BufferAccessType::ShaderRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -1615,16 +1615,17 @@ void TestFailClosedContracts(TestSuite& suite) {
             graph.ImportBuffer("Buffer", buffer, RenderGraph::BufferDesc{.byte_size = 64});
         graph.SetInitialState(
             handle,
-            RenderGraph::BufferState::Undefined,
+            RenderGraph::BufferBoundary::Undefined,
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
-        graph.AddPass(
+        graph.AddRecordPass(
             "Write",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(handle, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+                builder.Write(handle, RenderGraph::BufferAccessType::Storage).SideEffect();
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         ExpectLowerFailure(suite, graph, name, "explicit final state");
     }

@@ -62,55 +62,38 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
            mode == RenderGraph::AccessMode::ReadWrite;
 }
 
-[[nodiscard]] bool TextureStateSupports(
-    RenderGraph::TextureState state,
-    RenderGraph::AccessMode   mode
-) {
-    using State = RenderGraph::TextureState;
-    if (mode == RenderGraph::AccessMode::Unknown) {
+[[nodiscard]] bool TextureAccessSupports(RenderGraph::TextureAccessType type, RenderGraph::AccessMode mode) {
+    using Type = RenderGraph::TextureAccessType;
+    using Mode = RenderGraph::AccessMode;
+    if (mode == Mode::Unknown || type == Type::Unspecified) {
         return true;
     }
-    if (mode == RenderGraph::AccessMode::None) {
-        return state == State::Undefined || state == State::Automatic;
-    }
-    switch (state) {
-        case State::Automatic:
+    switch (type) {
+        case Type::TransferSource:
+        case Type::Sampled:
+            return mode == Mode::Read;
+        case Type::TransferDestination:
+            return mode == Mode::Write;
+        case Type::ColorAttachment:
+            return mode == Mode::Write || mode == Mode::ReadWrite;
+        case Type::Storage:
+        case Type::DepthStencilAttachment:
+            return mode == Mode::Read || mode == Mode::Write || mode == Mode::ReadWrite;
+        case Type::Unspecified:
             return true;
-        case State::Undefined:
-            return false;
-        case State::TransferSource:
-        case State::PresentationSource:
-        case State::ShaderResource:
-        case State::Sampled:
-        case State::DepthStencilRead:
-        case State::Present:
-            return HasRead(mode) && !HasWrite(mode);
-        case State::TransferDestination:
-            return mode == RenderGraph::AccessMode::Write;
-        case State::RenderTarget:
-        case State::DepthStencilWrite:
-            return HasWrite(mode);
-        case State::UnorderedAccess:
-            return HasRead(mode) || HasWrite(mode);
     }
     return false;
 }
 
-[[nodiscard]] bool TextureStateSupportsAspects(
-    RenderGraph::TextureState state,
-    TextureAspect             aspects
-) {
+[[nodiscard]] bool TextureAccessSupportsAspects(RenderGraph::TextureAccessType type, TextureAspect aspects) {
+    using Type             = RenderGraph::TextureAccessType;
     const uint8_t selected = AspectMask(aspects);
-    switch (state) {
-        case RenderGraph::TextureState::RenderTarget:
-        case RenderGraph::TextureState::UnorderedAccess:
-        case RenderGraph::TextureState::PresentationSource:
-        case RenderGraph::TextureState::Present:
+    switch (type) {
+        case Type::ColorAttachment:
+        case Type::Storage:
             return selected == AspectMask(TextureAspect::Color);
-        case RenderGraph::TextureState::DepthStencilRead:
-        case RenderGraph::TextureState::DepthStencilWrite: {
-            const uint8_t depth_stencil = AspectMask(TextureAspect::Depth) |
-                                          AspectMask(TextureAspect::Stencil);
+        case Type::DepthStencilAttachment: {
+            const uint8_t depth_stencil = AspectMask(TextureAspect::Depth) | AspectMask(TextureAspect::Stencil);
             return selected != 0 && (selected & depth_stencil) == selected;
         }
         default:
@@ -118,50 +101,59 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
     }
 }
 
-[[nodiscard]] bool BufferStateSupports(
-    RenderGraph::BufferState state,
-    RenderGraph::AccessMode  mode
-) {
-    using State = RenderGraph::BufferState;
-    if (mode == RenderGraph::AccessMode::Unknown) {
+[[nodiscard]] bool BufferAccessSupports(RenderGraph::BufferAccessType type, RenderGraph::AccessMode mode) {
+    using Type = RenderGraph::BufferAccessType;
+    using Mode = RenderGraph::AccessMode;
+    if (mode == Mode::Unknown || type == Type::Unspecified) {
         return true;
     }
-    if (mode == RenderGraph::AccessMode::None) {
-        return state == State::Undefined || state == State::Automatic;
-    }
-    switch (state) {
-        case State::Automatic:
+    switch (type) {
+        case Type::TransferSource:
+        case Type::VertexBuffer:
+        case Type::IndexBuffer:
+        case Type::IndirectArgument:
+        case Type::ShaderRead:
+        case Type::AccelerationStructureBuildInput:
+        case Type::AccelerationStructureRead:
+            return mode == Mode::Read;
+        case Type::TransferDestination:
+        case Type::AccelerationStructureWrite:
+            return mode == Mode::Write;
+        case Type::Storage:
+            return mode == Mode::Read || mode == Mode::Write || mode == Mode::ReadWrite;
+        case Type::Unspecified:
             return true;
-        case State::Undefined:
-            return false;
-        case State::TransferSource:
-        case State::VertexBuffer:
-        case State::IndexBuffer:
-        case State::IndirectArgument:
-        case State::ShaderResource:
-        case State::AccelerationStructureBuildInput:
-        case State::AccelerationStructureRead:
-            return HasRead(mode) && !HasWrite(mode);
-        case State::TransferDestination:
-        case State::AccelerationStructureWrite:
-            return mode == RenderGraph::AccessMode::Write;
-        case State::UnorderedAccess:
-            return HasRead(mode) || HasWrite(mode);
     }
     return false;
+}
+
+[[nodiscard]] bool BoundarySupportsAccess(const RenderGraph::ResourceState& state, RenderGraph::AccessMode mode) {
+    if (const auto* texture = std::get_if<RenderGraph::TextureAccessType>(&state)) {
+        return TextureAccessSupports(*texture, mode);
+    }
+    if (const auto* buffer = std::get_if<RenderGraph::BufferAccessType>(&state)) {
+        return BufferAccessSupports(*buffer, mode);
+    }
+    if (RenderGraph::IsUndefined(state)) {
+        return mode == RenderGraph::AccessMode::None;
+    }
+    return RenderGraph::IsPresentationSource(state) &&
+           (mode == RenderGraph::AccessMode::Read || mode == RenderGraph::AccessMode::Unknown);
+}
+
+[[nodiscard]] bool TextureBoundarySupportsAspects(const RenderGraph::ResourceState& state, TextureAspect aspects) {
+    if (const auto* type = std::get_if<RenderGraph::TextureAccessType>(&state)) {
+        return TextureAccessSupportsAspects(*type, aspects);
+    }
+    return RenderGraph::IsUndefined(state) ||
+           (RenderGraph::IsPresentationSource(state) && aspects == TextureAspect::Color);
 }
 
 [[nodiscard]] bool StatesCompatible(
     const RenderGraph::ResourceState& previous,
     const RenderGraph::ResourceState& next
 ) {
-    if (previous.kind != next.kind || previous.IsAutomatic() || next.IsAutomatic()) {
-        return false;
-    }
-    if (previous == next) {
-        return true;
-    }
-    return false;
+    return previous == next && !RenderGraph::IsUnspecified(previous);
 }
 
 [[nodiscard]] RenderGraph::ResourceState CanonicalCompatibleState(
@@ -272,37 +264,12 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
             return false;
         }
         const auto& pass = graph.passes[pass_index];
-        const bool has_execute = static_cast<bool>(pass.execute);
-        const bool has_record  = static_cast<bool>(pass.record);
-        if (has_execute == has_record) {
-            return Fail(
-                "pass '" + pass.name + "' must declare exactly one execute or record callback"
-            );
+        if (!pass.record) {
+            return Fail("pass '" + pass.name + "' has no record callback");
         }
-        const bool caller_thread =
-            pass.execution_class == RenderGraph::PassExecutionClass::MainThread ||
-            pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare ||
-            pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl;
-        if (has_execute && !caller_thread) {
-            return Fail(
-                "main-thread pass '" + pass.name + "' cannot use a command-recording class"
-            );
-        }
-        if (has_record && caller_thread) {
-            return Fail(
-                "record pass '" + pass.name + "' must use SerialRecord or ParallelRecordEligible"
-            );
-        }
-        if (has_execute &&
-            pass.translate_execution_class !=
-                ERHITranslateExecutionClass::Parallel) {
-            return Fail(
-                "caller-thread pass '" + pass.name +
-                "' cannot declare a backend translation policy"
-            );
-        }
-        if (pass.workload == 0) {
-            return Fail("pass '" + pass.name + "' has zero recording workload");
+        if (pass.record_policy != RenderGraph::PassRecordPolicy::Serial &&
+            pass.record_policy != RenderGraph::PassRecordPolicy::ParallelAllowed) {
+            return Fail("pass '" + pass.name + "' has an invalid recording policy");
         }
         for (const auto reference : pass.references) {
             if (!graph.IsValidResource(reference)) {
@@ -314,13 +281,6 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                 return Fail("pass '" + pass.name + "' references an invalid resource");
             }
             const auto&   resource = graph.resources[access.resource.resource_id];
-            if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare &&
-                resource.kind != RenderGraph::ResourceKind::Token) {
-                return Fail(
-                    "cpu-prepare pass '" + pass.name +
-                    "' may only access token resources; use Reference for GPU resource identity"
-                );
-            }
             ResourceRange normalized{};
             if (!NormalizeRange(resource, access.range, normalized) ||
                 !ValidateAccessState(
@@ -353,13 +313,10 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                                     bool                                              initial
                                 ) -> bool {
             for (const auto& declaration : declarations) {
-                if (declaration.state.IsAutomatic()) {
-                    return Fail("boundary state cannot be automatic on resource '" + resource.name + "'");
+                if (RenderGraph::IsUnspecified(declaration.state)) {
+                    return Fail("boundary state cannot be unspecified on resource '" + resource.name + "'");
                 }
-                const bool presentation_source =
-                    resource.kind == ResourceKind::Texture &&
-                    declaration.state.texture ==
-                        RenderGraph::TextureState::PresentationSource;
+                const bool presentation_source = RenderGraph::IsPresentationSource(declaration.state);
                 if (presentation_source &&
                     declaration.queue != RenderGraph::QueueRole::Graphics) {
                     return Fail(
@@ -368,32 +325,24 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                     );
                 }
                 if (declaration.queue == RenderGraph::QueueRole::None &&
-                    !declaration.state.IsUndefined()) {
+                    !RenderGraph::IsUndefined(declaration.state)) {
                     return Fail("a known boundary state requires an owner queue on resource '" + resource.name + "'");
                 }
-                if (!initial && declaration.state.IsUndefined()) {
+                if (!initial && RenderGraph::IsUndefined(declaration.state)) {
                     return Fail("an exported resource cannot require the undefined state: " + resource.name);
                 }
-                if (initial && !declaration.state.IsUndefined() &&
+                if (initial && !RenderGraph::IsUndefined(declaration.state) &&
                     declaration.boundary_access == RenderGraph::AccessMode::None) {
                     return Fail("a known imported state must describe its previous access on resource '" +
                                 resource.name + "'");
                 }
-                if (initial && declaration.state.IsUndefined() &&
+                if (initial && RenderGraph::IsUndefined(declaration.state) &&
                     declaration.boundary_access != RenderGraph::AccessMode::None) {
                     return Fail("an undefined imported state must have no previous access on resource '" +
                                 resource.name + "'");
                 }
                 if (declaration.boundary_access != RenderGraph::AccessMode::None) {
-                    const bool supported = resource.kind == ResourceKind::Texture ?
-                                               TextureStateSupports(
-                                                   declaration.state.texture,
-                                                   declaration.boundary_access
-                                               ) :
-                                               BufferStateSupports(
-                                                   declaration.state.buffer,
-                                                   declaration.boundary_access
-                                               );
+                    const bool supported = BoundarySupportsAccess(declaration.state, declaration.boundary_access);
                     if (!supported) {
                         return Fail("boundary access is incompatible with the state on resource '" +
                                     resource.name + "'");
@@ -404,8 +353,8 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                     return false;
                 }
                 if (resource.kind == ResourceKind::Texture &&
-                    !TextureStateSupportsAspects(
-                        declaration.state.texture, std::get<RenderGraph::TextureRange>(normalized).aspects
+                    !TextureBoundarySupportsAspects(
+                        declaration.state, std::get<RenderGraph::TextureRange>(normalized).aspects
                     )) {
                     return Fail(
                         "boundary texture state is incompatible with the selected aspects on resource '" +
@@ -513,8 +462,8 @@ bool RenderGraphCompiler::NormalizeRange(
 bool RenderGraphCompiler::ValidateExecutionDomain(uint32_t pass_index) {
     const auto& pass   = graph.passes[pass_index];
     const auto  queue  = pass.domain.queue;
-    const auto  domain = pass.domain.pipeline;
-    if (queue == RenderGraph::QueueRole::None || domain == RenderGraph::PipelineType::None) {
+    const auto  work   = pass.domain.work;
+    if (queue == RenderGraph::QueueRole::None || work == RenderGraph::GpuWorkType::None) {
         return Fail("pass '" + pass.name + "' has an incomplete execution domain");
     }
     if (!graph.queue_topology.Resolve(queue).available) {
@@ -522,14 +471,14 @@ bool RenderGraphCompiler::ValidateExecutionDomain(uint32_t pass_index) {
             "pass '" + pass.name + "' targets an unavailable logical queue"
         );
     }
-    if (queue == RenderGraph::QueueRole::Copy && domain != RenderGraph::PipelineType::Copy) {
-        return Fail("copy queue pass '" + pass.name + "' must use the copy pipeline domain");
+    if (queue == RenderGraph::QueueRole::Copy && work != RenderGraph::GpuWorkType::Transfer) {
+        return Fail("copy queue pass '" + pass.name + "' must declare Transfer work");
     }
-    if (domain == RenderGraph::PipelineType::Graphics &&
+    if (work == RenderGraph::GpuWorkType::Graphics &&
         queue != RenderGraph::QueueRole::Graphics) {
-        return Fail("graphics pipeline pass '" + pass.name + "' must use the graphics queue");
+        return Fail("graphics pass '" + pass.name + "' must use the graphics queue");
     }
-    if (domain == RenderGraph::PipelineType::RayTracing &&
+    if (work == RenderGraph::GpuWorkType::RayTracing &&
         queue == RenderGraph::QueueRole::Copy) {
         return Fail("ray tracing pass '" + pass.name + "' cannot use the copy queue");
     }
@@ -547,10 +496,9 @@ bool RenderGraphCompiler::ValidateAccessState(
     if (resource.kind == ResourceKind::Token) {
         return true;
     }
-    if (!explicit_state || state.IsAutomatic()) {
+    if (!explicit_state || RenderGraph::IsUnspecified(state)) {
         if (explicit_state) {
-            return Fail("pass '" + graph.passes[pass_index].name +
-                        "' explicitly requested the automatic state");
+            return Fail("pass '" + graph.passes[pass_index].name + "' explicitly requested the unspecified state");
         }
         return true;
     }
@@ -559,33 +507,29 @@ bool RenderGraphCompiler::ValidateAccessState(
     bool        supported = false;
     bool        transfer_state = false;
     if (resource.kind == ResourceKind::Texture) {
-        supported = TextureStateSupports(state.texture, mode) &&
-                    state.texture != RenderGraph::TextureState::Undefined &&
-                    state.texture != RenderGraph::TextureState::Present &&
-                    state.texture !=
-                        RenderGraph::TextureState::PresentationSource;
-        transfer_state = state.texture == RenderGraph::TextureState::TransferSource ||
-                         state.texture == RenderGraph::TextureState::TransferDestination;
-        const bool attachment_state = state.texture == RenderGraph::TextureState::RenderTarget ||
-                                      state.texture == RenderGraph::TextureState::DepthStencilRead ||
-                                      state.texture == RenderGraph::TextureState::DepthStencilWrite;
-        if (attachment_state && pass.domain.pipeline != RenderGraph::PipelineType::Graphics) {
-            return Fail("attachment state requires the graphics pipeline in pass '" + pass.name + "'");
+        const auto texture = std::get<RenderGraph::TextureAccessType>(state);
+        supported          = TextureAccessSupports(texture, mode);
+        transfer_state     = texture == RenderGraph::TextureAccessType::TransferSource ||
+                         texture == RenderGraph::TextureAccessType::TransferDestination;
+        const bool attachment_state = texture == RenderGraph::TextureAccessType::ColorAttachment ||
+                                      texture == RenderGraph::TextureAccessType::DepthStencilAttachment;
+        if (attachment_state && pass.domain.work != RenderGraph::GpuWorkType::Graphics) {
+            return Fail("attachment state requires Graphics work in pass '" + pass.name + "'");
         }
-        if (!TextureStateSupportsAspects(state.texture, std::get<RenderGraph::TextureRange>(range).aspects)) {
+        if (!TextureAccessSupportsAspects(texture, std::get<RenderGraph::TextureRange>(range).aspects)) {
             return Fail(
                 "texture state is incompatible with the selected aspects in pass '" + pass.name + "'"
             );
         }
     } else {
-        supported     = BufferStateSupports(state.buffer, mode) &&
-                    state.buffer != RenderGraph::BufferState::Undefined;
-        transfer_state = state.buffer == RenderGraph::BufferState::TransferSource ||
-                         state.buffer == RenderGraph::BufferState::TransferDestination;
-        const bool graphics_input = state.buffer == RenderGraph::BufferState::VertexBuffer ||
-                                    state.buffer == RenderGraph::BufferState::IndexBuffer;
-        if (graphics_input && pass.domain.pipeline != RenderGraph::PipelineType::Graphics) {
-            return Fail("vertex/index state requires the graphics pipeline in pass '" + pass.name + "'");
+        const auto buffer = std::get<RenderGraph::BufferAccessType>(state);
+        supported         = BufferAccessSupports(buffer, mode);
+        transfer_state    = buffer == RenderGraph::BufferAccessType::TransferSource ||
+                         buffer == RenderGraph::BufferAccessType::TransferDestination;
+        const bool graphics_input = buffer == RenderGraph::BufferAccessType::VertexBuffer ||
+                                    buffer == RenderGraph::BufferAccessType::IndexBuffer;
+        if (graphics_input && pass.domain.work != RenderGraph::GpuWorkType::Graphics) {
+            return Fail("vertex/index state requires Graphics work in pass '" + pass.name + "'");
         }
     }
     if (!supported) {
@@ -593,9 +537,9 @@ bool RenderGraphCompiler::ValidateAccessState(
                     pass.name + "'");
     }
     if ((pass.domain.queue == RenderGraph::QueueRole::Copy ||
-         pass.domain.pipeline == RenderGraph::PipelineType::Copy) &&
+         pass.domain.work == RenderGraph::GpuWorkType::Transfer) &&
         !transfer_state) {
-        return Fail("copy execution domain requires a transfer state in pass '" + pass.name + "'");
+        return Fail("Transfer work or a copy queue requires a transfer state in pass '" + pass.name + "'");
     }
     return true;
 }
@@ -659,10 +603,8 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                         };
                         cell.initialized = resource.imported;
                         cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
-                        cell.state       = RenderGraph::ResourceState::Texture(
-                            resource.imported ? RenderGraph::TextureState::Automatic :
-                                                RenderGraph::TextureState::Undefined
-                        );
+                        cell.state       = resource.imported ? RenderGraph::ResourceState{RenderGraph::TextureAccessType::Unspecified} :
+                                                               RenderGraph::ResourceState{RenderGraph::TextureBoundary::Undefined};
                         cell.state_known = !resource.imported;
                         cells.push_back(std::move(cell));
                     }
@@ -700,10 +642,8 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                 };
                 cell.initialized = resource.imported;
                 cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
-                cell.state       = RenderGraph::ResourceState::Buffer(
-                    resource.imported ? RenderGraph::BufferState::Automatic :
-                                        RenderGraph::BufferState::Undefined
-                );
+                cell.state       = resource.imported ? RenderGraph::ResourceState{RenderGraph::BufferAccessType::Unspecified} :
+                                                       RenderGraph::ResourceState{RenderGraph::BufferBoundary::Undefined};
                 cell.state_known = !resource.imported;
                 cells.push_back(std::move(cell));
             }
@@ -713,12 +653,10 @@ bool RenderGraphCompiler::BuildAtomicCells() {
             cell.initialized = resource.imported;
             cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
             if (resource.kind == ResourceKind::Buffer) {
-                cell.state = RenderGraph::ResourceState::Buffer(
-                    resource.imported ? RenderGraph::BufferState::Automatic :
-                                        RenderGraph::BufferState::Undefined
-                );
+                cell.state = resource.imported ? RenderGraph::ResourceState{RenderGraph::BufferAccessType::Unspecified} :
+                                                 RenderGraph::ResourceState{RenderGraph::BufferBoundary::Undefined};
             } else {
-                cell.state = RenderGraph::ResourceState::Token();
+                cell.state = RenderGraph::ResourceState{};
             }
             cell.state_known = resource.kind == ResourceKind::Token || !resource.imported;
             cells.push_back(std::move(cell));
@@ -742,12 +680,12 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                 }
                 cell.state                       = initial.state;
                 cell.state_known                 = true;
-                cell.initialized                 = !initial.state.IsUndefined();
+                cell.initialized                 = !RenderGraph::IsUndefined(initial.state);
                 if (!cell.initialized) {
                     cell.version = RenderGraph::InvalidVersion;
                 }
                 cell.last_domain                 = RenderGraph::ExecutionDomain{
-                    initial.queue, RenderGraph::PipelineType::None
+                    initial.queue, RenderGraph::GpuWorkType::None
                 };
                 cell.last_mode                    = initial.boundary_access;
                 cell.has_explicit_initial_state  = true;
@@ -822,8 +760,8 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                 const auto&    resource        = graph.resources[resource_index];
                 const auto     access_mode     = ToAccessMode(usage.read, usage.write);
                 const auto     next_state      = usage.explicit_state ?
-                                                    usage.state :
-                                                    RenderGraph::ResourceState{.kind = resource.kind};
+                                                     usage.state :
+                                                     RenderGraph::UnspecifiedResourceState(resource.kind);
 
                 const bool physical_resource = resource.kind != ResourceKind::Token;
                 const bool source_state_unknown = physical_resource && !cell.state_known;
@@ -1083,7 +1021,7 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                 if (physical_resource &&
                     (usage.write || import_availability || state_transition || queue_ownership)) {
                     // This pass has ordered the complete prior frontier and becomes the source of
-                    // state/data availability for later accesses. Automatic accesses still inherit
+                    // state/data availability for later accesses. Unspecified accesses still inherit
                     // this dependency even though they make the logical state unknown.
                     cell.availability_established_pass = pass_index;
                 }
@@ -1187,11 +1125,11 @@ bool RenderGraphCompiler::MergeCellState(
 
     if (usage.explicit_state) {
         const auto combined_mode = ToAccessMode(usage.read, usage.write);
-        const bool supported = resource.kind == ResourceKind::Texture ?
-                                   TextureStateSupports(usage.state.texture, combined_mode) :
-                               resource.kind == ResourceKind::Buffer ?
-                                   BufferStateSupports(usage.state.buffer, combined_mode) :
-                                   true;
+        const bool supported     = resource.kind == ResourceKind::Texture ?
+                                       TextureAccessSupports(std::get<RenderGraph::TextureAccessType>(usage.state), combined_mode) :
+                                   resource.kind == ResourceKind::Buffer ?
+                                       BufferAccessSupports(std::get<RenderGraph::BufferAccessType>(usage.state), combined_mode) :
+                                       true;
         if (!supported) {
             return Fail("combined accesses in pass '" + graph.passes[pass_index].name +
                         "' are incompatible with the explicit state of resource '" + resource.name +
@@ -1264,7 +1202,7 @@ void RenderGraphCompiler::AddBarrier(
         .execution_dependency = execution_dependency,
         .queue_dependency     = queue_dependency,
         .queue_ownership      = queue_ownership,
-        .discard_previous_contents = cell.state_known && cell.state.IsUndefined(),
+        .discard_previous_contents = cell.state_known && RenderGraph::IsUndefined(cell.state),
         .import_boundary      = import_boundary,
         .export_boundary      = export_boundary,
         .source_state_unknown = source_state_unknown,
@@ -1337,7 +1275,7 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
                 cell,
                 RenderGraph::PassHandle{},
                 final->state,
-                RenderGraph::ExecutionDomain{final->queue, RenderGraph::PipelineType::None},
+                RenderGraph::ExecutionDomain{final->queue, RenderGraph::GpuWorkType::None},
                 final->boundary_access,
                 state_transition,
                 memory_dependency,
@@ -1467,28 +1405,10 @@ void RenderGraphCompiler::BuildQueuePlan() {
     std::vector<uint32_t> pass_to_batch(
         graph.passes.size(), RenderGraph::InvalidIndex
     );
-    bool force_new_managed_batch = false;
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
         const auto& pass    = graph.passes[pass_handle.pass_id];
-        if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare) {
-            continue;
-        }
         const auto  binding = graph.queue_topology.Resolve(pass.domain.queue);
-        if (pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
-            const uint32_t batch_id =
-                static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
-            graph.compiled_plan.queue_batches.push_back(RenderGraph::CompiledQueueBatch{
-                .id               = batch_id,
-                .queue            = binding,
-                .passes           = {pass_handle},
-                .external_control = true,
-            });
-            pass_to_batch[pass_handle.pass_id] = batch_id;
-            force_new_managed_batch          = true;
-            continue;
-        }
-        if (graph.compiled_plan.queue_batches.empty() || force_new_managed_batch ||
-            graph.compiled_plan.queue_batches.back().external_control ||
+        if (graph.compiled_plan.queue_batches.empty() ||
             graph.compiled_plan.queue_batches.back().queue.role != binding.role) {
             const uint32_t batch_id =
                 static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
@@ -1497,7 +1417,6 @@ void RenderGraphCompiler::BuildQueuePlan() {
                 .queue = binding,
             });
         }
-        force_new_managed_batch = false;
         auto& batch = graph.compiled_plan.queue_batches.back();
         batch.passes.push_back(pass_handle);
         pass_to_batch[pass_handle.pass_id] = batch.id;
@@ -1722,9 +1641,9 @@ void RenderGraphCompiler::BuildFrontendRecordUnits() {
                 .source_index = source_index,
                 .target_queue = graph.queue_topology.Resolve(pass.domain.queue),
                 .pass         = pass_handle,
-                .record_execution_class = pass.execution_class,
+                .record_policy = pass.record_policy,
                 .native_translate_class = pass.translate_execution_class,
-                .estimated_record_work  = pass.workload,
+
                 .dependency_level_index =
                     pass_to_dependency_level[pass_handle.pass_id],
             }
@@ -1736,20 +1655,20 @@ void RenderGraphCompiler::BuildFrontendDispatchGroups() {
     // Graph edges describe GPU execution, state, and ownership. They do not
     // order frontend Record callbacks: every callback consumes immutable
     // prepared data and writes a private command stream. Only the declared CPU
-    // execution class creates a frontend dispatch boundary.
+    // recording policy creates a frontend dispatch boundary.
     uint32_t unit_index = 0;
     while (unit_index < graph.compiled_plan.frontend_record_units.size()) {
         const auto& first =
             graph.compiled_plan.frontend_record_units[unit_index];
         uint32_t group_end = unit_index + 1;
-        if (first.record_execution_class ==
-            RenderGraph::PassExecutionClass::ParallelRecordEligible) {
+        if (first.record_policy ==
+            RenderGraph::PassRecordPolicy::ParallelAllowed) {
             while (group_end <
                    graph.compiled_plan.frontend_record_units.size()) {
                 const auto& candidate =
                     graph.compiled_plan.frontend_record_units[group_end];
-                if (candidate.record_execution_class !=
-                    RenderGraph::PassExecutionClass::ParallelRecordEligible) {
+                if (candidate.record_policy !=
+                    RenderGraph::PassRecordPolicy::ParallelAllowed) {
                     break;
                 }
                 ++group_end;
@@ -1760,7 +1679,7 @@ void RenderGraphCompiler::BuildFrontendDispatchGroups() {
             RenderGraph::CompiledFrontendDispatchGroup{
                 .first_unit = unit_index,
                 .unit_count = group_end - unit_index,
-                .record_execution_class = first.record_execution_class,
+                .record_policy = first.record_policy,
             }
         );
         unit_index = group_end;
@@ -1926,7 +1845,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
             accesses_are_safe &=
                 position != RenderGraph::InvalidIndex &&
                 access->domain.queue == RenderGraph::QueueRole::Graphics &&
-                !access->state.IsAutomatic() && !access->state.IsUndefined() &&
+                !RenderGraph::IsUnspecified(access->state) && !RenderGraph::IsUndefined(access->state) &&
                 is_whole_range(resource, access->range);
         }
 
@@ -2026,7 +1945,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
                     barrier.dst_pass == candidate.first_access->pass &&
                     barrier.range == candidate.first_access->range &&
                     !barrier.src_pass.IsValid() && barrier.sources.empty() &&
-                    barrier.before_state.IsUndefined() &&
+                    RenderGraph::IsUndefined(barrier.before_state) &&
                     barrier.after_state == candidate.first_access->state &&
                     barrier.after_access == candidate.first_access->mode &&
                     !barrier.import_boundary && !barrier.export_boundary) {

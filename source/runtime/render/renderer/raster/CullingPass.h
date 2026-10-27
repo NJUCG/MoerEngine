@@ -325,7 +325,7 @@ public:
         RecordParameters           parameters,
         RenderGraph::TextureHandle hiz = {}
     ) {
-        using BS          = RenderGraph::BufferState;
+        using BS          = RenderGraph::BufferAccessType;
         const auto import = [&](BufferView view) {
             return ImportRasterBuffer(graph, name, view.GetBuffer());
         };
@@ -335,7 +335,7 @@ public:
         graph.AddRecordPass(
             std::string(name) + ".Initialize",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
                     .Write(counters, BS::TransferDestination);
                 if (parameters.dispatch_count) {
                     builder.Write(cull_data, BS::TransferDestination);
@@ -348,7 +348,8 @@ public:
             },
             [this, parameters](CommandList& commands) {
                 RecordInitialize(commands, parameters);
-            }
+            },
+            RenderGraph::PassRecordPolicy::Serial
         );
         RenderGraph::PassHandle cull{};
         if (parameters.dispatch_count) {
@@ -361,24 +362,24 @@ public:
             cull                  = graph.AddRecordPass(
                 std::string(name) + ".Cull",
                 [=](RenderGraph::PassBuilder& builder) {
-                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                         .Read(table)
-                        .Read(source, BS::ShaderResource)
-                        .Read(primitives, BS::ShaderResource)
-                        .Read(instances, BS::ShaderResource)
-                        .Read(cull_data, BS::ShaderResource)
-                        .Read(clusters, BS::ShaderResource)
-                        .Write(visible, BS::UnorderedAccess)
-                        .Write(draws, BS::UnorderedAccess)
-                        .ReadWrite(counters, BS::UnorderedAccess);
+                        .Read(source, BS::ShaderRead)
+                        .Read(primitives, BS::ShaderRead)
+                        .Read(instances, BS::ShaderRead)
+                        .Read(cull_data, BS::ShaderRead)
+                        .Read(clusters, BS::ShaderRead)
+                        .Write(visible, BS::Storage)
+                        .Write(draws, BS::Storage)
+                        .ReadWrite(counters, BS::Storage);
                     if (parameters.use_hiz) {
-                        builder.Read(hiz, RenderGraph::TextureState::Sampled);
+                        builder.Read(hiz, RenderGraph::TextureAccessType::Sampled);
                     }
                 },
                 [this, parameters](CommandList& commands) {
                     RecordCull(commands, parameters);
                 },
-                RenderGraph::PassExecutionClass::ParallelRecordEligible
+                RenderGraph::PassRecordPolicy::ParallelAllowed
             );
         }
         // This callback updates one pass-owned readback slot; keep CPU recording
@@ -386,14 +387,14 @@ public:
         graph.AddRecordPass(
             std::string(name) + ".Readback",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
                     .Read(counters, BS::TransferSource)
                     .SideEffect();
             },
             [this, parameters](CommandList& commands) {
                 QueueCounterReadback(commands, parameters.counters);
             },
-            RenderGraph::PassExecutionClass::SerialRecord
+            RenderGraph::PassRecordPolicy::Serial
         );
         return cull;
     }

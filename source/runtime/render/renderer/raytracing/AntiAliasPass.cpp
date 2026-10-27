@@ -1,4 +1,4 @@
-﻿#include "AntiAliasPass.h"
+#include "AntiAliasPass.h"
 // 实现时序解析与确定性抖动序列。
 
 #include "rhi/RHIResource.h"
@@ -181,13 +181,13 @@ bool AntialiasPass::AddPasses(
         ImportRTGraphBuffer(graph, "RT.AntiAlias.constants", owner->constants);
     graph.SetInitialState(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.SetInitialState(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -198,7 +198,7 @@ bool AntialiasPass::AddPasses(
         // histories to the same SRV/read boundary.
         graph.SetInitialState(
             feedback,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -223,7 +223,7 @@ bool AntialiasPass::AddPasses(
         [](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                 RenderGraph::QueueRole::Graphics,
-                RenderGraph::PipelineType::Copy
+                RenderGraph::GpuWorkType::Transfer
             );
         },
         [](CommandList& cmd_list, const UploadGraphParameters& parameters) {
@@ -238,7 +238,7 @@ bool AntialiasPass::AddPasses(
                 parameters.command.Get()
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     DispatchGraphParameters dispatch_parameters{};
@@ -257,7 +257,7 @@ bool AntialiasPass::AddPasses(
         [](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                 RenderGraph::QueueRole::Graphics,
-                RenderGraph::PipelineType::Compute
+                RenderGraph::GpuWorkType::Compute
             );
         },
         [](CommandList& cmd_list, const DispatchGraphParameters& parameters) {
@@ -274,26 +274,26 @@ bool AntialiasPass::AddPasses(
                 parameters.resources
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     for (const auto feedback : {feedback_read, feedback_write}) {
         graph.Export(
             feedback,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
     }
     graph.Export(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

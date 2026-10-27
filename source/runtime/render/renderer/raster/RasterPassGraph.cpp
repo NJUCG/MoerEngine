@@ -74,7 +74,8 @@ RenderGraph::PassHandle ShadowDepthPass::AddToGraph(
             },
             [parameters](CommandList& commands) {
                 commands.UpdateBindlessArray(parameters->bindless);
-            }
+            },
+            RenderGraph::PassRecordPolicy::Serial
         );
     }
     const RasterSceneGraphReads scene_reads(graph, context.GetGpuSceneRes());
@@ -91,8 +92,8 @@ RenderGraph::PassHandle ShadowDepthPass::AddToGraph(
             graph.AddRecordPass(
                 batch.pass_name + ".UploadMatrices",
                 [=](RenderGraph::PassBuilder& builder) {
-                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                        .Write(matrices, RenderGraph::BufferState::TransferDestination);
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                        .Write(matrices, RenderGraph::BufferAccessType::TransferDestination);
                 },
                 [parameters, index](CommandList& commands) {
                     const auto& data = parameters->draws[index].multiview_matrices;
@@ -100,7 +101,8 @@ RenderGraph::PassHandle ShadowDepthPass::AddToGraph(
                         std::span<const byte>(reinterpret_cast<const byte*>(&data), sizeof(data)),
                         parameters->point_shadow_view_matrices->GetView()
                     );
-                }
+                },
+                RenderGraph::PassRecordPolicy::ParallelAllowed
             );
         }
         const auto depth = ImportRasterTexture(graph, batch.pass_name, batch.depth_view.GetTexture());
@@ -118,16 +120,16 @@ RenderGraph::PassHandle ShadowDepthPass::AddToGraph(
         draws.push_back(graph.AddRecordPass(
             batch.pass_name,
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
                     .Read(table)
-                    .Read(indices, RenderGraph::BufferState::IndexBuffer)
-                    .Read(visible, RenderGraph::BufferState::ShaderResource)
-                    .Read(indirect, RenderGraph::BufferState::IndirectArgument)
-                    .Read(count, RenderGraph::BufferState::IndirectArgument)
-                    .Write(depth, RenderGraph::TextureState::DepthStencilWrite, range);
+                    .Read(indices, RenderGraph::BufferAccessType::IndexBuffer)
+                    .Read(visible, RenderGraph::BufferAccessType::ShaderRead)
+                    .Read(indirect, RenderGraph::BufferAccessType::IndirectArgument)
+                    .Read(count, RenderGraph::BufferAccessType::IndirectArgument)
+                    .Write(depth, RenderGraph::TextureAccessType::DepthStencilAttachment, range);
                 scene_reads.Declare(builder);
                 if (matrices.IsValid()) {
-                    builder.Read(matrices, RenderGraph::BufferState::ShaderResource);
+                    builder.Read(matrices, RenderGraph::BufferAccessType::ShaderRead);
                 }
             },
             [this, parameters, index](CommandList& commands) {
@@ -138,7 +140,7 @@ RenderGraph::PassHandle ShadowDepthPass::AddToGraph(
                     RecordShadowDraw(commands, *parameters, draw);
                 }
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         ));
     }
     return graph.AddRecordPass(
@@ -152,7 +154,8 @@ RenderGraph::PassHandle ShadowDepthPass::AddToGraph(
                 builder.DependsOn(publication);
             }
         },
-        [](CommandList&) {}
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -186,16 +189,17 @@ RenderGraph::PassHandle ProbeUpdatePass::AddToGraph(
     auto last = graph.AddRecordPass(
         "ProbeUpdate.Upload",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
                 .Write(resources.probe_volume)
                 .SideEffect();
             for (auto buffer : uploads) {
-                builder.Write(buffer, RenderGraph::BufferState::TransferDestination);
+                builder.Write(buffer, RenderGraph::BufferAccessType::TransferDestination);
             }
         },
         [parameters](CommandList& commands) {
             ProbeVolumeResource::RecordSceneDataUpload(commands, parameters->scene_upload);
-        }
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto probes           = import(parameters->probe_data);
     const auto visibility       = import(parameters->visibility_atlas);
@@ -231,28 +235,28 @@ RenderGraph::PassHandle ProbeUpdatePass::AddToGraph(
         last = graph.AddRecordPass(
             std::format("ProbeUpdate.Job{}", index),
             [=](RenderGraph::PassBuilder& builder) {
-                using BS = RenderGraph::BufferState;
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                using BS = RenderGraph::BufferAccessType;
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                     .ReadWrite(resources.probe_volume)
-                    .ReadWrite(probes, BS::UnorderedAccess)
-                    .ReadWrite(visibility, BS::UnorderedAccess)
-                    .ReadWrite(irradiance, BS::UnorderedAccess)
-                    .Read(scene, BS::ShaderResource)
-                    .Read(volumes, BS::ShaderResource)
-                    .Read(bricks, BS::ShaderResource)
-                    .Write(visibility_image, RenderGraph::TextureState::UnorderedAccess)
-                    .Write(irradiance_image, RenderGraph::TextureState::UnorderedAccess)
-                    .Read(environment, RenderGraph::TextureState::Sampled)
+                    .ReadWrite(probes, BS::Storage)
+                    .ReadWrite(visibility, BS::Storage)
+                    .ReadWrite(irradiance, BS::Storage)
+                    .Read(scene, BS::ShaderRead)
+                    .Read(volumes, BS::ShaderRead)
+                    .Read(bricks, BS::ShaderRead)
+                    .Write(visibility_image, RenderGraph::TextureAccessType::Storage)
+                    .Write(irradiance_image, RenderGraph::TextureAccessType::Storage)
+                    .Read(environment, RenderGraph::TextureAccessType::Sampled)
                     .SideEffect();
                 scene_reads.Declare(builder);
                 for (auto buffer : ray_data) {
-                    builder.Read(buffer, BS::ShaderResource);
+                    builder.Read(buffer, BS::ShaderRead);
                 }
             },
             [this, parameters, index](CommandList& commands) {
                 RecordJob(commands, *parameters, index);
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
     return last;
@@ -278,22 +282,22 @@ RenderGraph::PassHandle GeometryPass::AddToGraph(
     return graph.AddRecordPass(
         "Geometry.Draw",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
                 .Read(table)
-                .Read(indices, RenderGraph::BufferState::IndexBuffer)
-                .Read(visible, RenderGraph::BufferState::ShaderResource)
-                .Read(indirect, RenderGraph::BufferState::IndirectArgument)
-                .Read(count, RenderGraph::BufferState::IndirectArgument)
-                .Write(resources.base_color, RenderGraph::TextureState::RenderTarget)
-                .Write(resources.normal, RenderGraph::TextureState::RenderTarget)
-                .Write(resources.metal_rough_ao, RenderGraph::TextureState::RenderTarget)
-                .Write(resources.depth, RenderGraph::TextureState::DepthStencilWrite);
+                .Read(indices, RenderGraph::BufferAccessType::IndexBuffer)
+                .Read(visible, RenderGraph::BufferAccessType::ShaderRead)
+                .Read(indirect, RenderGraph::BufferAccessType::IndirectArgument)
+                .Read(count, RenderGraph::BufferAccessType::IndirectArgument)
+                .Write(resources.base_color, RenderGraph::TextureAccessType::ColorAttachment)
+                .Write(resources.normal, RenderGraph::TextureAccessType::ColorAttachment)
+                .Write(resources.metal_rough_ao, RenderGraph::TextureAccessType::ColorAttachment)
+                .Write(resources.depth, RenderGraph::TextureAccessType::DepthStencilAttachment);
             scene_reads.Declare(builder);
         },
         [this, parameters](CommandList& commands) {
             RecordDraw(commands, *parameters);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -322,28 +326,29 @@ void TessellatedSurfacePass::AddToGraph(
     graph.AddRecordPass(
         "Tessellation.Upload",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Write(data, RenderGraph::BufferState::TransferDestination);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(data, RenderGraph::BufferAccessType::TransferDestination);
         },
         [this, prepared](CommandList& commands) {
             RecordUpload(commands, prepared.Get());
-        }
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "TessellatedSurface",
         [resources, data](RenderGraph::PassBuilder& builder) {
-            builder.Read(data, RenderGraph::BufferState::ShaderResource);
-            builder.ReadWrite(resources.base_color, RenderGraph::TextureState::RenderTarget)
-                .ReadWrite(resources.normal, RenderGraph::TextureState::RenderTarget)
-                .ReadWrite(resources.metal_rough_ao, RenderGraph::TextureState::RenderTarget)
-                .ReadWrite(resources.depth, RenderGraph::TextureState::DepthStencilWrite);
+            builder.Read(data, RenderGraph::BufferAccessType::ShaderRead);
+            builder.ReadWrite(resources.base_color, RenderGraph::TextureAccessType::ColorAttachment)
+                .ReadWrite(resources.normal, RenderGraph::TextureAccessType::ColorAttachment)
+                .ReadWrite(resources.metal_rough_ao, RenderGraph::TextureAccessType::ColorAttachment)
+                .ReadWrite(resources.depth, RenderGraph::TextureAccessType::DepthStencilAttachment);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "TessellatedSurface", [&] {
                 RecordDraw(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -365,15 +370,14 @@ void HiZBuildPass::AddToGraph(
         graph.AddRecordPass(
             std::format("HiZBuild.Mip{}", mip),
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                    .Read(mip == 0 ? resources.depth : resources.hiz_current,
-                          RenderGraph::TextureState::Sampled,
-                          RenderGraph::TextureRange::Mips(mip == 0 ? 0 : mip - 1, 1))
-                    .Write(resources.hiz_current, RenderGraph::TextureState::UnorderedAccess,
-                           RenderGraph::TextureRange::Mips(mip, 1));
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                    .Read(mip == 0 ? resources.depth : resources.hiz_current, RenderGraph::TextureAccessType::Sampled, RenderGraph::TextureRange::Mips(mip == 0 ? 0 : mip - 1, 1))
+                    .Write(resources.hiz_current, RenderGraph::TextureAccessType::Storage, RenderGraph::TextureRange::Mips(mip, 1));
             },
-            [this, prepared, mip](CommandList& cmd_list) { RecordMip(cmd_list, prepared.Get(), mip); },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            [this, prepared, mip](CommandList& cmd_list) {
+                RecordMip(cmd_list, prepared.Get(), mip);
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 }
@@ -399,21 +403,21 @@ void DirectionalShadowMaskPass::AddToGraph(
         "DirectionalShadowMask",
         [resources, shadows](RenderGraph::PassBuilder& builder) {
             for (auto texture : shadows) {
-                builder.Read(texture, RenderGraph::TextureState::Sampled);
+                builder.Read(texture, RenderGraph::TextureAccessType::Sampled);
             }
 
-            builder.Read(resources.normal, RenderGraph::TextureState::Sampled)
-                .Read(resources.depth, RenderGraph::TextureState::Sampled)
-                .Read(resources.lighting_data, RenderGraph::BufferState::ShaderResource)
+            builder.Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.lighting_data, RenderGraph::BufferAccessType::ShaderRead)
                 .Read(resources.shadow_maps)
-                .Write(resources.shadow_mask, RenderGraph::TextureState::RenderTarget);
+                .Write(resources.shadow_mask, RenderGraph::TextureAccessType::ColorAttachment);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "DirectionalShadowMask", [&] {
                 Record(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -442,23 +446,23 @@ void LightingPass::AddToGraph(
         "Lighting",
         [resources, shadows, probes, emu, eavg](RenderGraph::PassBuilder& builder) {
             for (auto texture : shadows) {
-                builder.Read(texture, RenderGraph::TextureState::Sampled);
+                builder.Read(texture, RenderGraph::TextureAccessType::Sampled);
             }
             probes.Declare(builder);
-            builder.Read(emu, RenderGraph::TextureState::Sampled)
-                .Read(eavg, RenderGraph::TextureState::Sampled);
+            builder.Read(emu, RenderGraph::TextureAccessType::Sampled)
+                .Read(eavg, RenderGraph::TextureAccessType::Sampled);
 
-            builder.Read(resources.base_color, RenderGraph::TextureState::Sampled)
-                .Read(resources.normal, RenderGraph::TextureState::Sampled)
-                .Read(resources.metal_rough_ao, RenderGraph::TextureState::Sampled)
-                .Read(resources.depth, RenderGraph::TextureState::Sampled)
-                .Read(resources.shadow_mask, RenderGraph::TextureState::Sampled)
-                .Read(resources.lighting_data, RenderGraph::BufferState::ShaderResource)
-                .Read(resources.cubemap, RenderGraph::TextureState::Sampled)
+            builder.Read(resources.base_color, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.metal_rough_ao, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.shadow_mask, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.lighting_data, RenderGraph::BufferAccessType::ShaderRead)
+                .Read(resources.cubemap, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.probe_volume)
-                .Write(resources.lighting_output, RenderGraph::TextureState::RenderTarget);
+                .Write(resources.lighting_output, RenderGraph::TextureAccessType::ColorAttachment);
             if (resources.scene_lights.IsValid()) {
-                builder.Read(resources.scene_lights, RenderGraph::BufferState::ShaderResource);
+                builder.Read(resources.scene_lights, RenderGraph::BufferAccessType::ShaderRead);
             }
         },
         [this, prepared](CommandList& cmd_list) {
@@ -466,7 +470,7 @@ void LightingPass::AddToGraph(
                 Record(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -493,16 +497,16 @@ void SkyboxPass::AddToGraph(
         [resources](RenderGraph::PassBuilder& builder) {
             // Skybox disables depth writes, but the attachment STORE operation
             // still writes memory at the end of rendering.
-            builder.ReadWrite(resources.depth, RenderGraph::TextureState::DepthStencilWrite)
-                .Read(resources.cubemap, RenderGraph::TextureState::Sampled)
-                .ReadWrite(resources.lighting_output, RenderGraph::TextureState::RenderTarget);
+            builder.ReadWrite(resources.depth, RenderGraph::TextureAccessType::DepthStencilAttachment)
+                .Read(resources.cubemap, RenderGraph::TextureAccessType::Sampled)
+                .ReadWrite(resources.lighting_output, RenderGraph::TextureAccessType::ColorAttachment);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Skybox", [&] {
                 Record(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -533,7 +537,7 @@ void ProbeGizmoPass::AddToGraph(
             probes.Declare(builder);
 
             builder.Read(resources.probe_volume)
-                .ReadWrite(resources.lighting_output, RenderGraph::TextureState::RenderTarget)
+                .ReadWrite(resources.lighting_output, RenderGraph::TextureAccessType::ColorAttachment)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
@@ -541,7 +545,7 @@ void ProbeGizmoPass::AddToGraph(
                 Record(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -567,12 +571,13 @@ void AoPass::AddToGraph(
     graph.AddRecordPass(
         "AmbientOcclusion.UploadMotion",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Write(resources.motion_vector_data, RenderGraph::BufferState::TransferDestination);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(resources.motion_vector_data, RenderGraph::BufferAccessType::TransferDestination);
         },
         [this, prepared](CommandList& commands) {
             RecordUpload(commands, prepared.Get());
-        }
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const bool ray_query = ui_config.ao_mode == EAoMode::RTAO || ui_config.ao_mode == EAoMode::RTAO_AO_ONLY;
     graph.AddRecordPass(
@@ -581,29 +586,29 @@ void AoPass::AddToGraph(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    ray_query ? RenderGraph::PipelineType::Compute : RenderGraph::PipelineType::Graphics
+                    ray_query ? RenderGraph::GpuWorkType::Compute : RenderGraph::GpuWorkType::Graphics
                 )
-                .Read(resources.normal, RenderGraph::TextureState::Sampled)
-                .Read(resources.depth, RenderGraph::TextureState::Sampled)
-                .Read(resources.lighting_output, RenderGraph::TextureState::Sampled)
+                .Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.lighting_output, RenderGraph::TextureAccessType::Sampled)
                 .Write(
                     resources.ao_only,
-                    ray_query ? RenderGraph::TextureState::UnorderedAccess :
-                                           RenderGraph::TextureState::RenderTarget
+                    ray_query ? RenderGraph::TextureAccessType::Storage :
+                                RenderGraph::TextureAccessType::ColorAttachment
                 )
                 .Write(
                     resources.camera_motion_vector,
-                    ray_query ? RenderGraph::TextureState::UnorderedAccess :
-                                           RenderGraph::TextureState::RenderTarget
+                    ray_query ? RenderGraph::TextureAccessType::Storage :
+                                RenderGraph::TextureAccessType::ColorAttachment
                 )
-                .Read(resources.motion_vector_data, RenderGraph::BufferState::ShaderResource);
+                .Read(resources.motion_vector_data, RenderGraph::BufferAccessType::ShaderRead);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AmbientOcclusion", [&] {
                 RecordEvaluate(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -628,19 +633,19 @@ void AoPass::AddCompositeToGraph(
     graph.AddRecordPass(
         "AoComposite",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                .Read(resources.ao_only, RenderGraph::TextureState::Sampled)
-                .Read(resources.lighting_output, RenderGraph::TextureState::Sampled)
-                .Read(resources.depth, RenderGraph::TextureState::Sampled)
-                .Read(resources.normal, RenderGraph::TextureState::Sampled)
-                .Write(resources.ao_output, RenderGraph::TextureState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                .Read(resources.ao_only, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.lighting_output, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
+                .Write(resources.ao_output, RenderGraph::TextureAccessType::Storage);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AoComposite", [&] {
                 RecordComposite(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -669,30 +674,30 @@ void RtaoDenoiserPass::AddToGraph(
     graph.AddRecordPass(
         "RtaoDenoise",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.normal, RenderGraph::TextureState::Sampled)
-                .Read(resources.depth, RenderGraph::TextureState::Sampled)
-                .Read(resources.camera_motion_vector, RenderGraph::TextureState::Sampled)
-                .Read(resources.history_read, RenderGraph::TextureState::Sampled)
-                .Read(resources.ao_only, RenderGraph::TextureState::Sampled)
-                .Write(resources.history_write, RenderGraph::TextureState::RenderTarget);
+            builder.Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.camera_motion_vector, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.history_read, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.ao_only, RenderGraph::TextureAccessType::Sampled)
+                .Write(resources.history_write, RenderGraph::TextureAccessType::ColorAttachment);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "RtaoDenoise", [&] {
                 RecordDenoise(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "RtaoDenoise.Copy",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.history_write, RenderGraph::TextureState::Sampled)
-                .Write(resources.ao_only, RenderGraph::TextureState::RenderTarget);
+            builder.Read(resources.history_write, RenderGraph::TextureAccessType::Sampled)
+                .Write(resources.ao_only, RenderGraph::TextureAccessType::ColorAttachment);
         },
         [this, prepared](CommandList& commands) {
             RecordCopy(commands, prepared.Get());
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -717,15 +722,15 @@ void BilateralFilterDenoiserPass::AddToGraph(
     graph.AddRecordPass(
         "BilateralDenoise",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.input, RenderGraph::TextureState::Sampled)
-                .Write(resources.denoiser_output, RenderGraph::TextureState::RenderTarget);
+            builder.Read(resources.input, RenderGraph::TextureAccessType::Sampled)
+                .Write(resources.denoiser_output, RenderGraph::TextureAccessType::ColorAttachment);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "BilateralDenoise", [&] {
                 Record(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -751,18 +756,18 @@ void SsrPass::AddToGraph(
     graph.AddRecordPass(
         "ScreenSpaceReflection",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.input, RenderGraph::TextureState::Sampled)
-                .Read(resources.normal, RenderGraph::TextureState::Sampled)
-                .Read(resources.depth, RenderGraph::TextureState::Sampled)
-                .Read(resources.metal_rough_ao, RenderGraph::TextureState::Sampled)
-                .Write(resources.ssr_output, RenderGraph::TextureState::RenderTarget);
+            builder.Read(resources.input, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.metal_rough_ao, RenderGraph::TextureAccessType::Sampled)
+                .Write(resources.ssr_output, RenderGraph::TextureAccessType::ColorAttachment);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "ScreenSpaceReflection", [&] {
                 Record(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -786,7 +791,7 @@ void AaPass::AddToGraph(
         return;
     }
 
-    using State = RenderGraph::TextureState;
+    using State       = RenderGraph::TextureAccessType;
     const auto import = [&](std::string_view name, const TextureWithHandle& texture) {
         return ImportRasterTexture(graph, name, texture.tex.Get());
     };
@@ -796,12 +801,18 @@ void AaPass::AddToGraph(
     graph.AddRecordPass(
         smaa ? "AA.Edges" : "AA.Luma",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
-                .Read(resources.input, State::Sampled).Write(texture_1, State::RenderTarget);
-            if (temporal) { builder.Read(resources.depth, State::Sampled); }
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                .Read(resources.input, State::Sampled)
+                .Write(texture_1, State::ColorAttachment);
+            if (temporal) {
+                builder.Read(resources.depth, State::Sampled);
+            }
         },
-        [this, prepared](CommandList& commands) { RecordEdgesOrLuma(commands, prepared.Get()); },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible);
+        [this, prepared](CommandList& commands) {
+            RecordEdgesOrLuma(commands, prepared.Get());
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
     RenderGraph::TextureHandle texture_2{};
     if (smaa) {
         texture_2 = import("AA.weights", context.textures.aa_texture_2);
@@ -810,35 +821,51 @@ void AaPass::AddToGraph(
         graph.AddRecordPass(
             "AA.Weights",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
-                    .Read(texture_1, State::Sampled).Read(area, State::Sampled).Read(search, State::Sampled)
-                    .Write(texture_2, State::RenderTarget);
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                    .Read(texture_1, State::Sampled)
+                    .Read(area, State::Sampled)
+                    .Read(search, State::Sampled)
+                    .Write(texture_2, State::ColorAttachment);
             },
-            [this, prepared](CommandList& commands) { RecordWeights(commands, prepared.Get()); },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible);
+            [this, prepared](CommandList& commands) {
+                RecordWeights(commands, prepared.Get());
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
     }
     const auto blend_output = temporal ? import("AA.current", *aa_texture_34[smaa_phase]) : resources.aa_output;
     graph.AddRecordPass(
         "AA.Blend",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
-                .Read(texture_1, State::Sampled).Write(blend_output, State::RenderTarget);
-            if (smaa) { builder.Read(resources.input, State::Sampled).Read(texture_2, State::Sampled); }
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                .Read(texture_1, State::Sampled)
+                .Write(blend_output, State::ColorAttachment);
+            if (smaa) {
+                builder.Read(resources.input, State::Sampled).Read(texture_2, State::Sampled);
+            }
         },
-        [this, prepared](CommandList& commands) { RecordBlend(commands, prepared.Get()); },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible);
+        [this, prepared](CommandList& commands) {
+            RecordBlend(commands, prepared.Get());
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
     if (temporal) {
         // An invalid history samples the current output, exactly as Prepare's shader handle does.
         const auto previous = history_valid ? import("AA.previous", *aa_texture_34[smaa_phase ^ 1u]) : blend_output;
         graph.AddRecordPass(
             "AA.Resolve",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
-                    .Read(blend_output, State::Sampled).Read(previous, State::Sampled)
-                    .Read(texture_1, State::Sampled).Write(resources.aa_output, State::RenderTarget);
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                    .Read(blend_output, State::Sampled)
+                    .Read(previous, State::Sampled)
+                    .Read(texture_1, State::Sampled)
+                    .Write(resources.aa_output, State::ColorAttachment);
             },
-            [this, prepared](CommandList& commands) { RecordResolve(commands, prepared.Get()); },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible);
+            [this, prepared](CommandList& commands) {
+                RecordResolve(commands, prepared.Get());
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
     }
 }
 
@@ -872,7 +899,7 @@ RenderGraph::PassHandle BloomPass::AddRecordPasses(
     RenderGraph& graph, GraphResources resources, RGPreparedValue<RecordParameters> prepared, uint32 mip_count
 ) {
     using Range = RenderGraph::TextureRange;
-    using State = RenderGraph::TextureState;
+    using State = RenderGraph::TextureAccessType;
     if (mip_count == 0) {
         throw std::invalid_argument("Bloom graph requires at least one mip");
     }
@@ -881,23 +908,27 @@ RenderGraph::PassHandle BloomPass::AddRecordPasses(
     graph.AddRecordPass(
         "Bloom.Prefilter",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
                 .Read(resources.input, State::Sampled, Range::Mips(0, 1))
-                .Write(resources.downsample_chain, State::RenderTarget, Range::Mips(0, 1));
+                .Write(resources.downsample_chain, State::ColorAttachment, Range::Mips(0, 1));
         },
-        [this, prepared](CommandList& commands) { RecordPrefilter(commands, prepared.Get()); },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        [this, prepared](CommandList& commands) {
+            RecordPrefilter(commands, prepared.Get());
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     for (uint32 mip = 1; mip < mip_count; ++mip) {
         graph.AddRecordPass(
             std::format("Bloom.Downsample{}", mip),
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
                     .Read(resources.downsample_chain, State::Sampled, Range::Mips(mip - 1, 1))
-                    .Write(resources.downsample_chain, State::RenderTarget, Range::Mips(mip, 1));
+                    .Write(resources.downsample_chain, State::ColorAttachment, Range::Mips(mip, 1));
             },
-            [this, prepared, mip](CommandList& commands) { RecordDownsample(commands, prepared.Get(), mip); },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            [this, prepared, mip](CommandList& commands) {
+                RecordDownsample(commands, prepared.Get(), mip);
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
     for (uint32 source_mip = mip_count - 1; source_mip > 0; --source_mip) {
@@ -906,26 +937,29 @@ RenderGraph::PassHandle BloomPass::AddRecordPasses(
         graph.AddRecordPass(
             std::format("Bloom.Upsample{}", mip),
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
                     .Read(source, State::Sampled, Range::Mips(source_mip, 1))
                     .Read(resources.downsample_chain, State::Sampled, Range::Mips(mip, 1))
-                    .Write(resources.upsample_chain, State::RenderTarget, Range::Mips(mip, 1));
+                    .Write(resources.upsample_chain, State::ColorAttachment, Range::Mips(mip, 1));
             },
-            [this, prepared, mip](CommandList& commands) { RecordUpsample(commands, prepared.Get(), mip); },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            [this, prepared, mip](CommandList& commands) {
+                RecordUpsample(commands, prepared.Get(), mip);
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
     return graph.AddRecordPass(
         "Bloom.Apply",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
-                .Read(mip_count == 1 ? resources.downsample_chain : resources.upsample_chain,
-                      State::Sampled, Range::Mips(0, 1))
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                .Read(mip_count == 1 ? resources.downsample_chain : resources.upsample_chain, State::Sampled, Range::Mips(0, 1))
                 // Additive blending loads the existing scene color.
-                .ReadWrite(resources.input, State::RenderTarget, Range::Mips(0, 1));
+                .ReadWrite(resources.input, State::ColorAttachment, Range::Mips(0, 1));
         },
-        [this, prepared](CommandList& commands) { RecordApply(commands, prepared.Get()); },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        [this, prepared](CommandList& commands) {
+            RecordApply(commands, prepared.Get());
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -956,59 +990,59 @@ RenderGraph::PassHandle TonemappingPass::AddRecordPasses(
     graph.AddRecordPass(
         "Tonemapping.ClearHistogram",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Write(resources.histogram, RenderGraph::BufferState::TransferDestination);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(resources.histogram, RenderGraph::BufferAccessType::TransferDestination);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Tonemapping.ClearHistogram", [&] {
                 RecordClear(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "Tonemapping.BuildHistogram",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                .Read(resources.input, RenderGraph::TextureState::Sampled)
-                .ReadWrite(resources.histogram, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                .Read(resources.input, RenderGraph::TextureAccessType::Sampled)
+                .ReadWrite(resources.histogram, RenderGraph::BufferAccessType::Storage);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Tonemapping.BuildHistogram", [&] {
                 RecordHistogram(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "Tonemapping.CalculateExposure",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                .Read(resources.histogram, RenderGraph::BufferState::ShaderResource)
-                .ReadWrite(resources.exposure, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                .Read(resources.histogram, RenderGraph::BufferAccessType::ShaderRead)
+                .ReadWrite(resources.exposure, RenderGraph::BufferAccessType::Storage);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Tonemapping.CalculateExposure", [&] {
                 RecordExposure(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     return graph.AddRecordPass(
         "Tonemapping.Apply",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
-                .Read(resources.input, RenderGraph::TextureState::Sampled)
-                .Read(resources.histogram, RenderGraph::BufferState::ShaderResource)
-                .Read(resources.exposure, RenderGraph::BufferState::ShaderResource)
-                .Write(resources.tonemapping_output, RenderGraph::TextureState::RenderTarget);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                .Read(resources.input, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.histogram, RenderGraph::BufferAccessType::ShaderRead)
+                .Read(resources.exposure, RenderGraph::BufferAccessType::ShaderRead)
+                .Write(resources.tonemapping_output, RenderGraph::TextureAccessType::ColorAttachment);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Tonemapping.Apply", [&] {
                 RecordTonemapping(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -1033,7 +1067,7 @@ void CameraGizmoPass::AddToGraph(
     graph.AddRecordPass(
         "CameraGizmo",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.tonemapping_output, RenderGraph::TextureState::RenderTarget)
+            builder.ReadWrite(resources.tonemapping_output, RenderGraph::TextureAccessType::ColorAttachment)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
@@ -1041,7 +1075,7 @@ void CameraGizmoPass::AddToGraph(
                 Record(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -1071,19 +1105,20 @@ void CsmGizmoPass::AddToGraph(
     graph.AddRecordPass(
         "CsmGizmo.Upload",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Write(data, RenderGraph::BufferState::TransferDestination);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(data, RenderGraph::BufferAccessType::TransferDestination);
         },
         [this, prepared](CommandList& commands) {
             RecordUpload(commands, prepared.Get());
-        }
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "CsmGizmo",
         [resources, data](RenderGraph::PassBuilder& builder) {
-            builder.Read(data, RenderGraph::BufferState::ShaderResource);
+            builder.Read(data, RenderGraph::BufferAccessType::ShaderRead);
             builder.Read(resources.shadow_maps)
-                .ReadWrite(resources.tonemapping_output, RenderGraph::TextureState::RenderTarget)
+                .ReadWrite(resources.tonemapping_output, RenderGraph::TextureAccessType::ColorAttachment)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
@@ -1091,7 +1126,7 @@ void CsmGizmoPass::AddToGraph(
                 RecordDraw(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 
@@ -1158,14 +1193,14 @@ void UiCombinePass::AddToGraph(
         "UiCombine",
         [resources, ui_enabled, writes_external_window](RenderGraph::PassBuilder& builder) {
             if (!ui_enabled) {
-                builder.Read(resources.processing_input, RenderGraph::TextureState::Sampled)
-                    .Write(resources.output, RenderGraph::TextureState::RenderTarget);
+                builder.Read(resources.processing_input, RenderGraph::TextureAccessType::Sampled)
+                    .Write(resources.output, RenderGraph::TextureAccessType::ColorAttachment);
             } else if (writes_external_window) {
-                builder.Read(resources.selected_framebuffer, RenderGraph::TextureState::Sampled)
-                    .Write(resources.window_framebuffer, RenderGraph::TextureState::RenderTarget);
+                builder.Read(resources.selected_framebuffer, RenderGraph::TextureAccessType::Sampled)
+                    .Write(resources.window_framebuffer, RenderGraph::TextureAccessType::ColorAttachment);
             } else {
-                builder.Read(resources.selected_framebuffer, RenderGraph::TextureState::Sampled)
-                    .Write(resources.output, RenderGraph::TextureState::RenderTarget);
+                builder.Read(resources.selected_framebuffer, RenderGraph::TextureAccessType::Sampled)
+                    .Write(resources.output, RenderGraph::TextureAccessType::ColorAttachment);
             }
             builder.SideEffect();
         },
@@ -1174,7 +1209,7 @@ void UiCombinePass::AddToGraph(
                 Record(cmd_list, prepared.Get());
             });
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 }
 

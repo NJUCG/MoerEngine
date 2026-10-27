@@ -10,10 +10,10 @@ namespace Moer::Render {
 // Persistent graphics resources have one explicit boundary between graphs.
 // Their owners establish it at allocation; each graph exports it again. There
 // is no backend preferred-state restoration or independently maintained ledger.
-inline RenderGraph::TextureState GraphicsTextureBoundary(const Texture& texture) {
+inline RenderGraph::TextureBoundaryState GraphicsTextureBoundary(const Texture& texture) {
     return uint32(texture.GetUsage() & ETextureUsageFlags::PRESENTATION_SOURCE) ?
-               RenderGraph::TextureState::PresentationSource :
-               RenderGraph::TextureState::Sampled;
+               RenderGraph::TextureBoundaryState{RenderGraph::TextureBoundary::PresentationSource} :
+               RenderGraph::TextureBoundaryState{RenderGraph::TextureAccessType::Sampled};
 }
 
 inline void InitializeGraphicsTextures(std::span<const TextureRef> textures) {
@@ -32,7 +32,7 @@ inline void InitializeGraphicsTextures(std::span<const TextureRef> textures) {
         view.num_mips  = texture->GetNumMips();
         view.num_array = texture->GetNumArray();
         const bool presentation =
-            GraphicsTextureBoundary(*texture) == RenderGraph::TextureState::PresentationSource;
+            GraphicsTextureBoundary(*texture) == RenderGraph::TextureBoundaryState{RenderGraph::TextureBoundary::PresentationSource};
         barriers.push_back(BarrierCreateInfo::Transition(
             view,
             BarrierState{},

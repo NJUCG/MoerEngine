@@ -294,6 +294,19 @@ Vulkan 渲染路径由 RDG 根据显式声明生成这些依赖，RHI 按编译�
 Raster、Raytracing、UI、场景上传、环境贴图处理和导出读回都采用 `Compiled`；编译或录制失败不会回退到 reorderer。
 串行/并行录制只改变 CPU 调度，不改变这个契约。
 
+一次访问由 `TextureAccessType` / `BufferAccessType`（用途）、`AccessMode`（读写）、
+执行域和子资源范围共同描述。它们与创建资源时的 usage flags 不同：创建能力允许多种用途，
+pass 声明选择本次用途。lowering 据此生成 stage、access mask 和图像布局。
+`Sampled` 使用只读 shader 布局，`Storage` 使用 GENERAL；storage 的只读访问仍声明为
+`Read/Storage`。颜色和深度附件分别使用 `ColorAttachment`、`DepthStencilAttachment`，
+深度读写权限只由 `AccessMode` 决定。相同用途之间发生写后读，仍由编译器建立内存依赖。
+
+普通 pass 不能传入边界枚举。`TextureBoundary::Undefined`、`BufferBoundary::Undefined`
+只用于声明无须保留内容的初始状态；`TextureBoundary::PresentationSource` 表达呈现复制的
+交接约定。初始化和导出接口通过类型安全的 variant 接受普通用途或对应资源的特殊边界，
+内部 `ResourceState` 统一保存这些状态，不引入另一份状态账本。没有执行端点的 `Present`
+已移除。`Unspecified` 仅保留给逻辑依赖声明；实际 lowering 必须得到明确的访问类型。
+
 | 责任 | 保证者 |
 | --- | --- |
 | pass 访问哪些资源、读写方式、mip/layer 范围 | pass 声明；多阶段算法按依赖拆成节点 |
@@ -305,7 +318,7 @@ Raster、Raytracing、UI、场景上传、环境贴图处理和导出读回都�
 | 资源保活、提交接受、GPU 完成与回收 | 沿用 RHI 提交/完成机制；三者不混为一项状态 |
 
 跨图资源采用固定边界：普通图像为 `Sampled`，presentation source 为
-`PresentationSource`，普通场景 buffer 为 `ShaderResource`，加速结构为
+`PresentationSource`，普通场景 buffer 为 `ShaderRead`，加速结构为
 `AccelerationStructureRead`。所有者在新图像分配时建立布局；每张图导出约定状态。
 这把跨图协调放到明确的边界，省去另一份后端 preferred-state 表和 TLAS 地址登记表，
 代价是图之间可能增加状态转换。图内仍按实际依赖同步。
@@ -318,7 +331,7 @@ Raster、Raytracing、UI、场景上传、环境贴图处理和导出读回都�
 Copy → Graphics 交接，跨队列依赖由编译结果生成。
 
 NRD 的公共纹理依赖也由图声明：RELAX 读取 motion，REBLUR 还可能写回 motion，因此后者
-声明为 `ReadWrite/UnorderedAccess`。NRD/NRI 负责 pass 内部临时纹理及多次 dispatch 的同步，
+声明为 `ReadWrite/Storage`。NRD/NRI 负责 pass 内部临时纹理及多次 dispatch 的同步，
 并依据实际结束状态将公共纹理恢复到声明状态，再交回 RDG；插件不再访问后端资源 tracker。
 其串行 native 录制约束来自 NRI 的可变 descriptor 和 command-buffer 缓存，与资源依赖分析无关。
 
@@ -394,4 +407,16 @@ CUDA stream 完成后，后续 RHI 提交等待 CUDA 的 timeline，收回纹理
 这是 [Vulkan 外部资源所有权与同步](https://docs.vulkan.org/spec/latest/chapters/synchronization.html#synchronization-queue-transfers)
 所需的交接。当前实现选择在此边界等待 CUDA 和收回提交完成，以统一临时映射、推理 buffer 和 semaphore 的复用条件；
 代价是启用 CUDA 时增加提交及 CPU 等待，暂不追求 Vulkan/CUDA 重叠。
-未声明这些交接条件的通用 `ExternalControl` 仍会被 lowering 拒绝。
+外部交接在图之间完成，不作为普通 GPU pass 的一种执行分类。
+
+GPU pass 统一通过 `AddRecordPass` 接收 RDG 独占分配的 CommandList；回调不负责封装或提交它。
+`PassRecordPolicy` 只描述 CPU 录制约束，并由调用方在该接口中显式声明一次：
+`ParallelAllowed` 允许同组回调并发录制；`Serial` 等待前组结束，在调用线程执行，再开始后组。
+GPU 资源依赖、Token 与 `DependsOn` 仍约束命令执行顺序，不隐含 CPU 回调的先后关系。
+串行录制不等待 GPU 完成，也不提供跨图或后端线程互斥。
+
+UI frame packet 状态推进、Culling 共享读回槽和 bindless 待更新队列的消费仍保留串行约束。
+不可变上传、已准备的 AS 命令及仅声明 GPU 边界的 pass 可以并行录制。CPU 准备使用 Setup pass，
+接受/完成后的状态更新继续归提交回调所有；原来的 MainThread、CpuPrepare、ExternalControl
+执行模型及 caller-owned CommandList 衔接已经移除。原生翻译策略保持独立，NRD 的前端录制
+可以并行，而 NRI 可变缓存仍由后端 `SerialControl` 保护。

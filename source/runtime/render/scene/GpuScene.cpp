@@ -69,7 +69,7 @@ void UploadByteBuffer(
 }
 
 RenderGraph::BufferHandle
-ImportSceneBuffer(RenderGraph& graph, const BufferRef& buffer, RenderGraph::BufferState boundary) {
+ImportSceneBuffer(RenderGraph& graph, const BufferRef& buffer, RenderGraph::BufferAccessType boundary) {
     const auto handle = graph.ImportBuffer(
         std::format("Resource.{}", reinterpret_cast<uintptr_t>(buffer.Get())),
         buffer,
@@ -87,17 +87,17 @@ void RecordSceneBlasBuild(CommandList& commands, Array<AccelerationStructureBuil
         outputs.push_back(ImportSceneBuffer(
             graph,
             BufferRef(param.geometry->GetUnderlyingBuffer()),
-            RenderGraph::BufferState::AccelerationStructureRead
+            RenderGraph::BufferAccessType::AccelerationStructureRead
         ));
         for (const auto& segment : param.geometry->GetInfo().segments) {
             if (segment.vertex_buffer) {
                 inputs.push_back(
-                    ImportSceneBuffer(graph, segment.vertex_buffer, RenderGraph::BufferState::ShaderResource)
+                    ImportSceneBuffer(graph, segment.vertex_buffer, RenderGraph::BufferAccessType::ShaderRead)
                 );
             }
             if (segment.index_buffer) {
                 inputs.push_back(
-                    ImportSceneBuffer(graph, segment.index_buffer, RenderGraph::BufferState::ShaderResource)
+                    ImportSceneBuffer(graph, segment.index_buffer, RenderGraph::BufferAccessType::ShaderRead)
                 );
             }
         }
@@ -105,20 +105,20 @@ void RecordSceneBlasBuild(CommandList& commands, Array<AccelerationStructureBuil
     graph.AddRecordPass(
         "Build",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                 .TranslateSerialControl();
             for (auto input : inputs) {
-                builder.Read(input, RenderGraph::BufferState::AccelerationStructureBuildInput);
+                builder.Read(input, RenderGraph::BufferAccessType::AccelerationStructureBuildInput);
             }
             for (auto output : outputs) {
-                builder.Write(output, RenderGraph::BufferState::AccelerationStructureWrite)
+                builder.Write(output, RenderGraph::BufferAccessType::AccelerationStructureWrite)
                     .TranslateSerialControl();
             }
         },
         [params = std::move(params)](CommandList& list) mutable {
             list.BuildAccelerationStructures(std::move(params));
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     RecordGraphicsUploadGraph(graph, commands);
 }
@@ -133,32 +133,32 @@ void RecordSceneTlasBuild(CommandList& commands, const RaytracingSceneRef& scene
     const auto  output = ImportSceneBuffer(
         graph,
         BufferRef(build->Tlas()->GetUnderlyingBuffer()),
-        RenderGraph::BufferState::AccelerationStructureRead
+        RenderGraph::BufferAccessType::AccelerationStructureRead
     );
     Array<RenderGraph::BufferHandle> inputs;
     for (const auto& geometry : build->GeometryRefs()) {
         inputs.push_back(ImportSceneBuffer(
             graph,
             BufferRef(geometry->GetUnderlyingBuffer()),
-            RenderGraph::BufferState::AccelerationStructureRead
+            RenderGraph::BufferAccessType::AccelerationStructureRead
         ));
     }
     auto retained_command = MakeShared<UniquePtr<Command>>(std::move(command));
     graph.AddRecordPass(
         "Build",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                .Write(output, RenderGraph::BufferState::AccelerationStructureWrite)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                .Write(output, RenderGraph::BufferAccessType::AccelerationStructureWrite)
                 .TranslateSerialControl();
             for (auto input : inputs) {
-                builder.Read(input, RenderGraph::BufferState::AccelerationStructureBuildInput);
+                builder.Read(input, RenderGraph::BufferAccessType::AccelerationStructureBuildInput);
             }
         },
         [retained_command, scene](CommandList& list) {
             list.UpdateRaytracingScene(std::move(*retained_command));
             list.AddCallback([scene]() {});
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     RecordGraphicsUploadGraph(graph, commands);
 }

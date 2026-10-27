@@ -377,8 +377,8 @@ public:
         graph.AddRecordPass(
             "UploadLightingData",
             [resources](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                    .Write(resources.lighting_data, RenderGraph::BufferState::TransferDestination)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(resources.lighting_data, RenderGraph::BufferAccessType::TransferDestination)
                     .SideEffect();
             },
             [prepared](CommandList& cmd_list) {
@@ -387,7 +387,7 @@ public:
                 );
                 RecordGlobalLightingData(cmd_list, prepared.Get());
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 };

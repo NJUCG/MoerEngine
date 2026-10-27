@@ -1,4 +1,4 @@
-﻿#include "LightingPass.h"
+#include "LightingPass.h"
 
 // 协调 ReSTIR DI 各阶段调度，并共享同一组不可变参数。
 
@@ -323,7 +323,7 @@ bool LightingPass::AddPasses(
 
     graph.SetInitialState(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -337,7 +337,7 @@ bool LightingPass::AddPasses(
          }) {
         graph.SetInitialState(
             texture,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -349,21 +349,21 @@ bool LightingPass::AddPasses(
          }) {
         graph.SetInitialState(
             buffer,
-            RenderGraph::BufferState::UnorderedAccess,
+            RenderGraph::BufferAccessType::Storage,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::ReadWrite
         );
     }
     graph.SetInitialState(
         neighbor_offset,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     if (env_pdf.IsValid()) {
         graph.SetInitialState(
             env_pdf,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -371,7 +371,7 @@ bool LightingPass::AddPasses(
     if (env_map.IsValid()) {
         graph.SetInitialState(
             env_map,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -380,8 +380,8 @@ bool LightingPass::AddPasses(
     graph.AddRecordPass(
         "RT.Lighting.UploadConstants",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
-                .Write(constants, RenderGraph::BufferState::TransferDestination);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(constants, RenderGraph::BufferAccessType::TransferDestination);
         },
         [this, command, resources](CommandList& cmd_list) {
             ScopedGpuMarker marker(
@@ -389,50 +389,50 @@ bool LightingPass::AddPasses(
             );
             RecordConstantsUpload(cmd_list, command, resources);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     const auto add_dispatch = [&](std::string_view name, ELightingDispatch dispatch) {
         graph.AddRecordPass(
             name,
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                    .Read(constants, RenderGraph::BufferState::ShaderResource)
-                    .Read(tlas, RenderGraph::BufferState::AccelerationStructureRead)
-                    .Read(prev_tlas, RenderGraph::BufferState::AccelerationStructureRead)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                    .Read(constants, RenderGraph::BufferAccessType::ShaderRead)
+                    .Read(tlas, RenderGraph::BufferAccessType::AccelerationStructureRead)
+                    .Read(prev_tlas, RenderGraph::BufferAccessType::AccelerationStructureRead)
                     .Read(graph_resources.frame_setup.ready)
-                    .ReadWrite(light_reservoir, RenderGraph::BufferState::UnorderedAccess)
-                    .ReadWrite(ris, RenderGraph::BufferState::UnorderedAccess)
-                    .ReadWrite(ris_light_data, RenderGraph::BufferState::UnorderedAccess)
-                    .Read(neighbor_offset, RenderGraph::BufferState::ShaderResource)
-                    .Read(light_mapping, RenderGraph::BufferState::ShaderResource)
-                    .Read(light_data, RenderGraph::BufferState::ShaderResource)
-                    .Read(primitive_to_light, RenderGraph::BufferState::ShaderResource)
-                    .ReadWrite(graph_resources.diffuse_lighting, RenderGraph::TextureState::UnorderedAccess)
-                    .ReadWrite(graph_resources.specular_lighting, RenderGraph::TextureState::UnorderedAccess)
-                    .Read(graph_resources.current_view_depth, RenderGraph::TextureState::Sampled)
-                    .Read(graph_resources.current_diffuse_albedo, RenderGraph::TextureState::Sampled)
-                    .Read(graph_resources.current_specular_roughness, RenderGraph::TextureState::Sampled)
-                    .Read(graph_resources.current_normal, RenderGraph::TextureState::Sampled)
-                    .Read(graph_resources.previous_view_depth, RenderGraph::TextureState::Sampled)
-                    .Read(graph_resources.previous_diffuse_albedo, RenderGraph::TextureState::Sampled)
-                    .Read(graph_resources.previous_specular_roughness, RenderGraph::TextureState::Sampled)
-                    .Read(graph_resources.previous_normal, RenderGraph::TextureState::Sampled)
-                    .Read(graph_resources.motion, RenderGraph::TextureState::Sampled);
+                    .ReadWrite(light_reservoir, RenderGraph::BufferAccessType::Storage)
+                    .ReadWrite(ris, RenderGraph::BufferAccessType::Storage)
+                    .ReadWrite(ris_light_data, RenderGraph::BufferAccessType::Storage)
+                    .Read(neighbor_offset, RenderGraph::BufferAccessType::ShaderRead)
+                    .Read(light_mapping, RenderGraph::BufferAccessType::ShaderRead)
+                    .Read(light_data, RenderGraph::BufferAccessType::ShaderRead)
+                    .Read(primitive_to_light, RenderGraph::BufferAccessType::ShaderRead)
+                    .ReadWrite(graph_resources.diffuse_lighting, RenderGraph::TextureAccessType::Storage)
+                    .ReadWrite(graph_resources.specular_lighting, RenderGraph::TextureAccessType::Storage)
+                    .Read(graph_resources.current_view_depth, RenderGraph::TextureAccessType::Sampled)
+                    .Read(graph_resources.current_diffuse_albedo, RenderGraph::TextureAccessType::Sampled)
+                    .Read(graph_resources.current_specular_roughness, RenderGraph::TextureAccessType::Sampled)
+                    .Read(graph_resources.current_normal, RenderGraph::TextureAccessType::Sampled)
+                    .Read(graph_resources.previous_view_depth, RenderGraph::TextureAccessType::Sampled)
+                    .Read(graph_resources.previous_diffuse_albedo, RenderGraph::TextureAccessType::Sampled)
+                    .Read(graph_resources.previous_specular_roughness, RenderGraph::TextureAccessType::Sampled)
+                    .Read(graph_resources.previous_normal, RenderGraph::TextureAccessType::Sampled)
+                    .Read(graph_resources.motion, RenderGraph::TextureAccessType::Sampled);
                 if (local_light_pdf.IsValid()) {
-                    builder.Read(local_light_pdf, RenderGraph::TextureState::Sampled);
+                    builder.Read(local_light_pdf, RenderGraph::TextureAccessType::Sampled);
                 }
                 if (env_pdf.IsValid()) {
-                    builder.Read(env_pdf, RenderGraph::TextureState::Sampled);
+                    builder.Read(env_pdf, RenderGraph::TextureAccessType::Sampled);
                 }
                 if (env_map.IsValid()) {
-                    builder.Read(env_map, RenderGraph::TextureState::Sampled);
+                    builder.Read(env_map, RenderGraph::TextureAccessType::Sampled);
                 }
             },
             [this, command, resources, dispatch](CommandList& cmd_list) {
                 RecordDispatch(cmd_list, command, resources, dispatch);
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     };
 
@@ -452,9 +452,9 @@ bool LightingPass::AddPasses(
     add_dispatch("RT.Lighting.SpatialResample", ELightingDispatch::SpatialResample);
     add_dispatch("RT.Lighting.ShadeSample", ELightingDispatch::ShadeSample);
 
-    const auto export_texture = [&](RenderGraph::TextureHandle texture,
-                                    RenderGraph::TextureState  state,
-                                    RenderGraph::AccessMode    access) {
+    const auto export_texture = [&](RenderGraph::TextureHandle     texture,
+                                    RenderGraph::TextureAccessType state,
+                                    RenderGraph::AccessMode        access) {
         graph.Export(texture, state, RenderGraph::QueueRole::Graphics, access);
     };
     for (const auto texture : {
@@ -465,23 +465,23 @@ bool LightingPass::AddPasses(
              graph_resources.diffuse_lighting,
              graph_resources.specular_lighting,
          }) {
-        export_texture(texture, RenderGraph::TextureState::Sampled, RenderGraph::AccessMode::Read);
+        export_texture(texture, RenderGraph::TextureAccessType::Sampled, RenderGraph::AccessMode::Read);
     }
     if (local_light_pdf.IsValid()) {
         export_texture(
-            local_light_pdf, RenderGraph::TextureState::Sampled, RenderGraph::AccessMode::Read
+            local_light_pdf, RenderGraph::TextureAccessType::Sampled, RenderGraph::AccessMode::Read
         );
     }
     if (env_pdf.IsValid()) {
-        export_texture(env_pdf, RenderGraph::TextureState::Sampled, RenderGraph::AccessMode::Read);
+        export_texture(env_pdf, RenderGraph::TextureAccessType::Sampled, RenderGraph::AccessMode::Read);
     }
     if (env_map.IsValid()) {
-        export_texture(env_map, RenderGraph::TextureState::Sampled, RenderGraph::AccessMode::Read);
+        export_texture(env_map, RenderGraph::TextureAccessType::Sampled, RenderGraph::AccessMode::Read);
     }
 
     graph.Export(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -492,7 +492,7 @@ bool LightingPass::AddPasses(
          }) {
         graph.Export(
             buffer,
-            RenderGraph::BufferState::UnorderedAccess,
+            RenderGraph::BufferAccessType::Storage,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::ReadWrite
         );
@@ -505,7 +505,7 @@ bool LightingPass::AddPasses(
          }) {
         graph.Export(
             buffer,
-            RenderGraph::BufferState::ShaderResource,
+            RenderGraph::BufferAccessType::ShaderRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );

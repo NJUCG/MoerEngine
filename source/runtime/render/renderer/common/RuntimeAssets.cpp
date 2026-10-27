@@ -60,16 +60,19 @@ void RuntimeAssets::LoadTextures() {
     Array<RenderGraph::TextureHandle> resources;
     const auto upload = [&](const TextureRef& texture, std::span<const byte> bytes) {
         const auto handle = graph.ImportTexture(texture->GetName(), texture, {});
-        graph.SetInitialState(handle, RenderGraph::TextureState::Undefined,
-                              RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
-        graph.Export(handle, RenderGraph::TextureState::Sampled,
-                     RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
-        graph.AddRecordPass(std::format("Upload.{}", texture->GetName()), [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy)
-                .Write(handle, RenderGraph::TextureState::TransferDestination);
-        }, [texture, data = Array<byte>(bytes.begin(), bytes.end())](CommandList& commands) {
-            commands.CopyFrom(std::span<const byte>(data.data(), data.size()), texture);
-        });
+        graph.SetInitialState(handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        graph.Export(handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        graph.AddRecordPass(
+            std::format("Upload.{}", texture->GetName()),
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::GpuWorkType::Transfer)
+                    .Write(handle, RenderGraph::TextureAccessType::TransferDestination);
+            },
+            [texture, data = Array<byte>(bytes.begin(), bytes.end())](CommandList& commands) {
+                commands.CopyFrom(std::span<const byte>(data.data(), data.size()), texture);
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
         resources.push_back(handle);
     };
     const auto texture_path = assets_path / "textures";
@@ -104,12 +107,25 @@ void RuntimeAssets::LoadTextures() {
         }
     }
     auto accepted = device.CreateFence();
-    graph.AddRecordPass("PublishToGraphics", [=](RenderGraph::PassBuilder& builder) {
-        builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics).SideEffect();
-        for (auto texture : resources) { builder.Read(texture, RenderGraph::TextureState::Sampled); }
-    }, [accepted](CommandList& commands) { commands.Signal(accepted, 1); });
-    if (!graph.Compile() || !graph.ExecuteFrontendRecordingPlan({}, {}, false, {},
-            {.enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled})) {
+    graph.AddRecordPass(
+        "PublishToGraphics",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics).SideEffect();
+            for (auto texture : resources) {
+                builder.Read(texture, RenderGraph::TextureAccessType::Sampled);
+            }
+        },
+        [accepted](CommandList& commands) {
+            commands.Signal(accepted, 1);
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
+    if (!graph.Compile() || !graph.ExecuteFrontendRecordingPlan(
+            {},
+            false,
+            {},
+            {.enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled}
+        )) {
         throw std::runtime_error("Runtime asset graph: " + graph.GetCompileError());
     }
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);

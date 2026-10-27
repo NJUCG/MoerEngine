@@ -17,13 +17,13 @@ ImportRasterBuffer(RenderGraph& graph, std::string_view name, Buffer* buffer) {
     );
     graph.SetInitialState(
         handle,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         handle,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -83,10 +83,10 @@ struct RasterSceneGraphReads {
 
     void Declare(RenderGraph::PassBuilder& builder) const {
         for (auto buffer : buffers) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         }
         for (auto texture : textures) {
-            builder.Read(texture, RenderGraph::TextureState::Sampled);
+            builder.Read(texture, RenderGraph::TextureAccessType::Sampled);
         }
     }
 };
@@ -112,10 +112,10 @@ struct RasterProbeGraphReads {
     }
     void Declare(RenderGraph::PassBuilder& builder) const {
         for (auto buffer : buffers) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         }
         for (auto texture : textures) {
-            builder.Read(texture, RenderGraph::TextureState::Sampled);
+            builder.Read(texture, RenderGraph::TextureAccessType::Sampled);
         }
     }
 };

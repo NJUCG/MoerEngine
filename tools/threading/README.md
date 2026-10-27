@@ -173,18 +173,21 @@ unique queue and waits for device idle. That is the basis for its
 render_graph_parallel_recording = false
 ```
 
-The switch currently covers two audited Raster recording groups:
-`HiZBuild` + `DirectionalShadowMask`, then `Lighting` + `Skybox`. Each pass owns
-an independent CommandList and an immutable, strongly-owned Prepare snapshot.
-The second pair deliberately spans two GPU dependency waves: GPU hazards still
-fix Lighting-before-Skybox submission, but do not serialize their CPU command
-recording. Token hazards and explicit `DependsOn` edges still split CPU record
-groups. `CpuPrepare` is a managed caller-thread join boundary with no command
-submission: it may access logical Tokens or `Reference` GPU identities and is
-excluded from the GPU queue plan. `ExternalControl` is reserved for
-TensorRT/Vulkan-CUDA work that owns its own submit/sync scope. Other mutable
-Raster passes remain explicit caller-thread boundaries until their state is
-similarly split.
+Every GPU pass records into an RDG-owned CommandList and explicitly declares
+`PassRecordPolicy::Serial` or `ParallelAllowed` at `AddRecordPass`. Contiguous
+parallel-allowed passes can record together even across GPU dependency levels:
+resource hazards, Tokens and `DependsOn` order GPU work, not CPU callbacks.
+Serial recording joins the preceding group, executes on the caller, and
+finishes before the next group starts. This neither waits for GPU completion
+nor synchronizes callbacks from other graphs or backend translation.
+
+UI frame-packet transitions, the Culling readback slot and consumption of pending
+bindless updates retain serial recording. Immutable uploads, prepared AS commands
+and declaration-only boundaries allow parallel recording. CPU preparation uses
+Setup passes; acceptance/completion callbacks and external graph-to-graph
+handoffs keep their existing owners. Native translation has its own policy;
+NRD can record its frontend command in parallel while its NRI translation
+remains `SerialControl`.
 
 Vulkan records each compiled source in order. RDG pass recording and the RHI
 source/native-queue translator retain their existing parallel scheduling. The

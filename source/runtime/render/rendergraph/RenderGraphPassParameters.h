@@ -23,8 +23,8 @@ inline constexpr bool IsRGDeclarableAccessMode =
 
 /** A required typed texture access. Invalid handles deliberately fail closed. */
 template<
-    RenderGraph::AccessMode   Mode,
-    RenderGraph::TextureState State = RenderGraph::TextureState::Automatic>
+    RenderGraph::AccessMode        Mode,
+    RenderGraph::TextureAccessType Type = RenderGraph::TextureAccessType::Unspecified>
 struct RGTextureAccess {
     static_assert(
         Detail::IsRGDeclarableAccessMode<Mode>,
@@ -48,8 +48,8 @@ struct RGTextureAccess {
 
 /** A required typed buffer access. Invalid handles deliberately fail closed. */
 template<
-    RenderGraph::AccessMode  Mode,
-    RenderGraph::BufferState State = RenderGraph::BufferState::Automatic>
+    RenderGraph::AccessMode       Mode,
+    RenderGraph::BufferAccessType Type = RenderGraph::BufferAccessType::Unspecified>
 struct RGBufferAccess {
     static_assert(
         Detail::IsRGDeclarableAccessMode<Mode>,
@@ -98,44 +98,44 @@ using RGOptionalAccess = std::optional<Access>;
 template<typename Access>
 using RGAccessArray = std::vector<Access>;
 
-/** One heterogeneous texture-array element with explicit mode and state. */
+/** One heterogeneous texture-array element with explicit mode and type. */
 class RGTextureAccessElement {
 public:
     [[nodiscard]] static RGTextureAccessElement Read(
-        RenderGraph::TextureHandle handle,
-        RenderGraph::TextureState  state = RenderGraph::TextureState::Automatic,
-        RenderGraph::TextureRange  range = RenderGraph::TextureRange::Whole()
+        RenderGraph::TextureHandle     handle,
+        RenderGraph::TextureAccessType type  = RenderGraph::TextureAccessType::Unspecified,
+        RenderGraph::TextureRange      range = RenderGraph::TextureRange::Whole()
     ) {
         return RGTextureAccessElement(
             handle,
             RenderGraph::AccessMode::Read,
-            state,
+            type,
             range
         );
     }
 
     [[nodiscard]] static RGTextureAccessElement Write(
-        RenderGraph::TextureHandle handle,
-        RenderGraph::TextureState  state = RenderGraph::TextureState::Automatic,
-        RenderGraph::TextureRange  range = RenderGraph::TextureRange::Whole()
+        RenderGraph::TextureHandle     handle,
+        RenderGraph::TextureAccessType type  = RenderGraph::TextureAccessType::Unspecified,
+        RenderGraph::TextureRange      range = RenderGraph::TextureRange::Whole()
     ) {
         return RGTextureAccessElement(
             handle,
             RenderGraph::AccessMode::Write,
-            state,
+            type,
             range
         );
     }
 
     [[nodiscard]] static RGTextureAccessElement ReadWrite(
-        RenderGraph::TextureHandle handle,
-        RenderGraph::TextureState  state = RenderGraph::TextureState::Automatic,
-        RenderGraph::TextureRange  range = RenderGraph::TextureRange::Whole()
+        RenderGraph::TextureHandle     handle,
+        RenderGraph::TextureAccessType type  = RenderGraph::TextureAccessType::Unspecified,
+        RenderGraph::TextureRange      range = RenderGraph::TextureRange::Whole()
     ) {
         return RGTextureAccessElement(
             handle,
             RenderGraph::AccessMode::ReadWrite,
-            state,
+            type,
             range
         );
     }
@@ -146,8 +146,8 @@ public:
     [[nodiscard]] RenderGraph::AccessMode Mode() const {
         return mode;
     }
-    [[nodiscard]] RenderGraph::TextureState State() const {
-        return state;
+    [[nodiscard]] RenderGraph::TextureAccessType Type() const {
+        return type;
     }
     [[nodiscard]] RenderGraph::TextureRange Range() const {
         return range;
@@ -155,56 +155,60 @@ public:
 
 private:
     RGTextureAccessElement(
-        RenderGraph::TextureHandle handle,
-        RenderGraph::AccessMode    mode,
-        RenderGraph::TextureState  state,
-        RenderGraph::TextureRange  range
-    ) : resource(handle), mode(mode), state(state), range(range) {}
+        RenderGraph::TextureHandle     handle,
+        RenderGraph::AccessMode        mode,
+        RenderGraph::TextureAccessType type,
+        RenderGraph::TextureRange      range
+    ) :
+        resource(handle),
+        mode(mode),
+        type(type),
+        range(range) {}
 
     RenderGraph::TextureHandle resource{};
     RenderGraph::AccessMode    mode = RenderGraph::AccessMode::None;
-    RenderGraph::TextureState  state = RenderGraph::TextureState::Automatic;
+    RenderGraph::TextureAccessType type  = RenderGraph::TextureAccessType::Unspecified;
     RenderGraph::TextureRange  range = RenderGraph::TextureRange::Whole();
 };
 
-/** One heterogeneous buffer-array element with explicit mode and state. */
+/** One heterogeneous buffer-array element with explicit mode and type. */
 class RGBufferAccessElement {
 public:
     [[nodiscard]] static RGBufferAccessElement Read(
-        RenderGraph::BufferHandle handle,
-        RenderGraph::BufferState  state = RenderGraph::BufferState::Automatic,
-        RenderGraph::BufferRange  range = RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferHandle     handle,
+        RenderGraph::BufferAccessType type  = RenderGraph::BufferAccessType::Unspecified,
+        RenderGraph::BufferRange      range = RenderGraph::BufferRange::Whole()
     ) {
         return RGBufferAccessElement(
             handle,
             RenderGraph::AccessMode::Read,
-            state,
+            type,
             range
         );
     }
 
     [[nodiscard]] static RGBufferAccessElement Write(
-        RenderGraph::BufferHandle handle,
-        RenderGraph::BufferState  state = RenderGraph::BufferState::Automatic,
-        RenderGraph::BufferRange  range = RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferHandle     handle,
+        RenderGraph::BufferAccessType type  = RenderGraph::BufferAccessType::Unspecified,
+        RenderGraph::BufferRange      range = RenderGraph::BufferRange::Whole()
     ) {
         return RGBufferAccessElement(
             handle,
             RenderGraph::AccessMode::Write,
-            state,
+            type,
             range
         );
     }
 
     [[nodiscard]] static RGBufferAccessElement ReadWrite(
-        RenderGraph::BufferHandle handle,
-        RenderGraph::BufferState  state = RenderGraph::BufferState::Automatic,
-        RenderGraph::BufferRange  range = RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferHandle     handle,
+        RenderGraph::BufferAccessType type  = RenderGraph::BufferAccessType::Unspecified,
+        RenderGraph::BufferRange      range = RenderGraph::BufferRange::Whole()
     ) {
         return RGBufferAccessElement(
             handle,
             RenderGraph::AccessMode::ReadWrite,
-            state,
+            type,
             range
         );
     }
@@ -215,8 +219,8 @@ public:
     [[nodiscard]] RenderGraph::AccessMode Mode() const {
         return mode;
     }
-    [[nodiscard]] RenderGraph::BufferState State() const {
-        return state;
+    [[nodiscard]] RenderGraph::BufferAccessType Type() const {
+        return type;
     }
     [[nodiscard]] RenderGraph::BufferRange Range() const {
         return range;
@@ -224,15 +228,19 @@ public:
 
 private:
     RGBufferAccessElement(
-        RenderGraph::BufferHandle handle,
-        RenderGraph::AccessMode   mode,
-        RenderGraph::BufferState  state,
-        RenderGraph::BufferRange  range
-    ) : resource(handle), mode(mode), state(state), range(range) {}
+        RenderGraph::BufferHandle     handle,
+        RenderGraph::AccessMode       mode,
+        RenderGraph::BufferAccessType type,
+        RenderGraph::BufferRange      range
+    ) :
+        resource(handle),
+        mode(mode),
+        type(type),
+        range(range) {}
 
     RenderGraph::BufferHandle resource{};
     RenderGraph::AccessMode   mode = RenderGraph::AccessMode::None;
-    RenderGraph::BufferState  state = RenderGraph::BufferState::Automatic;
+    RenderGraph::BufferAccessType type  = RenderGraph::BufferAccessType::Unspecified;
     RenderGraph::BufferRange  range = RenderGraph::BufferRange::Whole();
 };
 
@@ -241,28 +249,28 @@ using RGBufferAccessArray  = RGAccessArray<RGBufferAccessElement>;
 
 /**
  * Adapts parameter declarations to the existing typed PassBuilder API. It
- * intentionally owns no compiler state and performs no access inference.
+ * intentionally owns no compiler type and performs no access inference.
  */
 class RGParameterAccessCollector {
 public:
     explicit RGParameterAccessCollector(RenderGraph::PassBuilder& builder) :
         builder(builder) {}
 
-    template<RenderGraph::AccessMode Mode, RenderGraph::TextureState State>
-    void Add(const RGTextureAccess<Mode, State>& access) {
-        AddTexture(access.resource, Mode, State, access.range);
+    template<RenderGraph::AccessMode Mode, RenderGraph::TextureAccessType Type>
+    void Add(const RGTextureAccess<Mode, Type>& access) {
+        AddTexture(access.resource, Mode, Type, access.range);
     }
 
-    template<RenderGraph::AccessMode Mode, RenderGraph::BufferState State>
-    void Add(const RGBufferAccess<Mode, State>& access) {
-        AddBuffer(access.resource, Mode, State, access.range);
+    template<RenderGraph::AccessMode Mode, RenderGraph::BufferAccessType Type>
+    void Add(const RGBufferAccess<Mode, Type>& access) {
+        AddBuffer(access.resource, Mode, Type, access.range);
     }
 
     void Add(const RGTextureAccessElement& access) {
         AddTexture(
             access.Resource(),
             access.Mode(),
-            access.State(),
+            access.Type(),
             access.Range()
         );
     }
@@ -271,7 +279,7 @@ public:
         AddBuffer(
             access.Resource(),
             access.Mode(),
-            access.State(),
+            access.Type(),
             access.Range()
         );
     }
@@ -308,31 +316,31 @@ public:
 
 private:
     void AddTexture(
-        RenderGraph::TextureHandle handle,
-        RenderGraph::AccessMode    mode,
-        RenderGraph::TextureState  state,
-        RenderGraph::TextureRange  range
+        RenderGraph::TextureHandle     handle,
+        RenderGraph::AccessMode        mode,
+        RenderGraph::TextureAccessType type,
+        RenderGraph::TextureRange      range
     ) {
         switch (mode) {
             case RenderGraph::AccessMode::Read:
-                if (state == RenderGraph::TextureState::Automatic) {
+                if (type == RenderGraph::TextureAccessType::Unspecified) {
                     builder.Read(handle, range);
                 } else {
-                    builder.Read(handle, state, range);
+                    builder.Read(handle, type, range);
                 }
                 return;
             case RenderGraph::AccessMode::Write:
-                if (state == RenderGraph::TextureState::Automatic) {
+                if (type == RenderGraph::TextureAccessType::Unspecified) {
                     builder.Write(handle, range);
                 } else {
-                    builder.Write(handle, state, range);
+                    builder.Write(handle, type, range);
                 }
                 return;
             case RenderGraph::AccessMode::ReadWrite:
-                if (state == RenderGraph::TextureState::Automatic) {
+                if (type == RenderGraph::TextureAccessType::Unspecified) {
                     builder.ReadWrite(handle, range);
                 } else {
-                    builder.ReadWrite(handle, state, range);
+                    builder.ReadWrite(handle, type, range);
                 }
                 return;
             case RenderGraph::AccessMode::Unknown:
@@ -343,31 +351,31 @@ private:
     }
 
     void AddBuffer(
-        RenderGraph::BufferHandle handle,
-        RenderGraph::AccessMode   mode,
-        RenderGraph::BufferState  state,
-        RenderGraph::BufferRange  range
+        RenderGraph::BufferHandle     handle,
+        RenderGraph::AccessMode       mode,
+        RenderGraph::BufferAccessType type,
+        RenderGraph::BufferRange      range
     ) {
         switch (mode) {
             case RenderGraph::AccessMode::Read:
-                if (state == RenderGraph::BufferState::Automatic) {
+                if (type == RenderGraph::BufferAccessType::Unspecified) {
                     builder.Read(handle, range);
                 } else {
-                    builder.Read(handle, state, range);
+                    builder.Read(handle, type, range);
                 }
                 return;
             case RenderGraph::AccessMode::Write:
-                if (state == RenderGraph::BufferState::Automatic) {
+                if (type == RenderGraph::BufferAccessType::Unspecified) {
                     builder.Write(handle, range);
                 } else {
-                    builder.Write(handle, state, range);
+                    builder.Write(handle, type, range);
                 }
                 return;
             case RenderGraph::AccessMode::ReadWrite:
-                if (state == RenderGraph::BufferState::Automatic) {
+                if (type == RenderGraph::BufferAccessType::Unspecified) {
                     builder.ReadWrite(handle, range);
                 } else {
-                    builder.ReadWrite(handle, state, range);
+                    builder.ReadWrite(handle, type, range);
                 }
                 return;
             case RenderGraph::AccessMode::Unknown:
@@ -398,8 +406,7 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
     Parameters&&     parameters,
     SetupCallback    policy_setup,
     Record&&         record,
-    PassExecutionClass execution,
-    uint32_t             workload
+    PassRecordPolicy policy
 ) {
     using ParameterType = std::remove_cvref_t<Parameters>;
     using RecordType    = std::decay_t<Record>;
@@ -410,8 +417,7 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
                 name,
                 policy_setup,
                 RecordCallback{},
-                execution,
-                workload
+                policy
             );
         }
     } else if constexpr (requires(const RecordType& candidate) {
@@ -422,8 +428,7 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
                 name,
                 policy_setup,
                 RecordCallback{},
-                execution,
-                workload
+                policy
             );
         }
     }
@@ -446,18 +451,17 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
         [parameter_owner, record_owner](CommandList& command_list) {
             std::invoke(*record_owner, command_list, *parameter_owner);
         },
-        execution,
-        workload
+        policy
     );
 }
 
 } // namespace Moer::Render
 
-#define DEFINE_RG_TEXTURE_ACCESS(name, mode, state) \
-    ::Moer::Render::RGTextureAccess<mode, state> name {}
+#define DEFINE_RG_TEXTURE_ACCESS(name, mode, type) \
+    ::Moer::Render::RGTextureAccess<mode, type> name {}
 
-#define DEFINE_RG_BUFFER_ACCESS(name, mode, state) \
-    ::Moer::Render::RGBufferAccess<mode, state> name {}
+#define DEFINE_RG_BUFFER_ACCESS(name, mode, type) \
+    ::Moer::Render::RGBufferAccess<mode, type> name {}
 
 #define DEFINE_RG_TOKEN_ACCESS(name, mode) \
     ::Moer::Render::RGTokenAccess<mode> name {}
@@ -470,13 +474,15 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
 #define DEFINE_RG_BUFFER_ACCESS_ARRAY(name) \
     ::Moer::Render::RGBufferAccessArray name {}
 
-#define DEFINE_RG_OPTIONAL_TEXTURE_ACCESS(name, mode, state) \
-    ::Moer::Render::RGOptionalAccess<                      \
-        ::Moer::Render::RGTextureAccess<mode, state>> name {}
+#define DEFINE_RG_OPTIONAL_TEXTURE_ACCESS(name, mode, type) \
+    ::Moer::Render::RGOptionalAccess<                       \
+        ::Moer::Render::RGTextureAccess<mode, type>>        \
+        name {}
 
-#define DEFINE_RG_OPTIONAL_BUFFER_ACCESS(name, mode, state) \
-    ::Moer::Render::RGOptionalAccess<                     \
-        ::Moer::Render::RGBufferAccess<mode, state>> name {}
+#define DEFINE_RG_OPTIONAL_BUFFER_ACCESS(name, mode, type) \
+    ::Moer::Render::RGOptionalAccess<                      \
+        ::Moer::Render::RGBufferAccess<mode, type>>        \
+        name {}
 
 #define DEFINE_RG_OPTIONAL_TOKEN_ACCESS(name, mode) \
     ::Moer::Render::RGOptionalAccess<               \

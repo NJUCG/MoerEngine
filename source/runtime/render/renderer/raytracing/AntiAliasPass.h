@@ -88,7 +88,7 @@ private:
         DEFINE_RG_BUFFER_ACCESS(
             constants,
             RenderGraph::AccessMode::Write,
-            RenderGraph::BufferState::TransferDestination
+            RenderGraph::BufferAccessType::TransferDestination
         );
         SharedPtr<RecordingOwner> owner{};
         RGPreparedValue<PreparedCommand> command{};
@@ -100,32 +100,32 @@ private:
         DEFINE_RG_BUFFER_ACCESS(
             constants,
             RenderGraph::AccessMode::Read,
-            RenderGraph::BufferState::ShaderResource
+            RenderGraph::BufferAccessType::ShaderRead
         );
         DEFINE_RG_TEXTURE_ACCESS(
             hdr_color,
             RenderGraph::AccessMode::Read,
-            RenderGraph::TextureState::Sampled
+            RenderGraph::TextureAccessType::Sampled
         );
         DEFINE_RG_TEXTURE_ACCESS(
             motion,
             RenderGraph::AccessMode::Read,
-            RenderGraph::TextureState::Sampled
+            RenderGraph::TextureAccessType::Sampled
         );
         DEFINE_RG_TEXTURE_ACCESS(
             feedback_read,
             RenderGraph::AccessMode::Read,
-            RenderGraph::TextureState::Sampled
+            RenderGraph::TextureAccessType::Sampled
         );
         DEFINE_RG_TEXTURE_ACCESS(
             resolved_color,
             RenderGraph::AccessMode::Write,
-            RenderGraph::TextureState::UnorderedAccess
+            RenderGraph::TextureAccessType::Storage
         );
         DEFINE_RG_TEXTURE_ACCESS(
             feedback_write,
             RenderGraph::AccessMode::Write,
-            RenderGraph::TextureState::UnorderedAccess
+            RenderGraph::TextureAccessType::Storage
         );
         SharedPtr<RecordingOwner> owner{};
         RGPreparedValue<PreparedCommand> command{};
