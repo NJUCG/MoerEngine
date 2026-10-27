@@ -437,66 +437,11 @@ public:
             retirement_serial(_other.retirement_serial) {}
     };
 
-    struct RhiExecuteWork {
-        CmdSubmit                             submit;
-        uint64                                timeline;
-        uint64                                serial;
-        std::chrono::steady_clock::time_point enqueued_at;
-        uint32                                enqueue_depth;
-        double                                caller_ms{0.0};
-
-        RhiExecuteWork(
-            CmdSubmit&&                           _submit,
-            uint64                                _timeline,
-            uint64                                _serial,
-            std::chrono::steady_clock::time_point _enqueued_at,
-            uint32                                _enqueue_depth
-        ) :
-            submit(std::move(_submit)),
-            timeline(_timeline),
-            serial(_serial),
-            enqueued_at(_enqueued_at),
-            enqueue_depth(_enqueue_depth) {}
-    };
-
-    struct RhiPresentWork {
-        SwapchainRef                          swapchain;
-        TextureRef                            source_texture;
-        TextureView                           source_view;
-        PresentReceiptRef                     receipt;
-        uint64                                timeline;
-        uint64                                serial;
-        std::chrono::steady_clock::time_point enqueued_at;
-        uint32                                enqueue_depth;
-        double                                caller_ms{0.0};
-
-        RhiPresentWork(
-            SwapchainRef&&                       _swapchain,
-            TextureRef&&                         _source_texture,
-            TextureView                          _source_view,
-            PresentReceiptRef                    _receipt,
-            uint64                               _timeline,
-            uint64                               _serial,
-            std::chrono::steady_clock::time_point _enqueued_at,
-            uint32                               _enqueue_depth
-        ) :
-            swapchain(std::move(_swapchain)),
-            source_texture(std::move(_source_texture)),
-            source_view(_source_view),
-            receipt(std::move(_receipt)),
-            timeline(_timeline),
-            serial(_serial),
-            enqueued_at(_enqueued_at),
-            enqueue_depth(_enqueue_depth) {}
-    };
-
-    using RhiWork = std::variant<RhiExecuteWork, RhiPresentWork>;
-
     VkCommandQueue(
         VulkanDevice& _device,
         EQueueType    _type,
         bool          _enable_rhi_thread = false,
-        bool          _thread_profile_logging = false
+        bool = false
     );
     ~VkCommandQueue();
     WaitEvent   Execute(CmdSubmit&& _submit) override;
@@ -523,31 +468,6 @@ public:
 
 private:
     friend class VulkanSubmissionExecutor;
-
-    enum class ERhiWorkKind : uint8 { Execute, Present };
-
-    struct RhiWorkProfileTotals {
-        uint64 samples{0};
-        double caller_total_ms{0.0};
-        double queue_wait_total_ms{0.0};
-        double work_total_ms{0.0};
-    };
-
-    struct RhiThreadProfileState {
-        RhiThreadProfileState() : window_start(std::chrono::steady_clock::now()) {}
-
-        std::chrono::steady_clock::time_point window_start;
-        uint64                 samples{0};
-        RhiWorkProfileTotals   execute{};
-        RhiWorkProfileTotals   present{};
-        double                 caller_total_ms{0.0};
-        double                 caller_max_ms{0.0};
-        double                 queue_wait_total_ms{0.0};
-        double                 queue_wait_max_ms{0.0};
-        double                 work_total_ms{0.0};
-        double                 work_max_ms{0.0};
-        uint32                 max_enqueue_depth{0};
-    };
 
     struct CurrentVulkanRecordedSubmit {
         CurrentVulkanRecordedSubmit(
@@ -635,7 +555,6 @@ private:
         uint64         _serial,
         bool           _runtime_owner = false
     ) noexcept;
-    void                       RhiThreadMain();
     void                       CompletionThreadMain();
     Array<RHIResource*>        TakeDeferredReleases();
     void                       EnqueueCompletionMarker(uint64 _timeline);
@@ -645,25 +564,11 @@ private:
     ) noexcept;
     UniquePtr<VulkanCommandContext> AcquireCommandContext();
     void                       CompleteAll(uint64 _timeline);
-    void                       RecordThreadingProfile(
-        ERhiWorkKind _kind,
-        double       _caller_ms,
-        double       _queue_wait_ms,
-        double       _work_ms,
-        uint32       _enqueue_depth
-    );
     void                       BeginSplitProfilingCpuFrame();
     void                       EndSplitProfilingCpuFrame();
     void                       ResetSplitProfilingCpuFrame();
 
 private:
-    enum class EExecutionOwnershipMode : uint8_t {
-        Unclaimed,
-        Legacy,
-        Runtime,
-    };
-
-    [[nodiscard]] bool ClaimLegacyOwnership(std::string_view _operation);
     std::atomic<uint64>                                last_frame{0};
     std::atomic<uint64>                                cpu_settled_frame = 0;
     uint64                                             retirement_enqueued_serial{0};
@@ -685,24 +590,12 @@ private:
     } split_profiling_cpu_frame;
 
     bool                    rhi_thread_enabled{false};
-    UniquePtr<RhiThreadProfileState> thread_profile;
-    bool                    rhi_worker_running{false};
-    std::atomic<uint32_t>   rhi_thread_id{0};
-    uint64                  enqueued_rhi_work{0};
-    uint64                  completed_rhi_work{0};
-    DEQueue<RhiWork>        rhi_work_queue;
-    std::mutex              rhi_work_mutex;
-    std::condition_variable_any rhi_work_cv;
-    std::condition_variable rhi_work_done_cv;
 
     std::mutex   exec_mtx;
     RHITransferableOwnershipGate runtime_execution_gate;
-    std::atomic<EExecutionOwnershipMode> execution_ownership_mode{
-        EExecutionOwnershipMode::Unclaimed
-    };
+    std::atomic_bool executor_claimed{false};
     std::atomic_bool runtime_dependency_waits_enabled{true};
     std::jthread completion_thread;
-    std::jthread rhi_thread;
     Array<UniquePtr<VulkanCommandContext>> command_context_quarantine;
 };
 class VkCopyQueue : public CopyQueue {
@@ -809,11 +702,6 @@ private:
     DEQueue<CompletionEvent>                      event_queue;
 
 private:
-    enum class EExecutionOwnershipMode : uint8_t {
-        Unclaimed,
-        Runtime,
-    };
-
     VulkanDevice& device;
 
     std::atomic<uint64>     last_frame{0};
@@ -833,9 +721,7 @@ private:
 
     std::mutex                                     exec_mutex;
     RHITransferableOwnershipGate                   runtime_execution_gate;
-    std::atomic<EExecutionOwnershipMode>           execution_ownership_mode{
-        EExecutionOwnershipMode::Unclaimed
-    };
+    std::atomic_bool                              executor_claimed{false};
     Array<UniquePtr<VulkanCommandContext>>         command_context_quarantine;
 };
 } // namespace Moer::Render

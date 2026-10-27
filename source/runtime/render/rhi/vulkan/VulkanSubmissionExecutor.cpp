@@ -337,19 +337,19 @@ VulkanSubmissionExecutor::VulkanSubmissionExecutor(uint32 _batch_window) :
         graphics_claimed = graphics_queue.ClaimRuntimeOwnership();
         if (!graphics_claimed) {
             throw std::runtime_error(
-                "Vulkan Graphics queue ownership conflicts with legacy execution"
+                "Vulkan Graphics queue is already claimed by an executor"
             );
         }
         compute_claimed = compute_queue.ClaimRuntimeOwnership();
         if (!compute_claimed) {
             throw std::runtime_error(
-                "Vulkan Compute queue ownership conflicts with legacy execution"
+                "Vulkan Compute queue is already claimed by an executor"
             );
         }
         copy_claimed = copy_queue.ClaimRuntimeOwnership();
         if (!copy_claimed) {
             throw std::runtime_error(
-                "Vulkan Copy queue ownership conflicts with legacy execution"
+                "Vulkan Copy queue is already claimed by an executor"
             );
         }
         claims_owned = true;
@@ -3459,8 +3459,8 @@ void VulkanSubmissionExecutor::ProcessSync(ERHISyncDepth _depth) {
         RenderDevice::Get().GetCommandQueue(EQueueType::Compute).Sync();
         RenderDevice::Get().GetCopyQueue().Sync(last_copy_timeline);
         if (_depth == ERHISyncDepth::Present) {
-            // Without per-Present fences, swapchain lifecycle boundaries use
-            // the same coarse idle wait as the legacy Vulkan presentation path.
+            // Without per-Present fences, swapchain lifecycle boundaries
+            // require a coarse idle wait after queue-local completion.
             RenderDevice::Get().WaitIdle();
         }
     });

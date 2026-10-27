@@ -3587,7 +3587,7 @@ VkCommandQueue::VkCommandQueue(
     VulkanDevice& _device,
     EQueueType    _type,
     bool          _enable_rhi_thread,
-    bool          _thread_profile_logging
+    bool
 ) :
     CommandQueue(),
     vk_device(_device),
@@ -3600,38 +3600,13 @@ VkCommandQueue::VkCommandQueue(
     ),
     profiler_storage(timestamp_pool),
     rhi_thread_enabled(_enable_rhi_thread) {
-    if (_thread_profile_logging) {
-        thread_profile = MakeUnique<RhiThreadProfileState>();
-    }
     timeline = MoerNew(VulkanTimeline(vk_device));
 
     try {
         completion_worker_running = true;
         completion_thread =
             std::jthread(&VkCommandQueue::CompletionThreadMain, this);
-
-        if (rhi_thread_enabled) {
-            rhi_worker_running = true;
-            rhi_thread = std::jthread(&VkCommandQueue::RhiThreadMain, this);
-        }
-
-        LOG_INFO(
-            "[Threading] Vulkan {} queue RHI mode: {}",
-            _type == EQueueType::Graphics ? "graphics" : "compute",
-            rhi_thread_enabled ? "threaded" : "synchronous"
-        );
     } catch (...) {
-        if (rhi_thread_enabled) {
-            {
-                std::lock_guard lock(rhi_work_mutex);
-                rhi_worker_running = false;
-            }
-            rhi_work_cv.notify_all();
-            if (rhi_thread.joinable()) {
-                rhi_thread.join();
-            }
-        }
-
         {
             std::lock_guard lock(event_mutex);
             completion_worker_running = false;
@@ -3650,16 +3625,7 @@ VkCommandQueue::VkCommandQueue(
 VkCommandQueue::~VkCommandQueue() {
     Sync();
 
-    if (rhi_thread_enabled) {
-        {
-            std::unique_lock<std::mutex> lock(rhi_work_mutex);
-            rhi_worker_running = false;
-        }
-        rhi_work_cv.notify_all();
-        rhi_thread.join();
-    }
-
-    // Legacy/direct queue teardown also waits before releasing Copy inputs.
+    // Presentation can still own swapchain images after Copy completion.
     if (queue.GetType() == EQueueType::Graphics) {
         vk_device.WaitIdle();
     }
@@ -3683,25 +3649,13 @@ VkCommandQueue::~VkCommandQueue() {
 }
 
 bool VkCommandQueue::ClaimRuntimeOwnership() {
-    EExecutionOwnershipMode expected = EExecutionOwnershipMode::Unclaimed;
-    if (execution_ownership_mode.compare_exchange_strong(
+    bool expected = false;
+    if (executor_claimed.compare_exchange_strong(
             expected,
-            EExecutionOwnershipMode::Runtime,
+            true,
             std::memory_order_acq_rel,
             std::memory_order_acquire
         )) {
-        std::lock_guard lock(rhi_work_mutex);
-        if (!rhi_work_queue.empty() || enqueued_rhi_work != completed_rhi_work) {
-            execution_ownership_mode.store(
-                EExecutionOwnershipMode::Unclaimed, std::memory_order_release
-            );
-            LOG_ERROR(
-                "[RHIExecutor][Vulkan] cannot claim Runtime ownership for queue={} "
-                "with legacy work in flight",
-                static_cast<uint32>(queue.GetType())
-            );
-            return false;
-        }
         try {
             LOG_INFO(
                 "[RHIExecutor][Vulkan] queue={} ownership=Runtime",
@@ -3714,9 +3668,8 @@ bool VkCommandQueue::ClaimRuntimeOwnership() {
     }
     try {
         LOG_ERROR(
-            "[RHIExecutor][Vulkan] queue={} Runtime ownership claim rejected mode={}",
-            static_cast<uint32>(queue.GetType()),
-            static_cast<uint32>(expected)
+            "[RHIExecutor][Vulkan] queue={} is already claimed by an executor",
+            static_cast<uint32>(queue.GetType())
         );
     } catch (...) {
     }
@@ -3725,10 +3678,10 @@ bool VkCommandQueue::ClaimRuntimeOwnership() {
 
 void VkCommandQueue::ReleaseRuntimeOwnership() noexcept {
     CancelRuntimeDependencyWaits();
-    EExecutionOwnershipMode expected = EExecutionOwnershipMode::Runtime;
-    const bool released = execution_ownership_mode.compare_exchange_strong(
+    bool expected = true;
+    const bool released = executor_claimed.compare_exchange_strong(
         expected,
-        EExecutionOwnershipMode::Unclaimed,
+        false,
         std::memory_order_acq_rel,
         std::memory_order_acquire
     );
@@ -3737,32 +3690,6 @@ void VkCommandQueue::ReleaseRuntimeOwnership() noexcept {
 
 void VkCommandQueue::CancelRuntimeDependencyWaits() noexcept {
     runtime_dependency_waits_enabled.store(false, std::memory_order_release);
-}
-
-bool VkCommandQueue::ClaimLegacyOwnership(std::string_view _operation) {
-    EExecutionOwnershipMode expected = EExecutionOwnershipMode::Unclaimed;
-    if (execution_ownership_mode.compare_exchange_strong(
-            expected,
-            EExecutionOwnershipMode::Legacy,
-            std::memory_order_acq_rel,
-            std::memory_order_acquire
-        )) {
-        LOG_INFO(
-            "[Threading] Vulkan queue={} ownership=Legacy first_operation={}",
-            static_cast<uint32>(queue.GetType()),
-            _operation
-        );
-        return true;
-    }
-    if (expected == EExecutionOwnershipMode::Legacy) {
-        return true;
-    }
-    LOG_ERROR(
-        "[RHIExecutor][Vulkan] rejected legacy {} on Runtime-owned queue={}",
-        _operation,
-        static_cast<uint32>(queue.GetType())
-    );
-    return false;
 }
 
 WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
@@ -3780,8 +3707,7 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
 std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit>
 VkCommandQueue::TranslateForRuntime(CmdSubmit&& _submit) noexcept {
     assert(
-        execution_ownership_mode.load(std::memory_order_acquire) ==
-            EExecutionOwnershipMode::Runtime &&
+        executor_claimed.load(std::memory_order_acquire) &&
         "runtime translate requires an exclusively claimed queue"
     );
     assert(
@@ -4041,7 +3967,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
     PresentReceiptRef _receipt
 ) noexcept {
     assert(
-        execution_ownership_mode.load(std::memory_order_acquire) == EExecutionOwnershipMode::Runtime &&
+        executor_claimed.load(std::memory_order_acquire) &&
         "runtime Present requires an exclusively claimed queue"
     );
     assert(
@@ -4453,8 +4379,8 @@ void VkCommandQueue::ExecuteNow(
     bool* _out_terminalized
 ) {
     assert(
-        _runtime_owner || !rhi_thread_enabled ||
-        rhi_thread_id.load(std::memory_order_acquire) == Platform::GetCurrentThreadID()
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Translate &&
+        "command recording must run on the Translate owner"
     );
 
     const ERHIProfilingPhase profiling_phase = _submit.ProfilingPhase();
@@ -4981,8 +4907,8 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
     bool              _runtime_owner
 ) noexcept {
     assert(
-        _runtime_owner || !rhi_thread_enabled ||
-        rhi_thread_id.load(std::memory_order_acquire) == Platform::GetCurrentThreadID()
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "Present must run on the Submission owner"
     );
 
     const VulkanOperationContext context{
@@ -5188,21 +5114,8 @@ void VkCommandQueue::Sync() {
         }
         return;
     }
-    assert(
-        !rhi_thread_enabled ||
-        rhi_thread_id.load(std::memory_order_acquire) != Platform::GetCurrentThreadID()
-    );
-
     uint64 target_timeline = 0;
-    uint64 target_work     = 0;
-    if (rhi_thread_enabled) {
-        std::unique_lock<std::mutex> lock(rhi_work_mutex);
-        target_work     = enqueued_rhi_work;
-        target_timeline = last_frame.load(std::memory_order_relaxed);
-        rhi_work_done_cv.wait(lock, [this, target_work]() {
-            return completed_rhi_work >= target_work;
-        });
-    } else {
+    {
         std::unique_lock<std::mutex> lock(exec_mtx);
         target_timeline = last_frame.load(std::memory_order_relaxed);
     }
@@ -5217,12 +5130,7 @@ void VkCommandQueue::Sync() {
     if (queue.GetType() != EQueueType::Graphics) {
         return;
     }
-    if (rhi_thread_enabled) {
-        std::unique_lock<std::mutex> lock(rhi_work_mutex);
-        if (enqueued_rhi_work == target_work && completed_rhi_work >= target_work) {
-            vk_device.deferred_release_queue.PopAll(deleted_resources);
-        }
-    } else {
+    {
         std::unique_lock<std::mutex> lock(exec_mtx);
         if (last_frame.load(std::memory_order_relaxed) == target_timeline) {
             vk_device.deferred_release_queue.PopAll(deleted_resources);
@@ -5251,15 +5159,9 @@ Array<RHIResource*> VkCommandQueue::TakeDeferredReleases() {
     }
 
     Array<RHIResource*> deleted_resources;
-    if (rhi_thread_enabled) {
-        std::unique_lock<std::mutex> lock(rhi_work_mutex);
-        if (!rhi_work_queue.empty()) {
-            return {};
-        }
-        vk_device.deferred_release_queue.PopAll(deleted_resources);
-    } else {
-        vk_device.deferred_release_queue.PopAll(deleted_resources);
-    }
+    // Recorded and submitted commands retain their resources through
+    // RHICommandLifetime until Completion finishes all callback tiers.
+    vk_device.deferred_release_queue.PopAll(deleted_resources);
 
     return deleted_resources;
 }
@@ -5270,108 +5172,6 @@ void VkCommandQueue::EnqueueCompletionMarker(uint64 _timeline) {
         VulkanCompletionMarker{}, _timeline, true, retirement_serial
     );
     retirement_enqueued_serial = retirement_serial;
-}
-
-void VkCommandQueue::RhiThreadMain() {
-    Platform::SetCurrentThreadName(
-        queue.GetType() == EQueueType::Graphics ? "Moer RHI Thread" : "Moer Compute RHI"
-    );
-    RHIThreadRoleScope owner_scope(ERHIThreadRole::Submission);
-    RHIThreadHeartbeatScope heartbeat(
-        ERHIThreadRole::Submission,
-        HeartbeatDomainForQueue(queue.GetType()),
-        ERHIHeartbeatStage::Dispatch
-    );
-    rhi_thread_id.store(Platform::GetCurrentThreadID(), std::memory_order_release);
-    LOG_INFO(
-        "[Threading] RHIThread id = {}, queue = {}",
-        rhi_thread_id.load(std::memory_order_relaxed),
-        queue.GetType() == EQueueType::Graphics ? "Graphics" : "Compute"
-    );
-
-    while (true) {
-        std::optional<RhiWork> work;
-        {
-            heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
-            std::unique_lock<std::mutex> lock(rhi_work_mutex);
-            RHIThreadHeartbeatWaitLock wait_lock(
-                lock, heartbeat, ERHIHeartbeatStage::Dispatch
-            );
-            rhi_work_cv.wait(wait_lock, [this]() {
-                return !rhi_worker_running || !rhi_work_queue.empty();
-            });
-            if (!rhi_worker_running && rhi_work_queue.empty()) {
-                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
-                break;
-            }
-
-            work.emplace(std::move(rhi_work_queue.front()));
-            rhi_work_queue.pop_front();
-        }
-
-        const uint64 serial = std::visit([](const auto& _work) { return _work.serial; }, *work);
-        heartbeat.Pulse(
-            std::holds_alternative<RhiExecuteWork>(*work) ?
-                ERHIHeartbeatStage::Translate :
-                ERHIHeartbeatStage::Present
-        );
-        {
-            std::unique_lock<std::mutex> lock(exec_mtx);
-            auto execute_work = [&] {
-                std::visit(
-                    Overload{
-                        [this](RhiExecuteWork& _work) {
-                            ExecuteNow(std::move(_work.submit), _work.timeline, _work.serial);
-                        },
-                        [this](RhiPresentWork& _work) {
-                            PresentNow(
-                                std::move(_work.swapchain),
-                                std::move(_work.source_texture),
-                                _work.source_view,
-                                std::move(_work.receipt),
-                                _work.timeline,
-                                _work.serial
-                            );
-                        }
-                    },
-                    *work
-                );
-            };
-            if (thread_profile) {
-                const auto enqueued_at =
-                    std::visit([](const auto& _work) { return _work.enqueued_at; }, *work);
-                const uint32 enqueue_depth =
-                    std::visit([](const auto& _work) { return _work.enqueue_depth; }, *work);
-                const double caller_ms =
-                    std::visit([](const auto& _work) { return _work.caller_ms; }, *work);
-                const ERhiWorkKind work_kind = std::holds_alternative<RhiExecuteWork>(*work)
-                                                   ? ERhiWorkKind::Execute
-                                                   : ERhiWorkKind::Present;
-                const auto work_started = std::chrono::steady_clock::now();
-                execute_work();
-                const auto work_finished = std::chrono::steady_clock::now();
-                RecordThreadingProfile(
-                    work_kind,
-                    caller_ms,
-                    RhiThreadProfileMilliseconds(enqueued_at, work_started),
-                    RhiThreadProfileMilliseconds(work_started, work_finished),
-                    enqueue_depth
-                );
-            } else {
-                execute_work();
-            }
-        }
-
-        work.reset();
-        {
-            std::unique_lock<std::mutex> lock(rhi_work_mutex);
-            completed_rhi_work = serial;
-        }
-        rhi_work_done_cv.notify_all();
-    }
-
-    heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
-    LOG_INFO("[Threading] RHIThread id = {} stopped", Platform::GetCurrentThreadID());
 }
 
 void VkCommandQueue::CompletionThreadMain() {

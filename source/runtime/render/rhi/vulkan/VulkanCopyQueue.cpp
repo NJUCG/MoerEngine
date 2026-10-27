@@ -64,10 +64,10 @@ void VkCopyQueue::CancelRuntimeDependencyWaits() noexcept {
 }
 
 bool VkCopyQueue::ClaimRuntimeOwnership() {
-    EExecutionOwnershipMode expected = EExecutionOwnershipMode::Unclaimed;
-    if (execution_ownership_mode.compare_exchange_strong(
+    bool expected = false;
+    if (executor_claimed.compare_exchange_strong(
             expected,
-            EExecutionOwnershipMode::Runtime,
+            true,
             std::memory_order_acq_rel,
             std::memory_order_acquire
         )) {
@@ -76,8 +76,7 @@ bool VkCopyQueue::ClaimRuntimeOwnership() {
     }
     try {
         LOG_ERROR(
-            "[RHIExecutor][Vulkan] Copy Runtime ownership claim rejected mode={}",
-            static_cast<uint32>(expected)
+            "[RHIExecutor][Vulkan] Copy queue is already claimed by an executor"
         );
     } catch (...) {
     }
@@ -86,10 +85,10 @@ bool VkCopyQueue::ClaimRuntimeOwnership() {
 
 void VkCopyQueue::ReleaseRuntimeOwnership() noexcept {
     CancelRuntimeDependencyWaits();
-    EExecutionOwnershipMode expected = EExecutionOwnershipMode::Runtime;
-    const bool released = execution_ownership_mode.compare_exchange_strong(
+    bool expected = true;
+    const bool released = executor_claimed.compare_exchange_strong(
         expected,
-        EExecutionOwnershipMode::Unclaimed,
+        false,
         std::memory_order_acq_rel,
         std::memory_order_acquire
     );
@@ -111,8 +110,7 @@ WaitEvent VkCopyQueue::Execute(CmdSubmit&& _evt) {
 std::optional<VkCopyQueue::CurrentVulkanCopyRecordedSubmit>
 VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
     assert(
-        execution_ownership_mode.load(std::memory_order_acquire) ==
-            EExecutionOwnershipMode::Runtime &&
+        executor_claimed.load(std::memory_order_acquire) &&
         "runtime Copy translate requires an exclusively claimed queue"
     );
     assert(
@@ -418,8 +416,7 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
     const VulkanRuntimePreCompletionHook* _pre_completion
 ) noexcept {
     assert(
-        execution_ownership_mode.load(std::memory_order_acquire) ==
-            EExecutionOwnershipMode::Runtime &&
+        executor_claimed.load(std::memory_order_acquire) &&
         "runtime Copy submit requires an exclusively claimed queue"
     );
     assert(
