@@ -3937,7 +3937,8 @@ void VkCommandQueue::RejectForRuntime(
         // treated as an unrecoverable runtime bookkeeping failure.
         std::terminate();
     }
-    queue_cv.notify_one();
+    // CompleteAll shares this CV; notify_one could leave the worker asleep.
+    queue_cv.notify_all();
 }
 
 VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
@@ -4331,7 +4332,8 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
         // never safe to unwind and destroy it on the Submission owner.
         std::terminate();
     }
-    queue_cv.notify_one();
+    // CompleteAll shares this CV; notify_one could leave the worker asleep.
+    queue_cv.notify_all();
 }
 
 void VkCommandQueue::RecordSubmissionCommands(
@@ -5384,21 +5386,25 @@ void VkCommandQueue::CompletionThreadMain() {
             batch.submit.lifetime.reset();
         }
 
-        uint64 completed = cpu_settled_frame.load(std::memory_order_relaxed);
-        while (completed < event_timeline &&
-               !cpu_settled_frame.compare_exchange_weak(
-                   completed, event_timeline, std::memory_order_release, std::memory_order_relaxed
-               )) {}
-        const uint64 retirement_serial = completion->retirement_serial;
-        uint64 settled_serial =
-            retirement_settled_serial.load(std::memory_order_relaxed);
-        while (settled_serial < retirement_serial &&
-               !retirement_settled_serial.compare_exchange_weak(
-                   settled_serial,
-                   retirement_serial,
-                   std::memory_order_release,
-                   std::memory_order_relaxed
-               )) {}
+        {
+            // Pair predicate updates with CompleteAll's check-and-wait lock.
+            std::lock_guard lock(event_mutex);
+            uint64 completed = cpu_settled_frame.load(std::memory_order_relaxed);
+            while (completed < event_timeline &&
+                   !cpu_settled_frame.compare_exchange_weak(
+                       completed, event_timeline, std::memory_order_release, std::memory_order_relaxed
+                   )) {}
+            const uint64 retirement_serial = completion->retirement_serial;
+            uint64 settled_serial =
+                retirement_settled_serial.load(std::memory_order_relaxed);
+            while (settled_serial < retirement_serial &&
+                   !retirement_settled_serial.compare_exchange_weak(
+                       settled_serial,
+                       retirement_serial,
+                       std::memory_order_release,
+                       std::memory_order_relaxed
+                   )) {}
+        }
         queue_cv.notify_all();
     }
 }

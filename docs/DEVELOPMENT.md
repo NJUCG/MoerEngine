@@ -341,6 +341,10 @@ Vulkan 提交统一由 `RHIExecutor` 调度：Translate 只录制并交接拥有
 处理，不能只等待 GPU timeline 而漏掉 CPU 回收。`rhi_thread/rhi_bypass` 和旧
 `parallel_record*` 配置已移除；Render Thread、帧延迟和 RDG 并行录制仍是独立的上层选择。
 
+完成进度与关闭标志的更新必须和条件变量等待共用 `event_mutex`，防止通知落在条件检查与
+真正睡眠之间；回调仍在锁外执行。Graphics/Compute 的工作等待与回收等待共用一个条件变量，
+入队时使用 `notify_all`，避免只唤醒回收等待者而让 Completion 工作线程继续睡眠。
+
 CUDA/TensorRT 使用两个 compiled 图之间的显式交接，不在 RDG 录制回调内提交队列。
 前图先导出固定边界并提交；interop owner 把具体共享纹理从 `Sampled` 转为 `GENERAL`、
 交给 external queue family，并通过导出的 RHI timeline 让 CUDA 等待。

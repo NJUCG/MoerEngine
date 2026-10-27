@@ -26,7 +26,10 @@ VkCopyQueue::VkCopyQueue(VulkanDevice& _device) :
             ExecuteThread();
         });
     } catch (...) {
-        enabled.store(false, std::memory_order_release);
+        {
+            std::lock_guard lock(event_mutex);
+            enabled.store(false, std::memory_order_release);
+        }
         queue_cv.notify_all();
         if (thread.joinable()) {
             thread.join();
@@ -39,7 +42,10 @@ VkCopyQueue::VkCopyQueue(VulkanDevice& _device) :
 VkCopyQueue::~VkCopyQueue() {
     CancelRuntimeDependencyWaits();
     CompleteAll(last_frame.load(std::memory_order_acquire));
-    enabled.store(false, std::memory_order_release);
+    {
+        std::lock_guard lock(event_mutex);
+        enabled.store(false, std::memory_order_release);
+    }
     queue_cv.notify_all();
     if (thread.joinable()) {
         thread.join();
@@ -1041,24 +1047,28 @@ void VkCopyQueue::ExecuteThread() {
         success_callbacks.clear();
         batch.submit.lifetime.reset();
 
-        uint64 settled = cpu_settled_frame.load(std::memory_order_relaxed);
-        while (settled < event_timeline &&
-               !cpu_settled_frame.compare_exchange_weak(
-                   settled,
-                   event_timeline,
-                   std::memory_order_release,
-                   std::memory_order_relaxed
-               )) {}
-        const uint64 retirement_serial = evt->retirement_serial;
-        uint64 settled_serial =
-            retirement_settled_serial.load(std::memory_order_relaxed);
-        while (settled_serial < retirement_serial &&
-               !retirement_settled_serial.compare_exchange_weak(
-                   settled_serial,
-                   retirement_serial,
-                   std::memory_order_release,
-                   std::memory_order_relaxed
-               )) {}
+        {
+            // Pair predicate updates with CompleteAll's check-and-wait lock.
+            std::lock_guard lock(event_mutex);
+            uint64 settled = cpu_settled_frame.load(std::memory_order_relaxed);
+            while (settled < event_timeline &&
+                   !cpu_settled_frame.compare_exchange_weak(
+                       settled,
+                       event_timeline,
+                       std::memory_order_release,
+                       std::memory_order_relaxed
+                   )) {}
+            const uint64 retirement_serial = evt->retirement_serial;
+            uint64 settled_serial =
+                retirement_settled_serial.load(std::memory_order_relaxed);
+            while (settled_serial < retirement_serial &&
+                   !retirement_settled_serial.compare_exchange_weak(
+                       settled_serial,
+                       retirement_serial,
+                       std::memory_order_release,
+                       std::memory_order_relaxed
+                   )) {}
+        }
         settled_cv.notify_all();
     }
 }
