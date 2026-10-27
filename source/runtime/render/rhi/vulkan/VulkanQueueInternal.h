@@ -78,6 +78,8 @@ QueryPublishBatch PublishUnsubmittedQueryErrors(
     std::string_view           _reason
 ) noexcept;
 
+[[nodiscard]] bool SupportsVulkanCompiledCommands(const CmdSubmit& submit, EQueueType queue);
+
 void RecordVulkanCopyCommands(
     VulkanDevice& device, VulkanCommandContext& vk_command_context,
     CmdSubmit& submit, bool suppress_timestamp_queries

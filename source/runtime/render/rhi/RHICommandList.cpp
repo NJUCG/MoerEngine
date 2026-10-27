@@ -1789,10 +1789,9 @@ void CommandList::Barriers(
         barrier_cmd->AddExplicitBarrier(barrier);
     }
     commands.push_back(std::move(barrier_cmd));
-    // Recording an authoritative src/dst dependency opts this submit out of
-    // the backend's legacy restore-to-preferred-state epilogue.
+    // Explicit barriers opt into the caller-owned dependency contract.
     if (!HasExplicitResourceStateOwnership()) {
-        resource_state_ownership = ERHIResourceStateOwnership::Explicit;
+        resource_state_ownership = ERHIResourceStateOwnership::Compiled;
     }
 }
 

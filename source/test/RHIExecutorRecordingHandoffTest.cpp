@@ -743,7 +743,7 @@ bool CmdSubmitCallbackCaptureDestructorSeesCompleteReplacement() {
     incoming.b_delete_resources = true;
     incoming.SetProfilingPhase(ERHIProfilingPhase::Begin);
     incoming.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     incoming.SetTranslateExecutionClass(
         ERHITranslateExecutionClass::SerialControl
@@ -776,7 +776,7 @@ bool CmdSubmitCallbackCaptureDestructorSeesCompleteReplacement() {
         observed->b_sync && observed->b_delete_resources &&
         observed->ProfilingPhase() == ERHIProfilingPhase::Begin &&
         observed->resource_state_ownership ==
-            ERHIResourceStateOwnership::Explicit &&
+            ERHIResourceStateOwnership::Compiled &&
         observed->translate_execution_class ==
             ERHITranslateExecutionClass::SerialControl &&
         observed->async_queue_scope == 0xA5 &&
@@ -850,7 +850,7 @@ bool CommandListCallbackCaptureDestructorSeesCompleteReplacement() {
     const QueryFuture query_future = query.GetFuture();
     incoming.Signal(&incoming_signal, 31);
     incoming.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     incoming.SetTranslateExecutionClass(
         ERHITranslateExecutionClass::SerialControl
@@ -867,7 +867,7 @@ bool CommandListCallbackCaptureDestructorSeesCompleteReplacement() {
         observed->signal_events.size() == 1 &&
         observed->signal_events.front().value == 31 &&
         observed->resource_state_ownership ==
-            ERHIResourceStateOwnership::Explicit &&
+            ERHIResourceStateOwnership::Compiled &&
         observed->translate_execution_class ==
             ERHITranslateExecutionClass::SerialControl;
     const bool destination_was_consumed = destination.IsEmpty();

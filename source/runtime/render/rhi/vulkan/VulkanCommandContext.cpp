@@ -41,17 +41,9 @@ bool InvokeCompletionCallbacksNoexcept(
 VulkanCommandContext::VulkanCommandContext(VulkanDevice* _device, EQueueType _type) :
     VulkanDeviceObject(_device),
     queue_type(_type),
-    tracker(_type),
     command_pool(_device, _type),
     cmd_list(command_pool),
     queries(*_device, _type) {}
-
-VulkanCommandList& VulkanCommandContext::PrepareSecondaryCommandList() {
-    if (!secondary_cmd_list.has_value()) {
-        secondary_cmd_list.emplace(command_pool, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
-    }
-    return secondary_cmd_list.value();
-}
 
 bool VulkanCommandContext::ResetCommandPool() {
     if (m_device->IsDeviceLost()) {
@@ -84,9 +76,6 @@ bool VulkanCommandContext::ResetCommandPool() {
     );
     if (result == VK_SUCCESS) {
         cmd_list.SetDescriptorRecordingPlan({});
-        if (secondary_cmd_list.has_value()) {
-            secondary_cmd_list->SetDescriptorRecordingPlan({});
-        }
         return true;
     }
     return false;
@@ -94,7 +83,6 @@ bool VulkanCommandContext::ResetCommandPool() {
 
 bool VulkanCommandContext::ResetAbandoned() {
     on_complete.clear();
-    tracker.Reset();
     return Reset();
 }
 

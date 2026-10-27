@@ -314,9 +314,9 @@ void TestRecordPassMaterializesExplicitBeforeBodyAfter(TestSuite& suite, bool me
     }
 }
 
-void TestSameStateSecondReadMaterializesStateSeed(TestSuite& suite) {
+void TestSameStateSecondReadNeedsNoBarrier(TestSuite& suite) {
     constexpr std::string_view test_name =
-        "same-state second read materializes a state seed";
+        "same-state second read needs no synthetic barrier";
 
     BufferRef buffer = MoerNew(FakeBuffer)(256);
     RenderGraph graph("ActiveReadSeed");
@@ -388,7 +388,7 @@ void TestSameStateSecondReadMaterializesStateSeed(TestSuite& suite) {
     suite.Check(
         second_submit.HasExplicitResourceStateOwnership(),
         test_name,
-        "state-seeded read submit must use Explicit ownership"
+        "barrier-free read submit must retain compiled ownership"
     );
     const auto body = std::find_if(
         second_submit.cmds.begin(),
@@ -398,30 +398,63 @@ void TestSameStateSecondReadMaterializesStateSeed(TestSuite& suite) {
             return probe != nullptr && probe->Marker() == 2;
         }
     );
-    suite.Check(
-        body != second_submit.cmds.end() && body != second_submit.cmds.begin(),
-        test_name,
-        "the second read body must follow a materialized state seed"
-    );
-    if (body == second_submit.cmds.end() || body == second_submit.cmds.begin()) {
-        return;
+    suite.Check(body != second_submit.cmds.end(), test_name, "second read body was not recorded");
+    suite.Check(std::none_of(second_submit.cmds.begin(), body,
+                            [](const auto& command) { return AsBarrier(command) != nullptr; }),
+                test_name, "read-after-read emitted an unnecessary state-registration barrier");
+
+}
+
+void TestPartialPhysicalRangesMaterialize(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name = "compiled barriers preserve buffer ranges and texture aspects";
+    BufferRef buffer = MoerNew(FakeBuffer)(128);
+    TextureRef texture = MoerNew(FakeTexture)(2, 2, ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE);
+    RenderGraph graph("PartialPhysicalRanges");
+    const auto data = graph.ImportBuffer("Data", buffer, {.byte_size = 128});
+    const auto depth = graph.ImportTexture("DepthStencil", texture,
+        {.mip_count = 2, .layer_count = 2,
+         .aspects = RenderGraph::TextureAspect::Depth | RenderGraph::TextureAspect::Stencil});
+    const RenderGraph::BufferRange bytes{.offset = 16, .size = 32};
+    const RenderGraph::TextureRange slice{.aspects = RenderGraph::TextureAspect::Depth,
+        .mip_first = 1, .mip_count = 1, .layer_first = 1, .layer_count = 1};
+    graph.SetInitialState(data, RenderGraph::BufferState::Undefined, RenderGraph::QueueRole::None,
+                          RenderGraph::AccessMode::None, bytes);
+    graph.SetInitialState(depth, RenderGraph::TextureState::Undefined, RenderGraph::QueueRole::None,
+                          RenderGraph::AccessMode::None, slice);
+    graph.AddRecordPass("WriteSlice", [=](RenderGraph::PassBuilder& pass) {
+        pass.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+            .Write(data, RenderGraph::BufferState::TransferDestination, bytes)
+            .Write(depth, RenderGraph::TextureState::TransferDestination, slice).SideEffect();
+    }, [](CommandList&) {});
+    graph.Export(data, RenderGraph::BufferState::TransferSource, RenderGraph::QueueRole::Graphics,
+                 RenderGraph::AccessMode::Read, bytes);
+    graph.Export(depth, RenderGraph::TextureState::TransferSource, RenderGraph::QueueRole::Graphics,
+                 RenderGraph::AccessMode::Read, slice);
+    CommandList commands;
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    suite.Check(graph.Compile() && graph.RecordAndMergeFrontendCommands(commands, false),
+                test_name, graph.GetCompileError());
+    auto submit = commands.Submit();
+    size_t buffer_barriers = 0, texture_barriers = 0;
+    for (const auto& command : submit.cmds) {
+        const auto* barrier = AsBarrier(command);
+        if (!barrier) { continue; }
+        for (const auto& range : barrier->ExplicitBuffers()) {
+            ++buffer_barriers;
+            suite.Check(range.offset == 16 && range.byte_size == 32, test_name,
+                        "materialization widened the buffer range");
+        }
+        for (const auto& range : barrier->ExplicitTextures()) {
+            ++texture_barriers;
+            suite.Check(range.mip_level == 1 && range.mip_count == 1 &&
+                        range.array_layer == 1 && range.array_count == 1 &&
+                        range.texture_aspects == ETextureAspectFlags::DEPTH_SLICE,
+                        test_name, "materialization widened the texture aspect or subresource");
+        }
     }
-    const auto* seed = AsBarrier(*(body - 1));
-    suite.Check(
-        seed != nullptr && seed->ExplicitBuffers().size() == 1,
-        test_name,
-        "the command immediately before the second read must be an explicit buffer seed"
-    );
-    if (seed != nullptr && seed->ExplicitBuffers().size() == 1) {
-        const auto& explicit_seed = seed->ExplicitBuffers().front();
-        suite.Check(
-            explicit_seed.src_state == explicit_seed.dst_state &&
-                explicit_seed.handle == reinterpret_cast<Moer::uint64>(buffer.Get()) &&
-                explicit_seed.offset == 0 && explicit_seed.byte_size == 256,
-            test_name,
-            "state seed must adopt the same ShaderResource state over the full buffer"
-        );
-    }
+    suite.Check(buffer_barriers == 2 && texture_barriers == 2, test_name,
+                "partial import/export boundaries were not materialized");
 }
 
 void ExpectActiveFailClosed(
@@ -546,60 +579,6 @@ void TestUnsupportedInputsFailBeforeCallbacksOrPublish(TestSuite& suite) {
             graph,
             test_name,
             "strong physical binding",
-            record_calls,
-            configure_calls,
-            publish_calls
-        );
-    }
-
-    {
-        constexpr std::string_view test_name =
-            "partial buffer bridge fails before callbacks or publication";
-        BufferRef buffer = MoerNew(FakeBuffer)(64);
-        RenderGraph graph("ActivePartialBufferFailClosed");
-        const auto  data = graph.ImportBuffer(
-            "Data",
-            buffer,
-            RenderGraph::BufferDesc{.byte_size = 64}
-        );
-        const RenderGraph::BufferRange range{.offset = 0, .size = 32};
-        graph.SetInitialState(
-            data,
-            RenderGraph::BufferState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None,
-            range
-        );
-        int record_calls    = 0;
-        int configure_calls = 0;
-        int publish_calls   = 0;
-        graph.AddRecordPass(
-            "PartialWrite",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(
-                           data,
-                           RenderGraph::BufferState::UnorderedAccess,
-                           range
-                       )
-                    .SideEffect();
-            },
-            [&](CommandList&) {
-                ++record_calls;
-            },
-            RenderGraph::PassExecutionClass::SerialRecord
-        );
-        graph.Export(
-            data,
-            RenderGraph::BufferState::ShaderResource,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read,
-            range
-        );
-        ExpectActiveFailClosed(
-            suite,
-            graph,
-            test_name,
-            "partial buffer state",
             record_calls,
             configure_calls,
             publish_calls
@@ -754,7 +733,7 @@ void TestRecordingSourceSetupCannotCompleteProducerGate(TestSuite& suite) {
 
 void TestManagedRecordCallbackCannotSealOrDowngrade(
     TestSuite& suite,
-    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Explicit
+    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Compiled
 ) {
     for (const auto execution :
          {RenderGraph::PassExecutionClass::SerialRecord,
@@ -795,9 +774,7 @@ void TestManagedRecordCallbackCannotSealOrDowngrade(
                         [[maybe_unused]] CmdSubmit discarded = commands.Submit();
                     } else {
                         commands.SetResourceStateOwnership(
-                            ownership == ERHIResourceStateOwnership::Compiled ?
-                                ERHIResourceStateOwnership::Explicit :
-                                ERHIResourceStateOwnership::BackendTracked
+                            ERHIResourceStateOwnership::BackendTracked
                         );
                     }
                 },
@@ -852,7 +829,7 @@ void TestTokenOnlyCompiledPassPreservesOwnership(TestSuite& suite) {
                 observed_compiled = commands.GetResourceStateOwnership() ==
                                     ERHIResourceStateOwnership::Compiled;
                 if (downgrade) {
-                    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+                    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::BackendTracked);
                 }
             },
             RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -1425,7 +1402,7 @@ void TestActiveMixedMainThreadAndRecordFailsBeforeCallbacks(TestSuite& suite) {
 
 void TestActiveMainThreadCallbackCannotSealOrDowngrade(
     TestSuite& suite,
-    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Explicit
+    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Compiled
 ) {
     for (const bool seal : {false, true}) {
         const std::string test_name =
@@ -1459,9 +1436,7 @@ void TestActiveMainThreadCallbackCannotSealOrDowngrade(
                         caller_commands.Submit();
                 } else {
                     caller_commands.SetResourceStateOwnership(
-                        ownership == ERHIResourceStateOwnership::Compiled ?
-                            ERHIResourceStateOwnership::Explicit :
-                            ERHIResourceStateOwnership::BackendTracked
+                        ERHIResourceStateOwnership::BackendTracked
                     );
                 }
             }
@@ -1933,7 +1908,8 @@ int main() {
     TestCompiledChildGraphPreservesParentLeaseAndScope(suite);
     TestRecordPassMaterializesExplicitBeforeBodyAfter(suite);
     TestRecordPassMaterializesExplicitBeforeBodyAfter(suite, true);
-    TestSameStateSecondReadMaterializesStateSeed(suite);
+    TestSameStateSecondReadNeedsNoBarrier(suite);
+    TestPartialPhysicalRangesMaterialize(suite);
     TestUnsupportedInputsFailBeforeCallbacksOrPublish(suite);
     TestRecordingSourceSetupCannotCompleteProducerGate(suite);
     TestManagedRecordCallbackCannotSealOrDowngrade(suite);

@@ -27,10 +27,10 @@
 
 推荐的使用方式大致如下：
 
-1. 安装 `just`  
-   - Windows：可以通过 `cargo` 安装（`cargo install just`）。  
+1. 安装 `just`
+   - Windows：可以通过 `cargo` 安装（`cargo install just`）。
    - Linux / macOS：参考官方仓库 `casey/just` 的 README 即可。【安装细节请自行询问AI】
-2. 通过简短命令完成日常操作  
+2. 通过简短命令完成日常操作
    - 例如：`just build`、`just run`、`just gbr`（实际命令以 `justfile` 中为准）。
 
 总之，**把常用、复杂、容易忘的命令都写在 `justfile` 里，然后只记住几个简短的 `just xxx` 就好**，既减少心智负担，也方便团队成员共享统一的开发流程。
@@ -189,7 +189,6 @@ MoerEngine开发早期使用 `.clang-tidy` 对命名风格进行规范，但强�
 
 **变量均为 全小写 & 下划线 风格**。
 
-
 | 类别                   | 命名风格                               | 示例                                                |
 | ---------------------- | -------------------------------------- | --------------------------------------------------- |
 | **局部变量**           |                                        | `shadow_map_texture`, `pso_full_screen_info`        |
@@ -244,10 +243,10 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
   ```cmake
   # Moer::Render
   set(target_name moer_render)
-  
+
   add_library(${target_name} SHARED ...)
   add_library(Moer::Render ALIAS ${target_name})
-  
+
   # Moer::Cuda
   set(target_name moer_cuda)
   add_library(${target_name} SHARED ${moer_cuda_h} ${moer_cuda_cu})
@@ -323,9 +322,15 @@ NRD 的公共纹理依赖也由图声明：RELAX 读取 motion，REBLUR 还可�
 并依据实际结束状态将公共纹理恢复到声明状态，再交回 RDG；插件不再访问后端资源 tracker。
 其串行 native 录制约束来自 NRI 的可变 descriptor 和 command-buffer 缓存，与资源依赖分析无关。
 
-低层 RHI 的 legacy recorder 暂留作兼容和对照测试，不属于渲染器执行分支。
-验证完整运行路径时可设置 `MOER_VULKAN_REQUIRE_COMPILED=1`：任何包含命令的非 compiled
-提交都会被拒绝。新增入口应补充资源声明或后端私有协议，不能通过关闭此检查掩盖遗漏。
+Vulkan 只接受 `Compiled` 命令流；任何非空的非 compiled 提交和推断式 barrier 都在 native
+录制之前被拒绝。旧 reorderer、状态 tracker、preferred-state 恢复、StateSeed 和分层 native
+并行录制器已经移除。后端仅将完整屏障翻译为 Vulkan 屏障，并校验范围与队列端点。
+同状态只读访问无需屏障；buffer 字节区间和 texture aspect/mip/layer 范围直接保留。
+新增入口应补充 RDG 资源声明或明确的私有同步协议。
+
+并行化保留在两个已有边界：RDG 的独立 pass 录制，以及 RHI 的独立 source/native queue
+翻译。旧 `RHI.CommandRecording.Parallel*` 配置已移除。资源保活仍随提交进入 Completion，
+回读 staging 在 GPU 完成后读取并回收；没有新增一份资源生命周期。
 
 CUDA/TensorRT 使用两个 compiled 图之间的显式交接，不在 RDG 录制回调内提交队列。
 前图先导出固定边界并提交；interop owner 把具体共享纹理从 `Sampled` 转为 `GENERAL`、

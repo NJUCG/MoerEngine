@@ -55,8 +55,6 @@ namespace {
 
 constexpr size_t kElementCount = 64;
 constexpr uint32 kIterations   = 24;
-constexpr uint32 kHeavyCopiesPerWave = 48;
-constexpr uint32 kHeavyCopyCount = kHeavyCopiesPerWave * 2;
 
 // Only for test-owned fences with no GPU producer. This does not update the
 // GPU completion cache. Signal the native semaphore before publishing acceptance
@@ -213,6 +211,8 @@ bool IsExpectedZeroOcclusionResult(
 
 class TranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     explicit TranslateProbeCommand(
         std::binary_semaphore* _translated,
         EQueueType             _queue = EQueueType::Graphics
@@ -253,6 +253,8 @@ public:
 class BindlessPresentationAccessProbeCommand final
     : public VkCustomDispatchCmd {
 public:
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     explicit BindlessPresentationAccessProbeCommand(
         BindlessArrayRef _bindless,
         EQueueType       _queue = EQueueType::Graphics
@@ -279,6 +281,8 @@ private:
 
 class PipelineTranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     PipelineTranslateProbeCommand(
         EQueueType               _queue,
         std::binary_semaphore*   _translated,
@@ -319,6 +323,8 @@ private:
 
 class BlockingTranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     BlockingTranslateProbeCommand(
         EQueueType               _queue,
         std::binary_semaphore*   _entered,
@@ -366,6 +372,8 @@ private:
 
 class ThrowingTranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     explicit ThrowingTranslateProbeCommand(bool) {}
 
     void Execute(const VkDispatchContext&) const override {
@@ -1565,8 +1573,7 @@ bool HasArgument(int _argc, const char** _argv, std::string_view _argument) {
 void ValidateArguments(int _argc, const char** _argv) {
     for (int index = 1; index < _argc; ++index) {
         const std::string_view argument = _argv[index];
-        if (argument != "--parallel" && argument != "--inject-worker-failure" &&
-            argument != "--production-gate" && argument != "--production-heavy" &&
+        if (argument != "--parallel" &&
             argument != "--inject-translate-failure" &&
             argument != "--inject-multi-segment-translate-failure" &&
             argument != "--pipeline-window1" &&
@@ -1598,37 +1605,60 @@ void ValidateArguments(int _argc, const char** _argv) {
             "--present-boundary and --present-hard are mutually exclusive"
         );
     }
-    if (HasArgument(_argc, _argv, "--inject-worker-failure") &&
-        !HasArgument(_argc, _argv, "--parallel")) {
-        throw std::invalid_argument("--inject-worker-failure requires --parallel");
-    }
-    if (HasArgument(_argc, _argv, "--production-gate") &&
-        !HasArgument(_argc, _argv, "--parallel")) {
-        throw std::invalid_argument("--production-gate requires --parallel");
-    }
-    if (HasArgument(_argc, _argv, "--production-heavy") &&
-        !HasArgument(_argc, _argv, "--parallel")) {
-        throw std::invalid_argument("--production-heavy requires --parallel");
-    }
-    if (HasArgument(_argc, _argv, "--inject-translate-failure") &&
-        HasArgument(_argc, _argv, "--inject-worker-failure")) {
-        throw std::invalid_argument("--inject-translate-failure cannot be combined with "
-                                    "--inject-worker-failure");
-    }
     if (HasArgument(_argc, _argv, "--inject-multi-segment-translate-failure") &&
-        (HasArgument(_argc, _argv, "--inject-worker-failure") ||
-         HasArgument(_argc, _argv, "--inject-translate-failure"))) {
-        throw std::invalid_argument("--inject-multi-segment-translate-failure cannot be combined with "
-                                    "another fault injection");
+        HasArgument(_argc, _argv, "--inject-translate-failure")) {
+        throw std::invalid_argument("failure modes are mutually exclusive");
     }
 }
 
-void RunOrderedReadback(
-    bool _parallel,
-    bool _inject_worker_failure,
-    bool _production_gate,
-    bool _production_heavy
-) {
+// Low-level submission tests own their transfer dependencies explicitly. These
+// helpers use a conservative buffer memory scope; texture layouts are declared
+// at the call site. RDG tests use CommandList directly so these barriers cannot
+// mask missing graph dependencies.
+template<class T>
+void PrepareTestBufferTransfer(CommandList& commands, const T& resource) {
+    if constexpr (std::is_same_v<T, BufferView>) {
+        commands.Barriers({BarrierCreateInfo::Transition(
+            resource,
+            BarrierState::Buffer(ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+                                 ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE),
+            BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER,
+                                 ERHIAccessFlags::TRANSFER_READ | ERHIAccessFlags::TRANSFER_WRITE))});
+    }
+}
+
+template<class From, class To>
+void CopyTestTransfer(CommandList& commands, From&& from, To&& to, std::string name = "TestTransfer") {
+    PrepareTestBufferTransfer(commands, from);
+    PrepareTestBufferTransfer(commands, to);
+    commands.CopyFrom(std::forward<From>(from), std::forward<To>(to), std::move(name));
+}
+
+template<class View>
+ReadbackFuture ReadbackTestTransfer(CommandList& commands, const View& view, std::string name = "TestReadback") {
+    PrepareTestBufferTransfer(commands, view);
+    return commands.Readback(view, std::move(name));
+}
+
+void TransitionTestTexture(CommandList& commands, const TextureView& view,
+                           ETextureLayout before, ETextureLayout after,
+                           bool publish = false) {
+    auto barrier = BarrierCreateInfo::Transition(
+        view,
+        BarrierState::Texture(before == ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ?
+                                  ERHIPipelineStageFlags::PS_NONE : ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+                              before == ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ?
+                                  ERHIAccessFlags::UNDEFINED :
+                                  ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE, before),
+        BarrierState::Texture(ERHIPipelineStageFlags::PS_TRANSFER,
+                              after == ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST ? ERHIAccessFlags::TRANSFER_WRITE :
+                                  ERHIAccessFlags::TRANSFER_READ, after),
+        view.texture->GetAspectFlags());
+    barrier.publish_external_state = publish;
+    commands.Barriers({barrier});
+}
+
+void RunOrderedReadback(bool _parallel) {
     auto& device = RenderDevice::Get();
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
@@ -1647,15 +1677,6 @@ void RunOrderedReadback(
         device.CreateBuffer<uint32>("parallel_order_checkpoint_c", kElementCount, usage),
         device.CreateBuffer<uint32>("parallel_order_checkpoint_d", kElementCount, usage),
     };
-    Array<BufferRef> heavy_checkpoints;
-    if (_production_heavy) {
-        heavy_checkpoints.reserve(kHeavyCopyCount);
-        for (uint32 index = 0; index < kHeavyCopyCount; ++index) {
-            heavy_checkpoints.push_back(device.CreateBuffer<uint32>(
-                "parallel_heavy_checkpoint_" + std::to_string(index), kElementCount, usage
-            ));
-        }
-    }
 
     for (uint32 iteration = 0; iteration < kIterations; ++iteration) {
         std::array<std::array<uint32, kElementCount>, 4> values{};
@@ -1666,84 +1687,54 @@ void RunOrderedReadback(
             }
         }
         std::array<std::array<uint32, kElementCount>, 4> readbacks{};
-        Array<std::array<uint32, kElementCount>> heavy_readbacks(
-            _production_heavy ? kHeavyCopyCount : 0
-        );
 
         CommandList commands;
+
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         for (uint32 source = 0; source < sources.size(); ++source) {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 OwnedBytes(values[source]),
                 sources[source]->GetView(),
                 "ParallelOrderUpload"
             );
         }
-        if (_production_heavy) {
-            for (uint32 index = 0; index < kHeavyCopiesPerWave; ++index) {
-                commands.CopyFrom(
-                    sources[0]->GetView(),
-                    heavy_checkpoints[index]->GetView(),
-                    "ParallelHeavyWave0"
-                );
-            }
-        }
 
-        // Two dependent safe-copy layers form the first worker wave. Their
-        // completion order is irrelevant; GPU execution must retain A then B.
-        commands.CopyFrom(
+        // Explicit dependencies preserve A then B even when CPU recording changes.
+        CopyTestTransfer(commands,
             sources[0]->GetView(), destination->GetView(), "ParallelOrderWave0A"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(), checkpoints[0]->GetView(), "ParallelOrderCheckpointA"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             sources[1]->GetView(), destination->GetView(), "ParallelOrderWave0B"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(), checkpoints[1]->GetView(), "ParallelOrderCheckpointB"
         );
 
-        // A coordinator-only scope is an explicit serial island. The second
-        // worker wave may not start translating before the first wave joins.
+        // Scope markers do not change resource ordering.
         commands.PushScope("ParallelOrderSerialIsland", {0.8f, 0.3f, 0.1f, 1.0f});
-        if (_production_heavy) {
-            for (uint32 index = kHeavyCopiesPerWave; index < kHeavyCopyCount; ++index) {
-                commands.CopyFrom(
-                    sources[2]->GetView(),
-                    heavy_checkpoints[index]->GetView(),
-                    "ParallelHeavyWave1"
-                );
-            }
-        }
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             sources[2]->GetView(), destination->GetView(), "ParallelOrderWave1C"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(), checkpoints[2]->GetView(), "ParallelOrderCheckpointC"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             sources[3]->GetView(), destination->GetView(), "ParallelOrderWave1D"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(), checkpoints[3]->GetView(), "ParallelOrderCheckpointD"
         );
         commands.PopScope();
 
         for (uint32 checkpoint = 0; checkpoint < checkpoints.size(); ++checkpoint) {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 checkpoints[checkpoint]->GetView(),
                 WritableBytes(readbacks[checkpoint]),
                 "ParallelOrderReadback"
             );
-        }
-        if (_production_heavy) {
-            for (uint32 index = 0; index < kHeavyCopyCount; ++index) {
-                commands.CopyFrom(
-                    heavy_checkpoints[index]->GetView(),
-                    WritableBytes(heavy_readbacks[index]),
-                    "ParallelHeavyReadback"
-                );
-            }
         }
 
         RHIExecutor::Get().Submit(
@@ -1770,26 +1761,59 @@ void RunOrderedReadback(
             }
             throw std::runtime_error("ordered GPU checkpoint mismatch");
         }
-        for (size_t checkpoint = 0; checkpoint < heavy_readbacks.size(); ++checkpoint) {
-            const size_t source = checkpoint < kHeavyCopiesPerWave ? 0 : 2;
-            if (heavy_readbacks[checkpoint] != values[source]) {
-                throw std::runtime_error(
-                    "heavy weighted checkpoint mismatch at iteration=" +
-                    std::to_string(iteration) + " checkpoint=" + std::to_string(checkpoint)
-                );
-            }
-        }
+
     }
 
-    LOG_INFO(
-        "[TESTCASE][PASS] name=ParallelRecordOrderedReadback mode={} worker_fault={} "
-        "production_gate={} production_heavy={} iterations={}",
-        _parallel ? "parallel" : "serial",
-        _inject_worker_failure,
-        _production_gate,
-        _production_heavy,
-        kIterations
-    );
+    LOG_INFO("[TESTCASE][PASS] name=CompiledOrderedReadback mode={} iterations={}",
+             _parallel ? "parallel" : "serial", kIterations);
+}
+
+void RunCompiledSubmissionContract() {
+    auto& device = RenderDevice::Get();
+    auto buffer = device.CreateBuffer<uint32>("compiled_contract", 1,
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST);
+    for (auto queue : {EQueueType::Graphics, EQueueType::Compute, EQueueType::Copy}) {
+        NativeSubmissionCapture native_capture;
+        ScopedNativeSubmissionObserver observer(native_capture);
+        for (bool inferred_barrier : {false, true}) {
+            std::atomic<uint32> ordinary{0}, success{0};
+            auto done = device.CreateFence();
+            CommandList rejected(queue);
+            if (inferred_barrier) {
+                rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+                rejected.BufferBarriers(queue, queue, EPassType::Copy,
+                    Array<ReadBuffer>{{buffer->GetView(), EBufferState::TRANSFER}}, {});
+            } else {
+                rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::BackendTracked);
+                rejected.PushScope("NoncompiledContract");
+                rejected.PopScope();
+            }
+            rejected.AddCallback([&] { ++ordinary; });
+            rejected.AddSuccessCallback([&] { ++success; });
+            auto submit = rejected.Submit();
+            submit.Signal(done.Get(), 1);
+            RHIExecutor::Get().Submit(queue, std::move(submit), ERHIExecSubmitFlags::FlushGPU);
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            if (!ResourceCast(done.Get())->IsRejected(1) || ResourceCast(done.Get())->IsFailed() ||
+                ordinary != 1 || success != 0 || native_capture.Count() != 0) {
+                throw std::runtime_error("noncompiled or inferred submission escaped pre-record rejection");
+            }
+        }
+        auto done = device.CreateFence();
+        CommandList recovered(queue);
+        recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        recovered.PushScope("CompiledContractRecovery");
+        recovered.PopScope();
+        auto submit = recovered.Submit();
+        submit.Signal(done.Get(), 1);
+        RHIExecutor::Get().Submit(queue, std::move(submit), ERHIExecSubmitFlags::FlushGPU);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (!ResourceCast(done.Get())->Wait(1) || native_capture.Count() != 1) {
+            throw std::runtime_error("compiled contract rejection latched the runtime");
+        }
+    }
+    LOG_INFO("[TESTCASE][PASS] name=CompiledSubmissionContract queues=Graphics,Compute,Copy "
+             "noncompiled=rejected inferred=rejected native_rejected=0 callbacks=exactly_once recovery=accepted");
 }
 
 void RunCompiledSubrangeSubmission(EQueueType queue) {
@@ -1810,6 +1834,7 @@ void RunCompiledSubrangeSubmission(EQueueType queue) {
         BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ);
 
     CommandList upload(queue);
+
     upload.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     upload.Barriers(std::array{BarrierCreateInfo::Transition(source_range, undefined, write)}, queue, queue);
     upload.CopyFrom(OwnedBytes(values), source_range, "CompiledPartialUpload");
@@ -1865,6 +1890,7 @@ void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel, bool 
     if (!publish_in_graph) {
         // Stable-table case: publication is complete before entering the graph.
         CommandList publish;
+        publish.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         publish.UpdateBindlessArray(table);
         RHIExecutor::Get().Submit(EQueueType::Graphics, publish.Submit(), ERHIExecSubmitFlags::FlushGPU);
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -2176,6 +2202,7 @@ void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
     table->UnbindBuffer(recycled);
     // Destroying an unpublished update uses the existing discard path.
     CommandList discard;
+    discard.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     discard.UpdateBindlessArray(table);
     LOG_INFO("[TESTCASE][PASS] name=CompiledBindlessCandidates graphs=2 gpu-indexed=true "
              "results=86,88 slots=recycled");
@@ -2193,7 +2220,7 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
             pixels[y * width + x] = float4(2.0f + 10.0f * (x % 8), 1.0f + 3.0f * y, 12.0f, 1.0f);
         }
     }
-    auto run = [&](uint32 mip_count, bool compiled, bool merge = false) {
+    auto run = [&](uint32 mip_count, bool merge) {
         const auto usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
                            ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC;
         auto input =
@@ -2214,17 +2241,7 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
             for (uint32 mip = 0; mip + 1 < mip_count; ++mip)
                 readbacks.push_back(commands.Readback(up->GetView(mip, 1)));
         };
-        if (!compiled) {
-            CommandList commands;
-            commands.CopyFrom(OwnedBytes(pixels), input->GetView());
-            bloom.Record(commands, params);
-            // The legacy reorderer groups read-only uses without considering
-            // layout compatibility. Keep readback in a following submit so it
-            // cannot move a TransferSource transition ahead of a sampled read.
-            RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
-            readback(commands);
-            RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
-        } else {
+        {
             Graph                     graph("CompiledBloom");
             BloomPass::GraphResources resources{
                 .input            = graph.ImportTexture("Scene", input, {}),
@@ -2332,10 +2349,9 @@ void RunCompiledBloom(ShaderManager& manager, bool parallel) {
     };
     for (const uint32 mip_count : {1u, 6u}) {
         const auto reference = run(mip_count, false);
-        const auto compiled  = run(mip_count, true);
-        const auto merged = run(mip_count, true, true);
-        if (reference != compiled || reference != merged) {
-            throw std::runtime_error("compiled Bloom differs from the legacy image or pyramid mips");
+        const auto merged = run(mip_count, true);
+        if (reference != merged) {
+            throw std::runtime_error("merged Bloom differs from active graph image or pyramid mips");
         }
         LOG_INFO(
             "[TESTCASE][PASS] name=CompiledBloom mips={} stages={} pyramid=matched scene=matched merged=matched",
@@ -2350,7 +2366,7 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
     auto& device = RenderDevice::Get();
     constexpr uint32 width = 16;
     constexpr uint32 height = 16;
-    auto             run    = [&](ERHIResourceStateOwnership ownership) {
+    auto             run    = [&](bool record_parallel) {
         TonemappingPass pass(device, manager, PF_R32G32B32A32_SFLOAT);
         auto            input = device.CreateTexture(
             "tonemap_test_input",
@@ -2521,9 +2537,9 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
             !graph.ExecuteFrontendRecordingPlan(
                 {},
                 {},
-                parallel,
+                record_parallel,
                 {},
-                RenderGraph::ActiveRecordingOptions{.enabled = true, .state_ownership = ownership}
+                RenderGraph::ActiveRecordingOptions{.enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled}
             )) {
             throw std::runtime_error("tonemapping graph failed: " + graph.GetCompileError());
         }
@@ -2545,14 +2561,14 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         result->push_back(exposure->front());
         return *result;
     };
-    const auto reference = run(ERHIResourceStateOwnership::Explicit);
-    const auto compiled  = run(ERHIResourceStateOwnership::Compiled);
+    const auto reference = run(false);
+    const auto compiled  = run(parallel);
     if (reference.size() != compiled.size()) {
         throw std::runtime_error("compiled tonemapping output size mismatch");
     }
     for (size_t i = 0; i < reference.size(); ++i) {
         if (!std::isfinite(compiled[i]) || std::abs(reference[i] - compiled[i]) > 0.00001f) {
-            throw std::runtime_error("compiled tonemapping differs from the tracked reference");
+            throw std::runtime_error("compiled tonemapping differs between serial and selected graph recording");
         }
     }
     LOG_INFO("[TESTCASE][PASS] name={} histogram=verified exposure=verified image=matched",
@@ -2561,7 +2577,7 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
 
 void RunActiveRdgExplicitBarrierReadback(
     bool                       _parallel,
-    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Explicit
+    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Compiled
 ) {
     auto&                   device    = RenderDevice::Get();
     const EBufferUsageFlags usage     = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
@@ -2819,6 +2835,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         );
     }
     CommandList caller_commands(EQueueType::Graphics);
+    caller_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     if (caller_graph.ExecuteFrontendRecordingPlan(
             {},
             {},
@@ -3026,6 +3043,8 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         }
 
         CommandList compute_readback(EQueueType::Compute);
+
+        compute_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         compute_readback.CopyFrom(
             compute_independent.buffer->GetView(),
             WritableBytes(compute_independent.readback),
@@ -3037,6 +3056,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             ERHIExecSubmitFlags::FlushGPU
         );
         CommandList graphics_readback(EQueueType::Graphics);
+        graphics_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics_readback.CopyFrom(
             graphics_independent.buffer->GetView(),
             WritableBytes(graphics_independent.readback),
@@ -3301,6 +3321,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             );
         }
         CommandList physical_readback(EQueueType::Compute);
+        physical_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         physical_readback.CopyFrom(
             shared_destination.buffer->GetView(),
             WritableBytes(shared_destination.readback),
@@ -3522,6 +3543,8 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     }
 
     CommandList compute_readback(EQueueType::Compute);
+
+    compute_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     compute_readback.CopyFrom(
         compute_independent.buffer->GetView(),
         WritableBytes(compute_independent.readback),
@@ -3539,6 +3562,8 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     );
 
     CommandList graphics_readback(EQueueType::Graphics);
+
+    graphics_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics_readback.CopyFrom(
         graphics_root.buffer->GetView(),
         WritableBytes(graphics_root.readback),
@@ -4490,6 +4515,8 @@ void RunExplicitTextureArrayRangeShapeChange(bool _parallel) {
     );
 
     CommandList commands(EQueueType::Graphics);
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     commands.Barriers({
         BarrierCreateInfo::Transition(
             whole,
@@ -4551,20 +4578,20 @@ void RunUpperTopologyBatch() {
 
     Array<CommandList> command_lists{};
     command_lists.emplace_back(EQueueType::Graphics);
-    command_lists.back().CopyFrom(OwnedBytes(expected), source->GetView(), "TopologyUpload");
+    CopyTestTransfer(command_lists.back(), OwnedBytes(expected), source->GetView(), "TopologyUpload");
     command_lists.back().AddCallback(append_callback(0));
 
     command_lists.emplace_back(EQueueType::Graphics);
     command_lists.back().SetTranslateExecutionClass(
         ERHITranslateExecutionClass::SerialControl
     );
-    command_lists.back().CopyFrom(
+    CopyTestTransfer(command_lists.back(),
         source->GetView(), destination->GetView(), "TopologySerialControlCopy"
     );
     command_lists.back().AddCallback(append_callback(1));
 
     command_lists.emplace_back(EQueueType::Graphics);
-    command_lists.back().CopyFrom(
+    CopyTestTransfer(command_lists.back(),
         destination->GetView(), WritableBytes(readback), "TopologyReadback"
     );
     command_lists.back().AddCallback(append_callback(2));
@@ -4622,17 +4649,17 @@ void RunPendingSourceTopologyBatch() {
 
     Array<CommandList> pass_lists{};
     pass_lists.emplace_back(EQueueType::Graphics);
-    pass_lists.back().CopyFrom(OwnedBytes(expected), source->GetView(), "PendingPassUpload");
+    CopyTestTransfer(pass_lists.back(), OwnedBytes(expected), source->GetView(), "PendingPassUpload");
     pass_lists.back().AddCallback(append_callback(0));
 
     pass_lists.emplace_back(EQueueType::Graphics);
-    pass_lists.back().CopyFrom(
+    CopyTestTransfer(pass_lists.back(),
         source->GetView(), destination->GetView(), "PendingPassCopy"
     );
     pass_lists.back().AddCallback(append_callback(1));
 
     pass_lists.emplace_back(EQueueType::Graphics);
-    pass_lists.back().CopyFrom(
+    CopyTestTransfer(pass_lists.back(),
         destination->GetView(), WritableBytes(readback), "PendingPassReadback"
     );
     pass_lists.back().AddCallback(append_callback(2));
@@ -4751,19 +4778,21 @@ void RunContinuousFrameInFlightRetirement() {
             }
 
             CommandList commands(EQueueType::Graphics);
+
+            commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
             if (frame == max_in_flight) {
                 commands.AddCustomCommand(
                     MakeUnique<TranslateProbeCommand>(&fourth_translate_reached),
                     "ContinuousFrameTranslateProbe"
                 );
             }
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 OwnedBytes(frame_values),
                 frame_output->GetView(),
                 "ContinuousFrameUpload"
             );
             if (frame + 1 == frame_count) {
-                commands.CopyFrom(
+                CopyTestTransfer(commands,
                     frame_output->GetView(),
                     WritableBytes(readback),
                     "ContinuousFrameReadback"
@@ -4845,6 +4874,27 @@ void RunContinuousFrameInFlightRetirement() {
     );
 }
 
+void RecordTestTransferHandoff(CommandList& commands, BufferView view,
+                               EQueueType from, EQueueType to, bool release) {
+    const auto topology = RenderDevice::Get().GetQueueTopology();
+    const auto endpoint = release ? from : to;
+    auto barrier = BarrierCreateInfo::Transition(view,
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE),
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ));
+    if (topology.Resolve(from).family_id != topology.Resolve(to).family_id) {
+        barrier.queue_transfer = release ? BarrierQueueTransfer::Release(from, to) :
+                                           BarrierQueueTransfer::Acquire(from, to);
+    }
+    CommandList endpoint_commands(endpoint);
+    endpoint_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    endpoint_commands.Barriers({barrier});
+    // This fixture deliberately creates one source containing different queue
+    // segments. Keep each barrier's explicit endpoint affinity when composing it.
+    auto recorded = endpoint_commands.Submit();
+    commands.AddCustomCommand(std::move(recorded.cmds.front()), "TestTransferHandoff");
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+}
+
 void RunCrossQueueTopologyBatch() {
     auto& device = RenderDevice::Get();
     const RHIQueueTopology topology = device.GetQueueTopology();
@@ -4867,52 +4917,28 @@ void RunCrossQueueTopologyBatch() {
 
     Array<CommandList> command_lists{};
     command_lists.emplace_back(EQueueType::Graphics);
-    command_lists.back().CopyFrom(
+    CopyTestTransfer(command_lists.back(),
         OwnedBytes(expected), source->GetView(), "TopologyCrossQueueUpload"
     );
-    command_lists.back().ExportResourcesToQueue(
-        EQueueType::Compute,
-        {},
-        Array<ExportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(command_lists.back(), source->GetView(), EQueueType::Graphics, EQueueType::Compute, true);
 
     command_lists.emplace_back(EQueueType::Compute);
-    command_lists.back().ImportResourcesFromQueue(
-        EQueueType::Graphics,
-        {},
-        Array<ImportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
-    );
-    command_lists.back().CopyFrom(
+    RecordTestTransferHandoff(command_lists.back(), source->GetView(), EQueueType::Graphics, EQueueType::Compute, false);
+    CopyTestTransfer(command_lists.back(),
         source->GetView(), compute_stage->GetView(), "TopologyCrossQueueCompute"
     );
-    command_lists.back().ExportResourcesToQueue(
-        EQueueType::Copy,
-        {},
-        Array<ExportBuffer>{{compute_stage->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(command_lists.back(), compute_stage->GetView(), EQueueType::Compute, EQueueType::Copy, true);
 
     command_lists.emplace_back(EQueueType::Copy);
-    command_lists.back().ImportResourcesFromQueue(
-        EQueueType::Compute,
-        {},
-        Array<ImportBuffer>{{compute_stage->GetView(), EBufferState::TRANSFER}}
-    );
-    command_lists.back().CopyFrom(
+    RecordTestTransferHandoff(command_lists.back(), compute_stage->GetView(), EQueueType::Compute, EQueueType::Copy, false);
+    CopyTestTransfer(command_lists.back(),
         compute_stage->GetView(), copy_stage->GetView(), "TopologyCrossQueueCopy"
     );
-    command_lists.back().ExportResourcesToQueue(
-        EQueueType::Graphics,
-        {},
-        Array<ExportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(command_lists.back(), copy_stage->GetView(), EQueueType::Copy, EQueueType::Graphics, true);
 
     command_lists.emplace_back(EQueueType::Graphics);
-    command_lists.back().ImportResourcesFromQueue(
-        EQueueType::Copy,
-        {},
-        Array<ImportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
-    );
-    command_lists.back().CopyFrom(
+    RecordTestTransferHandoff(command_lists.back(), copy_stage->GetView(), EQueueType::Copy, EQueueType::Graphics, false);
+    CopyTestTransfer(command_lists.back(),
         copy_stage->GetView(), WritableBytes(readback), "TopologyCrossQueueReadback"
     );
 
@@ -5109,9 +5135,7 @@ void RunAsyncQueueParallelTranslateSmoke() {
 
     try {
         CommandList graphics_front(EQueueType::Graphics);
-        graphics_front.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        graphics_front.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics_front.AddCustomCommand(
             MakeUnique<BlockingTranslateProbeCommand>(
                 EQueueType::Graphics,
@@ -5131,14 +5155,13 @@ void RunAsyncQueueParallelTranslateSmoke() {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_front_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_front_submit.async_queue_scope = async_queue_scope;
 
         CommandList graphics_tail(EQueueType::Graphics);
-        graphics_tail.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+
+        graphics_tail.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics_tail.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &graphics_tail_entered
@@ -5156,14 +5179,13 @@ void RunAsyncQueueParallelTranslateSmoke() {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_tail_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_tail_submit.async_queue_scope = async_queue_scope;
 
         CommandList compute_later(EQueueType::Compute);
-        compute_later.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+
+        compute_later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         compute_later.AddCustomCommand(
             MakeUnique<BlockingTranslateProbeCommand>(
                 EQueueType::Compute,
@@ -5183,20 +5205,19 @@ void RunAsyncQueueParallelTranslateSmoke() {
             ERHITranslateExecutionClass::Parallel
         );
         compute_later_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         compute_later_submit.async_queue_scope = async_queue_scope;
 
         CommandList copy(EQueueType::Copy);
-        copy.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        copy.CopyFrom(
+
+        copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(copy,
             OwnedBytes(copy_expected),
             copy_buffer->GetView(),
             "Phase15ECopyReadyUpload"
         );
-        copy.CopyFrom(
+        CopyTestTransfer(copy,
             copy_buffer->GetView(),
             WritableBytes(copy_readback),
             "Phase15ECopyReadyReadback"
@@ -5216,7 +5237,7 @@ void RunAsyncQueueParallelTranslateSmoke() {
             ERHITranslateExecutionClass::Parallel
         );
         copy_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         copy_submit.async_queue_scope = async_queue_scope;
         copy_submit.Signal(copy_done.Get(), 1);
@@ -5538,7 +5559,7 @@ void RunMultiSegmentSourceExecution() {
 
     try {
         CommandList source(EQueueType::Graphics);
-        source.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        source.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         source.AddCustomCommand(
             MakeUnique<BlockingTranslateProbeCommand>(
                 EQueueType::Graphics, &graphics_entered, &release_graphics, &graphics_translate_finished
@@ -5565,7 +5586,7 @@ void RunMultiSegmentSourceExecution() {
 
         CmdSubmit submit = source.Submit();
         submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-        submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         submit.async_queue_scope = async_queue_scope;
         submit.segments          = {
             RHISubmitSegment{EQueueType::Graphics, 0, 1},
@@ -5721,25 +5742,19 @@ void RunMultiSegmentCopyRoundTrip() {
     const uint32                   main_thread_id = Platform::GetCurrentThreadID();
 
     CommandList source_commands(EQueueType::Graphics);
+
+    source_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     source_commands.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    source_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    source_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
 
     source_commands.CopyFrom(OwnedBytes(expected), source->GetView(), "MultiSegmentCopyUpload");
-    source_commands.ExportResourcesToQueue(
-        EQueueType::Copy, {}, Array<ExportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(source_commands, source->GetView(), EQueueType::Graphics, EQueueType::Copy, true);
 
-    source_commands.ImportResourcesFromQueue(
-        EQueueType::Graphics, {}, Array<ImportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(source_commands, source->GetView(), EQueueType::Graphics, EQueueType::Copy, false);
     source_commands.CopyFrom(source->GetView(), copy_stage->GetView(), "MultiSegmentCopyNativeCopy");
-    source_commands.ExportResourcesToQueue(
-        EQueueType::Graphics, {}, Array<ExportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(source_commands, copy_stage->GetView(), EQueueType::Copy, EQueueType::Graphics, true);
 
-    source_commands.ImportResourcesFromQueue(
-        EQueueType::Copy, {}, Array<ImportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(source_commands, copy_stage->GetView(), EQueueType::Copy, EQueueType::Graphics, false);
     source_commands.CopyFrom(copy_stage->GetView(), WritableBytes(readback), "MultiSegmentCopyReadback");
     source_commands.AddCallback([&] {
         ordinary_callbacks.fetch_add(1, std::memory_order_relaxed);
@@ -5750,7 +5765,7 @@ void RunMultiSegmentCopyRoundTrip() {
 
     CmdSubmit submit = source_commands.Submit();
     submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     submit.async_queue_scope = async_queue_scope;
     submit.segments          = {
         RHISubmitSegment{EQueueType::Graphics, 0, 2},
@@ -5872,7 +5887,8 @@ void RunMultiSegmentRecoverableRejection() {
     const uint32                   main_thread_id = Platform::GetCurrentThreadID();
 
     CommandList rejected(EQueueType::Graphics);
-    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     rejected.AddCustomCommand(
         MakeUnique<TranslateProbeCommand>(&graphics_translated, EQueueType::Graphics),
         "MultiSegmentRejectedGraphicsTranslateProbe"
@@ -5890,7 +5906,7 @@ void RunMultiSegmentRecoverableRejection() {
 
     CmdSubmit rejected_submit = rejected.Submit();
     rejected_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    rejected_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    rejected_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     rejected_submit.async_queue_scope = async_queue_scope;
     rejected_submit.segments          = {
         RHISubmitSegment{EQueueType::Graphics, 0, 1},
@@ -5915,7 +5931,8 @@ void RunMultiSegmentRecoverableRejection() {
     }
 
     CommandList recovered(EQueueType::Graphics);
-    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered.AddCustomCommand(
         MakeUnique<TranslateProbeCommand>(&recovered_translated, EQueueType::Graphics),
         "MultiSegmentRejectionRecoveryProbe"
@@ -5928,7 +5945,7 @@ void RunMultiSegmentRecoverableRejection() {
     });
     CmdSubmit recovered_submit = recovered.Submit();
     recovered_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    recovered_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    recovered_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered_submit.async_queue_scope = async_queue_scope;
     recovered_submit.Signal(recovered_done.Get(), 1);
     RHIExecutor::Get().Submit(
@@ -5999,7 +6016,8 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
     const uint32                   main_thread_id = Platform::GetCurrentThreadID();
 
     CommandList source(EQueueType::Graphics);
-    source.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    source.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture source_completion =
         source.TrackGpuCompletion(
             "Phase19AMultiSegmentTailCompletion"
@@ -6043,7 +6061,7 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
 
     CmdSubmit submit = source.Submit();
     submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     submit.async_queue_scope = async_queue_scope;
     submit.segments          = {
         RHISubmitSegment{EQueueType::Graphics, 0, 1},
@@ -6099,6 +6117,8 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
     }
 
     CommandList later(EQueueType::Graphics);
+
+    later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture later_completion =
         later.TrackGpuCompletion(
             "Phase19AHardLatchCompletion"
@@ -6210,7 +6230,8 @@ void RunParallelTranslateFailureRetirement() {
     );
 
     CommandList graphics(EQueueType::Graphics);
-    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics.AddCustomCommand(
         MakeUnique<ThrowingTranslateProbeCommand>(true), "InjectedOuterTranslateFailure"
     );
@@ -6222,15 +6243,14 @@ void RunParallelTranslateFailureRetirement() {
     });
     CmdSubmit graphics_submit = graphics.Submit();
     graphics_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    graphics_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    graphics_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics_submit.async_queue_scope = async_queue_scope;
     graphics_submit.Signal(graphics_done.Get(), 1);
 
     CommandList copy(EQueueType::Copy);
-    copy.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    copy.CopyFrom(
+
+    copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(copy,
         OwnedBytes(copy_values),
         copy_destination->GetView(),
         "ParallelTranslateRecordedCopySuffix"
@@ -6246,7 +6266,7 @@ void RunParallelTranslateFailureRetirement() {
         ERHITranslateExecutionClass::Parallel
     );
     copy_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     copy_submit.async_queue_scope = async_queue_scope;
     copy_submit.Signal(copy_done.Get(), 1);
@@ -6293,6 +6313,7 @@ void RunParallelTranslateFailureRetirement() {
     // source must be terminalized without entering Translate or replaying any
     // earlier packet ownership.
     CommandList later(EQueueType::Graphics);
+    later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     later.AddCallback([&] {
         ordinary_callbacks[2].fetch_add(1, std::memory_order_relaxed);
     });
@@ -6357,7 +6378,8 @@ void RunParallelTranslateRecoverableRejection() {
     rejected_dependency->Reject(1);
 
     CommandList graphics(EQueueType::Graphics);
-    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics.AddCustomCommand(
         MakeUnique<TranslateProbeCommand>(&graphics_translated), "RecoverableGraphicsTranslateProbe"
     );
@@ -6369,15 +6391,16 @@ void RunParallelTranslateRecoverableRejection() {
     });
     CmdSubmit graphics_submit = graphics.Submit();
     graphics_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    graphics_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    graphics_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics_submit.async_queue_scope = async_queue_scope;
     graphics_submit.Wait(rejected_dependency.Get(), 1);
     graphics_submit.Signal(graphics_done.Get(), 1);
 
     CommandList compute(EQueueType::Compute);
-    compute.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    compute.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     compute.AddCustomCommand(
-        MakeUnique<TranslateProbeCommand>(&compute_translated), "RecoverableComputeRecordedSuffixProbe"
+        MakeUnique<TranslateProbeCommand>(&compute_translated, EQueueType::Compute), "RecoverableComputeRecordedSuffixProbe"
     );
     compute.AddCallback([&] {
         ordinary_callbacks[1].fetch_add(1, std::memory_order_relaxed);
@@ -6387,7 +6410,7 @@ void RunParallelTranslateRecoverableRejection() {
     });
     CmdSubmit compute_submit = compute.Submit();
     compute_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    compute_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    compute_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     compute_submit.async_queue_scope = async_queue_scope;
     compute_submit.Signal(compute_done.Get(), 1);
 
@@ -6419,9 +6442,9 @@ void RunParallelTranslateRecoverableRejection() {
     // The rejected dependency is packet-local. A later independent source
     // must still enter Translate, submit, and complete successfully.
     CommandList recovered(EQueueType::Compute);
-    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered.AddCustomCommand(
-        MakeUnique<TranslateProbeCommand>(&recovered_translated), "ParallelTranslateRecoveryProbe"
+        MakeUnique<TranslateProbeCommand>(&recovered_translated, EQueueType::Compute), "ParallelTranslateRecoveryProbe"
     );
     recovered.AddCallback([&] {
         ordinary_callbacks[2].fetch_add(1, std::memory_order_relaxed);
@@ -6431,7 +6454,7 @@ void RunParallelTranslateRecoverableRejection() {
     });
     CmdSubmit recovered_submit = recovered.Submit();
     recovered_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    recovered_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    recovered_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered_submit.async_queue_scope = async_queue_scope;
     recovered_submit.Signal(recovered_done.Get(), 1);
     RHIExecutor::Get().Submit(
@@ -6608,6 +6631,7 @@ void RunRaytracingExportAcceptanceRejection() {
     // identities still have callback-owned strong references after Submission
     // has published terminal rejection.
     CommandList blocker(EQueueType::Graphics);
+    blocker.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     blocker.AddCallback([&] {
         blocker_callbacks.fetch_add(1, std::memory_order_relaxed);
         blocker_entered.release();
@@ -6629,7 +6653,8 @@ void RunRaytracingExportAcceptanceRejection() {
 
     try {
         CommandList attempt1_source(EQueueType::Graphics);
-        attempt1_source.CopyFrom(
+        attempt1_source.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(attempt1_source,
             OwnedBytes(std::array<uint32, 4>{11, 13, 17, 19}),
             attempt1_source_buffer->GetView(),
             "RaytracingExportAttempt1Source"
@@ -6660,7 +6685,9 @@ void RunRaytracingExportAcceptanceRejection() {
         );
 
         CommandList attempt1_tail(EQueueType::Graphics);
-        attempt1_tail.CopyFrom(
+
+        attempt1_tail.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(attempt1_tail,
             OwnedBytes(std::array<uint32, 4>{23, 29, 31, 37}),
             attempt1_tail_target->GetView(),
             "RaytracingExportAttempt1DependentTail"
@@ -6748,7 +6775,9 @@ void RunRaytracingExportAcceptanceRejection() {
         }
 
         CommandList readback_retry_prefix(EQueueType::Graphics);
-        readback_retry_prefix.CopyFrom(
+
+        readback_retry_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(readback_retry_prefix,
             OwnedBytes(readback_retry_expected),
             readback_retry_source->GetView(),
             "RaytracingExportReadbackRetryPrefix"
@@ -6782,8 +6811,9 @@ void RunRaytracingExportAcceptanceRejection() {
 
         readback_retry_submission.BeginReadback(device.CreateFence());
         CommandList rejected_readback_commands(EQueueType::Graphics);
+        rejected_readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         ReadbackFuture rejected_readback =
-            rejected_readback_commands.Readback(
+            ReadbackTestTransfer(rejected_readback_commands,
             readback_retry_source->GetView(),
             "RaytracingExportRejectedReadback"
         );
@@ -6828,7 +6858,9 @@ void RunRaytracingExportAcceptanceRejection() {
         }
 
         CommandList readback_retry_tail(EQueueType::Graphics);
-        readback_retry_tail.CopyFrom(
+
+        readback_retry_tail.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(readback_retry_tail,
             OwnedBytes(std::array<uint32, 4>{73, 79, 83, 89}),
             readback_retry_tail_target->GetView(),
             "RaytracingExportReadbackRetryTail"
@@ -6928,7 +6960,9 @@ void RunRaytracingExportAcceptanceRejection() {
         }
 
         CommandList recovery_prefix(EQueueType::Graphics);
-        recovery_prefix.CopyFrom(
+
+        recovery_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(recovery_prefix,
             OwnedBytes(recovery_expected),
             recovery_source->GetView(),
             "RaytracingExportRecoveryPrefix"
@@ -6954,8 +6988,9 @@ void RunRaytracingExportAcceptanceRejection() {
 
         recovery_submission.BeginReadback(device.CreateFence());
         CommandList recovery_readback_commands(EQueueType::Graphics);
+        recovery_readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         ReadbackFuture recovered_readback =
-            recovery_readback_commands.Readback(
+            ReadbackTestTransfer(recovery_readback_commands,
             recovery_source->GetView(),
             "RaytracingExportRecoveryReadback"
         );
@@ -7004,7 +7039,9 @@ void RunRaytracingExportAcceptanceRejection() {
         }
 
         CommandList recovery_tail(EQueueType::Graphics);
-        recovery_tail.CopyFrom(
+
+        recovery_tail.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(recovery_tail,
             OwnedBytes(std::array<uint32, 4>{97, 101, 103, 107}),
             recovery_tail_target->GetView(),
             "RaytracingExportRecoveryTail"
@@ -7130,7 +7167,9 @@ void RunRaytracingAcceptedReadbackMaterializationFailure() {
     ExportSubmissionTransaction submission(device.CreateFence());
 
     CommandList source_commands(EQueueType::Graphics);
-    source_commands.CopyFrom(
+
+    source_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(source_commands,
         OwnedBytes(std::array<uint32, 4>{109, 113, 127, 131}),
         source->GetView(),
         "RaytracingExportMaterializationFailureSource"
@@ -7150,13 +7189,14 @@ void RunRaytracingAcceptedReadbackMaterializationFailure() {
 
     submission.BeginReadback(device.CreateFence());
     CommandList readback_commands(EQueueType::Graphics);
-    ReadbackFuture readback = readback_commands.Readback(
+    readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    ReadbackFuture readback = ReadbackTestTransfer(readback_commands,
         source->GetView(),
         "RaytracingExportInjectedMaterializationFailure"
     );
     CmdSubmit readback_submit = readback_commands.Submit();
-    if (readback_submit.cmds.size() != 1 ||
-        readback_submit.cmds.front()->Type() !=
+    if (readback_submit.cmds.empty() ||
+        readback_submit.cmds.back()->Type() !=
             Command::EType::CopyBackBuffer) {
         throw std::runtime_error(
             "materialization-failure readback command was not recorded"
@@ -7164,7 +7204,7 @@ void RunRaytracingAcceptedReadbackMaterializationFailure() {
     }
     const ReadbackToken backend_token =
         static_cast<const CopyBackBufferCmd&>(
-            *readback_submit.cmds.front()
+            *readback_submit.cmds.back()
         ).OwningReadback();
     if (ReadbackBackendAccess::MaterializePayload(
             backend_token,
@@ -7266,6 +7306,7 @@ void RunRecoverableCopyDependencyRejection() {
 
     try {
         CommandList blocker(EQueueType::Copy);
+        blocker.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         blocker.AddCallback([&] {
             blocker_callbacks.fetch_add(1, std::memory_order_relaxed);
             blocker_entered.release();
@@ -7286,7 +7327,9 @@ void RunRecoverableCopyDependencyRejection() {
         }
 
     CommandList rejected(EQueueType::Copy);
-    rejected.CopyFrom(
+
+    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(rejected,
         OwnedBytes(std::array<uint32, 4>{1, 2, 3, 4}),
         destination->GetView(),
         "RecoverableCopyRejected"
@@ -7301,7 +7344,9 @@ void RunRecoverableCopyDependencyRejection() {
     rejected_submit.Wait(dependency.Get(), 1).Signal(shared_done.Get(), 1);
 
     CommandList recovered(EQueueType::Copy);
-    recovered.CopyFrom(
+
+    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(recovered,
         OwnedBytes(expected),
         destination->GetView(),
         "RecoverableCopyUpload"
@@ -7316,7 +7361,9 @@ void RunRecoverableCopyDependencyRejection() {
     recovered_submit.Signal(shared_done.Get(), 2);
 
     CommandList stale_wait(EQueueType::Copy);
-    stale_wait.CopyFrom(
+
+    stale_wait.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(stale_wait,
         OwnedBytes(stale_values),
         destination->GetView(),
         "RejectedStaleTimelineWait"
@@ -7333,7 +7380,9 @@ void RunRecoverableCopyDependencyRejection() {
     );
 
     CommandList dependent(EQueueType::Copy);
-    dependent.CopyFrom(
+
+    dependent.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(dependent,
         destination->GetView(),
         WritableBytes(readback),
         "RecoveredTimelineDependencyReadback"
@@ -7503,6 +7552,8 @@ void RunDirectCopyExecuteRejected() {
     std::atomic<uint32> success_callbacks{0};
 
     CommandList direct(EQueueType::Copy);
+
+    direct.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     direct.AddCallback([&] {
         ordinary_callbacks.fetch_add(1, std::memory_order_relaxed);
     });
@@ -7583,7 +7634,9 @@ void RunRuntimeRejectCompletionOwnership() {
     };
 
     CommandList graphics(EQueueType::Graphics);
-    graphics.CopyFrom(
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(graphics,
         OwnedBytes(std::array<uint32, 4>{1, 2, 3, 4}),
         rejected_destination->GetView(),
         "RuntimeRejectRecordedCopy"
@@ -7606,6 +7659,8 @@ void RunRuntimeRejectCompletionOwnership() {
     graphics_submit.Wait(dependency.Get(), 1).Signal(graphics_done.Get(), 1);
 
     CommandList copy(EQueueType::Copy);
+
+    copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     copy.AddCallback([&] {
         validate_completion_owner();
         device.GetCommandQueue(EQueueType::Graphics).Sync();
@@ -7782,9 +7837,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
 
     try {
         CommandList graphics(EQueueType::Graphics);
-        graphics.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics.AddCustomCommand(
             MakeUnique<PipelineTranslateProbeCommand>(
                 EQueueType::Graphics,
@@ -7810,7 +7863,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_submit.async_queue_scope = async_queue_scope;
         graphics_submit.Wait(dependency.Get(), 1)
@@ -7840,9 +7893,8 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
         }
 
         CommandList compute(EQueueType::Compute);
-        compute.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+
+        compute.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         compute.AddCustomCommand(
             MakeUnique<PipelineTranslateProbeCommand>(
                 EQueueType::Compute,
@@ -7868,7 +7920,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
             ERHITranslateExecutionClass::Parallel
         );
         compute_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         compute_submit.async_queue_scope = async_queue_scope;
         compute_submit.Signal(compute_done.Get(), 1);
@@ -8132,9 +8184,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
 
     try {
         CommandList prefix(EQueueType::Graphics);
-        prefix.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         prefix.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &prefix_translated, EQueueType::Graphics
@@ -8152,7 +8202,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             ERHITranslateExecutionClass::Parallel
         );
         prefix_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         prefix_submit.async_queue_scope = async_queue_scope;
         prefix_submit.Wait(dependency.Get(), 1)
@@ -8176,9 +8226,8 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
         }
 
         CommandList malformed(EQueueType::Graphics);
-        malformed.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+
+        malformed.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         malformed.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &malformed_translated, EQueueType::Graphics
@@ -8196,7 +8245,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             ERHITranslateExecutionClass::Parallel
         );
         malformed_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         malformed_submit.async_queue_scope = async_queue_scope;
         malformed_submit.Signal(malformed_done.Get(), 1);
@@ -8440,9 +8489,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
 
     try {
         CommandList graphics(EQueueType::Graphics);
-        graphics.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &graphics_translated, EQueueType::Graphics
@@ -8464,7 +8511,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_submit.async_queue_scope = async_queue_scope;
         graphics_submit.Wait(dependency.Get(), 1)
@@ -8488,15 +8535,14 @@ void RunBoundedCrossBatchRecoverableRejection() {
         }
 
         CommandList copy(EQueueType::Copy);
-        copy.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        copy.CopyFrom(
+
+        copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(copy,
             OwnedBytes(expected),
             destination->GetView(),
             "PipelineRecoverableCopyUpload"
         );
-        copy.CopyFrom(
+        CopyTestTransfer(copy,
             destination->GetView(),
             WritableBytes(readback),
             "PipelineRecoverableCopyReadback"
@@ -8516,7 +8562,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
             ERHITranslateExecutionClass::Parallel
         );
         copy_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         copy_submit.async_queue_scope = async_queue_scope;
         copy_submit.Signal(copy_done.Get(), 1);
@@ -8763,9 +8809,7 @@ void RunBoundedPipelineShutdownCancellation() {
 
     try {
         CommandList graphics(EQueueType::Graphics);
-        graphics.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &graphics_translated, EQueueType::Graphics
@@ -8787,7 +8831,7 @@ void RunBoundedPipelineShutdownCancellation() {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_submit.async_queue_scope = async_queue_scope;
         graphics_submit.Wait(dependency.Get(), 1)
@@ -8811,15 +8855,14 @@ void RunBoundedPipelineShutdownCancellation() {
         }
 
         CommandList copy(EQueueType::Copy);
-        copy.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        copy.CopyFrom(
+
+        copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(copy,
             OwnedBytes(expected),
             destination->GetView(),
             "PipelineShutdownCopyUpload"
         );
-        copy.CopyFrom(
+        CopyTestTransfer(copy,
             destination->GetView(),
             WritableBytes(readback),
             "PipelineShutdownCopyReadback"
@@ -8839,7 +8882,7 @@ void RunBoundedPipelineShutdownCancellation() {
             ERHITranslateExecutionClass::Parallel
         );
         copy_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         copy_submit.async_queue_scope = async_queue_scope;
         copy_submit.Signal(copy_done.Get(), 1);
@@ -9046,6 +9089,8 @@ void RunShutdownDependencyCancellation() {
     ScopedBackendSyncWaitObserver  sync_wait_observer(sync_wait_capture);
 
     CommandList graphics(EQueueType::Graphics);
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics.AddCallback([&] {
         callbacks.fetch_add(1, std::memory_order_relaxed);
     });
@@ -9057,6 +9102,8 @@ void RunShutdownDependencyCancellation() {
         .Signal(graphics_done.Get(), 1);
 
     CommandList copy(EQueueType::Copy);
+
+    copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     copy.AddCallback([&] {
         callbacks.fetch_add(1, std::memory_order_relaxed);
     });
@@ -9217,10 +9264,8 @@ void RunSerialControlPipelineBoundary() {
 
     try {
         CommandList prefix(EQueueType::Graphics);
-        prefix.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        prefix.CopyFrom(
+        prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(prefix,
             OwnedBytes(expected),
             source->GetView(),
             "SerialControlBoundaryBlockedPrefix"
@@ -9240,7 +9285,7 @@ void RunSerialControlPipelineBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         prefix_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         prefix_submit.async_queue_scope = async_queue_scope;
         prefix_submit.Wait(dependency.Get(), 1)
@@ -9264,13 +9309,15 @@ void RunSerialControlPipelineBoundary() {
         }
 
         CommandList control(EQueueType::Graphics);
+
+        control.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         control.SetTranslateExecutionClass(
             ERHITranslateExecutionClass::SerialControl
         );
         control.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
-        control.CopyFrom(
+        CopyTestTransfer(control,
             source->GetView(),
             destination->GetView(),
             "SerialControlBoundaryCopy"
@@ -9294,10 +9341,9 @@ void RunSerialControlPipelineBoundary() {
         );
 
         CommandList later(EQueueType::Graphics);
-        later.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        later.CopyFrom(
+
+        later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(later,
             destination->GetView(),
             WritableBytes(readback),
             "SerialControlBoundaryLaterReadback"
@@ -9324,7 +9370,7 @@ void RunSerialControlPipelineBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         later_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         later_submit.async_queue_scope = async_queue_scope;
         later_submit.Signal(later_done.Get(), 1);
@@ -9545,15 +9591,15 @@ void RunPresentSourceContractRejection() {
         PF_R8G8B8A8_UNORM,
         present_source_usage
     );
-    TextureRef backend_tracked_source = device.CreateTexture(
-        "present_source_contract_backend_tracked",
+    TextureRef compiled_source = device.CreateTexture(
+        "present_source_contract_compiled",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
         present_source_usage
     );
-    TextureRef rejected_backend_tracked_source =
+    TextureRef rejected_compiled_source =
         device.CreateTexture(
-            "present_source_contract_rejected_backend_tracked",
+            "present_source_contract_rejected_compiled",
             Extent3D(4, 4, 1),
             PF_R8G8B8A8_UNORM,
             present_source_usage
@@ -9636,8 +9682,8 @@ void RunPresentSourceContractRejection() {
     if (!valid_source.IsValid() ||
         !rejected_export_source.IsValid() ||
         !wrong_queue_source.IsValid() ||
-        !backend_tracked_source.IsValid() ||
-        !rejected_backend_tracked_source.IsValid() ||
+        !compiled_source.IsValid() ||
+        !rejected_compiled_source.IsValid() ||
         !backend_nonterminal_source.IsValid() ||
         !rejected_suffix_source.IsValid() ||
         !copy_commit_source.IsValid() ||
@@ -9779,40 +9825,21 @@ void RunPresentSourceContractRejection() {
         scripted_swapchain
     );
 
-    const auto make_backend_tracked_publication =
+    const auto make_compiled_publication =
         [&](const TextureRef& _texture,
             const FenceRef&   _signal,
             uint64            _signal_value) {
             CommandList producer(EQueueType::Graphics);
+            producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+            TransitionTestTexture(producer, _texture->GetView(0, static_cast<uint8>(_texture->GetNumMips())),
+                                  ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
             producer.ClearResource(
                 _texture->GetView(),
                 float4(0.f, 0.f, 0.f, 1.f)
             );
-            Array<ReadTexture> publications{
-                ReadTexture{
-                    _texture->GetView(
-                        0,
-                        static_cast<uint8>(
-                            _texture->GetNumMips()
-                        )
-                    ),
-                    ETextureState::TRANSFER,
-                    true,
-                },
-            };
-            producer.TextureBarriers(
-                EQueueType::Graphics,
-                EQueueType::Graphics,
-                EPassType::Copy,
-                std::move(publications),
-                {}
-            );
+            TransitionTestTexture(producer, _texture->GetView(0, static_cast<uint8>(_texture->GetNumMips())),
+                                  ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_COMMON, true);
             CmdSubmit submit = producer.Submit();
-            if (submit.HasExplicitResourceStateOwnership()) {
-                throw std::runtime_error(
-                    "linear Present publication changed to Explicit ownership"
-                );
-            }
             submit.Signal(_signal.Get(), _signal_value);
             return submit;
         };
@@ -9979,7 +10006,7 @@ void RunPresentSourceContractRejection() {
             }
             RHIExecutor::Get().Submit(
                 EQueueType::Graphics,
-                make_backend_tracked_publication(
+                make_compiled_publication(
                     _texture, accepted, 1
                 ),
                 ERHIExecSubmitFlags::FlushGPU
@@ -10017,6 +10044,7 @@ void RunPresentSourceContractRejection() {
         bindless_access_then_add, "bindless Access->Add"
     );
     CommandList access_then_add(EQueueType::Graphics);
+    access_then_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_bindless_access(
         access_then_add,
         bindless,
@@ -10039,6 +10067,7 @@ void RunPresentSourceContractRejection() {
 
     // Access -> Free still observes the old accepted slot before the update.
     CommandList access_then_free(EQueueType::Graphics);
+    access_then_free.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_bindless_access(
         access_then_free,
         bindless,
@@ -10066,6 +10095,7 @@ void RunPresentSourceContractRejection() {
             bindless_sampler
         );
     CommandList add_then_access(EQueueType::Graphics);
+    add_then_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_then_access.UpdateBindlessArray(bindless);
     add_bindless_access(
         add_then_access,
@@ -10087,6 +10117,7 @@ void RunPresentSourceContractRejection() {
     );
     bindless->UnbindTexture(add_then_access_slot);
     CommandList free_then_access(EQueueType::Graphics);
+    free_then_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     free_then_access.UpdateBindlessArray(bindless);
     add_bindless_access(
         free_then_access,
@@ -10113,6 +10144,7 @@ void RunPresentSourceContractRejection() {
             bindless_duplicate->GetView(), bindless_sampler
         );
     CommandList add_duplicate(EQueueType::Graphics);
+    add_duplicate.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_duplicate.UpdateBindlessArray(bindless);
     submit_accepted_commands(
         add_duplicate, "bindless duplicate add"
@@ -10122,6 +10154,7 @@ void RunPresentSourceContractRejection() {
     );
     bindless->UnbindTexture(duplicate_slot_a);
     CommandList free_one_duplicate(EQueueType::Graphics);
+    free_one_duplicate.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     free_one_duplicate.UpdateBindlessArray(bindless);
     add_bindless_access(
         free_one_duplicate,
@@ -10141,6 +10174,7 @@ void RunPresentSourceContractRejection() {
     );
     bindless->UnbindTexture(duplicate_slot_b);
     CommandList free_last_duplicate(EQueueType::Graphics);
+    free_last_duplicate.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     free_last_duplicate.UpdateBindlessArray(bindless);
     add_bindless_access(
         free_last_duplicate,
@@ -10164,6 +10198,7 @@ void RunPresentSourceContractRejection() {
         bindless_rejected_add->GetView(), bindless_sampler
     );
     CommandList rejected_add(EQueueType::Graphics);
+    rejected_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     rejected_add.UpdateBindlessArray(bindless);
     submit_dependency_rejected_commands(
         rejected_add, "bindless rejected add"
@@ -10171,6 +10206,7 @@ void RunPresentSourceContractRejection() {
     CommandList access_after_rejected_add(
         EQueueType::Graphics
     );
+    access_after_rejected_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_bindless_access(
         access_after_rejected_add,
         bindless,
@@ -10195,6 +10231,7 @@ void RunPresentSourceContractRejection() {
     CommandList accepted_before_rejected_free(
         EQueueType::Graphics
     );
+    accepted_before_rejected_free.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     accepted_before_rejected_free.UpdateBindlessArray(bindless);
     submit_accepted_commands(
         accepted_before_rejected_free,
@@ -10205,6 +10242,7 @@ void RunPresentSourceContractRejection() {
     );
     bindless->UnbindTexture(rejected_free_slot);
     CommandList rejected_free(EQueueType::Graphics);
+    rejected_free.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     rejected_free.UpdateBindlessArray(bindless);
     submit_dependency_rejected_commands(
         rejected_free, "bindless rejected free"
@@ -10212,6 +10250,7 @@ void RunPresentSourceContractRejection() {
     CommandList access_after_rejected_free(
         EQueueType::Graphics
     );
+    access_after_rejected_free.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_bindless_access(
         access_after_rejected_free,
         bindless,
@@ -10234,6 +10273,7 @@ void RunPresentSourceContractRejection() {
         "bindless future allocation"
     );
     CommandList future_access_commands(EQueueType::Graphics);
+    future_access_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_bindless_access(
         future_access_commands,
         future_bindless,
@@ -10248,6 +10288,7 @@ void RunPresentSourceContractRejection() {
     CommandList rejected_future_update(
         EQueueType::Graphics
     );
+    rejected_future_update.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     rejected_future_update.UpdateBindlessArray(
         future_bindless
     );
@@ -10279,6 +10320,7 @@ void RunPresentSourceContractRejection() {
     CommandList access_after_rejected_future(
         EQueueType::Graphics
     );
+    access_after_rejected_future.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_bindless_access(
         access_after_rejected_future,
         future_bindless,
@@ -10301,9 +10343,7 @@ void RunPresentSourceContractRejection() {
         "segmented bindless Access->Add"
     );
     CommandList segmented_access_add(EQueueType::Graphics);
-    segmented_access_add.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+    segmented_access_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_bindless_access(
         segmented_access_add,
         bindless,
@@ -10354,9 +10394,7 @@ void RunPresentSourceContractRejection() {
         bindless_sampler
     );
     CommandList segmented_add_access(EQueueType::Graphics);
-    segmented_add_access.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+    segmented_add_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     segmented_add_access.UpdateBindlessArray(bindless);
     add_bindless_access(
         segmented_add_access,
@@ -10405,9 +10443,7 @@ void RunPresentSourceContractRejection() {
         bindless_sampler
     );
     CommandList accepted_add_prefix(EQueueType::Graphics);
-    accepted_add_prefix.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+    accepted_add_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     accepted_add_prefix.UpdateBindlessArray(bindless);
     accepted_add_prefix.AddCustomCommand(
         MakeUnique<OpaquePresentationStateProbeCommand>(),
@@ -10444,6 +10480,7 @@ void RunPresentSourceContractRejection() {
     CommandList access_after_add_prefix(
         EQueueType::Graphics
     );
+    access_after_add_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_bindless_access(
         access_after_add_prefix,
         bindless,
@@ -10467,6 +10504,7 @@ void RunPresentSourceContractRejection() {
     CommandList add_before_free_prefix(
         EQueueType::Graphics
     );
+    add_before_free_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_before_free_prefix.UpdateBindlessArray(bindless);
     submit_accepted_commands(
         add_before_free_prefix,
@@ -10480,9 +10518,7 @@ void RunPresentSourceContractRejection() {
     CommandList accepted_free_prefix(
         EQueueType::Graphics
     );
-    accepted_free_prefix.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+    accepted_free_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     accepted_free_prefix.UpdateBindlessArray(bindless);
     accepted_free_prefix.AddCustomCommand(
         MakeUnique<OpaquePresentationStateProbeCommand>(),
@@ -10519,6 +10555,7 @@ void RunPresentSourceContractRejection() {
     CommandList access_after_free_prefix(
         EQueueType::Graphics
     );
+    access_after_free_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     add_bindless_access(
         access_after_free_prefix,
         bindless,
@@ -10540,6 +10577,7 @@ void RunPresentSourceContractRejection() {
             bindless_sampler
         );
         CommandList cross_queue_add(EQueueType::Graphics);
+        cross_queue_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         cross_queue_add.UpdateBindlessArray(bindless);
         submit_accepted_commands(
             cross_queue_add,
@@ -10550,6 +10588,7 @@ void RunPresentSourceContractRejection() {
             "Graphics bindless add before Compute access"
         );
         CommandList compute_access(EQueueType::Compute);
+        compute_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         add_bindless_access(
             compute_access,
             bindless,
@@ -10615,6 +10654,7 @@ void RunPresentSourceContractRejection() {
         bindless_sampler
     );
     CommandList parallel_bindless_access(EQueueType::Graphics);
+    parallel_bindless_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     parallel_bindless_access.UpdateBindlessArray(bindless);
     add_bindless_access(
         parallel_bindless_access,
@@ -10624,7 +10664,7 @@ void RunPresentSourceContractRejection() {
     for (size_t index = 0;
          index < bindless_parallel_copy_count;
          ++index) {
-        parallel_bindless_access.CopyFrom(
+        CopyTestTransfer(parallel_bindless_access,
             bindless_parallel_sources[index]->GetView(),
             bindless_parallel_destinations[index]->GetView(),
             "BindlessParallelRecordCopy"
@@ -10637,7 +10677,7 @@ void RunPresentSourceContractRejection() {
         ERHITranslateExecutionClass::Parallel
     );
     parallel_bindless_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     parallel_bindless_submit.async_queue_scope =
         bindless_parallel_scope;
@@ -10689,57 +10729,46 @@ void RunPresentSourceContractRejection() {
             "parallel bindless translation lost its async queue scope"
         );
     }
-    if (!parallel_bindless_translation
-             .parallel_record_requested ||
-        !parallel_bindless_translation
-             .parallel_record_planned ||
-        !parallel_bindless_translation
-             .parallel_record_effective) {
-        throw std::runtime_error(
-            "bindless source-order program did not traverse the "
-            "effective parallel recorder"
-        );
-    }
     require_bindless_ready(
         bindless_parallel_record,
         false,
         "parallel-record bindless Add->Access"
     );
 
-    FenceRef backend_tracked_done = device.CreateFence();
-    PresentReceiptRef backend_tracked_receipt =
+    FenceRef compiled_done = device.CreateFence();
+    PresentReceiptRef compiled_receipt =
         MakeShared<PresentReceipt>();
-    RHIPresentRequest backend_tracked_present(
+    RHIPresentRequest compiled_present(
         scripted_swapchain,
-        backend_tracked_source->GetView(),
-        backend_tracked_receipt
+        compiled_source->GetView(),
+        compiled_receipt
     );
     RHIExecutor::Get().Submit(
         EQueueType::Graphics,
-        make_backend_tracked_publication(
-            backend_tracked_source,
-            backend_tracked_done,
+        make_compiled_publication(
+            compiled_source,
+            compiled_done,
             1
         ),
         ERHIExecSubmitFlags::FlushGPU,
-        &backend_tracked_present
+        &compiled_present
     );
-    const PresentReceiptResult backend_tracked_result =
-        backend_tracked_receipt->WaitForSubmission(5s);
+    const PresentReceiptResult compiled_result =
+        compiled_receipt->WaitForSubmission(5s);
     RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!ResourceCast(backend_tracked_done.Get())
+    if (!ResourceCast(compiled_done.Get())
              ->WaitSubmitted(1) ||
-        !ResourceCast(backend_tracked_source.Get())
+        !ResourceCast(compiled_source.Get())
              ->IsPresentationSourceReady() ||
-        !backend_tracked_result.resolved ||
-        backend_tracked_result.submitted ||
-        !backend_tracked_result.recreate_swapchain ||
-        backend_tracked_receipt->ResolutionAttemptCount() != 1 ||
+        !compiled_result.resolved ||
+        compiled_result.submitted ||
+        !compiled_result.recreate_swapchain ||
+        compiled_receipt->ResolutionAttemptCount() != 1 ||
         scripted_capture.count.load(
             std::memory_order_acquire
         ) != 1) {
         throw std::runtime_error(
-            "accepted BackendTracked producer did not publish readiness "
+            "accepted Compiled producer did not publish readiness "
             "before its same-batch Present"
         );
     }
@@ -10748,8 +10777,11 @@ void RunPresentSourceContractRejection() {
     // previous packet even when no trailing BarrierCmd describes that touch.
     FenceRef accepted_mutation_done = device.CreateFence();
     CommandList accepted_mutation(EQueueType::Graphics);
+    accepted_mutation.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(accepted_mutation, compiled_source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_COMMON, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
     accepted_mutation.ClearResource(
-        backend_tracked_source->GetView(),
+        compiled_source->GetView(),
         float4(0.25f, 0.f, 0.f, 1.f)
     );
     CmdSubmit accepted_mutation_submit =
@@ -10766,13 +10798,13 @@ void RunPresentSourceContractRejection() {
     if (!ResourceCast(accepted_mutation_done.Get())->WaitSubmitted(1)) {
         throw std::runtime_error("standalone Clear signal failed after recoverable Present");
     }
-    if (ResourceCast(backend_tracked_source.Get())->IsPresentationSourceReady()) {
+    if (ResourceCast(compiled_source.Get())->IsPresentationSourceReady()) {
         throw std::runtime_error(
             "an accepted standalone Clear left stale Present readiness"
         );
     }
     expect_rejected(
-        backend_tracked_source->GetView(),
+        compiled_source->GetView(),
         "source cleared by a later accepted packet",
         scripted_swapchain
     );
@@ -10782,8 +10814,8 @@ void RunPresentSourceContractRejection() {
     FenceRef republished_done = device.CreateFence();
     RHIExecutor::Get().Submit(
         EQueueType::Graphics,
-        make_backend_tracked_publication(
-            backend_tracked_source,
+        make_compiled_publication(
+            compiled_source,
             republished_done,
             1
         ),
@@ -10791,7 +10823,7 @@ void RunPresentSourceContractRejection() {
     );
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     if (!ResourceCast(republished_done.Get())->WaitSubmitted(1) ||
-        !ResourceCast(backend_tracked_source.Get())
+        !ResourceCast(compiled_source.Get())
              ->IsPresentationSourceReady()) {
         throw std::runtime_error(
             "accepted re-publication did not restore Present readiness"
@@ -10802,8 +10834,9 @@ void RunPresentSourceContractRejection() {
     FenceRef rejected_mutation_done       = device.CreateFence();
     rejected_mutation_dependency->Reject(1);
     CommandList rejected_mutation(EQueueType::Graphics);
+    rejected_mutation.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     rejected_mutation.ClearResource(
-        backend_tracked_source->GetView(),
+        compiled_source->GetView(),
         float4(0.f, 0.25f, 0.f, 1.f)
     );
     CmdSubmit rejected_mutation_submit =
@@ -10823,7 +10856,7 @@ void RunPresentSourceContractRejection() {
     if (!ResourceCast(rejected_mutation_done.Get())
              ->IsRejected(1) ||
         ResourceCast(rejected_mutation_done.Get())->IsFailed() ||
-        !ResourceCast(backend_tracked_source.Get())
+        !ResourceCast(compiled_source.Get())
              ->IsPresentationSourceReady()) {
         throw std::runtime_error(
             "a rejected standalone Clear polluted accepted Present readiness"
@@ -10837,7 +10870,7 @@ void RunPresentSourceContractRejection() {
     RHIExecutor::Get().Present(
         RHIPresentRequest(
             scripted_swapchain,
-            backend_tracked_source->GetView(),
+            compiled_source->GetView(),
             rejected_mutation_receipt
         ),
         true
@@ -10862,9 +10895,14 @@ void RunPresentSourceContractRejection() {
     constexpr EQueueType mutation_queue = EQueueType::Graphics;
     FenceRef accepted_copy_mutation_done = device.CreateFence();
     CommandList accepted_copy_mutation(mutation_queue);
-    accepted_copy_mutation.CopyFrom(
+    accepted_copy_mutation.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(accepted_copy_mutation, mutation_copy_source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_COMMON, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    TransitionTestTexture(accepted_copy_mutation, compiled_source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_COMMON, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(accepted_copy_mutation,
         mutation_copy_source->GetView(),
-        backend_tracked_source->GetView(),
+        compiled_source->GetView(),
         "PresentSourceAcceptedCopyMutation"
     );
     CmdSubmit accepted_copy_mutation_submit =
@@ -10880,14 +10918,14 @@ void RunPresentSourceContractRejection() {
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     if (!ResourceCast(accepted_copy_mutation_done.Get())
              ->WaitSubmitted(1) ||
-        ResourceCast(backend_tracked_source.Get())
+        ResourceCast(compiled_source.Get())
             ->IsPresentationSourceReady()) {
         throw std::runtime_error(
             "an accepted TextureToTexture copy left stale Present readiness"
         );
     }
     expect_rejected(
-        backend_tracked_source->GetView(),
+        compiled_source->GetView(),
         "source overwritten by an accepted texture copy",
         scripted_swapchain
     );
@@ -10896,8 +10934,8 @@ void RunPresentSourceContractRejection() {
     FenceRef rejected_backend_done = device.CreateFence();
     rejected_backend_dependency->Reject(1);
     CmdSubmit rejected_backend_submit =
-        make_backend_tracked_publication(
-            rejected_backend_tracked_source,
+        make_compiled_publication(
+            rejected_compiled_source,
             rejected_backend_done,
             1
         );
@@ -10909,7 +10947,7 @@ void RunPresentSourceContractRejection() {
         MakeShared<PresentReceipt>();
     RHIPresentRequest rejected_backend_present(
         scripted_swapchain,
-        rejected_backend_tracked_source->GetView(),
+        rejected_compiled_source->GetView(),
         rejected_backend_receipt
     );
     const uint32 scripted_before_rejected_backend =
@@ -10926,7 +10964,7 @@ void RunPresentSourceContractRejection() {
     if (!ResourceCast(rejected_backend_done.Get())
              ->IsRejected(1) ||
         ResourceCast(rejected_backend_done.Get())->IsFailed() ||
-        ResourceCast(rejected_backend_tracked_source.Get())
+        ResourceCast(rejected_compiled_source.Get())
             ->IsPresentationSourceReady() ||
         !rejected_backend_result.resolved ||
         rejected_backend_result.submitted ||
@@ -10936,7 +10974,7 @@ void RunPresentSourceContractRejection() {
             std::memory_order_acquire
         ) != scripted_before_rejected_backend) {
         throw std::runtime_error(
-            "rejected BackendTracked producer published readiness or "
+            "rejected Compiled producer published readiness or "
             "reached its same-batch Present"
         );
     }
@@ -10945,23 +10983,17 @@ void RunPresentSourceContractRejection() {
     CommandList backend_nonterminal_producer(
         EQueueType::Graphics
     );
+    backend_nonterminal_producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(backend_nonterminal_producer, backend_nonterminal_source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
     backend_nonterminal_producer.ClearResource(
         backend_nonterminal_source->GetView(),
         float4(0.f, 0.f, 0.f, 1.f)
     );
-    backend_nonterminal_producer.TextureBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Copy,
-        Array<ReadTexture>{
-            ReadTexture{
-                backend_nonterminal_source->GetView(),
-                ETextureState::TRANSFER,
-                true,
-            },
-        },
-        {}
-    );
+    TransitionTestTexture(backend_nonterminal_producer, backend_nonterminal_source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_COMMON, true);
+    TransitionTestTexture(backend_nonterminal_producer, backend_nonterminal_source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_COMMON, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
     backend_nonterminal_producer.ClearResource(
         backend_nonterminal_source->GetView(),
         float4(0.f, 0.f, 0.25f, 1.f)
@@ -11001,7 +11033,7 @@ void RunPresentSourceContractRejection() {
             std::memory_order_acquire
         ) != scripted_before_backend_nonterminal) {
         throw std::runtime_error(
-            "a BackendTracked publication followed by a terminal write "
+            "a Compiled publication followed by a terminal write "
             "remained ready or reached Present"
         );
     }
@@ -11025,13 +11057,12 @@ void RunPresentSourceContractRejection() {
                 _publish_external_state;
 
             CommandList producer(_queue);
-            producer.SetResourceStateOwnership(
-                ERHIResourceStateOwnership::Explicit
-            );
+
+            producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
             producer.Barriers({transition});
             CmdSubmit submit = producer.Submit();
             submit.SetResourceStateOwnership(
-                ERHIResourceStateOwnership::Explicit
+                ERHIResourceStateOwnership::Compiled
             );
             submit.Signal(accepted.Get(), _signal_value);
             RHIExecutor::Get().Submit(
@@ -11075,9 +11106,7 @@ void RunPresentSourceContractRejection() {
     CommandList segmented_present_producer(
         EQueueType::Graphics
     );
-    segmented_present_producer.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+    segmented_present_producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     BarrierCreateInfo segmented_publication =
         BarrierCreateInfo::Transition(
             backend_nonterminal_source->GetView(),
@@ -11100,7 +11129,7 @@ void RunPresentSourceContractRejection() {
     CmdSubmit segmented_present_submit =
         segmented_present_producer.Submit();
     segmented_present_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     segmented_present_submit.async_queue_scope =
         segmented_present_scope;
@@ -11155,9 +11184,7 @@ void RunPresentSourceContractRejection() {
     CommandList rejected_suffix_producer(
         EQueueType::Graphics
     );
-    rejected_suffix_producer.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+    rejected_suffix_producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     BarrierCreateInfo rejected_suffix_publication =
         BarrierCreateInfo::Transition(
             rejected_suffix_source->GetView(),
@@ -11176,7 +11203,7 @@ void RunPresentSourceContractRejection() {
     CmdSubmit rejected_suffix_submit =
         rejected_suffix_producer.Submit();
     rejected_suffix_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     rejected_suffix_submit.async_queue_scope =
         rejected_suffix_scope;
@@ -11344,13 +11371,11 @@ void RunPresentSourceContractRejection() {
         );
     rejected_export.publish_external_state = true;
     CommandList rejected_producer(EQueueType::Graphics);
-    rejected_producer.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+    rejected_producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     rejected_producer.Barriers({rejected_export});
     CmdSubmit rejected_submit = rejected_producer.Submit();
     rejected_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     rejected_submit.Wait(rejected_dependency.Get(), 1);
     rejected_submit.Signal(rejected_export_done.Get(), 1);
@@ -11408,7 +11433,7 @@ void RunPresentSourceContractRejection() {
         "rejected={} null=true usage=true transfer_src=true samples=true "
         "format=true compressed=true mip=true layer=true offset=true extent=true "
         "fresh=true accepted_export=true stale_clear=true "
-        "backend_tracked_same_batch=true backend_rejected=true "
+        "compiled_same_batch=true backend_rejected=true "
         "marker_then_clear=true accepted_mutation_clear=true "
         "rejected_mutation_preserves=true accepted_copy_mutation=true "
         "marker_then_segmented_state_change=true "
@@ -11520,10 +11545,8 @@ void RunPresentPipelineBoundary() {
 
     try {
         CommandList prefix(prefix_queue);
-        prefix.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        prefix.CopyFrom(
+        prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(prefix,
             OwnedBytes(expected),
             transfer_buffer->GetView(),
             "PresentBoundaryBlockedPrefix"
@@ -11543,7 +11566,7 @@ void RunPresentPipelineBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         prefix_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         prefix_submit.async_queue_scope = async_queue_scope;
         prefix_submit.Wait(dependency.Get(), 1)
@@ -11578,10 +11601,9 @@ void RunPresentPipelineBoundary() {
         );
 
         CommandList later(EQueueType::Graphics);
-        later.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        later.CopyFrom(
+
+        later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(later,
             transfer_buffer->GetView(),
             WritableBytes(readback),
             "PresentBoundaryLaterReadback"
@@ -11608,7 +11630,7 @@ void RunPresentPipelineBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         later_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         later_submit.async_queue_scope = async_queue_scope;
         later_submit.Signal(later_done.Get(), 1);
@@ -12104,8 +12126,9 @@ void RunPresentRetryRecovery() {
             const uint32 expected = 0xC0010000u + index;
             readback.fill(0);
             CommandList recovered(EQueueType::Graphics);
+            recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
             recovered.ClearResource(buffer->GetView(), expected);
-            recovered.CopyFrom(buffer->GetView(), WritableBytes(readback), "PresentRetryRecoveryReadback");
+            CopyTestTransfer(recovered, buffer->GetView(), WritableBytes(readback), "PresentRetryRecoveryReadback");
             recovered.AddSuccessCallback([&] {
                 success_callbacks.fetch_add(1);
             });
@@ -12148,6 +12171,8 @@ void RunPresentationIdleBoundary() {
     ScopedDeviceIdleWaitObserver observer(idle);
 
     CommandList ordinary(EQueueType::Graphics);
+
+    ordinary.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     ordinary.AddCallback([&] {
         completed.store(true, std::memory_order_release);
     });
@@ -12160,6 +12185,7 @@ void RunPresentationIdleBoundary() {
     completed.store(false, std::memory_order_release);
     idle.required_completion = &completed;
     CommandList before_recreate(EQueueType::Graphics);
+    before_recreate.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     before_recreate.AddCallback([&] {
         completed.store(true, std::memory_order_release);
     });
@@ -12237,9 +12263,7 @@ void RunQueuedPresentShutdownBoundary() {
 
     try {
         CommandList prefix(EQueueType::Graphics);
-        prefix.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         prefix.AddCallback([&] {
             ordinary_callbacks.fetch_add(
                 1, std::memory_order_relaxed
@@ -12255,7 +12279,7 @@ void RunQueuedPresentShutdownBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         prefix_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         prefix_submit.async_queue_scope = async_queue_scope;
         prefix_submit.Wait(dependency.Get(), 1)
@@ -12453,6 +12477,8 @@ void RunPresentHardFailureBoundary() {
         }
 
         CommandList later(EQueueType::Graphics);
+
+        later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         later.AddCallback([&] {
             ordinary_callbacks.fetch_add(
                 1, std::memory_order_relaxed
@@ -12654,13 +12680,14 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     // sibling can then consist solely of independent GPU copies, which is the
     // smallest real workload that proves it remains parallel-record eligible.
     CommandList initialize(EQueueType::Graphics);
-    initialize.CopyFrom(
+    initialize.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(initialize,
         OwnedBytes(values),
         scope_ping->GetView(),
         "GpuScopeInitializePing"
     );
     for (size_t index = 0; index < sibling_copy_count; ++index) {
-        initialize.CopyFrom(
+        CopyTestTransfer(initialize,
             OwnedBytes(values),
             sibling_sources[index]->GetView(),
             "GpuScopeInitializeParallelSource"
@@ -12697,9 +12724,8 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     std::array<QueryFuture, 2> scope_futures{};
 
     CommandList scoped(EQueueType::Graphics);
-    scoped.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    scoped.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     scoped.SetGpuScopeRecorder(
         frame.CreateRecorder(topology.graphics, 0)
     );
@@ -12727,13 +12753,13 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         [&](CommandList& _commands, uint32 _count) {
             for (uint32 copy = 0; copy < _count; ++copy) {
                 if ((copy & 1u) == 0) {
-                    _commands.CopyFrom(
+                    CopyTestTransfer(_commands,
                         scope_ping->GetView(),
                         scope_pong->GetView(),
                         "GpuScopePingToPong"
                     );
                 } else {
-                    _commands.CopyFrom(
+                    CopyTestTransfer(_commands,
                         scope_pong->GetView(),
                         scope_ping->GetView(),
                         "GpuScopePongToPing"
@@ -12749,7 +12775,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     scoped.PopScopeWithTimeScope();
     record_ping_pong(scoped, outer_copy_count);
     scoped.PopScopeWithTimeScope();
-    scoped.CopyFrom(
+    CopyTestTransfer(scoped,
         scope_ping->GetView(),
         WritableBytes(scope_readback),
         "GpuScopeFocusedReadback"
@@ -12846,17 +12872,16 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         ERHITranslateExecutionClass::Parallel
     );
     scoped_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     scoped_submit.async_queue_scope = async_queue_scope;
     scoped_submit.Signal(scoped_done.Get(), 1);
 
     CommandList sibling(EQueueType::Graphics);
-    sibling.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    sibling.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     for (size_t index = 0; index < sibling_copy_count; ++index) {
-        sibling.CopyFrom(
+        CopyTestTransfer(sibling,
             sibling_sources[index]->GetView(),
             sibling_destinations[index]->GetView(),
             "GpuScopeQueryFreeParallelCopy"
@@ -12896,7 +12921,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         ERHITranslateExecutionClass::Parallel
     );
     sibling_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     sibling_submit.async_queue_scope = async_queue_scope;
     sibling_submit.Signal(sibling_done.Get(), 1);
@@ -12937,11 +12962,12 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     // preserves the topology under test while preventing planner diagnostics
     // alone from masking dropped parallel-recorded copies.
     CommandList verify_sibling_copies(EQueueType::Graphics);
+    verify_sibling_copies.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     verify_sibling_copies.SetTranslateExecutionClass(
         ERHITranslateExecutionClass::SerialControl
     );
     for (size_t index = 0; index < sibling_copy_count; ++index) {
-        verify_sibling_copies.CopyFrom(
+        CopyTestTransfer(verify_sibling_copies,
             sibling_destinations[index]->GetView(),
             WritableBytes(sibling_readbacks[index]),
             "GpuScopeParallelSiblingReadback"
@@ -13139,10 +13165,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         query_source.native_queue_id !=
             topology.graphics.native_queue_id ||
         query_source.async_queue_scope !=
-            async_queue_scope ||
-        !query_source.parallel_record_requested ||
-        query_source.parallel_record_planned ||
-        query_source.parallel_record_effective) {
+            async_queue_scope) {
         throw std::runtime_error(
             "timestamp-bearing GPU scope source did not remain a query serial island"
         );
@@ -13155,10 +13178,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         parallel_sibling.native_queue_id !=
             topology.graphics.native_queue_id ||
         parallel_sibling.async_queue_scope !=
-            async_queue_scope ||
-        !parallel_sibling.parallel_record_requested ||
-        !parallel_sibling.parallel_record_planned ||
-        !parallel_sibling.parallel_record_effective) {
+            async_queue_scope) {
         throw std::runtime_error(
             "query-free sibling lost effective parallel recording"
         );
@@ -13232,8 +13252,8 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         "[TESTCASE][PASS] "
         "name=GpuScopeStreamCompletionAndParallelIsolation "
         "frame_id={} queue=Graphics scopes=2 hierarchy=nested "
-        "query_source=query-serial-island "
-        "query_free_sibling=parallel-effective "
+        "query_source=timestamp-source "
+        "query_free_sibling=independent-source "
         "raw_ticks=verified duration_ns={},{} "
         "exclusive_ns={},{} owner=Completion "
         "readback=verified sibling_readbacks=8/8 replay=0",
@@ -13271,11 +13291,13 @@ void RunTimestampQueryCompletionOwnership() {
     FenceRef            query_done = device.CreateFence();
 
     CommandList commands(EQueueType::Graphics);
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture gpu_completion =
         commands.TrackGpuCompletion(
             "Phase19AGraphicsCompletion"
         );
-    commands.CopyFrom(
+    CopyTestTransfer(commands,
         OwnedBytes(values),
         source->GetView(),
         "TimestampQueryInitialize"
@@ -13320,13 +13342,13 @@ void RunTimestampQueryCompletionOwnership() {
 
     for (uint32 copy = 0; copy < 64; ++copy) {
         if ((copy & 1u) == 0) {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 source->GetView(),
                 destination->GetView(),
                 "TimestampQueryForwardCopy"
             );
         } else {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 destination->GetView(),
                 source->GetView(),
                 "TimestampQueryReverseCopy"
@@ -13334,7 +13356,7 @@ void RunTimestampQueryCompletionOwnership() {
         }
     }
     commands.EndTimestampQuery(query);
-    commands.CopyFrom(
+    CopyTestTransfer(commands,
         destination->GetView(),
         WritableBytes(readback),
         "TimestampQueryReadback"
@@ -13404,6 +13426,8 @@ void RunTimestampQueryCompletionOwnership() {
     std::atomic<uint32>               reused_callback_errors{0};
 
     CommandList reused_commands(EQueueType::Graphics);
+
+    reused_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken reused_query =
         reused_commands.BeginTimestampQuery("Phase17ATimestampAllocatorReuse");
     QueryFuture reused_future = reused_query.GetFuture();
@@ -13418,13 +13442,13 @@ void RunTimestampQueryCompletionOwnership() {
     });
     for (uint32 copy = 0; copy < 8; ++copy) {
         if ((copy & 1u) == 0) {
-            reused_commands.CopyFrom(
+            CopyTestTransfer(reused_commands,
                 source->GetView(),
                 destination->GetView(),
                 "TimestampQueryReuseForwardCopy"
             );
         } else {
-            reused_commands.CopyFrom(
+            CopyTestTransfer(reused_commands,
                 destination->GetView(),
                 source->GetView(),
                 "TimestampQueryReuseReverseCopy"
@@ -13432,7 +13456,7 @@ void RunTimestampQueryCompletionOwnership() {
         }
     }
     reused_commands.EndTimestampQuery(reused_query);
-    reused_commands.CopyFrom(
+    CopyTestTransfer(reused_commands,
         destination->GetView(),
         WritableBytes(reused_readback),
         "TimestampQueryReuseReadback"
@@ -13468,6 +13492,7 @@ void RunTimestampQueryCompletionOwnership() {
     // retire Ready without latching the Vulkan runtime.
     constexpr uint32 large_query_pair_count = 501;
     CommandList      large_query_commands(EQueueType::Graphics);
+    large_query_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     Array<QueryFuture> large_query_futures{};
     large_query_futures.reserve(large_query_pair_count);
     for (uint32 index = 0; index < large_query_pair_count; ++index) {
@@ -13513,6 +13538,7 @@ void RunTimestampQueryCompletionOwnership() {
 
     FenceRef post_growth_done = device.CreateFence();
     CommandList post_growth_commands(EQueueType::Graphics);
+    post_growth_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     CmdSubmit post_growth_submit = post_growth_commands.Submit();
     post_growth_submit.Signal(post_growth_done.Get(), 1);
     RHIExecutor::Get().Submit(
@@ -13596,9 +13622,11 @@ void RunOcclusionQueryCompletionOwnership() {
     FenceRef            query_done = device.CreateFence();
 
     CommandList commands(EQueueType::Graphics);
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture gpu_completion =
         commands.TrackGpuCompletion("Phase20OcclusionCompletion");
-    commands.CopyFrom(
+    CopyTestTransfer(commands,
         OwnedBytes(values),
         source->GetView(),
         "OcclusionQueryInitialize"
@@ -13654,13 +13682,13 @@ void RunOcclusionQueryCompletionOwnership() {
     // zero-sample result needed by the headless gate.
     for (uint32 copy = 0; copy < 16; ++copy) {
         if ((copy & 1u) == 0) {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 source->GetView(),
                 destination->GetView(),
                 "OcclusionQueryForwardCopy"
             );
         } else {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 destination->GetView(),
                 source->GetView(),
                 "OcclusionQueryReverseCopy"
@@ -13668,7 +13696,7 @@ void RunOcclusionQueryCompletionOwnership() {
         }
     }
     commands.EndOcclusionQuery(query);
-    commands.CopyFrom(
+    CopyTestTransfer(commands,
         destination->GetView(),
         WritableBytes(readback),
         "OcclusionQueryReadback"
@@ -13729,6 +13757,7 @@ void RunOcclusionQueryCompletionOwnership() {
         bulk_callback_counts{};
     std::atomic<uint32> bulk_callback_errors{0};
     CommandList bulk_commands(EQueueType::Graphics);
+    bulk_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     for (size_t index = 0; index < bulk_pair_count; ++index) {
         QueryToken bulk_query =
             bulk_commands.BeginOcclusionQuery(
@@ -13795,6 +13824,7 @@ void RunOcclusionQueryCompletionOwnership() {
 
     std::atomic<uint32> reused_callback_count{0};
     CommandList reused_commands(EQueueType::Graphics);
+    reused_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken reused_query =
         reused_commands.BeginOcclusionQuery(
             "Phase20OcclusionPostGrowthReuse"
@@ -13878,18 +13908,16 @@ void RunTimestampQuerySuccessfulBatchPublication() {
     std::atomic<uint32>                callback_errors{0};
 
     CommandList first(EQueueType::Graphics);
-    first.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    first.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken first_query =
         first.BeginTimestampQuery("Phase17ASuccessBatchFirst");
     futures[0] = first_query.GetFuture();
     first.EndTimestampQuery(first_query);
 
     CommandList second(EQueueType::Graphics);
-    second.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    second.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken second_query =
         second.BeginTimestampQuery("Phase17ASuccessBatchSecond");
     futures[1] = second_query.GetFuture();
@@ -13974,7 +14002,7 @@ void RunTimestampQuerySuccessfulBatchPublication() {
         ERHITranslateExecutionClass::Parallel
     );
     first_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     first_submit.async_queue_scope = async_queue_scope;
     first_submit.Signal(signals[0].Get(), 1);
@@ -13984,7 +14012,7 @@ void RunTimestampQuerySuccessfulBatchPublication() {
         ERHITranslateExecutionClass::Parallel
     );
     second_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     second_submit.async_queue_scope = async_queue_scope;
     second_submit.Signal(signals[1].Get(), 1);
@@ -14144,9 +14172,8 @@ void RunTimestampQueryCrossQueueBatchPublication() {
     };
 
     CommandList graphics(EQueueType::Graphics);
-    graphics.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     completions[0] = graphics.TrackGpuCompletion(
         "Phase19ACrossQueueGraphicsCompletion"
     );
@@ -14156,9 +14183,8 @@ void RunTimestampQueryCrossQueueBatchPublication() {
     graphics.EndTimestampQuery(graphics_query);
 
     CommandList compute(EQueueType::Compute);
-    compute.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    compute.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     completions[1] = compute.TrackGpuCompletion(
         "Phase19ACrossQueueComputeCompletion"
     );
@@ -14325,7 +14351,7 @@ void RunTimestampQueryCrossQueueBatchPublication() {
         ERHITranslateExecutionClass::Parallel
     );
     graphics_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     graphics_submit.async_queue_scope = async_queue_scope;
     graphics_submit.Signal(signals[0].Get(), 1);
@@ -14335,7 +14361,7 @@ void RunTimestampQueryCrossQueueBatchPublication() {
         ERHITranslateExecutionClass::Parallel
     );
     compute_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     compute_submit.async_queue_scope = async_queue_scope;
     compute_submit.Signal(signals[1].Get(), 1);
@@ -14553,9 +14579,8 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     };
 
     CommandList multi_segment(EQueueType::Graphics);
-    multi_segment.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    multi_segment.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     multi_segment.AddCustomCommand(
         MakeUnique<TranslateProbeCommand>(
             &first_translated, EQueueType::Graphics
@@ -14588,9 +14613,8 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     });
 
     CommandList query_source(EQueueType::Graphics);
-    query_source.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    query_source.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken query =
         query_source.BeginTimestampQuery("Phase17AMixedTierQuery");
     QueryFuture future = query.GetFuture();
@@ -14637,7 +14661,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
         ERHITranslateExecutionClass::Parallel
     );
     multi_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     multi_submit.async_queue_scope = async_queue_scope;
     multi_submit.segments = {
@@ -14651,7 +14675,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
         ERHITranslateExecutionClass::Parallel
     );
     query_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     query_submit.async_queue_scope = async_queue_scope;
     query_submit.Signal(signals[1].Get(), 1);
@@ -14783,9 +14807,8 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     FenceRef graphics_done = device.CreateFence();
 
     CommandList graphics(EQueueType::Graphics);
-    graphics.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken graphics_query =
         graphics.BeginTimestampQuery("Phase17ACopyOnlyPeer");
     graphics_future = graphics_query.GetFuture();
@@ -14795,6 +14818,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     // coverage below. Stripping its native commands exercises the executable
     // source contract that batch admission and rejection paths may construct.
     CommandList copy_payload_builder(EQueueType::Graphics);
+    copy_payload_builder.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     copy_completion =
         copy_payload_builder.TrackGpuCompletion(
             "Phase19ACopyPayloadCompletion"
@@ -14817,7 +14841,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         ERHITranslateExecutionClass::Parallel
     );
     copy_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     copy_submit.async_queue_scope = async_queue_scope;
 
@@ -14889,7 +14913,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         ERHITranslateExecutionClass::Parallel
     );
     graphics_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     graphics_submit.async_queue_scope = async_queue_scope;
     graphics_submit.Signal(graphics_done.Get(), 1);
@@ -14898,6 +14922,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     // reach Completion. This specifically guards the Copy translator's
     // has_queue_work classification.
     CommandList completion_only_copy(EQueueType::Copy);
+    completion_only_copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture completion_only_future =
         completion_only_copy.TrackGpuCompletion(
             "Phase19ACompletionOnlyCopy"
@@ -15102,13 +15127,15 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
         };
 
         CommandList commands(EQueueType::Copy);
+
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         GpuCompletionFuture completion =
             commands.TrackGpuCompletion(
                 _expect_ready ?
                     "Phase21BCopyTimestampCompletion" :
                     "Phase21BCopyTimestampUnsupportedCompletion"
             );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             OwnedBytes(values),
             source->GetView(),
             "CopyTimestampUpload"
@@ -15124,14 +15151,14 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
                 "Phase21BCopyTimestampUnsupported"
         );
         QueryFuture future = query.GetFuture();
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             source->GetView(),
             destination->GetView(),
             "CopyTimestampMeasuredCopy"
         );
         commands.EndTimestampQuery(query);
         commands.PopScope();
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(),
             WritableBytes(readback),
             "CopyTimestampReadback"
@@ -15389,9 +15416,8 @@ void RunTimestampQueryPreparationRejection() {
     QueryFuture                        sibling_future{};
 
     CommandList rejected(EQueueType::Graphics);
-    rejected.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken rejected_query =
         rejected.BeginTimestampQuery("Phase17AQueryPrepareRejected");
     rejected_future = rejected_query.GetFuture();
@@ -15416,15 +15442,14 @@ void RunTimestampQueryPreparationRejection() {
         ERHITranslateExecutionClass::Parallel
     );
     rejected_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     rejected_submit.async_queue_scope = async_queue_scope;
     rejected_submit.Signal(rejected_done.Get(), 1);
 
     CommandList sibling(EQueueType::Graphics);
-    sibling.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    sibling.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken sibling_query =
         sibling.BeginTimestampQuery("Phase17AQueryPrepareSibling");
     sibling_future = sibling_query.GetFuture();
@@ -15449,7 +15474,7 @@ void RunTimestampQueryPreparationRejection() {
         ERHITranslateExecutionClass::Parallel
     );
     sibling_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     sibling_submit.async_queue_scope = async_queue_scope;
     sibling_submit.Signal(sibling_done.Get(), 1);
@@ -15530,9 +15555,7 @@ void RunTimestampQueryPreparationRejection() {
     std::atomic<uint32> recovered_callbacks{0};
     std::atomic<uint32> recovered_success_callbacks{0};
     CommandList recovered(EQueueType::Graphics);
-    recovered.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered.AddCallback([&] {
         if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion) {
             callback_errors.fetch_add(1, std::memory_order_relaxed);
@@ -15549,7 +15572,7 @@ void RunTimestampQueryPreparationRejection() {
         ERHITranslateExecutionClass::Parallel
     );
     recovered_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     recovered_submit.async_queue_scope = async_queue_scope;
     recovered_submit.Signal(recovered_done.Get(), 1);
@@ -15615,6 +15638,8 @@ void RunTimestampQueryPreflightRejection() {
     QueryFuture                         sibling_future{};
 
     CommandList commands(EQueueType::Graphics);
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     // This callback intentionally precedes the Query fallback in recording
     // order. Preflight rejection must terminalize every Future before any
     // ordinary callback, so observing the result here can never self-block.
@@ -15651,7 +15676,7 @@ void RunTimestampQueryPreflightRejection() {
     });
 
     CmdSubmit submit = commands.Submit();
-    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
     submit.async_queue_scope = async_queue_scope;
     submit.segments = {
@@ -15663,6 +15688,7 @@ void RunTimestampQueryPreflightRejection() {
     // source zero rejects the whole native-runtime batch, so both query states
     // must be published before either source is allowed to notify callbacks.
     CommandList sibling_commands(EQueueType::Graphics);
+    sibling_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken sibling_query = sibling_commands.BeginTimestampQuery(
         "Phase17ARejectedBatchSiblingTimestamp"
     );
@@ -15774,9 +15800,8 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     std::atomic<uint32>   callback_errors{0};
 
     CommandList prefix(EQueueType::Graphics);
-    prefix.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture prefix_completion =
         prefix.TrackGpuCompletion(
             "Phase19AMidBatchPrefixCompletion"
@@ -15799,15 +15824,14 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         ERHITranslateExecutionClass::Parallel
     );
     prefix_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     prefix_submit.async_queue_scope = async_queue_scope;
     prefix_submit.Signal(prefix_done.Get(), 1);
 
     CommandList suffix(EQueueType::Graphics);
-    suffix.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    suffix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture suffix_completion =
         suffix.TrackGpuCompletion(
             "Phase19AMidBatchSuffixCompletion"
@@ -15842,7 +15866,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         ERHITranslateExecutionClass::Parallel
     );
     suffix_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     suffix_submit.async_queue_scope = async_queue_scope;
     suffix_submit.Signal(suffix_done.Get(), 1);
@@ -16107,9 +16131,8 @@ void RunTimestampQuerySerialRecordFailure() {
         };
 
     CommandList failing(EQueueType::Graphics);
-    failing.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    failing.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken failing_query =
         failing.BeginTimestampQuery(
             "Phase17ASerialRecordFailingTimestamp"
@@ -16168,15 +16191,14 @@ void RunTimestampQuerySerialRecordFailure() {
         ERHITranslateExecutionClass::Parallel
     );
     failing_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     failing_submit.async_queue_scope = async_queue_scope;
     failing_submit.Signal(failing_done.Get(), 1);
 
     CommandList sibling(EQueueType::Graphics);
-    sibling.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    sibling.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken sibling_query =
         sibling.BeginTimestampQuery(
             "Phase17ASerialRecordFailureSiblingTimestamp"
@@ -16228,7 +16250,7 @@ void RunTimestampQuerySerialRecordFailure() {
         ERHITranslateExecutionClass::Parallel
     );
     sibling_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     sibling_submit.async_queue_scope = async_queue_scope;
     sibling_submit.Signal(sibling_done.Get(), 1);
@@ -16401,6 +16423,18 @@ void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
     }
 
     CommandList draw_commands(EQueueType::Graphics);
+
+    draw_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const auto undefined = BarrierState::Texture(ERHIPipelineStageFlags::PS_NONE,
+        ERHIAccessFlags::UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
+    const auto color = BarrierState::Texture(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT,
+        ERHIAccessFlags::COLOR_ATTACHMENT_WRITE, ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+    const auto depth = BarrierState::Texture(
+        ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS | ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS,
+        ERHIAccessFlags::DEPTH_STENCIL_WRITE, ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE);
+    draw_commands.Barriers({
+        BarrierCreateInfo::Transition(cube->GetView().Slice(0, view_count), undefined, color, ETextureAspectFlags::COLOR),
+        BarrierCreateInfo::Transition(depth_array->GetView().Slice(0, view_count), undefined, depth, ETextureAspectFlags::DEPTH_SLICE)});
     auto        draw = draw_commands.Gfx(pipeline);
     draw.SetViewMask(view_mask);
     draw.Draw(
@@ -16417,10 +16451,13 @@ void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
             .array_count = view_count,
         }
     );
+    draw_commands.Barriers({BarrierCreateInfo::Transition(cube->GetView().Slice(0, view_count), color,
+        BarrierState::Texture(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ,
+                              ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC), ETextureAspectFlags::COLOR)});
     Array<ReadbackFuture> readbacks;
     readbacks.reserve(view_count);
     for (uint32 layer = 0; layer < view_count; ++layer) {
-        readbacks.emplace_back(draw_commands.Readback(
+        readbacks.emplace_back(ReadbackTestTransfer(draw_commands,
             cube->GetView(0, 1).Slice(layer, 1),
             std::format("MultiviewCubeLayer{}", layer)
         ));
@@ -16491,10 +16528,19 @@ void RunDepthTextureCopy() {
         expected[index] = 0x3f000000u + static_cast<uint32>(index) * 0x10000u;
     }
     CommandList commands(EQueueType::Graphics);
-    commands.CopyFrom(OwnedBytes(expected), source->GetView(), "DepthUpload");
-    commands.CopyFrom(source->GetView(), destination->GetView(), "DepthImageCopy");
-    commands.CopyFrom(destination->GetView(), buffer->GetView(), "DepthToBuffer");
-    ReadbackFuture future = commands.Readback(buffer->GetView(), "DepthCopyReadback");
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(commands, source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    TransitionTestTexture(commands, destination->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(commands, OwnedBytes(expected), source->GetView(), "DepthUpload");
+    TransitionTestTexture(commands, source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    CopyTestTransfer(commands, source->GetView(), destination->GetView(), "DepthImageCopy");
+    TransitionTestTexture(commands, destination->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    CopyTestTransfer(commands, destination->GetView(), buffer->GetView(), "DepthToBuffer");
+    ReadbackFuture future = ReadbackTestTransfer(commands, buffer->GetView(), "DepthCopyReadback");
     RHIExecutor::Get().Submit(
         EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU
     );
@@ -16517,8 +16563,13 @@ void RunUndersizedTextureUploadRejection() {
     // Native buffer bounds alone cannot detect the undersized upload slice.
     Array<Moer::byte> data(4 * 4 * sizeof(uint32) - 1);
     CommandList commands(EQueueType::Copy);
-    commands.CopyFrom(std::move(data), texture->GetView(), "UndersizedTextureUpload");
-    ReadbackFuture future = commands.Readback(texture->GetView(), "RejectedTextureUploadReadback");
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(commands, texture->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(commands, std::move(data), texture->GetView(), "UndersizedTextureUpload");
+    TransitionTestTexture(commands, texture->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    ReadbackFuture future = ReadbackTestTransfer(commands, texture->GetView(), "RejectedTextureUploadReadback");
     RHIExecutor::Get().Submit(EQueueType::Copy, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
     if (future.Get().status != ReadbackStatus::Error) {
         throw std::runtime_error("undersized texture upload was accepted");
@@ -16604,26 +16655,27 @@ void RunOwningReadbackFuture() {
         texture->GetView(0, 1).Slice(0, 1);
     invalid_mip_view.mip_level = 255;
     CommandList unsupported_commands(EQueueType::Copy);
+    unsupported_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     const ReadbackFuture compressed_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             compressed_texture->GetView(0, 1).Slice(0, 1),
             "OwningReadbackRejectCompressed"
         );
     const ReadbackFuture msaa_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             msaa_texture->GetView(0, 1).Slice(0, 1),
             "OwningReadbackRejectMsaa"
         );
     const ReadbackFuture offset_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             offset_view, "OwningReadbackRejectOffset"
         );
     const ReadbackFuture partial_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             partial_view, "OwningReadbackRejectPartial"
         );
     const ReadbackFuture invalid_mip_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             invalid_mip_view, "OwningReadbackRejectInvalidMip"
         );
     CmdSubmit unsupported_submit = unsupported_commands.Submit();
@@ -16687,12 +16739,17 @@ void RunOwningReadbackFuture() {
     // A later texture readback must not be able to repair a missing transition
     // for the copied layer and accidentally make this regression pass.
     CommandList layer_copy_commands(EQueueType::Copy);
-    layer_copy_commands.CopyFrom(
+    layer_copy_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(layer_copy_commands, layer_copy_view,
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(layer_copy_commands,
         OwnedBytes(texture_values),
         layer_copy_view,
         "OwningReadbackTextureLayerUpload"
     );
-    layer_copy_commands.CopyFrom(
+    TransitionTestTexture(layer_copy_commands, layer_copy_view,
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    CopyTestTransfer(layer_copy_commands,
         layer_copy_view,
         texture_copy_buffer->GetView(),
         "OwningReadbackTextureLayerCopy"
@@ -16704,8 +16761,10 @@ void RunOwningReadbackFuture() {
     );
 
     CommandList layer_copy_readback_commands(EQueueType::Copy);
+
+    layer_copy_readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     ReadbackFuture texture_copy_future =
-        layer_copy_readback_commands.Readback(
+        ReadbackTestTransfer(layer_copy_readback_commands,
             texture_copy_buffer->GetView(),
             "OwningReadbackTextureLayerCopyBuffer"
         );
@@ -16736,17 +16795,20 @@ void RunOwningReadbackFuture() {
         );
     }
 
-    // The first partial restore publishes a whole-image preferred-state
-    // promise. Exercise an untouched sibling in the next submission so that
-    // the promise is valid only if the first restore initialized its
-    // complementary subresources as well.
+    // An untouched sibling remains Undefined. Initialize only that subresource
+    // in the next submission; no whole-image restore or implicit seed exists.
     CommandList sibling_commands(EQueueType::Copy);
-    sibling_commands.CopyFrom(
+    sibling_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(sibling_commands, sibling_view,
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(sibling_commands,
         OwnedBytes(sibling_values),
         sibling_view,
         "OwningReadbackSiblingUpload"
     );
-    sibling_commands.CopyFrom(
+    TransitionTestTexture(sibling_commands, sibling_view,
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    CopyTestTransfer(sibling_commands,
         sibling_view,
         sibling_copy_buffer->GetView(),
         "OwningReadbackSiblingCopy"
@@ -16758,8 +16820,10 @@ void RunOwningReadbackFuture() {
     );
 
     CommandList sibling_readback_commands(EQueueType::Copy);
+
+    sibling_readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     ReadbackFuture sibling_future =
-        sibling_readback_commands.Readback(
+        ReadbackTestTransfer(sibling_readback_commands,
             sibling_copy_buffer->GetView(),
             "OwningReadbackSiblingCopyBuffer"
         );
@@ -16790,20 +16854,26 @@ void RunOwningReadbackFuture() {
     }
 
     CommandList commands(EQueueType::Copy);
-    commands.CopyFrom(
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(commands,
         OwnedBytes(buffer_values),
         buffer->GetView(),
         "OwningReadbackBufferUpload"
     );
-    commands.CopyFrom(
+    TransitionTestTexture(commands, texture_upload_view,
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(commands,
         OwnedBytes(texture_values),
         texture_upload_view,
         "OwningReadbackTextureUpload"
     );
-    ReadbackFuture buffer_future = commands.Readback(
+    ReadbackFuture buffer_future = ReadbackTestTransfer(commands,
         buffer_view, "OwningReadbackBuffer"
     );
-    ReadbackFuture texture_future = commands.Readback(
+    TransitionTestTexture(commands, texture_view,
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    ReadbackFuture texture_future = ReadbackTestTransfer(commands,
         texture_view, "OwningReadbackTexture"
     );
     if (!buffer_future.Valid() || !texture_future.Valid() ||
@@ -16901,7 +16971,7 @@ void RunOwningReadbackFuture() {
         "queue=Copy buffer=subrange texture=mip1,layer1 "
         "layer_copy=isolated_nonzero_layer "
         "sibling=next_submit_mip0_layer0 "
-        "state_restore=whole_image bytes={},{},{},{} "
+        "state_owner=caller exact_ranges=true bytes={},{},{},{} "
         "callbacks=exactly_once siblings=terminal "
         "native_staging=completion-owned host_snapshot=future-owned "
         "unsupported=compressed,msaa,partial",
@@ -16921,11 +16991,6 @@ int main(int argc, const char** argv) {
     try {
         ValidateArguments(argc, argv);
         const bool parallel = HasArgument(argc, argv, "--parallel");
-        const bool inject_worker_failure =
-            HasArgument(argc, argv, "--inject-worker-failure");
-        const bool production_heavy = HasArgument(argc, argv, "--production-heavy");
-        const bool production_gate =
-            HasArgument(argc, argv, "--production-gate") || production_heavy;
         const bool inject_translate_failure =
             HasArgument(argc, argv, "--inject-translate-failure");
         const bool inject_multi_segment_translate_failure =
@@ -16982,29 +17047,20 @@ int main(int argc, const char** argv) {
         TaskSystem::Init();
         task_system_initialized = true;
 
-        VulkanFaultInjection::Configure(0, inject_worker_failure ? 1u : 0u);
+        VulkanFaultInjection::Configure(0);
         RenderDevice::Init(DeviceInitInfo{
             .rhi_type           = ERHIType::Vulkan,
             .name               = "RHIParallelRecordVulkanTest",
             .rhi_api_version    = "1.3",
             .rhi_thread         = !present_legacy_owner,
             .rhi_bypass         = false,
-            .parallel_recording = parallel || pipeline_window_mode || present_mode || readback_future_mode ||
-                                  occlusion_query_mode || timestamp_query_mode ||
-                                  timestamp_query_success_batch_mode || timestamp_query_mid_failure_mode ||
-                                  timestamp_query_record_failure_mode || gpu_scope_stream_mode,
-            .parallel_record_workers = 4,
-            .parallel_record_verify  = parallel || pipeline_window_mode || present_mode ||
-                                      readback_future_mode || occlusion_query_mode || timestamp_query_mode ||
-                                      timestamp_query_success_batch_mode ||
-                                      timestamp_query_mid_failure_mode ||
-                                      timestamp_query_record_failure_mode || gpu_scope_stream_mode,
-            .parallel_record_min_work_units_per_job = production_gate ? 64u : 1u,
+
             .submission_batch_window                = submission_batch_window,
         });
         render_device_initialized = true;
 
         if (HasArgument(argc, argv, "--compiled-commands")) {
+            RunCompiledSubmissionContract();
             RunCompiledSubrangeSubmission(EQueueType::Graphics);
             RunCompiledSubrangeSubmission(EQueueType::Copy);
             RunActiveRdgExplicitBarrierReadback(parallel, ERHIResourceStateOwnership::Compiled);
@@ -17204,9 +17260,7 @@ int main(int argc, const char** argv) {
             return 0;
         }
 
-        RunOrderedReadback(
-            parallel, inject_worker_failure, production_gate, production_heavy
-        );
+        RunOrderedReadback(parallel);
         RunActiveRdgExplicitBarrierReadback(parallel);
         RunActiveRdgAsyncQueueDag(parallel);
         RunActiveRdgGraphicsCopyRoundTrip(parallel);

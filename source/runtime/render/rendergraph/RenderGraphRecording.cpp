@@ -264,11 +264,6 @@ private:
                 "RecordAndMergeFrontendCommands requires a Graphics CommandList"
             );
         }
-        if (destination.GetResourceStateOwnership() == ERHIResourceStateOwnership::Explicit) {
-            return Fail(
-                "merged recording requires Compiled or BackendTracked ownership"
-            );
-        }
 
         const bool has_allocation_backed_transient = std::any_of(
             graph.compiled_plan.resources.begin(),

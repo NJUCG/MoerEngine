@@ -124,14 +124,6 @@ public:
     inline VkImage GetHandle() const {
         return m_alloc.image;
     }
-    [[nodiscard]] static VkImageLayout PreferredLayoutForUsage(ETextureUsageFlags _usage) noexcept {
-        const bool presentation_source =
-            (_usage & ETextureUsageFlags::PRESENTATION_SOURCE) == ETextureUsageFlags::PRESENTATION_SOURCE;
-        const bool prefer_sample =
-            !presentation_source && (_usage & ETextureUsageFlags::SAMPLED) == ETextureUsageFlags::SAMPLED &&
-            (_usage & ETextureUsageFlags::UNORDERED_ACCESS) == ETextureUsageFlags::UNDEFINED;
-        return prefer_sample ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
-    }
 
     uint               GetMipByteSize(uint _mip_idx) const override;
     [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
@@ -147,29 +139,12 @@ public:
     GetAttachmentView(uint _mip_level = 0, uint _mip_cnt = 1, uint _base_layer = 0, uint _layer_cnt = 1);
 
     void SetName(const std::string_view _name) override;
-    bool b_has_preferred_state : 1 = false;
     bool b_present : 1             = false;
     void PublishPresentationSourceReady(bool _ready) noexcept {
         presentation_source_ready.store(_ready, std::memory_order_release);
     }
     [[nodiscard]] bool IsPresentationSourceReady() const noexcept {
         return presentation_source_ready.load(std::memory_order_acquire);
-    }
-    VkImageLayout GetPreferredLayout() const {
-        return m_preferred_layout;
-    };
-
-    VkImageLayout GetQueuePreferredLayout(EQueueType _queue) {
-        switch (_queue) {
-            case EQueueType::Graphics:
-                return m_preferred_layout;
-            case EQueueType::Compute:
-                return m_preferred_layout;
-            case EQueueType::Copy:
-                return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            default:
-                return VK_IMAGE_LAYOUT_GENERAL;
-        }
     }
 
 private:
@@ -194,7 +169,6 @@ private:
     UnorderedMap<uint64, VkImageView> m_views;
     UnorderedMap<uint64, VkImageView> m_attachment_views;
     mutable std::mutex                m_views_mutex;
-    VkImageLayout                     m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
     std::atomic_bool                  presentation_source_ready{false};
 };
 

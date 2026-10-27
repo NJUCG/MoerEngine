@@ -186,31 +186,6 @@ struct EngineConsoleControl::Impl {
             "Configured maximum Render Thread frame lag; runtime policy may clamp it.",
             &EngineConsoleStartupConfig::max_frame_lag
         );
-        register_bool(
-            "RHI.CommandRecording.Parallel",
-            "Configured request for parallel backend command-list translation/recording.",
-            &EngineConsoleStartupConfig::parallel_recording
-        );
-        register_uint(
-            "RHI.CommandRecording.Parallel.Workers",
-            "Configured parallel command-recording worker count; zero selects the runtime default.",
-            &EngineConsoleStartupConfig::parallel_record_workers
-        );
-        register_bool(
-            "RHI.CommandRecording.Parallel.Verify",
-            "Whether parallel command recording runs verification checks.",
-            &EngineConsoleStartupConfig::parallel_record_verify
-        );
-        register_bool(
-            "RHI.CommandRecording.Parallel.Profile",
-            "Whether parallel command recording emits profiling diagnostics.",
-            &EngineConsoleStartupConfig::parallel_record_profile
-        );
-        register_uint(
-            "RHI.CommandRecording.Parallel.MinWorkUnitsPerJob",
-            "Minimum estimated work units assigned to each parallel recording job.",
-            &EngineConsoleStartupConfig::parallel_record_min_work_units_per_job
-        );
         register_uint(
             "RHI.Submission.BatchWindow",
             "Configured bounded submission batch window before policy clamping.",

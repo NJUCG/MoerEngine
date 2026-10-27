@@ -63,12 +63,6 @@ namespace Moer::Render {
 VulkanDevice::VulkanDevice(const VulkanRHIConfig& _config) : RenderDevice::Impl() {
     rhi_thread_enabled            = _config.rhi_thread && !_config.rhi_bypass;
     thread_profile_logging        = _config.thread_profile_logging;
-    parallel_recording            = _config.parallel_recording;
-    parallel_record_workers       = _config.parallel_record_workers;
-    parallel_record_verify        = _config.parallel_record_verify;
-    parallel_record_profile       = _config.parallel_record_profile;
-    parallel_record_min_work_units_per_job =
-        std::max(1u, _config.parallel_record_min_work_units_per_job);
 
     if (_config.rhi_thread && _config.rhi_bypass) {
         LOG_INFO("[Threading] Vulkan RHI Thread bypass is enabled; graphics submissions stay synchronous.");
@@ -586,12 +580,7 @@ void VulkanDevice::CreateDevice() {
         *this,
         EQueueType::Graphics,
         rhi_thread_enabled,
-        thread_profile_logging,
-        parallel_recording,
-        parallel_record_workers,
-        parallel_record_verify,
-        parallel_record_profile,
-        parallel_record_min_work_units_per_job
+        thread_profile_logging
     );
     SetResourceName(uint64(m_graphics_queue_handle), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
     m_compute_command_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute, false);
@@ -1036,8 +1025,6 @@ QueueFamilyIndices VulkanDevice::SelectQueueFamilyIndices(VkPhysicalDevice _gpu)
 
     return indices;
 }
-
-
 
 bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
     for (const auto& ext : m_device_info.enabled_extensions) {

@@ -22,17 +22,9 @@ namespace Moer::Render {
 class RENDER_API RenderGraphLowering {
 public:
     static constexpr uint32_t InvalidBarrierIndex = RenderGraph::InvalidIndex;
-    static constexpr uint32_t InvalidAccessIndex  = RenderGraph::InvalidIndex;
 
     enum class InstructionKind : uint8_t {
         Barrier,
-        /**
-         * Adopts the explicit input state of a pass whose same-state access did
-         * not require a compiler barrier. Materializers may emit a no-op
-         * explicit barrier; its purpose is persistent tracker state adoption
-         * across independently submitted CommandLists.
-         */
-        StateSeed,
         /** Source-family half emitted after the designated producer batch. */
         QueueRelease,
         /** Destination-family half emitted before the consuming pass. */
@@ -65,11 +57,9 @@ public:
 
     struct LoweredInstruction {
         InstructionKind instruction_kind = InstructionKind::Barrier;
-        /** Index in RenderGraph::CompiledPlan::barriers, or InvalidBarrierIndex for a seed. */
+        /** Index in RenderGraph::CompiledPlan::barriers. */
         uint32_t correlation_id = 0;
         uint32_t barrier_index  = InvalidBarrierIndex;
-        /** Index in CompiledPlan::accesses for StateSeed, otherwise InvalidAccessIndex. */
-        uint32_t access_index   = InvalidAccessIndex;
 
         RenderGraph::ResourceHandle resource{};
         RenderGraph::ResourceKind   resource_kind = RenderGraph::ResourceKind::Token;

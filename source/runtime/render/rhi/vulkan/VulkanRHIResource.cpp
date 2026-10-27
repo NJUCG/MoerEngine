@@ -202,7 +202,6 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, Vk
     Texture(_info),
     VulkanDeviceObject(_device) {
     b_present          = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
-    m_preferred_layout = PreferredLayoutForUsage(_info.usage);
 
     if (_image != VK_NULL_HANDLE) {
         m_alloc.image = _image;

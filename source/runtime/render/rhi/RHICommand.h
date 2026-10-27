@@ -279,18 +279,12 @@ enum class ERHIProfilingPhase : uint8 {
     End,
 };
 
-// Selects the owner of resource-state lifetime across one immutable submit.
-// BackendTracked preserves the legacy behavior: the backend infers command
-// states and restores resources to their preferred state at submit end.
-// Explicit is used by an upper-level compiler (for example RDG): barriers in
-// the command stream are authoritative and the backend must not append a
-// restore-to-preferred-state epilogue.
+// Resource dependency contract for one immutable submit. Vulkan requires
+// Compiled: command order, ranges and complete src/dst barriers come from the
+// caller (normally RDG). BackendTracked is retained for other RHI backends;
+// Vulkan rejects it before native recording.
 enum class ERHIResourceStateOwnership : uint8 {
     BackendTracked,
-    Explicit,
-    // Migration endpoint: command order and resource dependencies are fully
-    // compiled. The backend must neither reorder nor infer resource barriers.
-    // Explicit retains the legacy tracker bridge until its callers migrate.
     Compiled,
 };
 

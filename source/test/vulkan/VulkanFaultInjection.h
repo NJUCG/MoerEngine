@@ -9,14 +9,12 @@ class VulkanDevice;
 // Process-local validation scenario. Configure before creating the device and
 // starting workers; the trigger values stay immutable until all work is drained.
 struct VulkanFaultInjection {
-    RENDER_API static void Configure(uint64 _present_trigger, uint64 _worker_trigger);
+    RENDER_API static void Configure(uint64 _present_trigger);
     RENDER_API static void ValidateCommandLine(int argc, const char** argv);
     RENDER_API static void ConfigureFromCommandLine(int argc, const char** argv);
 
     static uint64 GetPresentTrigger();
-    static uint64 GetWorkerTrigger();
     static bool ShouldInjectPresentSubmit();
-    static bool ShouldFailWorker(EQueueType _queue);
     static VulkanOperationResult InjectPresentSubmitFault(
         VulkanDevice& _device, const VulkanOperationContext& _context
     );

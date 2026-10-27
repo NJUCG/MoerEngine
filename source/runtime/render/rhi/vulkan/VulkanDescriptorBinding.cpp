@@ -4,7 +4,6 @@
 #include "VulkanEnumTranslator.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPipeline.h"
-#include "VulkanResourceState.h"
 #include "shader/ShaderPipeline.h"
 
 #include <algorithm>
@@ -265,13 +264,7 @@ void VulkanCommandList::BindPipelineDescriptorSets(
                             record.image.imageLayout =
                                 binding.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE ?
                                     VK_IMAGE_LAYOUT_GENERAL :
-                                    ResolveVulkanTextureState(
-                                        ETextureState::SAMPLE,
-                                        EPassType::Graphics,
-                                        false,
-                                        view.GetTexture()->GetAspectFlags()
-                                    )
-                                        .layout;
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                         }
                     );
                     break;

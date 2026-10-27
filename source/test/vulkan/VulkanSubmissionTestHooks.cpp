@@ -392,10 +392,7 @@ void NotifyVulkanSourceTranslation(
     EQueueType                    _queue,
     uint32                        _native_queue_id,
     uint64                        _async_queue_scope,
-    EVulkanSourceTranslationPhase _phase,
-    bool                          _parallel_record_requested,
-    bool                          _parallel_record_planned,
-    bool                          _parallel_record_effective
+    EVulkanSourceTranslationPhase _phase
 ) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Translate &&
@@ -421,11 +418,6 @@ void NotifyVulkanSourceTranslation(
             .async_queue_scope     = _async_queue_scope,
             .thread_id             = Platform::GetCurrentThreadID(),
             .thread_role           = GetCurrentRHIThreadRole(),
-            .parallel_record_requested =
-                _parallel_record_requested,
-            .parallel_record_planned = _parallel_record_planned,
-            .parallel_record_effective =
-                _parallel_record_effective,
             .phase                 = _phase,
         }
     );

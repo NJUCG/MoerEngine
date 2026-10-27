@@ -167,7 +167,6 @@ public:
         return std::monostate{};
     }
 
-
     struct ResourceHandle {
         uint32_t resource_id = InvalidIndex;
         uint64_t graph_id    = InvalidGraphId;
@@ -782,29 +781,19 @@ public:
         std::function<void(Array<RHIRecordingSource>&&)>;
 
     /**
-     * Opts ExecuteFrontendRecordingPlan into the authoritative RDG state path.
-     *
-     * Active lowering materializes a fully validated Graphics-only plan into
-     * explicit RHI barriers and allocates descriptor-backed transients from a
-     * Completion-safe pool. Main-thread passes record into the caller-owned
-     * list; independently recorded passes continue to own their own lists and
-     * are mutation-sealed until one graph-wide RHI transaction commits. The
-     * current backend-tracker bridge requires full-buffer ranges, all physical
-     * texture aspects, and an initially empty main-thread list. Active lowering
-     * fails closed when caller-thread and managed-record passes are mixed in
-     * one graph. A physical MainThread graph must be isolated from nonphysical
-     * passes and keep its caller-owned list unsealed until
-     * ExecuteFrontendRecordingPlan returns (therefore no per-pass completion
-     * observer). Leaving enabled
-     * false preserves the legacy backend-tracked path and rejects active
-     * allocation-backed transient declarations.
+     * Materializes the compiled queue plan, exact resource ranges and barriers,
+     * and allocates transients from the Completion-owned pool. Main-thread GPU
+     * passes use an initially empty caller-owned list and cannot share a graph
+     * with managed record callbacks. The list stays unsealed until execution
+     * returns. With enabled=false, only logical/frontend recording is performed;
+     * such BackendTracked command streams cannot be submitted to Vulkan.
      */
     struct ActiveRecordingOptions {
         bool         enabled                  = false;
         CommandList* main_thread_command_list = nullptr;
         /** Defaults to the global completion-safe pool/allocator. */
         RenderGraphTransientAllocator* transient_allocator = nullptr;
-        /** Compiled bypasses the legacy backend tracker/reorderer bridge. */
+        /** Vulkan accepts only the complete Compiled dependency contract. */
         ERHIResourceStateOwnership state_ownership = ERHIResourceStateOwnership::Compiled;
     };
 

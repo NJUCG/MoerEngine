@@ -166,8 +166,8 @@ template<typename Enum>
                 if (!ShaderStages(domain.pipeline, scope.stages, error)) {
                     return false;
                 }
-                // VkCmdPreprocessor uses a generic shader-read access for both
-                // SRV descriptor forms; their layouts remain distinct.
+                // Shader reads cover sampled and storage SRV descriptors;
+                // their layouts remain distinct.
                 scope.access = ERHIAccessFlags::SHADER_READ;
                 return true;
             case TextureState::RenderTarget:
@@ -336,7 +336,6 @@ void AppendInstruction(
 ) {
     stream << "kind=" << static_cast<uint32_t>(instruction.instruction_kind)
            << " barrier=" << instruction.barrier_index
-           << " access_index=" << instruction.access_index
            << " correlation=" << instruction.correlation_id
            << " resource=" << instruction.resource.resource_id << " ";
     AppendRange(stream, instruction.range);
@@ -1212,7 +1211,6 @@ bool RenderGraphLowering::Lower(
             .instruction_kind        = InstructionKind::Barrier,
             .correlation_id          = barrier_index,
             .barrier_index           = barrier_index,
-            .access_index            = InvalidAccessIndex,
             .resource                = barrier.resource,
             .resource_kind           = resource.kind,
             .range                   = barrier.range,
@@ -1661,68 +1659,6 @@ bool RenderGraphLowering::Lower(
                 declaration.name + "'"
             );
         }
-    }
-
-    for (uint32_t access_index = 0; access_index < compiled.accesses.size(); ++access_index) {
-        const auto& access = compiled.accesses[access_index];
-        const auto& resource = graph.resources[access.resource.resource_id];
-        if (resource.kind == ResourceKind::Token) {
-            continue;
-        }
-        auto* pass = find_mutable_pass(access.pass);
-        if (pass == nullptr) {
-            return fail("physical access belongs to a non-GPU pass");
-        }
-        const bool state_already_adopted = std::any_of(
-            pass->before.begin(),
-            pass->before.end(),
-            [&](const LoweredInstruction& instruction) {
-                return instruction.resource == access.resource &&
-                       instruction.range == access.range &&
-                       instruction.after_state == access.state &&
-                       instruction.after_access == access.mode;
-            }
-        ) || std::any_of(
-            candidate.prologue.begin(),
-            candidate.prologue.end(),
-            [&](const LoweredInstruction& instruction) {
-                return instruction.dst_pass == access.pass &&
-                       instruction.resource == access.resource &&
-                       instruction.range == access.range &&
-                       instruction.after_state == access.state &&
-                       instruction.after_access == access.mode;
-            }
-        );
-        if (state_already_adopted) {
-            continue;
-        }
-
-        Scope seed_scope{};
-        if (!MapScope(access.state, access.mode, access.domain, seed_scope, error)) {
-            return fail("access " + std::to_string(access_index) +
-                        " cannot seed explicit tracked state: " + std::move(error));
-        }
-        pass->before.push_back(LoweredInstruction{
-            .instruction_kind        = InstructionKind::StateSeed,
-            .correlation_id          = access_index,
-            .barrier_index           = InvalidBarrierIndex,
-            .access_index            = access_index,
-            .resource                = access.resource,
-            .resource_kind           = resource.kind,
-            .range                   = access.range,
-            .texture_aspects         = resource.kind == ResourceKind::Texture ?
-                                           LowerAspects(std::get<RenderGraph::TextureRange>(access.range).aspects) :
-                                           ETextureAspectFlags::NONE,
-            .physical                = binding_for(access.resource),
-            .src_pass                = access.pass,
-            .dst_pass                = access.pass,
-            .source                  = seed_scope,
-            .destination             = seed_scope,
-            .before_state            = access.state,
-            .after_state             = access.state,
-            .before_access           = access.mode,
-            .after_access            = access.mode,
-        });
     }
 
     for (uint32_t barrier_index = 0;

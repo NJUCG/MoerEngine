@@ -15,13 +15,11 @@ try:
 except ImportError:
     import run_parallel_record_vulkan_test as runner
 
-
 def completion_probe_line() -> str:
     return (
         "[TESTCASE][PASS] name=MultiSegmentCompletionAggregateCpuProbe "
         "suffix_first=deferred prefix_second=ordinary1_success0 replay=0\n"
     )
-
 
 def pipeline_line(
     window: int,
@@ -132,7 +130,6 @@ def pipeline_line(
         + shutdown_cancellation
     )
 
-
 def serial_control_boundary_line() -> str:
     return (
         "[TESTCASE][PASS] name=SerialControlPipelineBoundary "
@@ -140,7 +137,6 @@ def serial_control_boundary_line() -> str:
         "later_translate=blocked readback=verified signals=success "
         "boundary_events=2 native_submits=3 replay=0\n"
     )
-
 
 def queued_present_shutdown_line() -> str:
     return (
@@ -150,14 +146,13 @@ def queued_present_shutdown_line() -> str:
         "native_submit=0 owners=stopped replay=0\n"
     )
 
-
 def present_source_contract_line() -> str:
     return (
         "[TESTCASE][PASS] name=PresentSourceContractRejection "
         "rejected=17 null=true usage=true transfer_src=true samples=true "
         "format=true compressed=true mip=true layer=true offset=true extent=true "
         "fresh=true accepted_export=true stale_clear=true "
-        "backend_tracked_same_batch=true backend_rejected=true "
+        "compiled_same_batch=true backend_rejected=true "
         "marker_then_clear=true accepted_mutation_clear=true "
         "rejected_mutation_preserves=true accepted_copy_mutation=true "
         "marker_then_segmented_state_change=true "
@@ -169,13 +164,11 @@ def present_source_contract_line() -> str:
         "valid_override=4 owner=Submission\n"
     )
 
-
 def presentation_idle_line() -> str:
     return (
         "[TESTCASE][PASS] name=PresentationIdleBoundary "
         "ordinary_idle=0 lifecycle_idle=1 owner=Submission callbacks=completed\n"
     )
-
 
 def present_boundary_line(bridge: str = "required") -> str:
     prefix_native = "2" if bridge == "required" else "0"
@@ -195,7 +188,6 @@ def present_boundary_line(bridge: str = "required") -> str:
         + queued_present_shutdown_line()
     )
 
-
 def present_hard_line() -> str:
     return (
         "[TESTCASE][PASS] name=PresentHardFailureBoundary "
@@ -204,7 +196,6 @@ def present_hard_line() -> str:
         "native_after_present=0 device_fault_priority=true "
         "invalid_source=true concurrent_hard_latch=verified replay=0\n"
     )
-
 
 def rt_export_rejection_line() -> str:
     return (
@@ -218,18 +209,16 @@ def rt_export_rejection_line() -> str:
         "native=accepted payload=error encoder=0 latch=true\n"
     )
 
-
 def readback_future_line() -> str:
     return (
         "[TESTCASE][PASS] name=OwningReadbackFuture "
         "queue=Copy buffer=subrange texture=mip1,layer1 "
         "layer_copy=isolated_nonzero_layer "
-        "sibling=next_submit_mip0_layer0 state_restore=whole_image "
+        "sibling=next_submit_mip0_layer0 state_owner=caller exact_ranges=true "
         "bytes=32,64,64,256 callbacks=exactly_once siblings=terminal "
         "native_staging=completion-owned host_snapshot=future-owned "
         "unsupported=compressed,msaa,partial\n"
     )
-
 
 def occlusion_query_line() -> str:
     return (
@@ -242,7 +231,6 @@ def occlusion_query_line() -> str:
         "order=signal->completion->query->ordinary "
         "callbacks=exactly_once readback=verified replay=0\n"
     )
-
 
 def timestamp_query_success_batch_line() -> str:
     return (
@@ -291,14 +279,12 @@ def timestamp_query_success_batch_line() -> str:
         "callbacks=exactly_once runtime=recovered replay=0\n"
     )
 
-
 def present_legacy_owner_line() -> str:
     return (
         "[TESTCASE][PASS] name=LegacyDirectPresentOwnerBoundary "
         "rhi_thread=false owner=Submission thread=caller "
         "receipt=exactly_once native_present=0\n"
     )
-
 
 def timestamp_query_line() -> str:
     return (
@@ -322,7 +308,6 @@ def timestamp_query_line() -> str:
         "success_callback=0 native_submit=0 replay=0\n"
     )
 
-
 def timestamp_query_mid_failure_line() -> str:
     return (
         "[TESTCASE][PASS] name=TimestampQueryMidBatchTranslateFailure "
@@ -334,7 +319,6 @@ def timestamp_query_mid_failure_line() -> str:
         "callbacks=exactly_once replay=0\n"
     )
 
-
 def timestamp_query_record_failure_line() -> str:
     return (
         "[TESTCASE][PASS] name=TimestampQuerySerialRecordFailure "
@@ -345,17 +329,15 @@ def timestamp_query_record_failure_line() -> str:
         "owner=Completion callbacks=exactly_once native_submit=0 replay=0\n"
     )
 
-
 def gpu_scope_stream_line() -> str:
     return (
         "[TESTCASE][PASS] name=GpuScopeStreamCompletionAndParallelIsolation "
         "frame_id=7 queue=Graphics scopes=2 hierarchy=nested "
-        "query_source=query-serial-island "
-        "query_free_sibling=parallel-effective raw_ticks=verified "
+        "query_source=timestamp-source "
+        "query_free_sibling=independent-source raw_ticks=verified "
         "duration_ns=12.5,3.25 exclusive_ns=9.25,3.25 "
         "owner=Completion readback=verified sibling_readbacks=8/8 replay=0\n"
     )
-
 
 def pass_line(
     mode: str,
@@ -365,7 +347,7 @@ def pass_line(
 ) -> str:
     return (
         completion_probe_line()
-        + "[TESTCASE][PASS] name=ParallelRecordOrderedReadback "
+        + "[TESTCASE][PASS] name=CompiledOrderedReadback "
         f"mode={mode} worker_fault={fault} production_gate={production_gate} "
         f"production_heavy={production_heavy} iterations=24\n"
         "[TESTCASE][PASS] name=AsyncQueueParallelTranslateSmoke "
@@ -413,7 +395,6 @@ def pass_line(
         "native_submit=0 sync_wait=registered concurrent_sync=drained\n"
     )
 
-
 def replace_testcase_marker(text: str, name: str, replacement: str) -> str:
     marker = f"name={name} "
     lines = [
@@ -422,19 +403,16 @@ def replace_testcase_marker(text: str, name: str, replacement: str) -> str:
     ]
     return "\n".join(lines) + "\n"
 
-
 def wave(batch: int, index: int) -> str:
     return (
         f"[ParallelRecord][Wave] batch={batch} wave={index} layers=0..2 jobs=2 "
         "join_completed=true worker_recorded=true\n"
     )
 
-
 def island(batch: int) -> str:
     return (
         f"[ParallelRecord][Island] batch={batch} island=0 first_layer=2 joined_waves=1\n"
     )
-
 
 def summary(batch: int, outcome: str = "parallel") -> str:
     effective = "true" if outcome == "parallel" else "false"
@@ -443,7 +421,6 @@ def summary(batch: int, outcome: str = "parallel") -> str:
         f"outcome={outcome} layers=4 jobs=4 work_units=256 ordered_cb=10 secondary_cb=4 waves=2 islands=1 "
         "workers=4 distinct_workers=3 max_active=3 coordinator=9 submit_status=0\n"
     )
-
 
 def gpu_env_line(
     *,
@@ -468,7 +445,6 @@ def gpu_env_line(
         f"device_api={device_api} api_variant=0 device_api_raw={device_api_raw} "
         "driver_id=4 driver_version_raw=0x12345678\n"
     )
-
 
 class VulkanRunnerTests(unittest.TestCase):
     def test_gpu_environment_schema_is_accepted(self) -> None:
@@ -1509,16 +1485,15 @@ class VulkanRunnerTests(unittest.TestCase):
                         ],
                     )
 
-    def test_declared_gpu_matrix_contains_all_20_unique_modes(self) -> None:
+    def test_declared_gpu_matrix_contains_all_19_unique_modes(self) -> None:
         modes = [test_case.mode for test_case in runner.VULKAN_TEST_CASES]
         self.assertEqual(
             set(modes),
             {
+                "compiled",
+                "multiview",
                 "serial",
                 "parallel",
-                "fallback",
-                "gated",
-                "heavy",
                 "translate-hard",
                 "multi-segment-hard",
                 "pipeline-window1",
@@ -1536,8 +1511,8 @@ class VulkanRunnerTests(unittest.TestCase):
                 "gpu-scope-stream",
             },
         )
-        self.assertEqual(len(modes), 20)
-        self.assertEqual(len(set(modes)), 20)
+        self.assertEqual(len(modes), 19)
+        self.assertEqual(len(set(modes)), 19)
         self.assertEqual(set(modes), set(runner.VULKAN_TEST_CASE_BY_MODE))
 
     def test_new_focused_modes_reject_weakened_terminal_contracts(self) -> None:
@@ -1572,7 +1547,7 @@ class VulkanRunnerTests(unittest.TestCase):
             (
                 "gpu-scope-stream",
                 gpu_scope_stream_line().replace(
-                    "query_free_sibling=parallel-effective",
+                    "query_free_sibling=independent-source",
                     "query_free_sibling=serial",
                 ),
             ),
@@ -1692,7 +1667,7 @@ class VulkanRunnerTests(unittest.TestCase):
             runner.validate_log(
                 "readback-future",
                 readback_future_line().replace(
-                    " state_restore=whole_image", ""
+                    " state_owner=caller exact_ranges=true", ""
                 ),
             )
 
@@ -2176,7 +2151,7 @@ class VulkanRunnerTests(unittest.TestCase):
     def test_regular_mode_requires_parallel_translate_contracts(self) -> None:
         text = (
             completion_probe_line()
-            + "[TESTCASE][PASS] name=ParallelRecordOrderedReadback "
+            + "[TESTCASE][PASS] name=CompiledOrderedReadback "
             "mode=serial worker_fault=false production_gate=false "
             "production_heavy=false iterations=24\n"
         )
@@ -2618,58 +2593,6 @@ class VulkanRunnerTests(unittest.TestCase):
         )
         runner.validate_log("serial", text)
 
-    def test_parallel_requires_wave_island_wave_and_concurrency(self) -> None:
-        text = wave(1, 0) + island(1) + wave(1, 1) + summary(1) + pass_line("parallel", "false")
-        runner.validate_log("parallel", text)
-
-    def test_parallel_accepts_legacy_summary_without_secondary_count(self) -> None:
-        text = wave(1, 0) + island(1) + wave(1, 1) + summary(1) + pass_line("parallel", "false")
-        runner.validate_log("parallel", text.replace("secondary_cb=4 ", ""))
-
-    def test_parallel_rejects_malformed_secondary_count(self) -> None:
-        text = wave(1, 0) + island(1) + wave(1, 1) + summary(1) + pass_line("parallel", "false")
-        with self.assertRaisesRegex(runner.VulkanTestError, "no parallel backend summary"):
-            runner.validate_log("parallel", text.replace("secondary_cb=4", "secondary_cb=invalid"))
-
-    def test_parallel_rejects_missing_second_wave(self) -> None:
-        text = wave(1, 0) + island(1) + summary(1) + pass_line("parallel", "false")
-        with self.assertRaisesRegex(runner.VulkanTestError, "do not prove"):
-            runner.validate_log("parallel", text)
-
-    def test_production_gate_rejects_cheap_copy_workload(self) -> None:
-        text = (
-            "[ParallelRecord] batch=1 requested=true effective=false "
-            "reason=insufficient-work coordinator=9\n"
-            + pass_line("parallel", "false", "true")
-        )
-        runner.validate_log("gated", text)
-
-    def test_production_heavy_requires_real_weighted_parallel_work(self) -> None:
-        text = (
-            wave(1, 0)
-            + island(1)
-            + wave(1, 1)
-            + summary(1)
-            + pass_line("parallel", "false", "true", "true")
-        )
-        runner.validate_log("heavy", text)
-
-    def test_fallback_requires_exactly_one_post_command_injection(self) -> None:
-        text = (
-            "[ParallelRecord][Injection] point=worker-throw phase=after-first-command "
-            "trigger=1 batch=1 layer=0 command=0\n"
-            + wave(1, 0).replace("worker_recorded=true", "worker_recorded=false")
-            + island(1)
-            + wave(1, 1)
-            + summary(1, "serial-fallback-worker-failure")
-            + wave(2, 0)
-            + island(2)
-            + wave(2, 1)
-            + summary(2)
-            + pass_line("parallel", "true")
-        )
-        runner.validate_log("fallback", text)
-
     def test_validation_vuid_is_fatal(self) -> None:
         with self.assertRaisesRegex(runner.VulkanTestError, "Vulkan validation VUID"):
             runner.validate_log("serial", "VUID-vkQueueSubmit-test\n" + pass_line("serial", "false"))
@@ -2896,7 +2819,6 @@ class VulkanRunnerTests(unittest.TestCase):
             runner.VulkanTestError, "expected exactly one marker"
         ):
             runner.validate_log("multi-segment-hard", text)
-
 
 if __name__ == "__main__":
     unittest.main()

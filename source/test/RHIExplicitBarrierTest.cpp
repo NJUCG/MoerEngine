@@ -1,7 +1,6 @@
 #include "rhi/RHIImpl.h"
-#include "rhi/vulkan/RHICmdReorderer.h"
 #include "rhi/vulkan/VulkanRHIResource.h"
-#include "rhi/vulkan/VulkanResourceTracker.h"
+#include "rhi/vulkan/VulkanBarrier.h"
 
 #include <array>
 #include <iostream>
@@ -57,25 +56,6 @@ private:
     }
 };
 
-ERHIAccessFlags NoArgumentAccess(const PipelineHandle&, uint) {
-    return ERHIAccessFlags::UNDEFINED;
-}
-
-bool FalseBindlessMembership(uint64, uint64) {
-    return false;
-}
-
-void NoopBindlessLock(uint64) {}
-
-FunctionTable MakeFunctionTable() {
-    return {
-        .get_argument_access     = &NoArgumentAccess,
-        .is_resource_in_bindless = &FalseBindlessMembership,
-        .lock_bdls_array         = &NoopBindlessLock,
-        .unlock_bdls_array       = &NoopBindlessLock,
-    };
-}
-
 template<typename TCallable>
 void ExpectInvalidArgument(TCallable&& _callable, const char* _message) {
     try {
@@ -84,199 +64,6 @@ void ExpectInvalidArgument(TCallable&& _callable, const char* _message) {
         return;
     }
     throw std::runtime_error(_message);
-}
-
-void LegacyVulkanStateMappingIsStageCompatible() {
-    const auto compute_srv = ResolveVulkanTextureState(
-        ETextureState::SHADER_RESOURCE, EPassType::Compute, false, ETextureAspectFlags::COLOR
-    );
-    Expect(
-        compute_srv.access == VK_ACCESS_2_SHADER_READ_BIT &&
-            compute_srv.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
-            compute_srv.stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        "compute SRV texture mapping is not shader-stage compatible"
-    );
-
-    const auto raytracing_sampled = ResolveVulkanTextureState(
-        ETextureState::SAMPLE, EPassType::Raytracing, false, ETextureAspectFlags::COLOR
-    );
-    Expect(
-        raytracing_sampled.access == VK_ACCESS_2_SHADER_SAMPLED_READ_BIT &&
-            raytracing_sampled.stages == VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        "raytracing sampled texture mapping lost its shader stage"
-    );
-
-    const auto graphics_srv = ResolveVulkanTextureState(
-        ETextureState::SHADER_RESOURCE, EPassType::Graphics, false, ETextureAspectFlags::COLOR
-    );
-    Expect(
-        graphics_srv.stages ==
-            (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT),
-        "graphics SRV texture mapping must cover vertex and fragment shaders"
-    );
-
-    const auto graphics_render_target_read = ResolveVulkanTextureState(
-        ETextureState::RENDER_TARGET, EPassType::Graphics, false, ETextureAspectFlags::COLOR
-    );
-    Expect(
-        graphics_render_target_read.access == VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT &&
-            graphics_render_target_read.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
-            graphics_render_target_read.stages == VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-        "graphics render-target read mapping lost queue-transfer compatibility"
-    );
-
-    const auto copy_src = ResolveVulkanTextureState(
-        ETextureState::TRANSFER, EPassType::Copy, false, ETextureAspectFlags::COLOR
-    );
-    const auto copy_dst =
-        ResolveVulkanTextureState(ETextureState::TRANSFER, EPassType::Copy, true, ETextureAspectFlags::COLOR);
-    Expect(
-        copy_src.access == VK_ACCESS_2_TRANSFER_READ_BIT &&
-            copy_src.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
-            copy_src.stages == VK_PIPELINE_STAGE_2_TRANSFER_BIT &&
-            copy_dst.access == VK_ACCESS_2_TRANSFER_WRITE_BIT &&
-            copy_dst.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
-            copy_dst.stages == VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        "copy texture mapping is not transfer-stage compatible"
-    );
-
-    const auto depth_read = ResolveVulkanTextureState(
-        ETextureState::DEPTH_STENCIL, EPassType::Graphics, false, ETextureAspectFlags::DEPTH_SLICE
-    );
-    Expect(
-        depth_read.access == VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT &&
-            depth_read.layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL &&
-            depth_read.stages ==
-                (VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT),
-        "depth read mapping is not attachment-stage compatible"
-    );
-
-    const auto sampled_depth = ResolveVulkanTextureState(
-        ETextureState::SAMPLE,
-        EPassType::Compute,
-        false,
-        ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE
-    );
-    Expect(
-        sampled_depth.access == VK_ACCESS_2_SHADER_SAMPLED_READ_BIT &&
-            sampled_depth.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
-            sampled_depth.stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        "sampled depth-stencil texture mapping lost depth layout or compute scope"
-    );
-
-    const auto compute_uav = ResolveVulkanTextureState(
-        ETextureState::UNORDERED_ACCESS, EPassType::Compute, true, ETextureAspectFlags::COLOR
-    );
-    Expect(
-        compute_uav.access == (VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT) &&
-            compute_uav.layout == VK_IMAGE_LAYOUT_GENERAL &&
-            compute_uav.stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        "compute UAV texture mapping is not shader-stage compatible"
-    );
-
-    const auto copy_buffer_src = ResolveVulkanBufferState(EBufferState::TRANSFER, EPassType::Copy, false);
-    const auto raytracing_buffer_srv =
-        ResolveVulkanBufferState(EBufferState::SHADER_RESOURCE, EPassType::Raytracing, false);
-    const auto graphics_buffer_srv =
-        ResolveVulkanBufferState(EBufferState::SHADER_RESOURCE, EPassType::Graphics, false);
-    Expect(
-        copy_buffer_src.access == VK_ACCESS_2_TRANSFER_READ_BIT &&
-            copy_buffer_src.stages == VK_PIPELINE_STAGE_2_TRANSFER_BIT &&
-            raytracing_buffer_srv.access == (VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT) &&
-            raytracing_buffer_srv.stages == VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR &&
-            graphics_buffer_srv.stages ==
-                (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT),
-        "legacy buffer mapping lost copy or raytracing stage semantics"
-    );
-
-    ExpectInvalidArgument(
-        [] {
-            (void)ResolveVulkanTextureState(
-                ETextureState::SHADER_RESOURCE, EPassType::Copy, false, ETextureAspectFlags::COLOR
-            );
-        },
-        "copy pass accepted a shader-resource texture"
-    );
-    ExpectInvalidArgument(
-        [] {
-            (void)ResolveVulkanTextureState(
-                ETextureState::RENDER_TARGET, EPassType::Compute, true, ETextureAspectFlags::COLOR
-            );
-        },
-        "compute pass accepted a render-target attachment"
-    );
-    ExpectInvalidArgument(
-        [] {
-            (void)ResolveVulkanTextureState(
-                ETextureState::SAMPLE, EPassType::Graphics, true, ETextureAspectFlags::COLOR
-            );
-        },
-        "write path accepted a sampled texture"
-    );
-    ExpectInvalidArgument(
-        [] {
-            (void)ResolveVulkanBufferState(EBufferState::SHADER_RESOURCE, EPassType::Copy, false);
-        },
-        "copy pass accepted a shader-resource buffer"
-    );
-    ExpectInvalidArgument(
-        [] {
-            (void)ResolveVulkanBufferState(EBufferState::VERTEX, EPassType::Graphics, true);
-        },
-        "write path accepted a vertex buffer"
-    );
-    ExpectInvalidArgument(
-        [] {
-            (void)ResolveVulkanTextureState(
-                ETextureState::TRANSFER, static_cast<EPassType>(99), false, ETextureAspectFlags::COLOR
-            );
-        },
-        "texture mapping accepted an unknown pass type"
-    );
-    ExpectInvalidArgument(
-        [] {
-            (void)ResolveVulkanBufferState(static_cast<EBufferState>(99), EPassType::Graphics, false);
-        },
-        "buffer mapping accepted an unknown state"
-    );
-}
-
-int64 FindCommandLayer(
-    const CmdReorderer& _reorderer,
-    const Command*      _command
-) {
-    for (size_t layer = 0; layer < _reorderer.m_cmd_lists.size(); ++layer) {
-        for (const auto* node = _reorderer.m_cmd_lists[layer].head;
-             node != nullptr;
-             node = node->next) {
-            if (node->cmd == _command) {
-                return static_cast<int64>(layer);
-            }
-        }
-    }
-    return -1;
-}
-
-void PresentationSourceUsageSelectsGeneralPreferredLayout() {
-    const ETextureUsageFlags sampled_output_usage =
-        ETextureUsageFlags::SAMPLED |
-        ETextureUsageFlags::COLOR_ATTACHMENT |
-        ETextureUsageFlags::TRANSFER_SRC |
-        ETextureUsageFlags::TRANSFER_DST;
-
-    Expect(
-        VulkanTexture::PreferredLayoutForUsage(
-            sampled_output_usage |
-            ETextureUsageFlags::PRESENTATION_SOURCE
-        ) == VK_IMAGE_LAYOUT_GENERAL,
-        "sampled presentation source must prefer GENERAL"
-    );
-    Expect(
-        VulkanTexture::PreferredLayoutForUsage(
-            sampled_output_usage
-        ) == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        "ordinary sampled texture must keep its shader-read preferred layout"
-    );
 }
 
 void BackendTrackedPublicationMarkerPreservesLegacyOwnership() {
@@ -794,73 +581,6 @@ void EmptyExplicitBarrierBatchFailsWithoutChangingOwnership() {
     );
 }
 
-void ExplicitBarrierOwnsAnExclusiveReorderLayer() {
-    constexpr uint64 buffer_handle = 0x4000;
-    const BufferView view(
-        reinterpret_cast<Buffer*>(buffer_handle),
-        0,
-        4,
-        4
-    );
-
-    BarrierCmd prior_read(
-        0,
-        0,
-        1,
-        0,
-        EQueueType::Graphics,
-        EQueueType::Graphics
-    );
-    prior_read.ReadBuffer(
-        view,
-        EBufferState::SHADER_RESOURCE,
-        EPassType::Graphics
-    );
-
-    BarrierCmd explicit_barrier(
-        1,
-        EQueueType::Graphics,
-        EQueueType::Graphics
-    );
-    explicit_barrier.AddExplicitBarrier(
-        BarrierCreateInfo::Transition(
-            view,
-            BarrierState::Buffer(
-                ERHIPipelineStageFlags::PS_FRAGMENT_SHADER,
-                ERHIAccessFlags::SHADER_READ
-            ),
-            BarrierState::Buffer(
-                ERHIPipelineStageFlags::PS_COMPUTE_SHADER,
-                ERHIAccessFlags::SHADER_READ
-            )
-        )
-    );
-
-    std::array<byte, 16> data{};
-    UploadBufferCmd following_write(
-        buffer_handle,
-        0,
-        data.size(),
-        data.data()
-    );
-
-    TCachedArgArray cached_args;
-    CmdReorderer reorderer(MakeFunctionTable(), cached_args);
-    reorderer.AcceptCmd(&prior_read);
-    reorderer.AcceptCmd(&explicit_barrier);
-    reorderer.AcceptCmd(&following_write);
-
-    Expect(FindCommandLayer(reorderer, &prior_read) == 0, "prior read layer changed");
-    Expect(
-        FindCommandLayer(reorderer, &explicit_barrier) == 1,
-        "explicit barrier did not own the next exclusive layer"
-    );
-    Expect(
-        FindCommandLayer(reorderer, &following_write) == 2,
-        "following work crossed the explicit barrier layer"
-    );
-}
-
 void TextureRangeOverlapMatchesAtomicExplicitTracking() {
     auto* texture = reinterpret_cast<VulkanTexture*>(0x5000);
     const TextureSubresourceKeyT<VulkanTexture> whole{
@@ -952,8 +672,6 @@ void ReleaseSentinelOverlapUsesExactBufferAndTextureRanges() {
 
 int main() {
     try {
-        LegacyVulkanStateMappingIsStageCompatible();
-        PresentationSourceUsageSelectsGeneralPreferredLayout();
         BackendTrackedPublicationMarkerPreservesLegacyOwnership();
         LocalExplicitPayloadAndOwnershipArePreserved();
         ReleaseAndAcquirePayloadsPreserveEndpointAffinity();
@@ -962,7 +680,6 @@ int main() {
         InvalidResourceRangeFailsWithoutMutation();
         LegacyBarrierRemainsCompatible();
         EmptyExplicitBarrierBatchFailsWithoutChangingOwnership();
-        ExplicitBarrierOwnsAnExclusiveReorderLayer();
         TextureRangeOverlapMatchesAtomicExplicitTracking();
         ReleaseSentinelOverlapUsesExactBufferAndTextureRanges();
     } catch (const std::exception& error) {

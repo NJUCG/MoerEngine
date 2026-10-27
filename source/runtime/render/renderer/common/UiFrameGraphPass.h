@@ -120,33 +120,12 @@ public:
         const TextureRef&       main_output
     );
 
-    [[nodiscard]] static bool ProcessLinear(
-        CommandList&            cmd_list,
-        UiCombinePass&          combine_pass,
-        const PreparedFrameRef& frame,
-        const TextureRef&       scene_color,
-        const TextureRef&       main_output
-    );
-
     static void RecordCompiledDraw(
         CommandList&                  commands,
         const UiCompositionFrameData& composition,
         const UiDrawFramePacket&      draw_frame,
         const TextureRef&             main_output,
         EUiDrawExecutionThread        execution_thread
-    );
-
-    /**
-     * Records the terminal BackendTracked export used by UI paths whose draw
-     * commands live outside an explicit RenderGraph packet. Every main,
-     * detached-scene, and platform-window target is deduplicated and published
-     * only after the containing native Graphics submit is accepted.
-     */
-    [[nodiscard]] static bool RecordPresentationBoundary(
-        CommandList&                  cmd_list,
-        const UiCompositionFrameData& composition,
-        const UiDrawFramePacket&      draw_frame,
-        const TextureRef&             main_output
     );
 
 private:
@@ -166,14 +145,6 @@ private:
         RenderGraph::TokenHandle   presentation_ready,
         GraphPasses&               passes
     );
-    [[nodiscard]] static bool ProcessLinearWithComposeRecorder(
-        CommandList&            cmd_list,
-        ComposeRecorder         compose_recorder,
-        const PreparedFrameRef& frame,
-        const TextureRef&       scene_color,
-        const TextureRef&       main_output
-    );
-
     static void RecordClear(
         CommandList&             cmd_list,
         const Array<TextureRef>& targets

@@ -564,8 +564,8 @@ void TestAccelerationBuildInputScopes(TestSuite& suite) {
     );
 }
 
-void TestSameStateReadGetsStateSeed(TestSuite& suite) {
-    constexpr std::string_view test_name = "same-state read receives explicit state seed";
+void TestSameStateReadNeedsNoBarrier(TestSuite& suite) {
+    constexpr std::string_view test_name = "same-state read needs no synthetic barrier";
     BufferRef buffer = MoerNew(FakeBuffer)(256);
 
     RenderGraph graph("ReadSeed");
@@ -611,33 +611,13 @@ void TestSameStateReadGetsStateSeed(TestSuite& suite) {
         test_name,
         "the first access must adopt its explicit import boundary"
     );
-    const auto before_second = lowered.Before(second_read);
-    const auto seed = std::find_if(
-        before_second.begin(),
-        before_second.end(),
-        [](const RenderGraphLowering::LoweredInstruction& instruction) {
-            return instruction.instruction_kind ==
-                   RenderGraphLowering::InstructionKind::StateSeed;
-        }
-    );
-    suite.Check(
-        seed != before_second.end() &&
-            seed->barrier_index == RenderGraphLowering::InvalidBarrierIndex &&
-            seed->access_index != RenderGraphLowering::InvalidAccessIndex &&
-            std::get<RenderGraph::BufferRange>(seed->range).offset == 0 &&
-            std::get<RenderGraph::BufferRange>(seed->range).size == 256 &&
-            seed->source.stages == ERHIPipelineStageFlags::PS_ALL_GRAPHICS &&
-            seed->source.access == (ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::UNIFORM_READ) &&
-            seed->source.stages == seed->destination.stages &&
-            seed->source.access == seed->destination.access,
-        test_name,
-        "a barrier-free read must seed the independent CommandList tracker"
-    );
+    suite.Check(lowered.Before(second_read).empty(), test_name,
+                "read-after-read must not emit a synthetic dependency");
     suite.Check(
         lowered.Keepalive(second_read).size() == 1 &&
             lowered.Keepalive(second_read).front().buffer.Get() == buffer.Get(),
         test_name,
-        "state-seeded pass must retain its buffer even without a compiler barrier"
+        "barrier-free pass must retain its buffer even without a compiler barrier"
     );
 }
 
@@ -1660,7 +1640,7 @@ int main() {
     TestPresentationSourceLowersToCommonTransferRead(suite);
     TestUntouchedImportedRangesNeedNoCommands(suite);
     TestAccelerationBuildInputScopes(suite);
-    TestSameStateReadGetsStateSeed(suite);
+    TestSameStateReadNeedsNoBarrier(suite);
     TestCrossNativeTokenSynchronization(suite);
     TestSameNativeTokenSynchronizationNeedsNoGpuSync(suite);
     TestSameNativePhysicalBarrierRetainsSourceScope(suite);

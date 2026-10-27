@@ -31,27 +31,27 @@
   # 如果在clone时忘记添加submodule相关参数，请执行git submodule update --init --depth 1
   git clone --recurse-submodules --shallow-submodules git@github.com:NJUCG/MoerEngine.git
   cd MoerEngine
-  
+
   # 忽略一些特定commit对commit历史的影响（只影响开发过程，不影响编译和使用）
   git config --local blame.ignoreRevsFile .git-blame-ignore-revs
-  
+
   # 根据模板创建一份MoerEngine的配置文件
   # 配置文件中，可以设置默认的渲染器（光栅化、光追）、默认分辨率等选项
   cp template.MoerEngine.toml MoerEngine.toml
-  
+
   # 构建
   # Clang + ninja
   cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
   # # MSVC
   # cmake -B build
   cmake --build build -j16 # change 16 to your cpu core count
-  
+
   # 运行
   ./target/bin/Debug/MoerEditor.exe
   ```
-  
+
   - 如果安装了 [just](https://github.com/casey/just)，你可以参考根目录下的 `template.justfile` 文件来编写你自己的脚本
-  
+
 - 方法二：Visual Studio 2022（GUI）
 
   Visual Studio 2022 可以直接打开根目录包含 `CMakeLists.txt` 的工程，不需要生成 `.sln`。参见 [Microsoft：Visual Studio 中的 CMake 项目](https://learn.microsoft.com/zh-cn/cpp/build/cmake-projects-in-visual-studio?view=msvc-170)。
@@ -155,7 +155,6 @@ CTest 为这些测试单独配置 SDK 的 DLL 搜索路径。`TestCudaSmoke`、`
 实际场景的推理生命周期可手动运行（需要上述 DLL 路径）：
 
 ```powershell
-$env:MOER_VULKAN_REQUIRE_COMPILED = '1'
 .\target\bin\Debug\TestCudaInterop.exe --raster --config <MoerEngine.toml绝对路径>
 ```
 

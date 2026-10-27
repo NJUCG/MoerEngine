@@ -56,13 +56,6 @@ public:
 
     AntialiasPass(RenderDevice& device, class ShaderManager& manager, CreateInfo info);
 
-    void Process(
-        CommandList& _cmd_list,
-        Params       _params,
-        bool         _prev_view_valid,
-        TextureRef   _input,
-        TextureRef   _output
-    );
     void RebindResources(const CreateInfo& info);
     bool AddPasses(
         RenderGraph&                 graph,

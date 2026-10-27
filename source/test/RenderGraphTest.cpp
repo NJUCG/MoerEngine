@@ -60,21 +60,6 @@ public:
         );
     }
 
-    [[nodiscard]] static bool ProcessLinearWithComposeRecorder(
-        CommandList&                              cmd_list,
-        std::function<void(CommandList&)>         compose_recorder,
-        const UiFrameGraphPass::PreparedFrameRef& frame,
-        const TextureRef&                         scene_color,
-        const TextureRef&                         main_output
-    ) {
-        return UiFrameGraphPass::ProcessLinearWithComposeRecorder(
-            cmd_list,
-            std::move(compose_recorder),
-            frame,
-            scene_color,
-            main_output
-        );
-    }
 };
 
 } // namespace Moer::Render
@@ -4701,66 +4686,15 @@ void TestRasterStyleUiSlotClaimTracksNativeAcceptance(TestSuite& suite) {
     UiDrawFrameSlotClaim accepted_claim(accepted_frame);
     CommandList         accepted_commands;
     RenderUiDrawFrame(
-        accepted_commands,
-        accepted_main_output->GetView(),
-        accepted_frame,
-        EUiDrawExecutionThread::Game
+        accepted_commands, accepted_main_output->GetView(), accepted_frame, EUiDrawExecutionThread::Game
     );
-    const bool raster_boundary_recorded =
-        UiFrameGraphPass::RecordPresentationBoundary(
-            accepted_commands,
-            {},
-            accepted_frame,
-            accepted_main_output
-        );
-    const CmdSubmit accepted_submit = accepted_commands.Submit();
-    bool raster_boundary_valid =
-        raster_boundary_recorded &&
-        !accepted_submit.HasExplicitResourceStateOwnership() &&
-        !accepted_submit.cmds.empty() &&
-        accepted_submit.cmds.back()->Type() ==
-            Command::EType::Barrier;
-    if (raster_boundary_valid) {
-        const auto& terminal = *static_cast<const BarrierCmd*>(
-            accepted_submit.cmds.back().get()
-        );
-        const std::array<Texture*, 2> expected{
-            accepted_main_output.Get(),
-            accepted_platform_output.Get(),
-        };
-        raster_boundary_valid =
-            terminal.ReadTextures().size() == expected.size() &&
-            terminal.WriteTextures().empty() &&
-            terminal.ExplicitTextures().empty();
-        for (Texture* texture : expected) {
-            const auto matches = std::count_if(
-                terminal.ReadTextures().begin(),
-                terminal.ReadTextures().end(),
-                [texture](const TextureBarrier& barrier) {
-                    return barrier.handle ==
-                               reinterpret_cast<std::uint64_t>(texture) &&
-                           barrier.state == ETextureState::TRANSFER &&
-                           barrier.pass_type == EPassType::Copy &&
-                           barrier.publish_external_state &&
-                           barrier.mip_level == 0 &&
-                           barrier.mip_cnt == texture->GetNumMips() &&
-                           barrier.array_layer == 0 &&
-                           barrier.array_cnt == texture->GetNumArray();
-                }
-            );
-            raster_boundary_valid =
-                raster_boundary_valid && matches == 1;
-        }
-    }
     suite.Check(
         accepted_backend->render_count == 1 &&
             accepted_backend->saw_valid_recording_slots &&
             accepted_resources->PendingSlot() == 23 &&
-            accepted_resources->CommitCount() == 0 &&
-            raster_boundary_valid,
+            accepted_resources->CommitCount() == 0,
         test_name,
-        "Raster UI recording advanced the upload ring or omitted its terminal "
-        "presentation-source boundary before native acceptance"
+        "Raster UI recording advanced the upload ring before native acceptance"
     );
     suite.Check(
         accepted_claim.CommitAccepted() &&
@@ -4974,111 +4908,6 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         std::move(composition),
         std::move(draw_frame),
         EUiDrawExecutionThread::Render
-    );
-
-    auto linear_shared_slots =
-        Moer::MakeShared<FakeUiViewportResources>(15);
-    auto linear_platform_slots =
-        Moer::MakeShared<FakeUiViewportResources>(19);
-    auto linear_backend = Moer::MakeShared<FakeUiDrawBackend>();
-    UiDrawFramePacket linear_draw_frame{};
-    linear_draw_frame.backend = linear_backend;
-    linear_draw_frame.main_viewport.render_resources =
-        linear_shared_slots;
-    linear_draw_frame.main_viewport.commands.emplace_back();
-    const auto append_linear_platform =
-        [&](
-            TextureRef framebuffer,
-            Moer::SharedPtr<FakeUiViewportResources> slots,
-            bool metadata_only = false
-        ) {
-            UiViewportDrawPacket viewport{};
-            viewport.framebuffer                = std::move(framebuffer);
-            viewport.render_resources           = std::move(slots);
-            viewport.presentation_metadata_only = metadata_only;
-            viewport.commands.emplace_back();
-            linear_draw_frame.platform_viewports.emplace_back(
-                std::move(viewport)
-            );
-        };
-    append_linear_platform(main_output, linear_shared_slots);
-    append_linear_platform(window_output, linear_shared_slots);
-    append_linear_platform(platform_output, linear_platform_slots);
-    append_linear_platform(metadata_output, linear_platform_slots, true);
-    auto linear_prepared = UiFrameGraphPass::Prepare(
-        UiCompositionFrameData{
-            .enabled                = true,
-            .separate_window        = true,
-            .output_resolution      = Moer::uint2(64, 64),
-            .scene_color_position   = Moer::float2(0.f, 0.f),
-            .scene_color_resolution = Moer::float2(64.f, 64.f),
-            .window_frame_buffer    = window_output,
-        },
-        std::move(linear_draw_frame),
-        EUiDrawExecutionThread::Render
-    );
-    CommandList linear_commands(EQueueType::Graphics);
-    const bool linear_recorded =
-        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
-            linear_commands,
-            [](CommandList&) {},
-            linear_prepared,
-            scene_color,
-            main_output
-        );
-    CmdSubmit linear_submit = linear_commands.Submit();
-    bool linear_publications_valid =
-        linear_recorded &&
-        !linear_submit.HasExplicitResourceStateOwnership() &&
-        !linear_submit.cmds.empty() &&
-        linear_submit.cmds.back()->Type() ==
-            Command::EType::Barrier;
-    if (linear_publications_valid) {
-        const auto& terminal = *static_cast<const BarrierCmd*>(
-            linear_submit.cmds.back().get()
-        );
-        const std::array<Texture*, 3> expected{
-            main_output.Get(),
-            window_output.Get(),
-            platform_output.Get(),
-        };
-        linear_publications_valid =
-            terminal.ReadTextures().size() == expected.size() &&
-            terminal.WriteTextures().empty() &&
-            terminal.ExplicitTextures().empty();
-        for (Texture* texture : expected) {
-            const auto matches = std::count_if(
-                terminal.ReadTextures().begin(),
-                terminal.ReadTextures().end(),
-                [texture](const TextureBarrier& barrier) {
-                    return barrier.handle ==
-                               reinterpret_cast<std::uint64_t>(
-                                   texture
-                               ) &&
-                           barrier.state ==
-                               ETextureState::TRANSFER &&
-                           barrier.pass_type == EPassType::Copy &&
-                           barrier.publish_external_state &&
-                           barrier.mip_level == 0 &&
-                           barrier.mip_cnt ==
-                               texture->GetNumMips() &&
-                           barrier.array_layer == 0 &&
-                           barrier.array_cnt ==
-                               texture->GetNumArray();
-                }
-            );
-            linear_publications_valid =
-                linear_publications_valid && matches == 1;
-        }
-    }
-    suite.Check(
-        linear_publications_valid &&
-            linear_prepared->GetRecordingState() ==
-                UiFrameGraphPass::ERecordingState::Recorded &&
-            linear_backend->render_count == 1,
-        test_name,
-        "linear UI tail did not retain BackendTracked ownership with one "
-        "terminal full-range publication per presentation target"
     );
 
     RenderGraph graph("UiFrameGraphTailContract");
@@ -5355,27 +5184,6 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         "presentation usage"
     );
 
-    CommandList linear_commands{};
-    const bool linear_recorded =
-        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
-            linear_commands,
-            [](CommandList&) {},
-            prepared,
-            scene_color,
-            invalid_output
-        );
-    const CmdSubmit rejected_submit = linear_commands.Submit();
-    suite.Check(
-        !linear_recorded && rejected_submit.cmds.empty() &&
-            backend->render_count == 0 && slots->CommitCount() == 0 &&
-            slots->PendingSlot() == 23 &&
-            prepared->GetRecordingState() ==
-                UiFrameGraphPass::ERecordingState::Prepared,
-        test_name,
-        "linear fallback bypassed UI target validation or claimed the copied "
-        "packet"
-    );
-
     RenderGraph semantic_graph("UiFrameGraphMissingPresentationUsage");
     const auto  scene_handle = semantic_graph.ImportTexture(
         "SceneColor",
@@ -5408,28 +5216,6 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         "usage"
     );
 
-    CommandList semantic_linear_commands{};
-    const bool semantic_linear_recorded =
-        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
-            semantic_linear_commands,
-            [](CommandList&) {},
-            prepared,
-            scene_color,
-            missing_presentation_usage
-        );
-    const CmdSubmit semantic_rejected_submit =
-        semantic_linear_commands.Submit();
-    suite.Check(
-        !semantic_linear_recorded &&
-            semantic_rejected_submit.cmds.empty() &&
-            backend->render_count == 0 && slots->CommitCount() == 0 &&
-            slots->PendingSlot() == 23 &&
-            prepared->GetRecordingState() ==
-                UiFrameGraphPass::ERecordingState::Prepared,
-        test_name,
-        "linear fallback accepted a target without PRESENTATION_SOURCE "
-        "usage"
-    );
 }
 
 void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
@@ -6703,7 +6489,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
            RHIQueueBinding,
            Moer::uint64) {
             command_list.SetResourceStateOwnership(
-                ERHIResourceStateOwnership::Explicit
+                ERHIResourceStateOwnership::Compiled
             );
             return false;
         },

@@ -21,13 +21,10 @@
 
 ```toml
 [cvars]
-"RHI.CommandRecording.Parallel" = true
-"RHI.CommandRecording.Parallel.Workers" = 0
 "RHI.Submission.BatchWindow" = 2
 
 [profiles.rdg-parallel.cvars]
 "Render.Raster.RDG.ParallelRecording" = true
-"RHI.CommandRecording.Parallel" = true
 ```
 
 ```powershell
@@ -47,11 +44,6 @@ Raster 和 Raytracing 固定采用 RDG 编译执行。`render_graph` 和
 - `Engine.Threading.RHIBypass`
 - `Engine.Threading.ProfileLogging`
 - `Engine.Threading.MaxFrameLag`
-- `RHI.CommandRecording.Parallel`
-- `RHI.CommandRecording.Parallel.Workers`
-- `RHI.CommandRecording.Parallel.Verify`
-- `RHI.CommandRecording.Parallel.Profile`
-- `RHI.CommandRecording.Parallel.MinWorkUnitsPerJob`
 - `RHI.Submission.BatchWindow`
 - `RHI.Heartbeat.Enabled`
 - `RHI.Heartbeat.StallTimeoutMs`

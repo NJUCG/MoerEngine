@@ -11,19 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-
-SUMMARY_RE = re.compile(
-    r"\[ParallelRecord\] batch=(?P<batch>\d+).*?effective=(?P<effective>true|false) "
-    r"outcome=(?P<outcome>\S+).*?work_units=(?P<work_units>\d+) "
-    r"ordered_cb=(?P<ordered_cb>\d+) "
-    r"(?:secondary_cb=\d+ )?"
-    r"waves=(?P<waves>\d+) islands=(?P<islands>\d+).*?"
-    r"distinct_workers=(?P<workers>\d+) max_active=(?P<max_active>\d+)"
-)
-INJECTION_RE = re.compile(
-    r"\[ParallelRecord\]\[Injection\].*?point=worker-throw "
-    r"phase=after-first-command.*?batch=(?P<batch>\d+)"
-)
 GPU_ENV_LINE_RE = re.compile(r"\[Vulkan\]\[GPU_ENV\][^\r\n]*")
 GPU_ENV_RE = re.compile(
     r"\[Vulkan\]\[GPU_ENV\] schema=1 backend=vulkan "
@@ -42,19 +29,16 @@ GPU_ENV_RE = re.compile(
     r"driver_version_raw=(?P<driver_version_raw>0x[0-9a-f]{8})"
 )
 
-
 @dataclass(frozen=True)
 class VulkanTestCase:
     mode: str
     arguments: tuple[str, ...]
 
-
 VULKAN_TEST_CASES = (
+    VulkanTestCase("compiled", ("--compiled-commands",)),
+    VulkanTestCase("multiview", ("--multiview",)),
     VulkanTestCase("serial", ()),
     VulkanTestCase("parallel", ("--parallel",)),
-    VulkanTestCase("fallback", ("--parallel", "--inject-worker-failure")),
-    VulkanTestCase("gated", ("--parallel", "--production-gate")),
-    VulkanTestCase("heavy", ("--parallel", "--production-heavy")),
     VulkanTestCase("translate-hard", ("--inject-translate-failure",)),
     VulkanTestCase(
         "multi-segment-hard", ("--inject-multi-segment-translate-failure",)
@@ -82,7 +66,6 @@ VULKAN_TEST_CASES = (
 VULKAN_TEST_CASE_BY_MODE = {case.mode: case for case in VULKAN_TEST_CASES}
 assert len(VULKAN_TEST_CASE_BY_MODE) == len(VULKAN_TEST_CASES)
 
-
 @dataclass(frozen=True)
 class GpuEnvironment:
     validation_requested: bool
@@ -98,7 +81,6 @@ class GpuEnvironment:
     device_api_raw: int
     driver_id: int
     driver_version_raw: int
-
 
 @dataclass(frozen=True)
 class GpuGateRequirements:
@@ -122,25 +104,20 @@ class GpuGateRequirements:
             or self.reject_testcase_skips
         )
 
-
 @dataclass(frozen=True)
 class CaseResult:
     log_path: Path
     environment: GpuEnvironment | None
 
-
 class VulkanTestError(RuntimeError):
     pass
-
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise VulkanTestError(message)
 
-
 def _native_ids_have_alias(*native_ids: str) -> bool:
     return len(set(native_ids)) != len(native_ids)
-
 
 def _parse_api_version(value: str) -> tuple[int, int, int]:
     parts = value.split(".")
@@ -150,7 +127,6 @@ def _parse_api_version(value: str) -> tuple[int, int, int]:
     if len(numbers) == 2:
         return numbers[0], numbers[1], 0
     return numbers
-
 
 def _gpu_environment(text: str, *, required: bool) -> GpuEnvironment | None:
     lines = GPU_ENV_LINE_RE.findall(text)
@@ -193,7 +169,6 @@ def _gpu_environment(text: str, *, required: bool) -> GpuEnvironment | None:
         "GPU_ENV: device_api fields do not match device_api_raw",
     )
     return environment
-
 
 def _validate_gpu_environment(
     environment: GpuEnvironment | None,
@@ -248,7 +223,6 @@ def _validate_gpu_environment(
             f"got {'.'.join(map(str, environment.device_api))}",
         )
 
-
 def _validate_consistent_gpu_environments(results: Sequence[CaseResult]) -> None:
     environments = [result.environment for result in results]
     if not any(environment is not None for environment in environments):
@@ -262,7 +236,6 @@ def _validate_consistent_gpu_environments(results: Sequence[CaseResult]) -> None
         all(environment == first for environment in environments[1:]),
         "GPU_ENV: selected device or validation state changed across test modes",
     )
-
 
 def _write_summary(outdir: Path, results: Sequence[CaseResult]) -> Path:
     environment = results[0].environment if results else None
@@ -308,7 +281,6 @@ def _write_summary(outdir: Path, results: Sequence[CaseResult]) -> Path:
     )
     return summary_path
 
-
 def _prepare_outdir(outdir: Path) -> None:
     if outdir.exists():
         _require(outdir.is_dir(), f"output path is not a directory: {outdir}")
@@ -318,7 +290,6 @@ def _prepare_outdir(outdir: Path) -> None:
         )
         return
     outdir.mkdir(parents=True, exist_ok=False)
-
 
 def _testcase_marker(name: str, text: str) -> tuple[str, dict[str, str]] | None:
     matches = list(
@@ -352,7 +323,6 @@ def _testcase_marker(name: str, text: str) -> tuple[str, dict[str, str]] | None:
     fields = dict(field_pairs)
     return marker.group("status"), fields
 
-
 def _vulkan_fault_summary(text: str) -> dict[str, str]:
     matches = list(re.finditer(r"\[VulkanFault\]\[Summary\][^\r\n]*", text))
     _require(
@@ -375,7 +345,6 @@ def _vulkan_fault_summary(text: str) -> dict[str, str]:
     )
     return dict(field_pairs)
 
-
 def _require_clean_hard_fault_summary(mode: str, text: str) -> None:
     fields = _vulkan_fault_summary(text)
     _require(
@@ -385,7 +354,6 @@ def _require_clean_hard_fault_summary(mode: str, text: str) -> None:
         and fields.get("device_lost") == "false",
         f"{mode}: incomplete clean hard-fault ownership summary",
     )
-
 
 def _require_phase15b_copy_contracts(mode: str, text: str) -> None:
     round_trip = _testcase_marker("ActiveRdgGraphicsCopyRoundTrip", text)
@@ -489,7 +457,6 @@ def _require_phase15b_copy_contracts(mode: str, text: str) -> None:
         and shutdown_fields.get("concurrent_sync") == "drained",
         f"{mode}: incomplete shutdown dependency cancellation contract",
     )
-
 
 def _require_phase15c_multi_segment_contracts(mode: str, text: str) -> None:
     execution = _testcase_marker("MultiSegmentSourceExecution", text)
@@ -606,7 +573,6 @@ def _require_phase15c_multi_segment_contracts(mode: str, text: str) -> None:
         f"{mode}: incomplete Phase15C multi-segment recoverable rejection contract",
     )
 
-
 def _require_phase15c_completion_aggregate_cpu_probe(
     mode: str, text: str
 ) -> None:
@@ -622,7 +588,6 @@ def _require_phase15c_completion_aggregate_cpu_probe(
         and fields.get("replay") == "0",
         f"{mode}: incomplete multi-segment completion aggregate CPU probe contract",
     )
-
 
 def _require_rt_export_rejection(text: str) -> None:
     marker = _testcase_marker(
@@ -663,7 +628,6 @@ def _require_rt_export_rejection(text: str) -> None:
         and materialization_fields.get("latch") == "true",
         "rt-export-rejection: incomplete accepted-readback failure contract",
     )
-
 
 def _require_bounded_cross_batch_pipeline(mode: str, text: str) -> None:
     expected_window = {
@@ -1020,7 +984,6 @@ def _require_bounded_cross_batch_pipeline(mode: str, text: str) -> None:
         f"{mode}: invalid bounded pipeline shutdown alias fallback contract",
     )
 
-
 def _require_phase15f_present_boundary(mode: str, text: str) -> None:
     if mode == "present-boundary":
         source_contract = _testcase_marker(
@@ -1059,7 +1022,7 @@ def _require_phase15f_present_boundary(mode: str, text: str) -> None:
                     "fresh",
                     "accepted_export",
                     "stale_clear",
-                    "backend_tracked_same_batch",
+                    "compiled_same_batch",
                     "backend_rejected",
                     "marker_then_clear",
                     "accepted_mutation_clear",
@@ -1202,7 +1165,6 @@ def _require_phase15f_present_boundary(mode: str, text: str) -> None:
         and fields.get("replay") == "0",
         f"{mode}: incomplete hard Present boundary contract",
     )
-
 
 def _require_timestamp_query_success_batch(text: str) -> None:
     marker = _testcase_marker(
@@ -1371,7 +1333,6 @@ def _require_timestamp_query_success_batch(text: str) -> None:
         "timestamp-query-success-batch: incomplete Copy unsupported fallback contract",
     )
 
-
 def _nonnegative_number(value: str | None) -> bool:
     if value is None:
         return False
@@ -1380,7 +1341,6 @@ def _nonnegative_number(value: str | None) -> bool:
     except ValueError:
         return False
     return math.isfinite(number) and number >= 0.0
-
 
 def _number_pair(value: str | None) -> tuple[float, float] | None:
     if value is None:
@@ -1395,7 +1355,6 @@ def _number_pair(value: str | None) -> tuple[float, float] | None:
     if not all(math.isfinite(number) for number in pair):
         return None
     return pair
-
 
 def _require_present_legacy_owner(text: str) -> None:
     marker = _testcase_marker("LegacyDirectPresentOwnerBoundary", text)
@@ -1412,7 +1371,6 @@ def _require_present_legacy_owner(text: str) -> None:
         and fields.get("native_present") == "0",
         "present-legacy-owner: incomplete direct Present ownership contract",
     )
-
 
 def _require_timestamp_query(text: str) -> None:
     completion = _testcase_marker("TimestampQueryCompletionOwnership", text)
@@ -1488,7 +1446,6 @@ def _require_timestamp_query(text: str) -> None:
         "timestamp-query: incomplete preflight rejection contract",
     )
 
-
 def _require_timestamp_query_mid_failure(text: str) -> None:
     marker = _testcase_marker("TimestampQueryMidBatchTranslateFailure", text)
     _require(
@@ -1511,7 +1468,6 @@ def _require_timestamp_query_mid_failure(text: str) -> None:
         and fields.get("replay") == "0",
         "timestamp-query-mid-failure: incomplete terminal-frontier contract",
     )
-
 
 def _require_timestamp_query_record_failure(text: str) -> None:
     marker = _testcase_marker("TimestampQuerySerialRecordFailure", text)
@@ -1541,7 +1497,6 @@ def _require_timestamp_query_record_failure(text: str) -> None:
         and fields.get("replay") == "0",
         "timestamp-query-record-failure: incomplete record-failure contract",
     )
-
 
 def _require_gpu_scope_stream(text: str) -> None:
     marker = _testcase_marker(
@@ -1587,8 +1542,8 @@ def _require_gpu_scope_stream(text: str) -> None:
         and fields.get("queue") == "Graphics"
         and fields.get("scopes") == "2"
         and fields.get("hierarchy") == "nested"
-        and fields.get("query_source") == "query-serial-island"
-        and fields.get("query_free_sibling") == "parallel-effective"
+        and fields.get("query_source") == "timestamp-source"
+        and fields.get("query_free_sibling") == "independent-source"
         and fields.get("raw_ticks") == "verified"
         and timing_contract
         and fields.get("owner") == "Completion"
@@ -1597,7 +1552,6 @@ def _require_gpu_scope_stream(text: str) -> None:
         and fields.get("replay") == "0",
         "gpu-scope-stream: incomplete query-island/parallel-sibling contract",
     )
-
 
 def _require_owning_readback_future(text: str) -> None:
     marker = _testcase_marker("OwningReadbackFuture", text)
@@ -1612,7 +1566,8 @@ def _require_owning_readback_future(text: str) -> None:
         and fields.get("texture") == "mip1,layer1"
         and fields.get("layer_copy") == "isolated_nonzero_layer"
         and fields.get("sibling") == "next_submit_mip0_layer0"
-        and fields.get("state_restore") == "whole_image"
+        and fields.get("state_owner") == "caller"
+        and fields.get("exact_ranges") == "true"
         and fields.get("bytes") == "32,64,64,256"
         and fields.get("callbacks") == "exactly_once"
         and fields.get("siblings") == "terminal"
@@ -1621,7 +1576,6 @@ def _require_owning_readback_future(text: str) -> None:
         and fields.get("unsupported") == "compressed,msaa,partial",
         "readback-future: incomplete owning readback contract",
     )
-
 
 def _require_occlusion_query(text: str) -> None:
     marker = _testcase_marker("OcclusionQueryCompletionOwnership", text)
@@ -1649,11 +1603,28 @@ def _require_occlusion_query(text: str) -> None:
         "occlusion-query: incomplete native query contract",
     )
 
-
 def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
+    if mode == "compiled":
+        marker = _testcase_marker("CompiledSubmissionContract", text)
+        _require(marker is not None and marker[0] == "PASS", "compiled: missing submission contract")
+        fields = marker[1]
+        _require(fields.get("queues") == "Graphics,Compute,Copy" and
+                 fields.get("noncompiled") == "rejected" and fields.get("inferred") == "rejected" and
+                 fields.get("native_rejected") == "0" and fields.get("callbacks") == "exactly_once" and
+                 fields.get("recovery") == "accepted", "compiled: incomplete rejection contract")
+        for name in ("CompiledSubrangeSubmission", "CompiledTonemapping", "CompiledBloom",
+                     "CompiledBloomTonemapping", "CompiledKnownBindlessAccess", "CompiledBindlessCandidates"):
+            _require(f"[TESTCASE][PASS] name={name} " in text, f"compiled: missing {name}")
+        return
+    if mode == "multiview":
+        marker = _testcase_marker("MultiviewCubeAttachment", text)
+        _require(marker is not None and (marker[0] == "SKIP" or
+                 (marker[0] == "PASS" and marker[1].get("layers") == "readback_verified")),
+                 "multiview: missing layer readback contract")
+        return
     if mode == "present-legacy-owner":
         _require_present_legacy_owner(text)
         return
@@ -1841,111 +1812,10 @@ def validate_log(mode: str, text: str) -> None:
     _require_phase15c_multi_segment_contracts(mode, text)
     _require_phase15b_copy_contracts(mode, text)
 
-    expected_fault = "true" if mode == "fallback" else "false"
     expected_mode = "serial" if mode == "serial" else "parallel"
-    expected_production_gate = "true" if mode in ("gated", "heavy") else "false"
-    expected_production_heavy = "true" if mode == "heavy" else "false"
-    _require(
-        re.search(
-            rf"\[TESTCASE\]\[PASS\].*mode={expected_mode}.*worker_fault={expected_fault}"
-            rf".*production_gate={expected_production_gate}"
-            rf".*production_heavy={expected_production_heavy}",
-            text,
-        )
-        is not None,
-        f"{mode}: missing matching PASS marker",
-    )
-
-    summaries = [match.groupdict() for match in SUMMARY_RE.finditer(text)]
-    if mode == "serial":
-        _require(not summaries, "serial: parallel backend summary was unexpectedly emitted")
-        _require("[ParallelRecord][Injection]" not in text, "serial: fault injection ran")
-        return
-    if mode == "gated":
-        _require(not summaries, "gated: cheap workload unexpectedly recorded in parallel")
-        _require(
-            "reason=insufficient-work" in text,
-            "gated: production threshold did not report insufficient work",
-        )
-        _require("[ParallelRecord][Wave]" not in text, "gated: worker wave was dispatched")
-        _require("[ParallelRecord][Injection]" not in text, "gated: fault injection ran")
-        return
-
-    _require(summaries, f"{mode}: no parallel backend summary was emitted")
-    _require(
-        any(
-            item["outcome"] == "parallel"
-            and int(item["work_units"]) > 0
-            and int(item["ordered_cb"]) > 1
-            and int(item["waves"]) >= 2
-            and int(item["islands"]) >= 1
-            and int(item["workers"]) >= 2
-            and int(item["max_active"]) >= 2
-            for item in summaries
-        ),
-        f"{mode}: no effective concurrent multi-CB batch with two waves and a serial island",
-    )
-    if mode == "heavy":
-        _require(
-            any(int(item["work_units"]) >= 128 for item in summaries),
-            "heavy: production floor did not admit two threshold-sized jobs",
-        )
-
-    lines = text.splitlines()
-    first_parallel_batch = next(
-        item["batch"] for item in summaries if item["outcome"] == "parallel"
-    )
-    wave_positions = [
-        index
-        for index, line in enumerate(lines)
-        if f"[ParallelRecord][Wave] batch={first_parallel_batch} " in line
-    ]
-    island_positions = [
-        index
-        for index, line in enumerate(lines)
-        if f"[ParallelRecord][Island] batch={first_parallel_batch} " in line
-    ]
-    _require(
-        any(
-            any(wave < island for wave in wave_positions)
-            and any(wave > island for wave in wave_positions)
-            for island in island_positions
-        ),
-        f"{mode}: logs do not prove joined wave -> serial island -> later wave order",
-    )
-
-    injection_batches = [match.group("batch") for match in INJECTION_RE.finditer(text)]
-    fallback_batches = [
-        item["batch"]
-        for item in summaries
-        if item["outcome"] == "serial-fallback-worker-failure"
-    ]
-    if mode in ("parallel", "heavy"):
-        _require(not injection_batches, "parallel: unexpected worker fault injection")
-        _require(not fallback_batches, "parallel: unexpected worker fallback")
-    else:
-        _require(
-            len(injection_batches) == 1,
-            f"fallback: expected one post-command injection, got {len(injection_batches)}",
-        )
-        _require(
-            len(fallback_batches) == 1,
-            f"fallback: expected one fallback batch, got {len(fallback_batches)}",
-        )
-        fault_batch = fallback_batches[0]
-        _require(
-            injection_batches[0] == fault_batch,
-            "fallback: injection and coordinator fallback belong to different batches",
-        )
-        _require(
-            re.search(
-                rf"\[ParallelRecord\]\[Wave\] batch={fault_batch} .*?worker_recorded=false",
-                text,
-            )
-            is not None,
-            "fallback: injected batch has no failed worker wave",
-        )
-
+    marker = _testcase_marker("CompiledOrderedReadback", text)
+    _require(marker is not None and marker[0] == "PASS" and marker[1].get("mode") == expected_mode,
+             f"{mode}: missing compiled ordered readback PASS marker")
 
 def _output_text(value: str | bytes | None) -> str:
     if value is None:
@@ -1953,7 +1823,6 @@ def _output_text(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
-
 
 def _write_case_logs(
     outdir: Path,
@@ -1967,7 +1836,6 @@ def _write_case_logs(
     log_path = outdir / f"{mode}.log"
     log_path.write_text(stdout + stderr, encoding="utf-8")
     return log_path
-
 
 def run_case(
     executable: Path,
@@ -2016,7 +1884,6 @@ def run_case(
         )
     return CaseResult(log_path=log_path, environment=environment)
 
-
 def _uint32_argument(value: str) -> int:
     try:
         number = int(value, 0)
@@ -2028,17 +1895,15 @@ def _uint32_argument(value: str) -> int:
         raise argparse.ArgumentTypeError("value must fit in uint32")
     return number
 
-
 def _api_version_argument(value: str) -> tuple[int, int, int]:
     try:
         return _parse_api_version(value)
     except ValueError as error:
         raise argparse.ArgumentTypeError(str(error)) from error
 
-
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run and gate the Vulkan parallel-record serial/parallel/fallback matrix."
+        description="Run and gate the Vulkan compiled submission and RDG recording matrix."
     )
     parser.add_argument("--executable", required=True, type=Path)
     parser.add_argument("--outdir", required=True, type=Path)
@@ -2092,7 +1957,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             )
     return args
 
-
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     executable = args.executable.resolve()
@@ -2130,7 +1994,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         + ", ".join(str(result.log_path) for result in results)
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

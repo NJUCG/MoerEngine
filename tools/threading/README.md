@@ -145,7 +145,7 @@ python tools/threading/run_matrix.py --set fault --base-config template.MoerEngi
 
 The `fault` set passes `--vulkan-fault-inject=present-submit@3` to the editor.
 Build the editor with `MOER_VULKAN_TEST_SUPPORT=ON` for this scenario and for
-`--parallel-record-fault-inject`. Ordinary builds reject these arguments.
+Ordinary builds reject fault-injection arguments.
 It is deliberately separate from `full`, which remains the original nine
 non-fault functional scenarios.
 
@@ -160,7 +160,7 @@ runner rejects it. Use `TestRHIParallelRecordVulkan --compiled-commands` for GPU
 output comparisons. Low-level legacy recordings may still collect serial
 summaries when profiling is enabled; these do not validate the active compiled
 renderer path. Barrier summaries consume resolved batches in diagnostics code,
-without adding trace responsibilities to the resource tracker.
+without inferring resource dependencies in the backend.
 
 Generate and validate all scenario configs without launching the editor:
 
@@ -314,9 +314,6 @@ There are two independent switches:
 # Upper topology: RDG batches record independent CommandLists on TaskGraph workers.
 render_graph_parallel_recording = false
 
-[engine.threading]
-# Lower topology: Vulkan translates eligible immutable command bodies in parallel.
-parallel_recording = false
 ```
 
 The upper switch currently migrates two audited Raster recording groups:
@@ -332,50 +329,22 @@ TensorRT/Vulkan-CUDA work that owns its own submit/sync scope. Other mutable
 Raster passes remain explicit caller-thread boundaries until their state is
 similarly split.
 
-The Vulkan Graphics queue can experimentally translate/record safe command
-bodies on worker threads while retaining one coordinator for reorder, resource
-state tracking, barrier generation, and final submission. Worker command
-buffers are joined and assembled in stable layer/job order, then submitted by
-one ordered `vkQueueSubmit2`; parallel CPU recording does not reorder GPU work.
+Vulkan records each compiled source in order. RDG pass recording and the RHI
+source/native-queue translator retain their existing parallel scheduling. The
+retired backend layer recorder has no configuration or fallback path.
 
-The tracked template keeps the experiment off:
-
-```toml
-[engine.threading]
-parallel_recording = false
-parallel_record_workers = 0
-parallel_record_verify = false
-parallel_record_profile = false
-parallel_record_min_work_units_per_job = 64
-```
-
-`parallel_record_workers = 0` selects an automatic worker count. The minimum is
-a backend recording-work heuristic, not a top-level command count and not a
-draw count. Direct draw calls, mesh dispatches, argument writes, pipeline
-changes, and native copy/clear calls contribute units; GPU byte counts,
-dispatch group counts, and indirect draw counts do not. A wave needs at least
-two qualifying jobs, otherwise it safely uses the serial recorder.
-
-Run the 21-mode Vulkan correctness/fallback gate after building the target. The
-native integration target is intentionally excluded from default CTest because
-it requires a real Vulkan device:
+Run the compiled submission matrix after building the integration target:
 
 ```powershell
 python tools/threading/run_parallel_record_vulkan_test.py `
   --executable target/bin/Debug/TestRHIParallelRecordVulkan.exe `
-  --outdir target/validation/parallel_record/debug
+  --outdir target/validation/compiled_submission/debug
 ```
 
-The matrix covers serial, forced-parallel, injected worker failure,
-production-gate rejection, production-heavy admission, hard cross-queue
-Translate failure retirement, multi-segment prefix-submit/suffix-failure
-retirement, bounded Submission-pipeline windows 1 and 2, Present ownership and
-hard-fault boundaries, RT export rejection, owning readback futures, occlusion
-queries, complete timestamp-query success/rejection/failure ownership, and the
-GPU-scope query-island/parallel-sibling stream. It requires real worker overlap,
-stable `wave -> serial island -> wave` assembly, GPU readback correctness,
-exact failure/fallback counts, no native submit after the injected hard fault,
-and clean Vulkan logs. Every process also emits one fixed-schema
+The matrix covers serial/parallel RDG recording, native data readback, queue
+handoffs, failed/rejected submission retirement, bounded pipeline windows,
+Present boundaries, raytracing exports, owning readback futures and queries.
+Every process also emits one fixed-schema
 `[Vulkan][GPU_ENV]` record after complete Vulkan initialization. The record
 proves which physical device ran the test and distinguishes validation being
 requested, available, and actually enabled.
@@ -423,30 +392,3 @@ all three stable queue identities, blocked admission, and the
 `reason=queue_unavailable` only when its required logical queues are absent;
 the runner validates that SKIP separately instead of weakening the remaining
 available-queue contracts.
-
-For Release A/B, enable `parallel_record_profile` in isolated configs and feed
-at least two independent logs per side to `parallel_record_ab.py`. The parser
-is fail-closed for missing fields, invalid percentiles, impure baselines, and
-inconsistent `mode/requested/planned/effective/worker_fallbacks` counters. Its
-performance gate uses end-to-end `ExecuteNow` CPU percentiles, including the
-cost of assembling and submitting multiple command buffers. Record-only
-percentiles and submit averages remain attribution metrics.
-
-The result classes are:
-
-- `GO`: workers were admitted, at least 95% of planned submissions completed
-  on workers, p50 improved by both 15% and 0.2 ms, and p95/p99 did not regress.
-- `GATED`: the feature was requested but no workload met the profitability
-  floor, and the serial fallback stayed within the non-regression tolerance.
-- `EXPERIMENTAL`: any reliability, improvement, or tail gate was not met.
-
-UE's `r.RHICmdMinDrawsPerParallelCmdList=64` is a renderer-layer draw-task
-threshold. MoerEngine's current default of 64 backend work units only borrows
-the profitability-gate principle and conservative order of magnitude; the
-numbers are not semantically interchangeable. Likewise, `dev_parallel_rhi`
-uses whole-submit/segment translate tasks and stable submit assembly, whereas
-this experiment partitions safe ranges inside the current reordered submit.
-A shared recorder/translate context, fewer platform command buffers, and
-draw-range splitting within one large `MultiDraw` remain follow-up architecture
-work for both lines of evolution rather than existing `dev_parallel_rhi`
-features.

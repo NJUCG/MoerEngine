@@ -15,15 +15,17 @@
 | `VulkanPipeline.cpp` | Pipeline-owned layouts and binding metadata. |
 | `VulkanRaytracingResource.cpp` | BLAS/TLAS storage, stable scene instance slots and generation of instance updates. |
 | `VulkanNativeQueue.cpp` | Native queue submission and semaphore/label operations. |
-| `VulkanQueue.cpp` | Graphics queue execution and shared command preprocessing/recording. |
+| `VulkanQueue.cpp` | Graphics queue execution and compiled command recording and backend-private staging protocols. |
+| `VulkanBarrier.cpp` | Validate and translate explicit ranges, stages, accesses, layouts and ownership transfers. |
 | `VulkanCopyQueue.cpp` | Copy queue handoff, submission and completion. |
 | `VulkanQueueProfiler.cpp` | Timestamp collection and CPU recording profiles. |
 | `VulkanSurfaceSupport.cpp` | Swapchain surface support queries. |
 
 The queue split preserves the existing queue, recorded-submit and completion
 owners. `VulkanQueueInternal.h` only declares operations shared by the queue
-implementations; it introduces no additional runtime owner. Reordering and
-explicit resource-state scheduling are unchanged.
+implementations; it introduces no additional runtime owner. Application dependency scheduling belongs to RDG. Vulkan rejects nonempty
+non-Compiled submissions and inferred barriers; no backend reorderer, tracker
+or preferred-state restore remains.
 
 Creation calls requiring `VK_SUCCESS` use a check that throws in every build
 configuration. Partial pipeline construction releases shader modules, layouts
@@ -68,9 +70,8 @@ while its descriptor is copied or used by the GPU.
 
 A submission lease owns ranges reserved before native command recording.
 An immutable plan assigns ranges to commands; each recorder consumes them with
-a local cursor. Failed parallel work can replay those ranges only after workers
-join and their command buffers are discarded. Writes are flushed after recording
-joins, and storage is recycled after GPU completion or after all referencing
+a local cursor. Failed recording discards its command buffers before recycling the lease.
+Writes are flushed after recording, and storage is recycled after GPU completion or after all referencing
 work has been discarded. Dropping a shared pointer alone does not authorize reuse
 of GPU storage. Persistent bindless tables retain their own leases.
 

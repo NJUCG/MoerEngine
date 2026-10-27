@@ -3,11 +3,9 @@
 #include "VulkanCommandList.h"
 #include "VulkanDeviceObject.h"
 #include "VulkanCommandQueries.h"
-#include "VulkanResourceTracker.h"
 #include "VulkanTemporaryBufferAllocator.h"
 
 #include <functional>
-#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -25,20 +23,6 @@ public:
 
     VulkanCommandList& GetCommandList() {
         return cmd_list;
-    }
-    // Secondary allocation is deliberately explicit. Call this on the
-    // coordinator before publishing work to a record worker: Vulkan command
-    // pools require external synchronization even when different command
-    // buffers are allocated from the pool.
-    VulkanCommandList& PrepareSecondaryCommandList();
-    VulkanCommandList& GetSecondaryCommandList() {
-        return secondary_cmd_list.value();
-    }
-    [[nodiscard]] bool HasSecondaryCommandList() const noexcept {
-        return secondary_cmd_list.has_value();
-    }
-    VulkanResourceTracker& GetTracker() {
-        return tracker;
     }
     void AddOnComplete(std::function<void()>&& _func) {
         on_complete.push_back(std::move(_func));
@@ -84,13 +68,11 @@ public:
 private:
     bool ResetCommandPool();
 
-    // Release command buffers before the pool, callbacks and tracker.
+    // Release command buffers before the pool and callbacks.
     EQueueType                                queue_type{EQueueType::Ignore};
-    VulkanResourceTracker                     tracker;
     Array<std::function<void()>>              on_complete;
     VulkanCommandPool                         command_pool;
     VulkanCommandList                         cmd_list;
-    std::optional<VulkanCommandList>          secondary_cmd_list;
     UniquePtr<VulkanTemporaryBufferAllocator> temporary_buffer_allocator;
     VulkanCommandQueries                      queries;
     VkSemaphore                               image_ready_semaphore{VK_NULL_HANDLE};

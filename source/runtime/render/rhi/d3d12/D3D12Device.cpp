@@ -12,7 +12,6 @@
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/ThreadManager.h"
 
-#include "../vulkan/RHICmdReorderer.h"
 #include <algorithm>
 #include <config.h>
 #include <exception>
@@ -1636,14 +1635,6 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
         device->GetCsuHeapGpuDyn(),
         device->GetSamplerHeapGpuDyn()
     };
-
-    //FunctionTable function_table{
-    //    .is_resource_in_bindless = &IsResourceInBindlessArray};
-    //CmdReorderer reorderer{function_table};
-    //for (const auto& cmd : _submit.cmds) {
-    //    reorderer.AcceptCmd(cmd.get());
-    //}
-    //const auto& cmd_lists = reorderer.m_cmd_lists;
 
     cmd_list->Begin();
     descriptor_push_guard.csu_chunk =

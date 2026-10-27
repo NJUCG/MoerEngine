@@ -60,13 +60,6 @@ VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     config.rhi_thread                   = _info.rhi_thread;
     config.rhi_bypass                   = _info.rhi_bypass;
     config.thread_profile_logging       = _info.thread_profile_logging;
-    config.parallel_recording           = _info.parallel_recording;
-    config.parallel_record_workers      = _info.parallel_record_workers;
-    config.parallel_record_verify       = _info.parallel_record_verify;
-    config.parallel_record_profile      = _info.parallel_record_profile;
-    config.parallel_record_min_work_units_per_job =
-        _info.parallel_record_min_work_units_per_job;
-
 
     std::string_view api = _info.rhi_api_version;
 

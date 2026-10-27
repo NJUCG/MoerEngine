@@ -22,7 +22,6 @@
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
 
-
 // Editor
 #include "renderer/common/RuntimeAssets.h"
 #include "renderer/raster/RasterRenderer.h"
@@ -247,12 +246,6 @@ EngineConsoleStartupConfig MakeConsoleStartupConfig(const Config::GlobalConfig& 
         .rhi_thread = config.engine.threading.rhi_thread,
         .rhi_bypass = config.engine.threading.rhi_bypass,
         .profile_logging = config.engine.threading.profile_logging,
-        .parallel_recording = config.engine.threading.parallel_recording,
-        .parallel_record_workers = config.engine.threading.parallel_record_workers,
-        .parallel_record_verify = config.engine.threading.parallel_record_verify,
-        .parallel_record_profile = config.engine.threading.parallel_record_profile,
-        .parallel_record_min_work_units_per_job =
-            config.engine.threading.parallel_record_min_work_units_per_job,
         .configured_submission_batch_window = config.engine.threading.submission_batch_window,
         .rhi_heartbeat_enabled = config.engine.threading.rhi_heartbeat_enabled,
         .rhi_heartbeat_stall_timeout_ms = config.engine.threading.rhi_heartbeat_stall_timeout_ms,
@@ -271,22 +264,18 @@ void LogCVarOverrideIssue(const CVar::OverrideIssueView& issue, void*) {
     LOG_ERROR("[Config][CVar] {}: {}", issue.name, issue.detail);
 }
 
-
 void ValidateFaultInjectionArguments(int argc, const char** argv) {
 #if MOER_VULKAN_TEST_SUPPORT
     Render::VulkanFaultInjection::ValidateCommandLine(argc, argv);
 #else
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument = argv[index];
-        if (argument == "--vulkan-fault-inject" || argument.starts_with("--vulkan-fault-inject=") ||
-            argument == "--parallel-record-fault-inject" ||
-            argument.starts_with("--parallel-record-fault-inject=")) {
+        if (argument == "--vulkan-fault-inject" || argument.starts_with("--vulkan-fault-inject=")) {
             throw std::invalid_argument("Vulkan fault injection requires MOER_VULKAN_TEST_SUPPORT=ON");
         }
     }
 #endif
 }
-
 
 bool ParseThreadingRendererSwitchValidation(int argc, const char** argv) {
     constexpr std::string_view argument_name = "--threading-renderer-switch-validation";
@@ -1326,9 +1315,7 @@ void Engine::Init(
     LOG_INFO("[Threading] GameThread id = {}", GetGameThreadId());
     LOG_INFO(
         "[Threading] render_thread={}, rhi_thread={}, rhi_bypass={}, max_frame_lag={}, "
-        "profile_logging={}, parallel_recording={}, parallel_record_workers={}, "
-        "parallel_record_verify={}, parallel_record_profile={}, "
-        "parallel_record_min_work_units_per_job={}, submission_batch_window={}, "
+        "profile_logging={}, submission_batch_window={}, "
         "rhi_heartbeat_enabled={}, rhi_heartbeat_stall_timeout_ms={}, "
         "rhi_heartbeat_poll_interval_ms={}",
         startup_config.render_thread,
@@ -1336,11 +1323,6 @@ void Engine::Init(
         startup_config.rhi_bypass,
         startup_config.max_frame_lag,
         startup_config.profile_logging,
-        startup_config.parallel_recording,
-        startup_config.parallel_record_workers,
-        startup_config.parallel_record_verify,
-        startup_config.parallel_record_profile,
-        startup_config.parallel_record_min_work_units_per_job,
         submission_batch_window,
         startup_config.rhi_heartbeat_enabled,
         startup_config.rhi_heartbeat_stall_timeout_ms,
@@ -1404,12 +1386,6 @@ void Engine::Init(
                 .rhi_thread              = startup_config.rhi_thread,
                 .rhi_bypass              = startup_config.rhi_bypass,
                 .thread_profile_logging  = startup_config.profile_logging,
-                .parallel_recording      = startup_config.parallel_recording,
-                .parallel_record_workers = startup_config.parallel_record_workers,
-                .parallel_record_verify  = startup_config.parallel_record_verify,
-                .parallel_record_profile = startup_config.parallel_record_profile,
-                .parallel_record_min_work_units_per_job =
-                    startup_config.parallel_record_min_work_units_per_job,
                 .submission_batch_window = submission_batch_window,
                 .rhi_heartbeat_enabled =
                     startup_config.rhi_heartbeat_enabled,

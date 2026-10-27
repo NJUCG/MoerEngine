@@ -1,7 +1,6 @@
 #include "VulkanBindlessArray.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
-#include "VulkanResourceState.h"
 #include "VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
@@ -446,9 +445,7 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
                                 view.array_layer,
                                 view.num_array ? view.num_array : 1
                             );
-                            native_image.imageLayout = ResolveVulkanTextureState(
-                                ETextureState::SAMPLE, EPassType::Graphics, false, vk_texture->GetAspectFlags()
-                            ).layout;
+                            native_image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                             VkWriteDescriptorSet native_write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                             native_write.dstSet          = GetLegacySet(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
                             native_write.dstArrayElement = _cmd.slot;

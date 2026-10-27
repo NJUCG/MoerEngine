@@ -7,14 +7,10 @@
 #include "VulkanCommon.h"
 #include "VulkanDescriptor.h"
 #include "VulkanFault.h"
-#include "diagnostics/VulkanSerialGolden.h"
 // #include "VulkanDevice.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
-#include "rhi/ExternalCpuJoinPool.h"
-#include "rhi/RHIParallelRecord.h"
-#include "rhi/RHIRecordDiagnostics.h"
 #include "rhi/RHIThreadOwnership.h"
 #include <atomic>
 #include <chrono>
@@ -28,8 +24,6 @@
 #include <thread>
 #include <variant>
 namespace Moer::Render {
-class CmdReorderer;
-struct FunctionTable;
 
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
@@ -91,18 +85,13 @@ private:
     VulkanDevice&                device;
     VkQueue                      queue;
     EQueueType                   type;
-    
+
     // A local mutex covers standalone use before the device installs its canonical queue mutex.
     std::mutex                   local_submit_mutex;
     std::mutex*                  submit_mutex = &local_submit_mutex;
 };
 
-struct QueryFrameDiagnostics {
-    uint64 digest{0};
-    uint32 used_query_count{0};
-};
-
-// Immutable source-order program built before dependency reordering or native
+// Immutable source-order program built before native
 // recording. Bindless accesses remain symbolic until the Submission owner can
 // evaluate them against the last natively accepted descriptor membership.
 struct VulkanPresentationSourceStateDelta {
@@ -194,7 +183,6 @@ struct ProfilerStorage {
         std::string_view        _name,
         VkPipelineStageFlagBits _stage = kEndTimestampStage
     );
-    QueryFrameDiagnostics GetCurrentFrameQueryDiagnostics() const;
 
     bool               active = false;
     VkNativeQueryPool& timestamp_pool;
@@ -508,12 +496,7 @@ public:
         VulkanDevice& _device,
         EQueueType    _type,
         bool          _enable_rhi_thread = false,
-        bool          _thread_profile_logging = false,
-        bool          _parallel_recording = false,
-        uint32_t      _parallel_record_workers = 0,
-        bool          _parallel_record_verify = false,
-        bool          _parallel_record_profile = false,
-        uint32_t      _parallel_record_min_work_units_per_job = 8
+        bool          _thread_profile_logging = false
     );
     ~VkCommandQueue();
     WaitEvent   Execute(CmdSubmit&& _submit) override;
@@ -550,62 +533,6 @@ private:
         double work_total_ms{0.0};
     };
 
-    struct RhiRecordExecuteSample {
-        RecordTopologySummary topology;
-        Array<RecordLayerTiming> layer_timings;
-        double                   serial_command_sum_ms{0.0};
-        StableRecordHash         barrier_hash;
-        uint64                   descriptor_digest{StableRecordHash::kOffset};
-        uint64                   query_digest{StableRecordHash::kOffset};
-        uint64                   descriptor_bytes{0};
-        uint32                   buffer_barriers{0};
-        uint32                   texture_barriers{0};
-        uint32                   memory_barriers{0};
-        uint32                   used_queries{0};
-        VulkanSerialGoldenResult serial_golden{};
-    };
-
-    struct RhiRecordWindowTotals {
-        uint64 samples{0};
-        double serial_record_wall_total_ms{0.0};
-        double serial_record_wall_max_ms{0.0};
-        double serial_command_sum_total_ms{0.0};
-        double eligible_record_total_ms{0.0};
-        double predicted_critical_total_ms{0.0};
-        double dispatch_join_estimate_total_ms{0.0};
-        double predicted_net_saving_total_ms{0.0};
-        uint64 layer_total{0};
-        uint64 command_total{0};
-        uint64 candidate_command_total{0};
-        uint64 safe_command_total{0};
-        uint64 parallel_layer_total{0};
-        uint64 descriptor_bytes_total{0};
-        uint64 buffer_barrier_total{0};
-        uint64 texture_barrier_total{0};
-        uint64 memory_barrier_total{0};
-        uint64 used_query_total{0};
-        uint32 layer_max{0};
-        uint32 command_max{0};
-        uint32 parallel_layer_max{0};
-        uint64 topology_changes{0};
-        uint64 golden_complete{0};
-        uint64 golden_incomplete{0};
-        uint64 golden_unresolved_total{0};
-        uint64 golden_opaque_total{0};
-        UnorderedSet<uint64> command_digests;
-        UnorderedSet<uint64> layer_digests;
-        UnorderedSet<uint64> barrier_digests;
-        UnorderedSet<uint64> descriptor_digests;
-        UnorderedSet<uint64> query_digests;
-        UnorderedSet<uint64> golden_command_digests;
-        UnorderedSet<uint64> golden_layer_digests;
-        UnorderedSet<uint64> golden_barrier_digests;
-        UnorderedSet<uint64> golden_descriptor_digests;
-        UnorderedSet<uint64> golden_query_digests;
-        UnorderedSet<uint64> golden_combined_digests;
-        UnorderedSet<uint64> golden_manifest_entries;
-    };
-
     struct RhiThreadProfileState {
         RhiThreadProfileState() : window_start(std::chrono::steady_clock::now()) {}
 
@@ -620,65 +547,6 @@ private:
         double                 work_total_ms{0.0};
         double                 work_max_ms{0.0};
         uint32                 max_enqueue_depth{0};
-        RhiRecordWindowTotals  record{};
-        bool                   calibration_ready{false};
-        uint32                 model_workers{1};
-        double                 dispatch_join_median_ms{0.0};
-        double                 dispatch_join_tail_ms{0.0};
-        bool                   has_topology{false};
-        uint64                 last_topology_digest{0};
-        UnorderedSet<uint64>   observed_golden_manifests;
-    };
-
-    struct ParallelRecordProfileSample {
-        bool   requested{false};
-        bool   planned{false};
-        bool   effective{false};
-        bool   worker_fallback{false};
-        double record_wall_ms{0.0};
-        double execute_cpu_wall_ms{0.0};
-        double reorder_ms{0.0};
-        double preprocess_ms{0.0};
-        double worker_join_ms{0.0};
-        double submit_cpu_ms{0.0};
-        uint32 layers{0};
-        uint32 jobs{0};
-        uint64 work_units{0};
-        uint32 ordered_cb{0};
-        uint32 secondary_cb{0};
-        uint32 max_active{0};
-    };
-
-    struct ParallelRecordProfileState {
-        ParallelRecordProfileState() : window_start(std::chrono::steady_clock::now()) {}
-
-        std::chrono::steady_clock::time_point window_start;
-        Array<double> record_samples_ms;
-        Array<double> execute_cpu_samples_ms;
-        uint64 samples{0};
-        uint64 requested{0};
-        uint64 planned{0};
-        uint64 effective{0};
-        uint64 worker_fallbacks{0};
-        double reorder_total_ms{0.0};
-        double preprocess_total_ms{0.0};
-        double worker_join_total_ms{0.0};
-        double submit_cpu_total_ms{0.0};
-        uint64 layer_total{0};
-        uint64 job_total{0};
-        uint64 work_unit_total{0};
-        uint64 ordered_cb_total{0};
-        uint64 secondary_cb_total{0};
-        uint32 max_active{0};
-    };
-
-    // Current-backend ownership packet at the translate/submit boundary. The
-    // command buffers remain valid because their command context owners travel in
-    // the same move-only packet until the completion queue takes ownership.
-    struct CurrentVulkanRecordedSubmitProfile {
-        bool                                  enabled{false};
-        std::chrono::steady_clock::time_point execute_started{};
-        ParallelRecordProfileSample           sample{};
     };
 
     struct CurrentVulkanRecordedSubmit {
@@ -706,7 +574,6 @@ private:
         Array<RHIResource*>                     deferred_releases;
         VulkanBatchCompletionTicket             batch_completion{};
         VulkanPresentationSourceStateProgram    presentation_source_program;
-        CurrentVulkanRecordedSubmitProfile      profile;
         RHITransferableOwnershipGate::Lease     execution_lease{};
         VulkanOperationResult                   retirement_outcome{
             EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
@@ -759,21 +626,6 @@ private:
         TextureView _source,
         PresentReceiptRef _receipt
     ) noexcept;
-    bool                       TryExecuteParallel(
-        CmdSubmit&                    _submit,
-        VulkanDescriptorBufferLease&  descriptor_lease,
-        const std::shared_ptr<const VulkanDescriptorRecordingPlan>& descriptor_plan,
-        uint64                        _timeline,
-        uint64                        _serial,
-        const VulkanOperationContext& _context,
-        const FunctionTable&           _function_table,
-        const CmdReorderer&            _reorderer,
-        double                         _reorder_time,
-        std::chrono::steady_clock::time_point _profile_started,
-        VulkanPresentationSourceStateProgram&
-                                      _presentation_source_program,
-        std::optional<CurrentVulkanRecordedSubmit>* _out_recorded = nullptr
-    );
     VulkanRuntimeSubmissionResult PresentNow(
         SwapchainRef&& _swapchain,
         TextureRef&&   _source_texture,
@@ -793,8 +645,6 @@ private:
     ) noexcept;
     UniquePtr<VulkanCommandContext> AcquireCommandContext();
     void                       CompleteAll(uint64 _timeline);
-    void                       EnsureRecordCalibration();
-    void                       RecordRhiRecordProfile(const RhiRecordExecuteSample& _sample);
     void                       RecordThreadingProfile(
         ERhiWorkKind _kind,
         double       _caller_ms,
@@ -802,15 +652,7 @@ private:
         double       _work_ms,
         uint32       _enqueue_depth
     );
-    void                       RecordParallelRecordProfile(
-        const ParallelRecordProfileSample& _sample
-    );
-    void                       FlushParallelRecordProfile();
     void                       BeginSplitProfilingCpuFrame();
-    void                       AccumulateSplitProfilingCpuFrame(
-        double _reorder_ms,
-        double _preprocess_ms
-    );
     void                       EndSplitProfilingCpuFrame();
     void                       ResetSplitProfilingCpuFrame();
 
@@ -840,19 +682,9 @@ private:
     struct SplitProfilingCpuFrame {
         bool                                  active{false};
         std::chrono::steady_clock::time_point started{};
-        double                                reorder_ms{0.0};
-        double                                preprocess_ms{0.0};
     } split_profiling_cpu_frame;
 
     bool                    rhi_thread_enabled{false};
-    bool                    parallel_record_requested{false};
-    bool                    parallel_record_verify{false};
-    bool                    parallel_record_profile_enabled{false};
-    uint32                  parallel_record_workers{0};
-    uint32                  parallel_record_min_work_units_per_job{8};
-    UniquePtr<ExternalCpuJoinPool> parallel_record_pool;
-    uint64                  parallel_record_batch_serial{0};
-    UniquePtr<ParallelRecordProfileState> parallel_record_profile;
     UniquePtr<RhiThreadProfileState> thread_profile;
     bool                    rhi_worker_running{false};
     std::atomic<uint32_t>   rhi_thread_id{0};

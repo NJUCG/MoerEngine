@@ -543,74 +543,6 @@ bool UiFrameGraphPass::ProcessCompiled(
     return true;
 }
 
-bool UiFrameGraphPass::ProcessLinear(
-    CommandList&            cmd_list,
-    UiCombinePass&          combine_pass,
-    const PreparedFrameRef& frame,
-    const TextureRef&       scene_color,
-    const TextureRef&       main_output
-) {
-    return ProcessLinearWithComposeRecorder(
-        cmd_list,
-        [&combine_pass, frame, scene_color, main_output](
-            CommandList& recording_list
-        ) {
-            RecordCompose(
-                recording_list,
-                combine_pass,
-                *frame,
-                scene_color,
-                main_output
-            );
-        },
-        frame,
-        scene_color,
-        main_output
-    );
-}
-
-bool UiFrameGraphPass::ProcessLinearWithComposeRecorder(
-    CommandList&            cmd_list,
-    ComposeRecorder         compose_recorder,
-    const PreparedFrameRef& frame,
-    const TextureRef&       scene_color,
-    const TextureRef&       main_output
-) {
-    Array<TextureRef> targets{};
-    if (!compose_recorder ||
-        !CollectValidatedPresentationTargets(
-            frame,
-            scene_color,
-            main_output,
-            targets
-        ) ||
-        !frame->BeginRecording()) {
-        return false;
-    }
-
-    try {
-        RecordClear(cmd_list, targets);
-        compose_recorder(cmd_list);
-        RecordDraw(cmd_list, *frame, main_output);
-
-        if (!RecordPresentationBoundary(
-                cmd_list,
-                frame->GetComposition(),
-                frame->GetDrawFrame(),
-                main_output
-            )) {
-            frame->Abandon();
-            return false;
-        }
-
-        frame->FinishRecording();
-        return frame->GetRecordingState() == ERecordingState::Recorded;
-    } catch (...) {
-        frame->Abandon();
-        throw;
-    }
-}
-
 void UiFrameGraphPass::RecordCompiledDraw(
     CommandList&                  commands,
     const UiCompositionFrameData& composition,
@@ -659,46 +591,6 @@ void UiFrameGraphPass::RecordCompiledDraw(
     if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
         throw std::runtime_error("UI frame graph failed: " + graph.GetCompileError());
     }
-}
-
-bool UiFrameGraphPass::RecordPresentationBoundary(
-    CommandList&                  cmd_list,
-    const UiCompositionFrameData& composition,
-    const UiDrawFramePacket&      draw_frame,
-    const TextureRef&             main_output
-) {
-    Array<TextureRef> targets{};
-    if (!CollectValidatedPresentationTargets(
-            composition, draw_frame, main_output, targets
-        )) {
-        return false;
-    }
-
-    // Linear warm-up/fallback and Raster frame-tail packets remain
-    // BackendTracked. Declare their presentation boundary with a terminal
-    // legacy read instead of switching a mixed command stream to Explicit
-    // ownership. Vulkan restores these targets to their semantic preferred
-    // GENERAL layout and publishes readiness only after native acceptance.
-    Array<ReadTexture> presentation_sources{};
-    presentation_sources.reserve(targets.size());
-    for (const auto& target : targets) {
-        presentation_sources.emplace_back(ReadTexture{
-            target->GetView(
-                0,
-                static_cast<uint8>(target->GetNumMips())
-            ),
-            ETextureState::TRANSFER,
-            true,
-        });
-    }
-    cmd_list.TextureBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Copy,
-        std::move(presentation_sources),
-        {}
-    );
-    return true;
 }
 
 void UiFrameGraphPass::RecordClear(

@@ -1,6 +1,3 @@
-#if MOER_VULKAN_TEST_SUPPORT
-#include "vulkan/VulkanFaultInjection.h"
-#endif
 #include "Core.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
@@ -160,11 +157,31 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
     const uint        input_value = 23;
     const uint        texel       = 0xffffffffu;
     const uint4       params{100, 0, 0, 0};
+    const auto undefined = BarrierState::Texture(ERHIPipelineStageFlags::PS_NONE,
+        ERHIAccessFlags::UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
+    const auto texture_write = BarrierState::Texture(ERHIPipelineStageFlags::PS_TRANSFER,
+        ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    const auto sampled = BarrierState::Texture(ERHIPipelineStageFlags::PS_COMPUTE_SHADER,
+        ERHIAccessFlags::SHADER_READ, ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto transfer_write = BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE);
+    const auto transfer_read = BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ);
+    const auto shader_read = BarrierState::Buffer(ERHIPipelineStageFlags::PS_COMPUTE_SHADER,
+        ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::UNIFORM_READ);
+    const auto shader_write = BarrierState::Buffer(ERHIPipelineStageFlags::PS_COMPUTE_SHADER,
+        ERHIAccessFlags::SHADER_WRITE);
     CommandList       upload;
+    upload.Barriers({
+        BarrierCreateInfo::Transition(texture->GetView(), undefined, texture_write, ETextureAspectFlags::COLOR),
+        BarrierCreateInfo::Transition(depth->GetView(), undefined, texture_write, ETextureAspectFlags::DEPTH_SLICE)});
     upload.CopyFrom(Bytes(input_value), input->GetView());
     upload.CopyFrom(Bytes(params), uniform->GetView());
     upload.CopyFrom(Bytes(texel), texture->GetView());
     upload.CopyFrom(Bytes(depth_value), depth->GetView());
+    upload.Barriers({
+        BarrierCreateInfo::Transition(input->GetView(), transfer_write, shader_read),
+        BarrierCreateInfo::Transition(uniform->GetView(), transfer_write, shader_read),
+        BarrierCreateInfo::Transition(texture->GetView(), texture_write, sampled, ETextureAspectFlags::COLOR),
+        BarrierCreateInfo::Transition(depth->GetView(), texture_write, sampled, ETextureAspectFlags::DEPTH_SLICE)});
     upload.UpdateBindlessArray(table);
     RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit(), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -182,7 +199,9 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         auto done = device.CreateFence();
         CommandList rejected;
         const uint poison = 999;
+        rejected.Barriers({BarrierCreateInfo::Transition(input->GetView(), shader_read, transfer_write)});
         rejected.CopyFrom(Bytes(poison), input->GetView());
+        rejected.Barriers({BarrierCreateInfo::Transition(input->GetView(), transfer_write, shader_read)});
         rejected.Compute(bindless, uniform, output, input_views[0], depth->GetView(), table, input_index, 0u)
             .Dispatch(uint3(1, 1, 1));
         rejected.AddCallback([&] { ++completed; });
@@ -208,6 +227,7 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
     for (uint batch = 0; batch < 8; ++batch) {
         auto&       readback = readbacks[batch];
         CommandList commands;
+        commands.Barriers({BarrierCreateInfo::Transition(output->GetView(), transfer_read, shader_write)});
         for (uint i = 0; i < readback.size(); ++i) {
             const uint iteration = batch * uint(readback.size()) + i;
             if (large_constants && i % 4 == 3)
@@ -239,6 +259,7 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
                 commands.Compute(arrays, std::span<BufferView>(input_views), output, input_index, iteration)
                     .Dispatch(uint3(1, 1, 1));
         }
+        commands.Barriers({BarrierCreateInfo::Transition(output->GetView(), shader_write, transfer_read)});
         commands.CopyFrom(
             output->GetView(),
             std::span<Moer::byte>(reinterpret_cast<Moer::byte*>(readback.data()), sizeof(readback))
@@ -283,36 +304,23 @@ int main(int argc, char** argv) {
     bool tasks = false, device = false, shaders = false;
     int  result = 0;
     try {
-        bool parallel = false, pressure = false, worker_failure = false;
+        bool pressure = false;
         for (int i = 1; i < argc; ++i) {
             const std::string_view arg(argv[i]);
-            if (arg == "--parallel") parallel = true;
-            else if (arg == "--reservation-pressure") pressure = true;
-            else if (arg == "--inject-worker-failure") worker_failure = true;
+            if (arg == "--reservation-pressure") pressure = true;
             else throw std::invalid_argument("Unknown test argument");
         }
-        if (worker_failure && !parallel) throw std::invalid_argument("Worker failure requires --parallel");
         LogSystem::Init();
         ConfigManager::GetInstance().Init(std::filesystem::current_path());
         TaskSystem::Init();
         tasks = true;
-#if MOER_VULKAN_TEST_SUPPORT
-        VulkanFaultInjection::Configure(0, worker_failure ? 1u : 0u);
-#else
-        if (worker_failure) {
-            throw std::invalid_argument("worker failure injection requires MOER_VULKAN_TEST_SUPPORT=ON");
-        }
-#endif
+
         RenderDevice::Init(DeviceInitInfo{
             .rhi_type                               = ERHIType::Vulkan,
             .name                                   = "DescriptorBackendTest",
             .rhi_api_version                        = "1.3",
             .rhi_thread                             = true,
             .rhi_bypass                             = false,
-            .parallel_recording                     = parallel,
-            .parallel_record_workers                = 4,
-            .parallel_record_verify                 = parallel,
-            .parallel_record_min_work_units_per_job = 1,
         });
         device  = true;
         shaders = true;

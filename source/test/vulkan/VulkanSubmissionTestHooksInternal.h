@@ -70,10 +70,7 @@ void NotifyVulkanSourceTranslation(
     EQueueType                    _queue,
     uint32                        _native_queue_id,
     uint64                        _async_queue_scope,
-    EVulkanSourceTranslationPhase _phase,
-    bool                          _parallel_record_requested = false,
-    bool                          _parallel_record_planned = false,
-    bool                          _parallel_record_effective = false
+    EVulkanSourceTranslationPhase _phase
 ) noexcept;
 
 void NotifyVulkanBatchPreflightRejected(
@@ -117,6 +114,5 @@ VulkanRuntimeSubmissionResult ExecuteObservedSubmissionBoundary(
     );
     return result;
 }
-
 
 } // namespace Moer::Render

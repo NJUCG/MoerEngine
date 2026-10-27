@@ -99,10 +99,9 @@ RHI scope 是命令重排器的独占层边界，能保证 barrier 和命令落�
 Marker 机制的回归测试：
 
 ```powershell
-cmake --build build --target TestRHICommandMarker TestRHICmdReorderer TestRHIRecordDiagnostics --config Debug -j 30
+cmake --build build --target TestRHICommandMarker TestRHIExplicitBarrier --config Debug -j 30
 target/bin/Debug/TestRHICommandMarker.exe
-target/bin/Debug/TestRHICmdReorderer.exe
-target/bin/Debug/TestRHIRecordDiagnostics.exe
+target/bin/Debug/TestRHIExplicitBarrier.exe
 ```
 
 涉及真实层级或颜色的修改仍需至少抓取一帧，在 RenderDoc 中确认结构、六个 point-cube 面和 pass 颜色。

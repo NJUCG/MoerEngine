@@ -1112,12 +1112,6 @@ bool RenderGraphLowering::MaterializeInstruction(
             error = "texture instruction has no physical binding or aspect";
             return false;
         }
-        if (instruction.texture_aspects != binding->GetAspectFlags()) {
-            error =
-                "partial-aspect texture state is not supported by the active "
-                "backend-tracker bridge";
-            return false;
-        }
         constexpr uint32_t max_view_index = std::numeric_limits<uint8_t>::max();
         if (range.mip_count == 0 || range.layer_count == 0 ||
             range.mip_first > max_view_index || range.mip_count > max_view_index ||
@@ -1149,12 +1143,6 @@ bool RenderGraphLowering::MaterializeInstruction(
         if (!binding.IsValid() || range.size == 0 || range.offset > binding->GetByteSize() ||
             range.size > binding->GetByteSize() - range.offset) {
             error = "buffer instruction has no physical binding or has an invalid range";
-            return false;
-        }
-        if (range.offset != 0 || range.size != binding->GetByteSize()) {
-            error =
-                "partial buffer state is not supported by the active "
-                "backend-tracker bridge";
             return false;
         }
         output = BarrierCreateInfo::Transition(
@@ -1884,9 +1872,8 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
     bool active_async_multiqueue          = false;
     RenderGraphTransientAllocator* active_transient_allocator = nullptr;
     if (active_recording.enabled) {
-        if (active_recording.state_ownership != ERHIResourceStateOwnership::Explicit &&
-            active_recording.state_ownership != ERHIResourceStateOwnership::Compiled) {
-            compile_error = "active RDG recording requires explicit or compiled state ownership";
+        if (active_recording.state_ownership != ERHIResourceStateOwnership::Compiled) {
+            compile_error = "active RDG recording requires compiled state ownership";
             return false;
         }
         active_transient_allocator =
@@ -2641,7 +2628,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         jobs.reserve(unit_end - record_unit_index);
         frontend_sources.reserve(unit_end - record_unit_index);
         producer_gates.reserve(unit_end - record_unit_index);
-
 
         for (size_t index = record_unit_index; index < unit_end; ++index) {
             const auto& unit = compiled_plan.frontend_record_units[index];

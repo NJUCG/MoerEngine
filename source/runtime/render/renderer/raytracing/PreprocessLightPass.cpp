@@ -393,52 +393,6 @@ void PrepareLightPass::RecordClears(CommandList& cmd_list, SharedPtr<const Recor
     cmd_list.AddCallback([payload(std::move(payload))]() {});
 }
 
-void PrepareLightPass::RecordSceneInputTransitions(
-    CommandList&                   cmd_list,
-    SharedPtr<const RecordPayload> payload
-) {
-    if (!payload->reads_scene_geometry) {
-        return;
-    }
-
-    Array<ReadBuffer> buffers;
-    buffers.reserve(6);
-    for (const BufferRef& buffer : {
-             payload->resources.primitive_buf,
-             payload->resources.instance_buf,
-             payload->resources.material_buf,
-             payload->resources.position_buf,
-             payload->resources.index_buf,
-         }) {
-        buffers.emplace_back(ReadBuffer{buffer->GetView(), EBufferState::SHADER_RESOURCE});
-    }
-    if (payload->resources.texcoord0_buf) {
-        buffers.emplace_back(
-            ReadBuffer{payload->resources.texcoord0_buf->GetView(), EBufferState::SHADER_RESOURCE}
-        );
-    }
-    cmd_list.BufferBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        std::move(buffers),
-        Array<WriteBuffer>{}
-    );
-
-    if (!payload->resources.material_textures.empty()) {
-        Array<ReadTexture> textures;
-        textures.reserve(payload->resources.material_textures.size());
-        for (const TextureRef& texture : payload->resources.material_textures) {
-            textures.emplace_back(
-                ReadTexture{texture->GetView(0, texture->GetNumMips()), ETextureState::SAMPLE}
-            );
-        }
-        cmd_list.TextureBarriers(
-            EQueueType::Graphics, EQueueType::Graphics, EPassType::Compute, std::move(textures)
-        );
-    }
-}
-
 void PrepareLightPass::RecordDispatch(CommandList& cmd_list, SharedPtr<const RecordPayload> payload) {
     if (payload->dispatch_light_count == 0) {
         return;
@@ -469,72 +423,6 @@ void PrepareLightPass::RecordGenerateMips(
     );
     payload->resources.shader_utils->GenerateMipsChunk(cmd_list, mips);
     cmd_list.AddCallback([payload(std::move(payload))]() {});
-}
-
-void PrepareLightPass::Process(CommandList& cmd_list, const PreparedCommand& command) {
-    const auto payload = command.record;
-    cmd_list.PushScopeWithTimeScope("PrepareLights");
-    RecordUploads(cmd_list, payload);
-    RecordClears(cmd_list, payload);
-    RecordSceneInputTransitions(cmd_list, payload);
-    RecordDispatch(cmd_list, payload);
-    for (const MipDispatch dispatch : payload->mip_dispatches) {
-        RecordGenerateMips(cmd_list, payload, dispatch);
-    }
-    cmd_list.PopScopeWithTimeScope();
-}
-
-void PrepareLightPass::RecordLightingInputTransitions(CommandList& cmd_list, const PreparedCommand& command) {
-    const auto payload = command.record;
-    cmd_list.Barriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        ReadBuffer{payload->resources.primitive_to_light_buf->GetView(), EBufferState::SHADER_RESOURCE},
-        ReadBuffer{payload->resources.light_mapping_buf->GetView(), EBufferState::SHADER_RESOURCE},
-        ReadBuffer{payload->resources.light_data_buf->GetView(), EBufferState::SHADER_RESOURCE},
-        ReadTexture{
-            payload->resources.local_light_pdf_tex->GetView(
-                0, payload->resources.local_light_pdf_tex->GetNumMips()
-            ),
-            ETextureState::SAMPLE
-        }
-    );
-}
-
-void PrepareLightPass::RecordAcceptedBoundary(CommandList& cmd_list, const PreparedCommand& command) {
-    const auto payload = command.record;
-
-    Array<ReadBuffer> buffers;
-    buffers.reserve(5);
-    for (const BufferRef& buffer : {
-             payload->resources.primitive_to_light_buf,
-             payload->resources.task_buf,
-             payload->resources.prim_light_buf,
-             payload->resources.light_mapping_buf,
-             payload->resources.light_data_buf,
-         }) {
-        buffers.emplace_back(ReadBuffer{buffer->GetView(), EBufferState::SHADER_RESOURCE});
-    }
-    cmd_list.BufferBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        std::move(buffers),
-        Array<WriteBuffer>{}
-    );
-
-    cmd_list.TextureBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        Array<ReadTexture>{ReadTexture{
-            payload->resources.local_light_pdf_tex->GetView(
-                0, payload->resources.local_light_pdf_tex->GetNumMips()
-            ),
-            ETextureState::SHADER_RESOURCE
-        }}
-    );
 }
 
 bool PrepareLightPass::AddPasses(

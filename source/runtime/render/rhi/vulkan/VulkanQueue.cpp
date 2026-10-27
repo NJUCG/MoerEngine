@@ -4,19 +4,17 @@
 #include "VulkanRaytracingResource.h"
 #include "VulkanTimeline.h"
 #include "VulkanQueue.h"
+#include "VulkanBarrier.h"
 #include "VulkanQueueInternal.h"
 #include "VulkanQueueTiming.h"
 #include "PixelFormat.h"
-#include "RHICmdReorderer.h"
 #include "VulkanCommandContext.h"
 #include "VulkanCommandList.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
-#include "VulkanParallelRecordWorkEstimator.h"
 #include "VulkanRHIResource.h"
 #include "VulkanSwapChain.h"
-#include "diagnostics/VulkanSerialGolden.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
 #include "vulkan/VulkanFaultInjection.h"
@@ -51,16 +49,6 @@
 #include <variant>
 namespace Moer::Render {
 namespace {
-
-// Validation runs can require the production contract without removing the
-// legacy reference recorder used by low-level RHI comparison tests.
-bool RequiresCompiledCommands() {
-    static const bool required = [] {
-        const char* value = std::getenv("MOER_VULKAN_REQUIRE_COMPILED");
-        return value && std::string_view(value) == "1";
-    }();
-    return required;
-}
 
 void ValidateTextureTransferDataSize(const VulkanTexture& _texture, uint3 _extent, uint64 _byte_size) {
     const uint64 expected_byte_size = GetSizeFromImageFormat(_texture.GetFormat(), _extent);
@@ -498,27 +486,6 @@ private:
     VkSampleCountFlagBits rasterization_samples{VK_SAMPLE_COUNT_1_BIT};
 };
 
-static ERHIAccessFlags GetArgumentAccess(const PipelineHandle& pipeline, uint argument_index) {
-    return static_cast<VulkanPipelineState*>(pipeline.GetState())
-        ->GetArgumentInfo(argument_index)
-        .GetAccess();
-}
-
-static bool IsResourceInBindlessArray(uint64 _res, uint64 _bdls_handle) {
-    VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bdls_handle);
-    return bindless_array->IsResourceAllocated(_res);
-}
-
-static void LockBindlessArray(uint64 _handle) {
-    VulkanBindlessArray* bdls_array = reinterpret_cast<VulkanBindlessArray*>(_handle);
-    bdls_array->Lock();
-}
-
-static void UnlockBindlessArray(uint64 _handle) {
-    VulkanBindlessArray* bdls_array = reinterpret_cast<VulkanBindlessArray*>(_handle);
-    bdls_array->Unlock();
-}
-
 static void FinalizeBindlessUpdatesOnce(
     BindlessArrayRef                         _array,
     const Array<BindlessArray::UpdateCmd>&   _updates,
@@ -800,1280 +767,7 @@ public:
 
 #pragma endregion
 
-#pragma region[ preprocessor ]
-struct VkCmdPreprocessor {
-    VulkanResourceTracker&          tracker;
-    FunctionTable                   m_funcs;
-    VulkanTemporaryBufferAllocator& temporary_buffer_allocator;
-    VulkanDevice&                   device;
-    EQueueType                      current_queue;
-
-    UnorderedSet<uint64> writed_buffer_resources;
-    UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
-                           writed_texture_resources;
-    const TCachedArgArray& cached_args;
-
-    VkCmdPreprocessor(
-        VulkanDevice&                   _device,
-        VulkanResourceTracker&          _tracker,
-        VulkanTemporaryBufferAllocator& _temporary_buffer_allocator,
-        FunctionTable                   _funcs,
-        const TCachedArgArray&          _cached_args,
-        EQueueType                      _current_queue = EQueueType::Graphics
-    ) :
-        device(_device),
-        tracker(_tracker),
-        temporary_buffer_allocator(_temporary_buffer_allocator),
-        m_funcs(_funcs),
-        cached_args(_cached_args),
-        current_queue(_current_queue) {}
-
-    bool OverlapsCurrentTextureWrite(
-        const TextureSubresourceKeyT<VulkanTexture>& _candidate
-    ) const {
-        return std::any_of(
-            writed_texture_resources.begin(),
-            writed_texture_resources.end(),
-            [&](const TextureSubresourceKeyT<VulkanTexture>& written) {
-                return TextureSubresourceRangesOverlap(
-                    written, _candidate
-                );
-            }
-        );
-    }
-
-    void RecordAttachmentState(
-        VulkanTexture*            _texture,
-        VkAccessFlagBits2         _access,
-        VkImageLayout             _layout,
-        VkPipelineStageFlagBits2  _stage,
-        uint32_t                  _mip_level,
-        uint32_t                  _base_layer,
-        uint32_t                  _layer_count
-    ) {
-        // Keep inferred attachment state mip/layer atomic. A layered multiview
-        // attachment may be consumed one face at a time later in the same
-        // submit; aggregate tracker keys cannot join that transition exactly.
-        for (uint32_t layer = 0; layer < _layer_count; ++layer) {
-            tracker.RecordState(
-                _texture,
-                _access,
-                _layout,
-                _stage,
-                static_cast<uint8>(_mip_level),
-                1,
-                static_cast<uint8>(_base_layer + layer),
-                1
-            );
-        }
-    }
-
-    void HandleBindless(BindlessArrayRef _bindless_array, VkPipelineStageFlagBits2 _pipeline_stages) {
-        EPassType pass_type = EPassType::Graphics;
-        if (_pipeline_stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) {
-            pass_type = EPassType::Compute;
-        } else if (_pipeline_stages == VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR) {
-            pass_type = EPassType::Raytracing;
-        }
-        if (!_bindless_array) {
-            return;
-        }
-        auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bindless_array.Get());
-
-        Moer::Array<TextureSubresourceKeyT<VulkanTexture>> to_read_textures;
-        Moer::Array<VulkanBuffer*> to_read_buffers;
-        {
-            // Allocation/unbind/update can run on a producer thread while the
-            // RHI coordinator preprocesses this packet. Observe both maps from
-            // one stable snapshot; worker recorders never access them.
-            auto bindless_lock = vk_bindless_array->AcquireLock();
-            for (const auto& key : tracker.GetWriteStateTextures()) {
-                if (vk_bindless_array->IsTextureViewAllocated(
-                        uint64(key.texture),
-                        key.mip_level,
-                        key.mip_count,
-                        key.array_layer,
-                        key.array_count
-                    ) &&
-                    !OverlapsCurrentTextureWrite(key)) {
-                    to_read_textures.push_back(key);
-                }
-            }
-            for (const auto& buffer : tracker.GetWriteStateBuffers()) {
-                if (vk_bindless_array->IsResourceAllocated(uint64(buffer)) &&
-                    !writed_buffer_resources.contains(uint64(buffer))) {
-                    to_read_buffers.push_back(buffer);
-                }
-            }
-        }
-        if (!to_read_textures.empty()) {
-            for (const auto& key : to_read_textures) {
-                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
-                    ETextureState::SAMPLE, pass_type, false, key.texture->GetAspectFlags()
-                );
-                tracker.RecordState(
-                    key.texture,
-                    texture_state.access,
-                    texture_state.layout,
-                    texture_state.stages,
-                    key.mip_level,
-                    key.mip_count,
-                    key.array_layer,
-                    key.array_count
-                );
-            }
-        }
-        if (!to_read_buffers.empty()) {
-            for (const auto& i : to_read_buffers) {
-                tracker.RecordState(i, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
-            }
-        }
-        if (auto* descriptors = vk_bindless_array->GetTextureSamplerDescriptorBuffer()) {
-            tracker.RecordState(descriptors, vk_bindless_array->GetDescriptorReadAccess(), _pipeline_stages);
-        }
-        if (auto* descriptors = vk_bindless_array->GetBufferDescriptorBuffer()) {
-            tracker.RecordState(descriptors, vk_bindless_array->GetDescriptorReadAccess(), _pipeline_stages);
-        }
-        tracker.RecordState(
-            vk_bindless_array->GetIndexBuffer(), VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages
-        );
-    }
-
-    static VkAccessFlags2 GetBufferAccess(const VulkanArgumentInfo& _info) {
-        switch (_info.resource_type) {
-            case SRT_CBV:
-                return VK_ACCESS_2_UNIFORM_READ_BIT;
-            case SRT_SRV:
-                return VK_ACCESS_2_SHADER_READ_BIT;
-            case SRT_UAV:
-                return VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
-            default:
-                return VK_ACCESS_2_SHADER_READ_BIT;
-        }
-    }
-
-    static VkAccessFlags2 GetTextureAccess(const VulkanArgumentInfo& _info) {
-        switch (_info.resource_type) {
-            // case SRT_SAMPLER:
-            //     return VK_ACCESS_2_SHADER_READ_BIT;
-            case SRT_SRV:
-                return VK_ACCESS_2_SHADER_READ_BIT;
-            case SRT_UAV:
-                return VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
-            default:
-                assert(false && "Invalid texture resource type");
-                return VK_ACCESS_2_SHADER_READ_BIT;
-        }
-    }
-
-    static VkImageLayout GetTextureLayout(const VulkanArgumentInfo& _info, ETextureAspectFlags aspects) {
-        switch (_info.resource_type) {
-            // case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
-            //     return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            case SRT_SRV: {
-                if (_info.image_sampling != VulkanImageSampling::Unknown)
-                    return ResolveVulkanTextureState(ETextureState::SAMPLE, EPassType::Graphics, false, aspects).layout;
-
-                return VK_IMAGE_LAYOUT_GENERAL;
-            }
-
-            case SRT_UAV:
-                return VK_IMAGE_LAYOUT_GENERAL;
-            default:
-                assert(false && "Invalid texture resource type");
-                return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        }
-    }
-
-    void VisitArgs(const TArg& _arg, const VulkanArgumentInfo& _info) {
-        if (_info.stages == VK_PIPELINE_STAGE_2_NONE)
-            return;
-        std::visit(
-            [&](auto&& _arg) {
-                using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, BufferView>) {
-                    if (_info.resource_type == SRT_INVALID)
-                        return;
-                    auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer());
-                    tracker.RecordState(vk_buffer, GetBufferAccess(_info), _info.stages);
-                    if (_info.IsWritable()) {
-                        writed_buffer_resources.insert(uint64(vk_buffer));
-                    }
-                } else if constexpr (std::is_same_v<T, TextureView>) {
-                    if (_info.resource_type == SRT_INVALID)
-                        return;
-                    auto* vk_texture = ResourceCast(_arg.GetTexture());
-                    tracker.RecordState(
-                        vk_texture,
-                        GetTextureAccess(_info),
-                        GetTextureLayout(_info, vk_texture->GetAspectFlags()),
-                        _info.stages,
-                        _arg.mip_level,
-                        _arg.num_mips,
-                        _arg.array_layer,
-                        _arg.num_array
-                    );
-                    if (_info.IsWritable()) {
-                        ValidateSubresourceRange(
-                            _arg.texture, _arg.mip_level, _arg.num_mips, _arg.array_layer, _arg.num_array
-                        );
-                        TextureSubresourceKeyT<VulkanTexture> key{
-                            vk_texture, _arg.mip_level, _arg.num_mips, _arg.array_layer, _arg.num_array
-                        };
-                        writed_texture_resources.insert(key);
-                    }
-                } else if constexpr (std::is_same_v<T, TextureViewArray>) {
-                    for (auto&& i : _arg) {
-                        VisitArgs(i, _info);
-                    }
-                } else if constexpr (std::is_same_v<T, BufferViewArray>) {
-                    for (auto&& i : _arg) {
-                        VisitArgs(i, _info);
-                    }
-                }
-
-                else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                    // HandleBindless(_arg, _info.stages);
-                    assert(false && "Bindless array not supported");
-                } else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
-                    VulkanAccelerationStructure* vk_as = ResourceCast(_arg.Get());
-                    tracker.RecordState(
-                        vk_as->underlying_buffer,
-                        VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
-                        _info.stages
-                    );
-                }
-            },
-            _arg
-        );
-    }
-
-    bool VisitCmd(const Command* _cmd) {
-        assert(_cmd != nullptr);
-        switch (_cmd->Type()) {
-            case Command::EType::UploadBuffer:
-                Visit(static_cast<const UploadBufferCmd*>(_cmd));
-                break;
-            case Command::EType::UploadTexture:
-                Visit(static_cast<const UploadTextureCmd*>(_cmd));
-                break;
-            case Command::EType::BufferToBuffer:
-                Visit(static_cast<const CopyBufferCmd*>(_cmd));
-                break;
-            case Command::EType::BufferToTexture:
-                Visit(static_cast<const CopyBufferToTextureCmd*>(_cmd));
-                break;
-            case Command::EType::TextureToBuffer:
-                Visit(static_cast<const CopyTextureToBufferCmd*>(_cmd));
-                break;
-            case Command::EType::TextureToTexture:
-                Visit(static_cast<const CopyTextureCmd*>(_cmd));
-                break;
-            case Command::EType::CopyBackBuffer:
-                Visit(static_cast<const CopyBackBufferCmd*>(_cmd));
-                break;
-            case Command::EType::CopyBackTexture:
-                Visit(static_cast<const CopyBackTextureCmd*>(_cmd));
-                break;
-            case Command::EType::ShaderDispatch:
-                Visit(static_cast<const DispatchCmd*>(_cmd));
-                break;
-            case Command::EType::SetDrawState:
-                Visit(static_cast<const SetDrawStateCmd*>(_cmd));
-                break;
-            case Command::EType::MultiDraw:
-                Visit(static_cast<const MultiDrawCmd*>(_cmd));
-                break;
-            // case Command::EType::SetGeometryPassDrawState:
-            //     Visit(static_cast<const SetGeometryPassDrawStateCmd*>(_cmd));
-            //     break;
-            case Command::EType::BuildAccel:
-                Visit(static_cast<const BuildAccelerationStructuresCmd*>(_cmd));
-                break;
-            case Command::EType::BuildTLAS:
-                Visit(static_cast<const UpdateRaytracingSceneCmd*>(_cmd));
-                break;
-            case Command::EType::Barrier:
-                Visit(static_cast<const BarrierCmd*>(_cmd));
-                break;
-            case Command::EType::QueueTransfer:
-                Visit(static_cast<const QueueTransferCmd*>(_cmd));
-                break;
-            case Command::EType::UpdateBindlessArray:
-                Visit(static_cast<const UpdateBindlessArrayCmd*>(_cmd));
-                break;
-
-            case Command::EType::ClearResource:
-                Visit(static_cast<const ClearResourceCmd*>(_cmd));
-                break;
-            case Command::EType::Custom:
-                Visit(static_cast<const CustomCmd*>(_cmd));
-                break;
-            case Command::EType::Query:
-            case Command::EType::Scope:
-                // Query/marker commands have no resource-state dependency.
-                break;
-            default:
-                assert(false && "Invalid command type");
-        }
-        return false;
-    }
-
-    void Visit(const UploadBufferCmd* _cmd, bool infer_resource_state = true) {
-        auto data_span  = _cmd->Data();
-        auto tmp_buffer = temporary_buffer_allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
-        device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
-        _cmd->staging_buffer = tmp_buffer;
-
-        auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
-        if (infer_resource_state) {
-            tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-        }
-        //Register Inner Buffer Ranges for queue execution sync
-        tracker.RecordInternalBufferRange(
-            _cmd->staging_buffer,
-            VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            VK_ACCESS_2_HOST_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_HOST_BIT
-        );
-    }
-    void Visit(const UploadTextureCmd* _cmd, bool infer_resource_state = true) {
-        const auto data_span  = _cmd->Data();
-        auto*      vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
-        // The staging buffer can be larger than this upload's slice. Validate
-        // the supplied data before allocating or copying into that slice.
-        ValidateTextureTransferDataSize(*vk_texture, _cmd->Size(), data_span.size_bytes());
-        auto tmp_buffer = temporary_buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
-        device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
-        _cmd->staging_buffer = tmp_buffer;
-
-        if (infer_resource_state) {
-            tracker.RecordState(
-                vk_texture,
-                VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                _cmd->MipLevel(),
-                1,                 // mip_count
-                _cmd->array_layer, // array_layer
-                1                  // array_count
-            );
-        }
-        tracker.RecordInternalBufferRange(
-            _cmd->staging_buffer,
-            VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            VK_ACCESS_2_HOST_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_HOST_BIT
-        );
-    }
-    void Visit(const CopyBufferCmd* _cmd) {
-        auto* vk_src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->SrcHandle());
-        auto* vk_dst_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->DstHandle());
-        tracker.RecordState(vk_src_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-        tracker.RecordState(vk_dst_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-    }
-    void Visit(const CopyTextureCmd* _cmd) {
-        auto* vk_src_texture = reinterpret_cast<VulkanTexture*>(_cmd->SrcHandle());
-        auto* vk_dst_texture = reinterpret_cast<VulkanTexture*>(_cmd->DstHandle());
-        tracker.RecordState(
-            vk_src_texture,
-            VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->SrcMipLevel()
-        );
-        tracker.RecordState(
-            vk_dst_texture,
-            VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->DstMipLevel()
-        );
-    }
-    void Visit(const CopyBufferToTextureCmd* _cmd) {
-        auto* vk_src_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd->SrcHandle());
-        auto* vk_dst_texture = reinterpret_cast<VulkanTexture*>(_cmd->DstHandle());
-        tracker.RecordState(vk_src_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-        tracker.RecordState(
-            vk_dst_texture,
-            VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel(),
-            1,                 // mip_count
-            _cmd->array_layer, // array_layer
-            1                  // array_count
-        );
-    }
-
-    void Visit(const CopyTextureToBufferCmd* _cmd) {
-        auto* vk_src_texture = reinterpret_cast<VulkanTexture*>(_cmd->SrcHandle());
-        auto* vk_dst_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd->DstHandle());
-        tracker.RecordState(
-            vk_src_texture,
-            VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel(),
-            1, // mip_count
-            _cmd->ArrayLayer(),
-            1 // array_count
-        );
-        tracker.RecordState(vk_dst_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-    }
-
-    void Visit(const CopyBackBufferCmd* _cmd, bool infer_resource_state = true) {
-        auto tmp_buffer      = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
-        _cmd->staging_buffer = tmp_buffer;
-
-        auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
-        if (infer_resource_state) {
-            tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-        }
-        tracker.RecordInternalBufferRange(
-            _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
-        );
-    }
-
-    void Visit(const CopyBackTextureCmd* _cmd, bool infer_resource_state = true) {
-        auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
-        ValidateTextureTransferDataSize(*vk_texture, _cmd->Size(), _cmd->ByteSize());
-        auto tmp_buffer      = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
-        _cmd->staging_buffer = tmp_buffer;
-
-        if (infer_resource_state) {
-            tracker.RecordState(
-                vk_texture,
-                VK_ACCESS_2_TRANSFER_READ_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                _cmd->MipLevel(),
-                1,
-                _cmd->ArrayLayer(),
-                1
-            );
-        }
-        tracker.RecordInternalBufferRange(
-            _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
-        );
-    }
-
-    void Visit(const DispatchCmd* _cmd) {
-        const DispatchCmd::DispatchParam dispatch_param = _cmd->Param();
-        if (const auto* indirect = std::get_if<DispatchIndirectParam>(&dispatch_param)) {
-            tracker.RecordState(
-                ResourceCast(indirect->indirect.GetBuffer()),
-                VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
-                VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
-            );
-        }
-
-        const auto& pipeline = _cmd->Pipeline();
-        const auto*  vk_pipeline          = static_cast<VulkanPipelineState*>(pipeline.GetState());
-        const auto   argument_infos       = vk_pipeline->GetArgumentInfos();
-        const uint64 active_argument_bits = vk_pipeline->GetActiveArgumentBits();
-
-        writed_buffer_resources.clear();
-        writed_texture_resources.clear();
-
-        auto func = [&](const TArg& _arg, uint _idx) {
-            if (active_argument_bits & (uint64(1) << _idx))
-                VisitArgs(_arg, argument_infos[_idx]);
-        };
-        auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-            if (active_argument_bits & (uint64(1) << _idx))
-                HandleBindless(std::get<BindlessArrayRef>(_arg), argument_infos[_idx].stages);
-        };
-
-        IterateArgs(_cmd->Args(cached_args), func, bdls_post_func);
-    }
-
-    // void Visit(const SetParamsCmd* _cmd) {
-    // }
-    // void Visit(const SetConstantCmd* _cmd) {
-    // }
-    void Visit(const BuildAccelerationStructuresCmd* _cmd, bool infer_resources = true) {
-        const Array<AccelerationStructureBuildParam>& params  = _cmd->Params();
-        BufferView&                                   scratch = _cmd->Scratch();
-        if (!scratch.GetBuffer()) {
-            uint64 scratch_size      = 0;
-            uint64 scratch_alignment = 256u;
-
-            for (const AccelerationStructureBuildParam& param : params) {
-                auto* vk_geo = ResourceCast(param.geometry.Get());
-                scratch_size = Moer::AlignUp(scratch_size, scratch_alignment);
-                scratch_size += param.mode == ERaytracingBuildMode::BUILD ?
-                                    vk_geo->build_sizes_info.buildScratchSize :
-                                    vk_geo->build_sizes_info.updateScratchSize;
-            }
-            scratch_size += scratch_alignment;
-
-            scratch = temporary_buffer_allocator.AllocateScratch(scratch_size);
-        }
-        if (!infer_resources) {
-            return;
-        }
-        tracker.RecordState(
-            ResourceCast(scratch.GetBuffer()),
-            {VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR,
-             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
-        );
-        for (const AccelerationStructureBuildParam& param : params) {
-            auto* vk_geo    = ResourceCast(param.geometry.Get());
-            auto* vk_buffer = vk_geo->GetUnderlyingBuffer();
-
-            tracker.RecordState(
-                vk_buffer,
-                {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
-            );
-
-            tracker.MarkBlasWritten(uint64(vk_geo));
-        }
-
-        for (auto& vtx : _cmd->VtxBuffers()) {
-            auto* vk_buffer = ResourceCast(vtx);
-            tracker.RecordState(
-                vk_buffer,
-                {VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
-            );
-        }
-
-        for (auto& idx : _cmd->IdxBuffers()) {
-            auto* idx_buffer = ResourceCast(idx);
-            tracker.RecordState(
-                idx_buffer,
-                {VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
-            );
-        }
-    }
-
-    void Visit(const UpdateRaytracingSceneCmd* _cmd) {
-        if (_cmd->InstancesToUpdate().empty() && !_cmd->ForceUpdate()) {
-            return;
-        }
-        //instance buffer
-        VulkanBuffer* instance_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->InstanceBufferHandle());
-        VulkanBuffer* scratch_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd->ScratchBufferHandle());
-        VulkanAccelerationStructure* tlas =
-            reinterpret_cast<VulkanAccelerationStructure*>(_cmd->TlasHandle());
-
-        if (_cmd->ForceUpdate() && _cmd->InstancesToUpdate().empty()) {
-            tracker.RecordState(
-                instance_buffer,
-                {VK_ACCESS_2_SHADER_READ_BIT,
-                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
-            );
-        } else {
-            tracker.RecordState(
-                instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT}
-            );
-        }
-        // tracker.RecordState(instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
-        tracker.RecordState(
-            scratch_buffer,
-            {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
-                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
-             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
-        );
-        tracker.RecordState(
-            tlas->underlying_buffer,
-            {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
-        );
-
-        for (const uint64& handle : tracker.GetWrittenBlasHandles()) {
-            if (_cmd->HasGeometry(handle)) {
-                VulkanRaytracingGeometry* vk_geo = reinterpret_cast<VulkanRaytracingGeometry*>(handle);
-
-                tracker.RecordState(
-                    vk_geo->GetUnderlyingBuffer(),
-                    {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
-                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
-                );
-            }
-        }
-    }
-
-    void Visit(const BarrierCmd* _cmd) {
-        if (_cmd->HasExplicitBarriers()) {
-            if (_cmd->GetSrcQueue() != current_queue ||
-                _cmd->GetDstQueue() != current_queue) {
-                LOG_CRITICAL(
-                    "Explicit BarrierCmd queue affinity mismatch: command={} "
-                    "current={}",
-                    static_cast<uint>(_cmd->GetSrcQueue()),
-                    static_cast<uint>(current_queue)
-                );
-                throw std::logic_error("explicit barrier recorded on the wrong queue");
-            }
-
-            const auto resolve_transfer =
-                [&](const BarrierQueueTransfer& transfer) {
-                    std::pair<uint32_t, uint32_t> families{
-                        VK_QUEUE_FAMILY_IGNORED,
-                        VK_QUEUE_FAMILY_IGNORED,
-                    };
-                    if (transfer.phase == EBarrierQueueTransferPhase::None) {
-                        if (transfer.external) {
-                            throw std::invalid_argument("Vulkan external ownership barrier requires a phase");
-                        }
-                        return families;
-                    }
-                    if (transfer.phase != EBarrierQueueTransferPhase::Release &&
-                        transfer.phase != EBarrierQueueTransferPhase::Acquire) {
-                        throw std::invalid_argument(
-                            "Vulkan ownership barrier carries an unknown phase"
-                        );
-                    }
-                    if (transfer.external) {
-                        const bool release  = transfer.phase == EBarrierQueueTransferPhase::Release;
-                        const auto managed  = release ? transfer.src_queue : transfer.dst_queue;
-                        const auto external = release ? transfer.dst_queue : transfer.src_queue;
-                        if (managed != current_queue || external != EQueueType::Ignore) {
-                            throw std::invalid_argument("Vulkan external ownership barrier endpoint mismatch"
-                            );
-                        }
-                        const auto family = device.GetQueueFamilyIndex(managed);
-                        if (family == VK_QUEUE_FAMILY_IGNORED) {
-                            throw std::invalid_argument(
-                                "Vulkan external ownership barrier has no native queue"
-                            );
-                        }
-                        return release ? std::pair{family, uint32_t(VK_QUEUE_FAMILY_EXTERNAL)} :
-                                         std::pair{uint32_t(VK_QUEUE_FAMILY_EXTERNAL), family};
-                    }
-                    if ((transfer.src_queue != EQueueType::Graphics &&
-                         transfer.src_queue != EQueueType::Compute &&
-                         transfer.src_queue != EQueueType::Copy) ||
-                        (transfer.dst_queue != EQueueType::Graphics &&
-                         transfer.dst_queue != EQueueType::Compute &&
-                         transfer.dst_queue != EQueueType::Copy) ||
-                        transfer.src_queue == transfer.dst_queue) {
-                        throw std::invalid_argument(
-                            "Vulkan ownership barrier requires distinct managed "
-                            "Graphics/Compute/Copy endpoints"
-                        );
-                    }
-                    const EQueueType expected_queue =
-                        transfer.phase == EBarrierQueueTransferPhase::Release ?
-                            transfer.src_queue :
-                            transfer.dst_queue;
-                    if (current_queue != expected_queue) {
-                        throw std::logic_error(
-                            "Vulkan ownership barrier recorded on the wrong endpoint"
-                        );
-                    }
-                    families.first =
-                        device.GetQueueFamilyIndex(transfer.src_queue);
-                    families.second =
-                        device.GetQueueFamilyIndex(transfer.dst_queue);
-                    if (families.first == VK_QUEUE_FAMILY_IGNORED ||
-                        families.second == VK_QUEUE_FAMILY_IGNORED ||
-                        families.first == families.second) {
-                        throw std::invalid_argument(
-                            "Vulkan ownership barrier requires two distinct queue families"
-                        );
-                    }
-                    return families;
-                };
-
-            for (const ExplicitBufferBarrier& barrier : _cmd->ExplicitBuffers()) {
-                if (barrier.src_state.texture_layout !=
-                        ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ||
-                    barrier.dst_state.texture_layout !=
-                        ETextureLayout::TEXTURE_LAYOUT_UNDEFINED) {
-                    throw std::invalid_argument(
-                        "explicit buffer barrier cannot carry a texture layout"
-                    );
-                }
-                const auto [src_family, dst_family] =
-                    resolve_transfer(barrier.queue_transfer);
-                tracker.EmitExplicitBarrier(
-                    reinterpret_cast<VulkanBuffer*>(barrier.handle),
-                    barrier.offset,
-                    barrier.byte_size,
-                    barrier.queue_transfer.phase,
-                    src_family,
-                    dst_family,
-                    VulkanEnumTranslator::METoVkPipelineStageFlags2(
-                        barrier.src_state.stage
-                    ),
-                    VulkanEnumTranslator::METoVkAccessFlags2(
-                        barrier.src_state.access
-                    ),
-                    VulkanEnumTranslator::METoVkPipelineStageFlags2(
-                        barrier.dst_state.stage
-                    ),
-                    VulkanEnumTranslator::METoVkAccessFlags2(
-                        barrier.dst_state.access
-                    )
-                );
-            }
-            for (const ExplicitTextureBarrier& barrier :
-                 _cmd->ExplicitTextures()) {
-                const VkImageLayout src_layout =
-                    VulkanEnumTranslator::METoVKImageLayout(
-                        barrier.src_state.texture_layout
-                    );
-                const VkImageLayout dst_layout =
-                    VulkanEnumTranslator::METoVKImageLayout(
-                        barrier.dst_state.texture_layout
-                    );
-                if (src_layout == VK_IMAGE_LAYOUT_MAX_ENUM ||
-                    dst_layout == VK_IMAGE_LAYOUT_MAX_ENUM) {
-                    throw std::invalid_argument(
-                        "explicit texture barrier carries an unsupported layout"
-                    );
-                }
-                const auto [src_family, dst_family] =
-                    resolve_transfer(barrier.queue_transfer);
-                tracker.EmitExplicitBarrier(
-                    reinterpret_cast<VulkanTexture*>(barrier.handle),
-                    VulkanEnumTranslator::METoVKImageAspectFlags(
-                        barrier.texture_aspects
-                    ),
-                    barrier.mip_level,
-                    barrier.mip_count,
-                    barrier.array_layer,
-                    barrier.array_count,
-                    barrier.queue_transfer.phase,
-                    src_family,
-                    dst_family,
-                    VulkanEnumTranslator::METoVkPipelineStageFlags2(
-                        barrier.src_state.stage
-                    ),
-                    VulkanEnumTranslator::METoVkAccessFlags2(
-                        barrier.src_state.access
-                    ),
-                    src_layout,
-                    VulkanEnumTranslator::METoVkPipelineStageFlags2(
-                        barrier.dst_state.stage
-                    ),
-                    VulkanEnumTranslator::METoVkAccessFlags2(
-                        barrier.dst_state.access
-                    ),
-                    dst_layout
-                );
-            }
-            return;
-        }
-
-        if (!_cmd->IsQueueTransition()) {
-
-            for (auto& barrier : _cmd->ReadBuffers()) {
-                auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-                tracker.RecordState(
-                    vk_buffer, ResolveVulkanBufferState(barrier.state, barrier.pass_type, false)
-                );
-            }
-            for (auto& barrier : _cmd->WriteBuffers()) {
-                auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-                tracker.RecordState(
-                    vk_buffer, ResolveVulkanBufferState(barrier.state, barrier.pass_type, true)
-                );
-            }
-
-            for (auto& barrier : _cmd->ReadTextures()) {
-                auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
-                    barrier.state, barrier.pass_type, false, vk_texture->GetAspectFlags()
-                );
-                tracker.RecordState(
-                    vk_texture,
-                    texture_state.access,
-                    texture_state.layout,
-                    texture_state.stages,
-                    static_cast<uint8>(barrier.mip_level),
-                    static_cast<uint8>(barrier.mip_cnt),
-                    static_cast<uint8>(barrier.array_layer),
-                    static_cast<uint8>(barrier.array_cnt)
-                );
-            }
-            for (auto& barrier : _cmd->WriteTextures()) {
-                auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
-                    barrier.state, barrier.pass_type, true, vk_texture->GetAspectFlags()
-                );
-                tracker.RecordState(
-                    vk_texture,
-                    texture_state.access,
-                    texture_state.layout,
-                    texture_state.stages,
-                    static_cast<uint8>(barrier.mip_level),
-                    static_cast<uint8>(barrier.mip_cnt),
-                    static_cast<uint8>(barrier.array_layer),
-                    static_cast<uint8>(barrier.array_cnt)
-                );
-            }
-
-            return;
-        }
-
-        const uint src_queue_family = device.GetQueueFamilyIndex(_cmd->GetSrcQueue());
-        const uint dst_queue_family = device.GetQueueFamilyIndex(_cmd->GetDstQueue());
-
-        for (auto& barrier : _cmd->ReadBuffers()) {
-            auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-            tracker.RecordState(
-                vk_buffer,
-                ResolveVulkanBufferState(barrier.state, barrier.pass_type, false),
-                src_queue_family,
-                dst_queue_family
-            );
-        }
-        for (auto& barrier : _cmd->WriteBuffers()) {
-            auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-            tracker.RecordState(
-                vk_buffer,
-                ResolveVulkanBufferState(barrier.state, barrier.pass_type, true),
-                src_queue_family,
-                dst_queue_family
-            );
-        }
-
-        for (auto& barrier : _cmd->ReadTextures()) {
-            auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-            const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
-                barrier.state, barrier.pass_type, false, vk_texture->GetAspectFlags()
-            );
-            tracker.RecordState(
-                vk_texture,
-                texture_state.access,
-                texture_state.layout,
-                texture_state.stages,
-                static_cast<uint8>(barrier.mip_level),
-                static_cast<uint8>(barrier.mip_cnt),
-                static_cast<uint8>(barrier.array_layer),
-                static_cast<uint8>(barrier.array_cnt),
-                src_queue_family,
-                dst_queue_family
-            );
-        }
-        for (auto& barrier : _cmd->WriteTextures()) {
-            auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-            const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
-                barrier.state, barrier.pass_type, true, vk_texture->GetAspectFlags()
-            );
-            tracker.RecordState(
-                vk_texture,
-                texture_state.access,
-                texture_state.layout,
-                texture_state.stages,
-                static_cast<uint8>(barrier.mip_level),
-                static_cast<uint8>(barrier.mip_cnt),
-                static_cast<uint8>(barrier.array_layer),
-                static_cast<uint8>(barrier.array_cnt),
-                src_queue_family,
-                dst_queue_family
-            );
-        }
-
-        //queue transition
-    }
-
-    void Visit(const QueueTransferCmd* _cmd) {
-        const EQueueType src_queue =
-            _cmd->IsImport() ? _cmd->src_queue : current_queue;
-        const EQueueType dst_queue =
-            _cmd->IsImport() ? current_queue : _cmd->dst_queue;
-        if (src_queue == EQueueType::Ignore || dst_queue == EQueueType::Ignore) {
-            throw std::invalid_argument("queue transfer requires two concrete queues");
-        }
-        const uint src_queue_family = device.GetQueueFamilyIndex(src_queue);
-        const uint dst_queue_family = device.GetQueueFamilyIndex(dst_queue);
-        const uint current_queue_family = device.GetQueueFamilyIndex(current_queue);
-        const uint expected_queue_family =
-            _cmd->IsImport() ? dst_queue_family : src_queue_family;
-        if (current_queue_family != expected_queue_family) {
-            LOG_CRITICAL(
-                "QueueTransferCmd affinity mismatch: import={} src={}({}) "
-                "dst={}({}) current={}({})",
-                _cmd->IsImport(),
-                static_cast<uint>(src_queue),
-                src_queue_family,
-                static_cast<uint>(dst_queue),
-                dst_queue_family,
-                static_cast<uint>(current_queue),
-                current_queue_family
-            );
-            throw std::logic_error(
-                "queue transfer barrier recorded by a non-endpoint queue family"
-            );
-        }
-
-        if (_cmd->IsImport()) {
-            for (auto& barrier : _cmd->ImportTextures()) {
-                auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
-                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
-                    barrier.state, EPassType::Graphics, false, vk_texture->GetAspectFlags()
-                );
-                tracker.QueueTransferAcquireResource(
-                    vk_texture,
-                    src_queue_family,
-                    dst_queue_family,
-                    vk_texture->GetQueuePreferredLayout(src_queue),
-                    texture_state.layout,
-                    VK_ACCESS_2_NONE,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-                );
-            }
-
-            for (auto& barrier : _cmd->ImportBuffers()) {
-                auto* vk_buffer = ResourceCast(barrier.buffer.GetBuffer());
-                (void)ResolveVulkanBufferState(barrier.state, EPassType::Graphics, false);
-                tracker.QueueTransferAcquireResource(
-                    vk_buffer,
-                    src_queue_family,
-                    dst_queue_family,
-                    VK_ACCESS_2_NONE,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-                );
-            }
-
-        } else {
-            for (auto& barrier : _cmd->ExportTextures()) {
-                auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
-                const VulkanTextureAccessState texture_state = ResolveVulkanTextureState(
-                    barrier.state, EPassType::Graphics, false, vk_texture->GetAspectFlags()
-                );
-                tracker.QueueTransferReleaseResource(
-                    vk_texture,
-                    src_queue_family,
-                    dst_queue_family,
-                    vk_texture->GetQueuePreferredLayout(src_queue),
-                    texture_state.layout
-                );
-            }
-
-            for (auto& barrier : _cmd->ExportBuffers()) {
-                auto* vk_buffer = ResourceCast(barrier.buffer.GetBuffer());
-                (void)ResolveVulkanBufferState(barrier.state, EPassType::Graphics, false);
-                tracker.QueueTransferReleaseResource(
-                    vk_buffer,
-                    src_queue_family,
-                    dst_queue_family
-                );
-            }
-        }
-    }
-    void Visit(const SetDrawStateCmd* _cmd) {
-        ValidateRenderPassMultiview(_cmd->RenderPassInfo());
-        ValidatePipelineViewMask(_cmd->Pipeline(), _cmd->RenderPassInfo());
-
-        const auto& vbs = _cmd->VertexBuffers();
-        for (const auto& vb : vbs) {
-            auto* vk_buffer = ResourceCast(vb.first);
-            tracker.RecordState(
-                vk_buffer, VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT
-            );
-        }
-        const auto& ibs = _cmd->IndexBuffers();
-        for (const auto& ib : ibs) {
-            auto* vk_buffer = ResourceCast(ib.first);
-            tracker.RecordState(vk_buffer, VK_ACCESS_2_INDEX_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
-        }
-
-        const auto& indirect_buffers = _cmd->IndirectBuffers();
-        for (const auto& ib : indirect_buffers) {
-            auto* vk_buffer = ResourceCast(ib.first);
-            tracker.RecordState(
-                vk_buffer, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
-            );
-        }
-
-        const auto& count_buffers = _cmd->DrawCountBuffers();
-        for (const auto& ib : count_buffers) {
-            auto* vk_buffer = ResourceCast(ib.first);
-            tracker.RecordState(
-                vk_buffer, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
-            );
-        }
-
-        writed_buffer_resources.clear();
-        writed_texture_resources.clear();
-
-        const auto& pipeline = _cmd->Pipeline();
-        const auto*  vk_pipeline          = static_cast<VulkanPipelineState*>(pipeline.GetState());
-        const auto   argument_infos       = vk_pipeline->GetArgumentInfos();
-        const uint64 active_argument_bits = vk_pipeline->GetActiveArgumentBits();
-        auto         func                 = [&](const TArg& _arg, uint _idx) {
-            if (active_argument_bits & (uint64(1) << _idx))
-                VisitArgs(_arg, argument_infos[_idx]);
-        };
-        auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-            if (active_argument_bits & (uint64(1) << _idx))
-                HandleBindless(std::get<BindlessArrayRef>(_arg), argument_infos[_idx].stages);
-        };
-
-        _cmd->IterateArgs(func, bdls_post_func);
-
-        for (const auto& rt : _cmd->RenderPassInfo().color_attachments) {
-            auto* vk_texture = ResourceCast(rt.target);
-            auto  action     = rt.action;
-            bool  b_load     = GetLoadOp(action) == EAttachmentLoadOp::LOAD;
-            // Both STORE and DONT_CARE access attachment memory for writing.
-            RecordAttachmentState(
-                vk_texture,
-                (b_load ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                rt.mip_level,
-                rt.array_layer,
-                rt.array_count
-            );
-        }
-        if (_cmd->RenderPassInfo().depth_attachment.Valid()) {
-            auto* vk_texture     = ResourceCast(_cmd->RenderPassInfo().depth_attachment.target);
-            auto  action         = _cmd->RenderPassInfo().depth_attachment.action;
-            bool  b_depth_load   = GetLoadOp(GetDepthAction(action)) == EAttachmentLoadOp::LOAD;
-            bool  b_stencil_load = GetLoadOp(GetStencilAction(action)) == EAttachmentLoadOp::LOAD;
-            bool  b_read         = b_depth_load || b_stencil_load;
-            RecordAttachmentState(
-                vk_texture,
-                (b_read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                _cmd->RenderPassInfo().depth_attachment.mip_level,
-                _cmd->RenderPassInfo().depth_attachment.array_layer,
-                _cmd->RenderPassInfo().depth_attachment.array_count
-            );
-        }
-    }
-
-    void Visit(const MultiDrawCmd* _cmd) {
-        ValidateRenderPassMultiview(_cmd->RenderPassInfo());
-        for (const DrawBatchElement& draw_cmd : _cmd->draw_batch.draw_cmds) {
-            ValidatePipelineViewMask(draw_cmd.handle, _cmd->RenderPassInfo());
-        }
-
-        const auto& vbs = _cmd->VertexBuffers();
-        for (const auto& vb : vbs) {
-            auto* vk_buffer = ResourceCast(vb.first);
-            tracker.RecordState(
-                vk_buffer, VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT
-            );
-        }
-        const auto& ibs = _cmd->IndexBuffers();
-        for (const auto& ib : ibs) {
-            auto* vk_buffer = ResourceCast(ib.first);
-            tracker.RecordState(vk_buffer, VK_ACCESS_2_INDEX_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
-        }
-
-        const auto& indirect_buffers = _cmd->IndirectBuffers();
-        for (const auto& ib : indirect_buffers) {
-            auto* vk_buffer = ResourceCast(ib.first);
-            tracker.RecordState(
-                vk_buffer, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
-            );
-        }
-
-        writed_buffer_resources.clear();
-        writed_texture_resources.clear();
-
-        UnorderedSet<const ArrayArguments*> temp_arg_batch;
-        for (const auto& draw_cmd : _cmd->draw_batch.draw_cmds) {
-            const auto& pipeline = draw_cmd.handle;
-            const auto*  vk_pipeline          = static_cast<VulkanPipelineState*>(pipeline.GetState());
-            const auto   argument_infos       = vk_pipeline->GetArgumentInfos();
-            const uint64 active_argument_bits = vk_pipeline->GetActiveArgumentBits();
-            auto         func                 = [&](const TArg& _arg, uint _idx) {
-                if (active_argument_bits & (uint64(1) << _idx))
-                    VisitArgs(_arg, argument_infos[_idx]);
-            };
-            auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-                if (active_argument_bits & (uint64(1) << _idx))
-                    HandleBindless(std::get<BindlessArrayRef>(_arg), argument_infos[_idx].stages);
-            };
-            const ArrayArguments* arg = std::holds_alternative<ArrayArguments>(draw_cmd.args) ?
-                                            &std::get<ArrayArguments>(draw_cmd.args) :
-                                            (std::holds_alternative<ArrayArgReference>(draw_cmd.args) ?
-                                                 &cached_args[std::get<ArrayArgReference>(draw_cmd.args)()] :
-                                                 nullptr);
-
-            auto iter = temp_arg_batch.emplace(arg);
-            if (arg && iter.second) {
-                IterateArgs(*arg, func, bdls_post_func);
-            }
-        }
-
-        // _cmd->IterateArgs(func, bdls_post_func);
-
-        for (const auto& rt : _cmd->RenderPassInfo().color_attachments) {
-            auto* vk_texture = ResourceCast(rt.target);
-            auto  action     = rt.action;
-            bool  b_load     = GetLoadOp(action) == EAttachmentLoadOp::LOAD;
-            // Both STORE and DONT_CARE access attachment memory for writing.
-            RecordAttachmentState(
-                vk_texture,
-                (b_load ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                rt.mip_level,
-                rt.array_layer,
-                rt.array_count
-            );
-        }
-        if (_cmd->RenderPassInfo().depth_attachment.Valid()) {
-            auto* vk_texture     = ResourceCast(_cmd->RenderPassInfo().depth_attachment.target);
-            auto  action         = _cmd->RenderPassInfo().depth_attachment.action;
-            bool  b_depth_load   = GetLoadOp(GetDepthAction(action)) == EAttachmentLoadOp::LOAD;
-            bool  b_stencil_load = GetLoadOp(GetStencilAction(action)) == EAttachmentLoadOp::LOAD;
-            bool  b_read         = b_depth_load || b_stencil_load;
-            RecordAttachmentState(
-                vk_texture,
-                (b_read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                _cmd->RenderPassInfo().depth_attachment.mip_level,
-                _cmd->RenderPassInfo().depth_attachment.array_layer,
-                _cmd->RenderPassInfo().depth_attachment.array_count
-            );
-        }
-    }
-
-    // void Visit(const SetGeometryPassDrawStateCmd* _cmd) {
-    //     const auto& vbs = _cmd->VertexBuffers();
-    //     for (const auto& vb : vbs) {
-    //         auto* vk_buffer = ResourceCast(vb.first);
-    //         tracker.RecordState(vk_buffer, VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
-    //     }
-    //     const auto& ibs = _cmd->IndexBuffers();
-    //     for (const auto& ib : ibs) {
-    //         auto* vk_buffer = ResourceCast(ib.first);
-    //         tracker.RecordState(vk_buffer, VK_ACCESS_2_INDEX_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
-    //     }
-
-    //     writed_resources.clear();
-
-    //     for (const auto& rt : _cmd->RenderPassInfo().color_attachments) {
-    //         auto* vk_texture = ResourceCast(rt.target);
-    //         auto  action     = rt.action;
-    //         bool  b_load     = GetLoadOp(action) == EAttachmentLoadOp::LOAD;
-    //         bool  b_store    = GetStoreOp(action) == EAttachmentStoreOp::STORE;
-    //         tracker.RecordState(
-    //             vk_texture,
-    //             (b_load ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-    //                 (b_store ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
-    //             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    //             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-    //             0,
-    //             1);
-    //     }
-    //     if (_cmd->RenderPassInfo().depth_attachment.Valid()) {
-    //         auto* vk_texture      = ResourceCast(_cmd->RenderPassInfo().depth_attachment.target);
-    //         auto  action          = _cmd->RenderPassInfo().depth_attachment.action;
-    //         bool  b_depth_load    = GetLoadOp(GetDepthAction(action)) == EAttachmentLoadOp::LOAD;
-    //         bool  b_depth_store   = GetStoreOp(GetDepthAction(action)) == EAttachmentStoreOp::STORE;
-    //         bool  b_stencil_load  = GetLoadOp(GetStencilAction(action)) == EAttachmentLoadOp::LOAD;
-    //         bool  b_stencil_store = GetStoreOp(GetStencilAction(action)) == EAttachmentStoreOp::STORE;
-    //         bool  b_read          = b_depth_load || b_stencil_load;
-    //         bool  b_write         = b_depth_store || b_stencil_store;
-    //         tracker.RecordState(
-    //             vk_texture,
-    //             (b_read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
-    //                 (b_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
-    //             VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    //             VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-    //             0,
-    //             1);
-    //     }
-    // }
-
-    void Visit(const UpdateBindlessArrayCmd* _cmd) {
-        //use dispatch in the future
-        // auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
-        // tracker.RecordState(vk_bindless_array, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-
-        if (!_cmd->HasUpdates()) {
-            return;
-        }
-
-        VulkanBindlessArray* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
-        tracker.RecordState(
-            vk_bindless_array->GetIndexBuffer(),
-            VK_ACCESS_2_SHADER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-        );
-
-        if (_cmd->HasBufferUpdates()) {
-            tracker.RecordState(
-                vk_bindless_array->GetBufferDescriptorBuffer(),
-                VK_ACCESS_2_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-            );
-        }
-
-        if (_cmd->HasTextureUpdates()) {
-            tracker.RecordState(
-                vk_bindless_array->GetTextureSamplerDescriptorBuffer(),
-                VK_ACCESS_2_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-            );
-        }
-    }
-
-    void Visit(const ClearResourceCmd* _cmd) {
-        std::visit(
-            [&](auto&& _arg) {
-                using T = std::decay_t<decltype(_arg)>;
-                if constexpr (std::is_same_v<T, TextureView>) {
-                    auto* vk_texture = ResourceCast(_arg.GetTexture());
-                    tracker.RecordState(
-                        vk_texture,
-                        VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                        _arg.mip_level,
-                        _arg.num_mips,
-                        _arg.array_layer,
-                        _arg.num_array
-                    );
-                } else if constexpr (std::is_same_v<T, BufferView>) {
-                    auto* vk_buffer = ResourceCast(_arg.GetBuffer());
-                    tracker.RecordState(
-                        vk_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
-                    );
-                }
-            },
-            _cmd->Resource()
-        );
-    }
-
-    void Visit(const CustomCmd* _cmd) {
-        switch (_cmd->CustomId()) {
-            case CustomCmd::CustomCmdId::CUSTOM_RASTER:
-                assert(false && "Custom raster draw scene not implemented");
-                break;
-            case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
-                Visit(static_cast<const CustomDispatchCmd*>(_cmd));
-                break;
-            default:
-                assert(false && "Invalid Custom Command for VkCmdPreprocessor");
-        }
-    }
-
-    void Visit(const CustomDispatchCmd* _cmd) {
-        const auto* vk_command = static_cast<const VkCustomDispatchCmd*>(_cmd);
-        for (const auto& usage : vk_command->GetResourceUsages()) {
-            VisitArgs(usage.resource, usage.info);
-        }
-    }
-};
-
-#pragma endregion
-
-#pragma region[ command visitor ]
-
-// Count binds, not draws: MultiDraw binds once per batch element. Internal
-// updates have conditional binds, so reserve their small upper bound without
-// consuming or modifying the command payload during preparation.
+#pragma region[ command translation ]
 std::shared_ptr<const VulkanDescriptorRecordingPlan> PrepareDescriptorRecordingPlan(
     VulkanDevice& _device, const CmdSubmit& _submit, const VulkanDescriptorBufferLease& _lease
 ) {
@@ -2139,11 +833,9 @@ class VkCmdVisitor : VulkanDeviceObject {
     } state = EState::Common;
     VulkanCommandList&     cmd_list;
     VulkanCommandContext&  command_context;
-    VulkanResourceTracker& tracker;
     const TCachedArgArray& cached_args;
     ProfilerStorage*       profiler = nullptr;
     bool                   query_profiling_enabled = false;
-    bool                   inside_inherited_rendering = false;
 
     class ScopedNativeLabel {
     public:
@@ -2167,21 +859,17 @@ public:
     VkCmdVisitor(
         VulkanDevice&          _device,
         VulkanCommandContext&  _command_context,
-        VulkanResourceTracker& _tracker,
         VulkanCommandList&     _cmd_list,
         const TCachedArgArray& _cached_args,
         ProfilerStorage*       _profiler                   = nullptr,
-        bool                   _query_profiling_enabled    = false,
-        bool                   _inside_inherited_rendering = false
+        bool                   _query_profiling_enabled    = false
     ) :
         VulkanDeviceObject(&_device),
         command_context(_command_context),
-        tracker(_tracker),
         cmd_list(_cmd_list),
         cached_args(_cached_args),
         profiler(_profiler),
-        query_profiling_enabled(_query_profiling_enabled),
-        inside_inherited_rendering(_inside_inherited_rendering) {}
+        query_profiling_enabled(_query_profiling_enabled) {}
 
     void VisitCmd(const Command* _cmd) {
         cmd_list.BeginDescriptorCommand(_cmd);
@@ -2299,7 +987,6 @@ public:
         VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
         auto          tmp_buffer = _cmd.staging_buffer;
 
-        // tracker.DispatchBarriers(cmd_list);
         cmd_list.CopyBuffer(
             src_buffer,
             reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
@@ -2358,7 +1045,6 @@ public:
         VulkanTexture* src_texture = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
         auto           tmp_buffer  = _cmd.staging_buffer;
 
-        // tracker.DispatchBarriers(cmd_list);
         cmd_list.CopyTextureToBuffer(
             src_texture,
             reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
@@ -2514,19 +1200,15 @@ public:
 
         // for (const auto& buffer : read_buffers) {
         //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
-        //     tracker.RecordState(vk_buffer, ResolveVulkanBufferState(buffer.state, buffer.pass_type, false));
         // }
         // for (const auto& buffer : write_buffers) {
         //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
-        //     tracker.RecordState(vk_buffer, ResolveVulkanBufferState(buffer.state, buffer.pass_type, true));
         // }
         // for (const auto& texture : read_textures) {
         //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
-        //     tracker.RecordState(vk_texture, ResolveVulkanTextureState(texture.state, texture.pass_type, false, vk_texture->GetAspectFlags()));
         // }
         // for (const auto& texture : write_textures) {
         //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
-        //     tracker.RecordState(vk_texture, ResolveVulkanTextureState(texture.state, texture.pass_type, true, vk_texture->GetAspectFlags()));
         // }
     }
 
@@ -2562,16 +1244,13 @@ public:
                 );
             }
         }
-        std::optional<VulkanDynamicRenderingEnvelope> rendering_envelope;
-        if (!inside_inherited_rendering) {
-            const bool uses_stencil_attachment =
-                pass_info.depth_attachment.Valid() &&
-                FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
-                PipelineUsesStencilAttachment(_cmd.Pipeline());
-            rendering_envelope.emplace(pass_info, uses_stencil_attachment);
-            VkRenderingInfo dynamic_rendering_info = rendering_envelope->RenderingInfo();
-            cmd_list.BeginRendering(dynamic_rendering_info);
-        }
+        const bool uses_stencil_attachment =
+            pass_info.depth_attachment.Valid() &&
+            FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
+            PipelineUsesStencilAttachment(_cmd.Pipeline());
+        VulkanDynamicRenderingEnvelope rendering_envelope(pass_info, uses_stencil_attachment);
+        VkRenderingInfo dynamic_rendering_info = rendering_envelope.RenderingInfo();
+        cmd_list.BeginRendering(dynamic_rendering_info);
 
         cmd_list.BindPipeline(_cmd.Pipeline());
 
@@ -2703,9 +1382,7 @@ public:
                 draw_data.idx_view
             );
         }
-        if (!inside_inherited_rendering) {
-            cmd_list.EndRendering();
-        }
+        cmd_list.EndRendering();
         cmd_list.EndLabel();
     }
 
@@ -2720,16 +1397,13 @@ public:
         state = EState::Draw;
 
         const auto& pass_info = _cmd.RenderPassInfo();
-        std::optional<VulkanDynamicRenderingEnvelope> rendering_envelope;
-        if (!inside_inherited_rendering) {
-            const bool uses_stencil_attachment =
-                pass_info.depth_attachment.Valid() &&
-                FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
-                DrawBatchUsesStencilAttachment(_cmd.draw_batch);
-            rendering_envelope.emplace(pass_info, uses_stencil_attachment);
-            VkRenderingInfo dynamic_rendering_info = rendering_envelope->RenderingInfo();
-            cmd_list.BeginRendering(dynamic_rendering_info);
-        }
+        const bool uses_stencil_attachment =
+            pass_info.depth_attachment.Valid() &&
+            FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
+            DrawBatchUsesStencilAttachment(_cmd.draw_batch);
+        VulkanDynamicRenderingEnvelope rendering_envelope(pass_info, uses_stencil_attachment);
+        VkRenderingInfo dynamic_rendering_info = rendering_envelope.RenderingInfo();
+        cmd_list.BeginRendering(dynamic_rendering_info);
         const auto& rect = pass_info.render_area;
         VkViewport  viewport{
             .x        = float(rect.offset.x),
@@ -2920,9 +1594,7 @@ public:
             );
         }
 
-        if (!inside_inherited_rendering) {
-            cmd_list.EndRendering();
-        }
+        cmd_list.EndRendering();
         cmd_list.EndLabel();
     }
 
@@ -3427,12 +2099,6 @@ public:
             dependency.pBufferMemoryBarriers    = &barrier;
 
             vkCmdPipelineBarrier2(cmd_list.GetHandle(), &dependency);
-            tracker.AdoptExternalState(
-                instance_buffer,
-                VK_ACCESS_2_SHADER_READ_BIT,
-                VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
-            );
-            // tracker.RecordState(instance_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
         }
         VkAccelerationStructureBuildGeometryInfoKHR build_info{
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR
@@ -3555,10 +2221,13 @@ public:
 
 #pragma endregion
 
-// Validate before native recording or consuming command payloads. Commands
-// with backend-private build/update protocols migrate separately; never fall
-// back to inferred barriers for a partially compiled submission.
-bool SupportsCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
+// Validate before native recording or consuming command payloads. Build/update
+// commands retain their backend-private protocols; application dependencies
+// must already be compiled into the submission.
+bool SupportsVulkanCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
+    if (!submit.cmds.empty() && submit.resource_state_ownership != ERHIResourceStateOwnership::Compiled) {
+        return false;
+    }
     for (const auto& command : submit.cmds) {
         if (!command) {
             return false;
@@ -3589,9 +2258,11 @@ bool SupportsCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
                 }
                 break;
             case Command::EType::Custom: {
+                if (static_cast<const CustomCmd&>(*command).CustomId() != CustomCmd::CustomCmdId::CUSTOM_DISPATCH) {
+                    return false;
+                }
                 const auto& custom = static_cast<const VkCustomDispatchCmd&>(*command);
-                if (custom.GetQueueType() != queue || !custom.PreservesCompiledResourceStates() ||
-                    submit.translate_execution_class != ERHITranslateExecutionClass::SerialControl) {
+                if (custom.GetQueueType() != queue || !custom.PreservesCompiledResourceStates()) {
                     return false;
                 }
                 break;
@@ -3615,7 +2286,7 @@ void RecordCompiledBindlessUpdate(
     const UpdateBindlessArrayCmd& command
 ) {
     auto*                      table = static_cast<VulkanBindlessArray*>(command.Handle());
-    VulkanResolvedBarrierBatch before, after;
+    VulkanBarrierBatch before, after;
     auto protect = [&](VulkanBuffer* buffer, uint64 offset, uint64 size, VkAccessFlags2 read_access) {
         VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
         barrier.srcStageMask        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -3670,7 +2341,7 @@ void RecordCompiledTlasUpdate(
     VulkanCommandList& native, VkCmdVisitor& visitor, const UpdateRaytracingSceneCmd& command
 ) {
     if (command.InstancesToUpdate().empty() && !command.ForceUpdate()) { return; }
-    VulkanResolvedBarrierBatch before;
+    VulkanBarrierBatch before;
     const auto protect = [&](VulkanBuffer* buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access) {
         VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
         barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -3694,6 +2365,244 @@ void RecordCompiledTlasUpdate(
     visitor.VisitCmd(&command);
 }
 
+// Backend-private allocation and explicit barrier preparation. Each staging
+// slice is exclusively owned until completion; no application state is inferred.
+struct VulkanCommandPreparation {
+    VulkanDevice& device;
+    VulkanTemporaryBufferAllocator& temporary_buffer_allocator;
+    EQueueType current_queue;
+    VulkanBarrierRecorder barriers;
+
+    void UploadDependency(const BufferView& view) {
+        barriers.Append(ResourceCast(view.GetBuffer()), view.GetByteOffset(), view.GetByteSize(),
+            EBarrierQueueTransferPhase::None, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+            VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    }
+
+    void Visit(const UploadBufferCmd* _cmd) {
+        auto data_span  = _cmd->Data();
+        auto tmp_buffer = temporary_buffer_allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
+        device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
+        _cmd->staging_buffer = tmp_buffer;
+
+        UploadDependency(_cmd->staging_buffer);
+    }
+
+    void Visit(const UploadTextureCmd* _cmd) {
+        const auto data_span  = _cmd->Data();
+        auto*      vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
+        // The staging buffer can be larger than this upload's slice. Validate
+        // the supplied data before allocating or copying into that slice.
+        ValidateTextureTransferDataSize(*vk_texture, _cmd->Size(), data_span.size_bytes());
+        auto tmp_buffer = temporary_buffer_allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
+        device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
+        _cmd->staging_buffer = tmp_buffer;
+
+        UploadDependency(_cmd->staging_buffer);
+    }
+
+    void Visit(const CopyBackBufferCmd* _cmd) {
+        auto tmp_buffer      = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        _cmd->staging_buffer = tmp_buffer;
+
+    }
+
+    void Visit(const CopyBackTextureCmd* _cmd) {
+        auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
+        ValidateTextureTransferDataSize(*vk_texture, _cmd->Size(), _cmd->ByteSize());
+        auto tmp_buffer      = temporary_buffer_allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        _cmd->staging_buffer = tmp_buffer;
+
+    }
+
+    void Visit(const BuildAccelerationStructuresCmd* _cmd) {
+        const Array<AccelerationStructureBuildParam>& params  = _cmd->Params();
+        BufferView&                                   scratch = _cmd->Scratch();
+        if (!scratch.GetBuffer()) {
+            uint64 scratch_size      = 0;
+            uint64 scratch_alignment = 256u;
+
+            for (const AccelerationStructureBuildParam& param : params) {
+                auto* vk_geo = ResourceCast(param.geometry.Get());
+                scratch_size = Moer::AlignUp(scratch_size, scratch_alignment);
+                scratch_size += param.mode == ERaytracingBuildMode::BUILD ?
+                                    vk_geo->build_sizes_info.buildScratchSize :
+                                    vk_geo->build_sizes_info.updateScratchSize;
+            }
+            scratch_size += scratch_alignment;
+
+            scratch = temporary_buffer_allocator.AllocateScratch(scratch_size);
+        }
+    }
+
+    void Visit(const BarrierCmd* _cmd) {
+        if (!_cmd->HasExplicitBarriers()) {
+            throw std::invalid_argument("Vulkan requires fully specified barriers");
+        }
+
+        if (_cmd->GetSrcQueue() != current_queue ||
+            _cmd->GetDstQueue() != current_queue) {
+            LOG_CRITICAL(
+                "Explicit BarrierCmd queue affinity mismatch: command={} "
+                "current={}",
+                static_cast<uint>(_cmd->GetSrcQueue()),
+                static_cast<uint>(current_queue)
+            );
+            throw std::logic_error("explicit barrier recorded on the wrong queue");
+        }
+
+        const auto resolve_transfer =
+            [&](const BarrierQueueTransfer& transfer) {
+                std::pair<uint32_t, uint32_t> families{
+                    VK_QUEUE_FAMILY_IGNORED,
+                    VK_QUEUE_FAMILY_IGNORED,
+                };
+                if (transfer.phase == EBarrierQueueTransferPhase::None) {
+                    if (transfer.external) {
+                        throw std::invalid_argument("Vulkan external ownership barrier requires a phase");
+                    }
+                    return families;
+                }
+                if (transfer.phase != EBarrierQueueTransferPhase::Release &&
+                    transfer.phase != EBarrierQueueTransferPhase::Acquire) {
+                    throw std::invalid_argument(
+                        "Vulkan ownership barrier carries an unknown phase"
+                    );
+                }
+                if (transfer.external) {
+                    const bool release  = transfer.phase == EBarrierQueueTransferPhase::Release;
+                    const auto managed  = release ? transfer.src_queue : transfer.dst_queue;
+                    const auto external = release ? transfer.dst_queue : transfer.src_queue;
+                    if (managed != current_queue || external != EQueueType::Ignore) {
+                        throw std::invalid_argument("Vulkan external ownership barrier endpoint mismatch"
+                        );
+                    }
+                    const auto family = device.GetQueueFamilyIndex(managed);
+                    if (family == VK_QUEUE_FAMILY_IGNORED) {
+                        throw std::invalid_argument(
+                            "Vulkan external ownership barrier has no native queue"
+                        );
+                    }
+                    return release ? std::pair{family, uint32_t(VK_QUEUE_FAMILY_EXTERNAL)} :
+                                     std::pair{uint32_t(VK_QUEUE_FAMILY_EXTERNAL), family};
+                }
+                if ((transfer.src_queue != EQueueType::Graphics &&
+                     transfer.src_queue != EQueueType::Compute &&
+                     transfer.src_queue != EQueueType::Copy) ||
+                    (transfer.dst_queue != EQueueType::Graphics &&
+                     transfer.dst_queue != EQueueType::Compute &&
+                     transfer.dst_queue != EQueueType::Copy) ||
+                    transfer.src_queue == transfer.dst_queue) {
+                    throw std::invalid_argument(
+                        "Vulkan ownership barrier requires distinct managed "
+                        "Graphics/Compute/Copy endpoints"
+                    );
+                }
+                const EQueueType expected_queue =
+                    transfer.phase == EBarrierQueueTransferPhase::Release ?
+                        transfer.src_queue :
+                        transfer.dst_queue;
+                if (current_queue != expected_queue) {
+                    throw std::logic_error(
+                        "Vulkan ownership barrier recorded on the wrong endpoint"
+                    );
+                }
+                families.first =
+                    device.GetQueueFamilyIndex(transfer.src_queue);
+                families.second =
+                    device.GetQueueFamilyIndex(transfer.dst_queue);
+                if (families.first == VK_QUEUE_FAMILY_IGNORED ||
+                    families.second == VK_QUEUE_FAMILY_IGNORED ||
+                    families.first == families.second) {
+                    throw std::invalid_argument(
+                        "Vulkan ownership barrier requires two distinct queue families"
+                    );
+                }
+                return families;
+            };
+
+        for (const ExplicitBufferBarrier& barrier : _cmd->ExplicitBuffers()) {
+            if (barrier.src_state.texture_layout !=
+                    ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ||
+                barrier.dst_state.texture_layout !=
+                    ETextureLayout::TEXTURE_LAYOUT_UNDEFINED) {
+                throw std::invalid_argument(
+                    "explicit buffer barrier cannot carry a texture layout"
+                );
+            }
+            const auto [src_family, dst_family] =
+                resolve_transfer(barrier.queue_transfer);
+            barriers.Append(
+                reinterpret_cast<VulkanBuffer*>(barrier.handle),
+                barrier.offset,
+                barrier.byte_size,
+                barrier.queue_transfer.phase,
+                src_family,
+                dst_family,
+                VulkanEnumTranslator::METoVkPipelineStageFlags2(
+                    barrier.src_state.stage
+                ),
+                VulkanEnumTranslator::METoVkAccessFlags2(
+                    barrier.src_state.access
+                ),
+                VulkanEnumTranslator::METoVkPipelineStageFlags2(
+                    barrier.dst_state.stage
+                ),
+                VulkanEnumTranslator::METoVkAccessFlags2(
+                    barrier.dst_state.access
+                )
+            );
+        }
+        for (const ExplicitTextureBarrier& barrier :
+             _cmd->ExplicitTextures()) {
+            const VkImageLayout src_layout =
+                VulkanEnumTranslator::METoVKImageLayout(
+                    barrier.src_state.texture_layout
+                );
+            const VkImageLayout dst_layout =
+                VulkanEnumTranslator::METoVKImageLayout(
+                    barrier.dst_state.texture_layout
+                );
+            if (src_layout == VK_IMAGE_LAYOUT_MAX_ENUM ||
+                dst_layout == VK_IMAGE_LAYOUT_MAX_ENUM) {
+                throw std::invalid_argument(
+                    "explicit texture barrier carries an unsupported layout"
+                );
+            }
+            const auto [src_family, dst_family] =
+                resolve_transfer(barrier.queue_transfer);
+            barriers.Append(
+                reinterpret_cast<VulkanTexture*>(barrier.handle),
+                VulkanEnumTranslator::METoVKImageAspectFlags(
+                    barrier.texture_aspects
+                ),
+                barrier.mip_level,
+                barrier.mip_count,
+                barrier.array_layer,
+                barrier.array_count,
+                barrier.queue_transfer.phase,
+                src_family,
+                dst_family,
+                VulkanEnumTranslator::METoVkPipelineStageFlags2(
+                    barrier.src_state.stage
+                ),
+                VulkanEnumTranslator::METoVkAccessFlags2(
+                    barrier.src_state.access
+                ),
+                src_layout,
+                VulkanEnumTranslator::METoVkPipelineStageFlags2(
+                    barrier.dst_state.stage
+                ),
+                VulkanEnumTranslator::METoVkAccessFlags2(
+                    barrier.dst_state.access
+                ),
+                dst_layout
+            );
+        }
+    }
+};
+
 void RecordCompiledCommands(
     VulkanDevice&         device,
     VulkanCommandContext& context,
@@ -3702,10 +2611,7 @@ void RecordCompiledCommands(
     EQueueType            queue,
     bool                  suppress_timestamp_queries = false
 ) {
-    auto&             tracker = context.GetTracker();
-    VkCmdPreprocessor preparation(
-        device, tracker, context.GetTemporaryBufferAllocator(), {}, submit.cached_args, queue
-    );
+    VulkanCommandPreparation preparation{device, context.GetTemporaryBufferAllocator(), queue};
     for (const auto& command : submit.cmds) {
         if (suppress_timestamp_queries && command->Type() == Command::EType::Query) {
             continue;
@@ -3717,10 +2623,10 @@ void RecordCompiledCommands(
         }
         if (command->Type() == Command::EType::BuildAccel) {
             const auto* build = static_cast<const BuildAccelerationStructuresCmd*>(command.get());
-            preparation.Visit(build, false);
+            preparation.Visit(build);
             // Scratch is backend-private. Vertex/index inputs and BLAS output
             // are exclusively synchronized by the graph's declared resources.
-            VulkanResolvedBarrierBatch before;
+            VulkanBarrierBatch before;
             VkBufferMemoryBarrier2     barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
             barrier.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
@@ -3745,16 +2651,16 @@ void RecordCompiledCommands(
         // Shader arguments, attachments and bindless membership are not scanned.
         switch (command->Type()) {
             case Command::EType::UploadBuffer:
-                preparation.Visit(static_cast<const UploadBufferCmd*>(command.get()), false);
+                preparation.Visit(static_cast<const UploadBufferCmd*>(command.get()));
                 break;
             case Command::EType::UploadTexture:
-                preparation.Visit(static_cast<const UploadTextureCmd*>(command.get()), false);
+                preparation.Visit(static_cast<const UploadTextureCmd*>(command.get()));
                 break;
             case Command::EType::CopyBackBuffer:
-                preparation.Visit(static_cast<const CopyBackBufferCmd*>(command.get()), false);
+                preparation.Visit(static_cast<const CopyBackBufferCmd*>(command.get()));
                 break;
             case Command::EType::CopyBackTexture:
-                preparation.Visit(static_cast<const CopyBackTextureCmd*>(command.get()), false);
+                preparation.Visit(static_cast<const CopyBackTextureCmd*>(command.get()));
                 break;
             case Command::EType::Barrier:
                 preparation.Visit(static_cast<const BarrierCmd*>(command.get()));
@@ -3762,96 +2668,33 @@ void RecordCompiledCommands(
             default:
                 break;
         }
-        tracker.ResolveBarriers();
-        tracker.DispatchBarriers(context.GetCommandList());
+        preparation.barriers.Flush(context.GetCommandList());
         visitor.VisitCmd(command.get());
+        const BufferView readback = command->Type() == Command::EType::CopyBackBuffer ?
+            static_cast<const CopyBackBufferCmd*>(command.get())->staging_buffer :
+            command->Type() == Command::EType::CopyBackTexture ?
+            static_cast<const CopyBackTextureCmd*>(command.get())->staging_buffer : BufferView{};
+        if (readback.GetBuffer()) {
+            preparation.barriers.Append(ResourceCast(readback.GetBuffer()), readback.GetByteOffset(), readback.GetByteSize(),
+                EBarrierQueueTransferPhase::None, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+            preparation.barriers.Flush(context.GetCommandList());
+        }
     }
 }
 
 void RecordVulkanCopyCommands(
-    VulkanDevice&         device,
-    VulkanCommandContext& vk_command_context,
-    CmdSubmit&            submit,
-    bool                  suppress_timestamp_queries
+    VulkanDevice& device, VulkanCommandContext& context, CmdSubmit& submit,
+    bool suppress_timestamp_queries
 ) {
-    if (RequiresCompiledCommands() && !submit.cmds.empty() &&
-        submit.resource_state_ownership != ERHIResourceStateOwnership::Compiled) {
-        throw std::invalid_argument("Copy submission did not provide a compiled resource plan");
-    }
-    if (submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled) {
-        if (!SupportsCompiledCommands(submit, EQueueType::Copy)) {
-            throw std::invalid_argument("compiled Copy submission contains an unsupported command");
-        }
-        auto&        native  = vk_command_context.GetCommandList();
-        auto&        tracker = vk_command_context.GetTracker();
-        VkCmdVisitor visitor(device, vk_command_context, tracker, native, submit.cached_args);
-        VK_CHECK_RESULT(native.Begin());
-        native.BeginLabel("Compiled Copy", {0.0f, 1.0f, 1.0f, 1.0f});
-        RecordCompiledCommands(
-            device, vk_command_context, submit, visitor, EQueueType::Copy, suppress_timestamp_queries
-        );
-        native.EndLabel();
-        VK_CHECK_RESULT(native.End());
-        tracker.Reset();
-        return;
-    }
-    FunctionTable function_table{
-        .get_argument_access     = &GetArgumentAccess,
-        .is_resource_in_bindless = &IsResourceInBindlessArray,
-        .lock_bdls_array         = &LockBindlessArray,
-        .unlock_bdls_array       = &UnlockBindlessArray
-    };
-    CmdReorderer reorderer{function_table, submit.cached_args};
-
-    auto& vk_cmd_list        = vk_command_context.GetCommandList();
-    auto& vk_tracker         = vk_command_context.GetTracker();
-
-    VkCmdPreprocessor preprocessor(
-        device,
-        vk_tracker,
-        vk_command_context.GetTemporaryBufferAllocator(),
-        {},
-        submit.cached_args,
-        EQueueType::Copy
-    );
-    VkCmdVisitor visitor(
-        device, vk_command_context, vk_tracker, vk_cmd_list, submit.cached_args
-    );
-
-    for (const auto& cmd : submit.cmds) {
-        if (suppress_timestamp_queries && cmd &&
-            cmd->Type() == Command::EType::Query) {
-            continue;
-        }
-        reorderer.AcceptCmd(cmd.get());
-    }
-
-    VK_CHECK_RESULT(vk_cmd_list.Begin());
-    vk_cmd_list.BeginLabel("Copy", {0.0f, 1.0f, 1.0f, 1.0f});
-    for (const CmdReorderer::LinkedCommandList& cmd_list :
-         reorderer.m_cmd_lists) {
-        if (cmd_list.head == nullptr) {
-            continue;
-        }
-        for (const auto* node = cmd_list.head; node != nullptr;
-             node = node->next) {
-            preprocessor.VisitCmd(node->cmd);
-        }
-        vk_tracker.ResolveBarriers();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-        for (const auto* node = cmd_list.head; node != nullptr;
-             node = node->next) {
-            visitor.VisitCmd(node->cmd);
-        }
-    }
-
-    if (!submit.HasExplicitResourceStateOwnership()) {
-        vk_tracker.RestorePreferredStates();
-    }
-    vk_tracker.DispatchBarriers(vk_cmd_list);
-    vk_cmd_list.EndLabel();
-    VK_CHECK_RESULT(vk_cmd_list.End());
-    vk_tracker.Reset();
+    auto& native = context.GetCommandList();
+    VkCmdVisitor visitor(device, context, native, submit.cached_args);
+    VK_CHECK_RESULT(native.Begin());
+    native.BeginLabel("Copy", {0.0f, 1.0f, 1.0f, 1.0f});
+    RecordCompiledCommands(device, context, submit, visitor, EQueueType::Copy, suppress_timestamp_queries);
+    native.EndLabel();
+    VK_CHECK_RESULT(native.End());
 }
 
 #pragma region[ VkCommandQueue ]
@@ -3947,28 +2790,6 @@ void MarkSubmissionAccepted(
            _barrier.array_count == _texture.GetNumArray();
 }
 
-[[nodiscard]] static bool IsAcceptedPresentationSourcePublication(
-    const TextureBarrier& _barrier,
-    const VulkanTexture&  _texture
-) noexcept {
-    const ETextureUsageFlags required_usage =
-        ETextureUsageFlags::PRESENTATION_SOURCE |
-        ETextureUsageFlags::TRANSFER_SRC;
-    return _barrier.publish_external_state &&
-           _barrier.state == ETextureState::TRANSFER &&
-           _barrier.pass_type == EPassType::Copy &&
-           (_texture.GetUsage() & required_usage) == required_usage &&
-           _texture.GetAspectFlags() == ETextureAspectFlags::COLOR &&
-           _texture.GetNumSamples() == 1 &&
-           !_texture.b_present &&
-           _texture.GetPreferredLayout() ==
-               VK_IMAGE_LAYOUT_GENERAL &&
-           _barrier.mip_level == 0 &&
-           _barrier.mip_cnt == _texture.GetNumMips() &&
-           _barrier.array_layer == 0 &&
-           _barrier.array_cnt == _texture.GetNumArray();
-}
-
 template<typename TTextureVisitor, typename TBindlessVisitor>
 static void VisitPresentationTextureArgument(
     const TArg&        _argument,
@@ -4053,7 +2874,7 @@ static void VisitPresentationTextureArguments(
     }
 }
 
-// Freeze source command order before CmdReorderer or parallel translation can
+// Freeze source command order before translation can
 // change execution topology. Direct texture uses become concrete events;
 // bindless uses remain symbolic until Submission can observe the last
 // natively accepted descriptor membership.
@@ -4143,14 +2964,12 @@ BuildPresentationSourceStateProgram(
             }
 
             size_t reference_count = 0;
-            const TextureBarrier* legacy_publication = nullptr;
             const ExplicitTextureBarrier*
                 explicit_publication = nullptr;
             for (const TextureBarrier& barrier :
                  _command.ReadTextures()) {
                 if (barrier.handle == _handle) {
                     ++reference_count;
-                    legacy_publication = &barrier;
                 }
             }
             for (const TextureBarrier& barrier :
@@ -4170,19 +2989,8 @@ BuildPresentationSourceStateProgram(
             bool ready = false;
             if (_queue == EQueueType::Graphics &&
                 reference_count == 1) {
-                if (_submit.HasExplicitResourceStateOwnership()) {
-                    ready =
-                        explicit_publication != nullptr &&
-                        IsAcceptedPresentationSourcePublication(
-                            *explicit_publication, *texture
-                        );
-                } else {
-                    ready =
-                        legacy_publication != nullptr &&
-                        IsAcceptedPresentationSourcePublication(
-                            *legacy_publication, *texture
-                        );
-                }
+                ready = explicit_publication != nullptr &&
+                        IsAcceptedPresentationSourcePublication(*explicit_publication, *texture);
             }
             record_texture(texture, ready);
         };
@@ -4833,12 +3641,7 @@ VkCommandQueue::VkCommandQueue(
     VulkanDevice& _device,
     EQueueType    _type,
     bool          _enable_rhi_thread,
-    bool          _thread_profile_logging,
-    bool          _parallel_recording,
-    uint32_t      _parallel_record_workers,
-    bool          _parallel_record_verify,
-    bool          _parallel_record_profile,
-    uint32_t      _parallel_record_min_work_units_per_job
+    bool          _thread_profile_logging
 ) :
     CommandQueue(),
     vk_device(_device),
@@ -4850,25 +3653,9 @@ VkCommandQueue::VkCommandQueue(
         _type
     ),
     profiler_storage(timestamp_pool),
-    rhi_thread_enabled(_enable_rhi_thread),
-    parallel_record_requested(_parallel_recording),
-    parallel_record_verify(_parallel_record_verify),
-    parallel_record_profile_enabled(_parallel_record_profile),
-    parallel_record_min_work_units_per_job(
-        std::max(1u, _parallel_record_min_work_units_per_job)
-    ) {
+    rhi_thread_enabled(_enable_rhi_thread) {
     if (_thread_profile_logging) {
         thread_profile = MakeUnique<RhiThreadProfileState>();
-    }
-    if (parallel_record_profile_enabled && _type == EQueueType::Graphics) {
-        parallel_record_profile = MakeUnique<ParallelRecordProfileState>();
-    }
-    if (parallel_record_requested && rhi_thread_enabled && _type == EQueueType::Graphics) {
-        const uint32 hardware_threads = std::max(2u, std::thread::hardware_concurrency());
-        parallel_record_workers = _parallel_record_workers == 0
-                                      ? std::min(4u, hardware_threads)
-                                      : std::clamp(_parallel_record_workers, 2u, hardware_threads);
-        parallel_record_pool = MakeUnique<ExternalCpuJoinPool>(parallel_record_workers);
     }
     timeline = MoerNew(VulkanTimeline(vk_device));
 
@@ -4887,24 +3674,6 @@ VkCommandQueue::VkCommandQueue(
             _type == EQueueType::Graphics ? "graphics" : "compute",
             rhi_thread_enabled ? "threaded" : "synchronous"
         );
-        if (parallel_record_requested) {
-            LOG_INFO(
-                "[ParallelRecord] queue={} requested=true effective={} workers={} "
-                "min_work_units_per_job={} reason={}",
-                _type == EQueueType::Graphics ? "Graphics" : "Compute",
-                parallel_record_pool != nullptr,
-                parallel_record_workers,
-                parallel_record_min_work_units_per_job,
-                parallel_record_pool ? "none" :
-                _type != EQueueType::Graphics ? "unsupported-queue" :
-                                                "rhi-thread-disabled-or-bypass"
-            );
-        }
-        if (parallel_record_profile) {
-            LOG_INFO(
-                "[ParallelRecordProfile][Config] queue=Graphics enabled=true window_ms=1000"
-            );
-        }
     } catch (...) {
         if (rhi_thread_enabled) {
             {
@@ -4934,7 +3703,6 @@ VkCommandQueue::VkCommandQueue(
 
 VkCommandQueue::~VkCommandQueue() {
     Sync();
-    FlushParallelRecordProfile();
 
     if (rhi_thread_enabled) {
         {
@@ -4943,11 +3711,6 @@ VkCommandQueue::~VkCommandQueue() {
         }
         rhi_work_cv.notify_all();
         rhi_thread.join();
-    }
-
-    if (parallel_record_pool) {
-        parallel_record_pool->StopAndDrain();
-        parallel_record_pool.reset();
     }
 
     // Legacy/direct queue teardown also waits before releasing Copy inputs.
@@ -5557,9 +4320,6 @@ VkCommandQueue::SubmitRecorded(
         "recorded Vulkan submit command-list ownership mismatch"
     );
 
-    const auto profile_submit_started = _recorded.profile.enabled ?
-                                            std::chrono::steady_clock::now() :
-                                            std::chrono::steady_clock::time_point{};
     const auto end_tag = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VulkanOperationResult submit_outcome{};
     if (!WaitForSubmittedDependencies(
@@ -5694,26 +4454,11 @@ VkCommandQueue::SubmitRecorded(
             }
         }
     }
-    const double profile_submit_cpu_ms = _recorded.profile.enabled ?
-                                             RhiThreadProfileMilliseconds(
-                                                 profile_submit_started,
-                                                 std::chrono::steady_clock::now()
-                                             ) :
-                                             0.0;
     const uint32 ordered_cmd_list_count =
         static_cast<uint32>(_recorded.ordered_cmd_lists.size());
 
     if (!_defer_completion) {
         CommitRuntimeSubmitCompletion(_recorded, submit_outcome);
-    }
-
-    if (_recorded.profile.enabled) {
-        _recorded.profile.sample.submit_cpu_ms = profile_submit_cpu_ms;
-        _recorded.profile.sample.execute_cpu_wall_ms = RhiThreadProfileMilliseconds(
-            _recorded.profile.execute_started, std::chrono::steady_clock::now()
-        );
-        _recorded.profile.sample.ordered_cb = ordered_cmd_list_count;
-        RecordParallelRecordProfile(_recorded.profile.sample);
     }
 
     return {
@@ -5809,1664 +4554,6 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
         std::terminate();
     }
     queue_cv.notify_one();
-}
-
-bool VkCommandQueue::TryExecuteParallel(
-    CmdSubmit&                    _submit,
-    VulkanDescriptorBufferLease&  descriptor_lease,
-    const std::shared_ptr<const VulkanDescriptorRecordingPlan>& descriptor_plan,
-    uint64                        _timeline,
-    uint64                        _serial,
-    const VulkanOperationContext& _context,
-    const FunctionTable&           _function_table,
-    const CmdReorderer&            _reorderer,
-    double                         _reorder_time,
-    std::chrono::steady_clock::time_point _profile_started,
-    VulkanPresentationSourceStateProgram&
-                                  _presentation_source_program,
-    std::optional<CurrentVulkanRecordedSubmit>* _out_recorded
-) {
-    const ERHIProfilingPhase profiling_phase = _submit.ProfilingPhase();
-    const bool emits_profiling_queries       = _submit.EmitsProfilingQueries();
-    const bool begins_profiling_frame        = _submit.BeginsProfilingFrame();
-    const bool ends_profiling_frame          = _submit.EndsProfilingFrame();
-    const bool complete_profiling_frame =
-        profiling_phase == ERHIProfilingPhase::Complete;
-    auto fallback_name = [](ParallelRecordFallbackReason _reason) -> std::string_view {
-        switch (_reason) {
-            case ParallelRecordFallbackReason::None:
-                return "none";
-            case ParallelRecordFallbackReason::WorkerCountTooSmall:
-                return "worker-count-too-small";
-            case ParallelRecordFallbackReason::NoEligibleLayer:
-                return "no-eligible-layer";
-            case ParallelRecordFallbackReason::InsufficientWork:
-                return "insufficient-work";
-            case ParallelRecordFallbackReason::InsufficientConcurrency:
-                return "insufficient-concurrency";
-            case ParallelRecordFallbackReason::InvalidWorkDescription:
-                return "invalid-work-description";
-            case ParallelRecordFallbackReason::InvalidCommandType:
-                return "invalid-command-type";
-            case ParallelRecordFallbackReason::LayerTooLarge:
-                return "layer-too-large";
-        }
-        return "unknown";
-    };
-    uint64 batch_serial = 0;
-    auto verify_fallback = [&](std::string_view _reason) {
-        if (parallel_record_verify) {
-            LOG_INFO(
-                "[ParallelRecord] batch={} requested=true effective=false reason={} coordinator={}",
-                batch_serial,
-                _reason,
-                Platform::GetCurrentThreadID()
-            );
-        }
-    };
-
-    if (!parallel_record_pool || queue.GetType() != EQueueType::Graphics || !rhi_thread_enabled) {
-        return false;
-    }
-    batch_serial = ++parallel_record_batch_serial;
-    if (thread_profile) {
-        verify_fallback("record-diagnostics-enabled");
-        return false;
-    }
-    if (std::any_of(
-            _submit.cmds.begin(),
-            _submit.cmds.end(),
-            [](const UniquePtr<Command>& _command) {
-                return _command &&
-                       _command->Type() == Command::EType::Query;
-            }
-        )) {
-        // A query pair must stay in one native command buffer owned by one
-        // command context. Other source packets can still translate concurrently;
-        // only this source falls back to its serial recorder.
-        verify_fallback("query-serial-island");
-        return false;
-    }
-
-    const auto& cmd_lists = _reorderer.m_cmd_lists;
-    Array<Array<const Command*>> command_layers(cmd_lists.size());
-    Array<Array<Command::EType>> type_layers(cmd_lists.size());
-    Array<Array<uint32_t>>       work_unit_layers(cmd_lists.size());
-    for (size_t layer_index = 0; layer_index < cmd_lists.size(); ++layer_index) {
-        for (const auto* node = cmd_lists[layer_index].head; node != nullptr; node = node->next) {
-            command_layers[layer_index].push_back(node->cmd);
-            type_layers[layer_index].push_back(node->cmd->Type());
-            work_unit_layers[layer_index].push_back(
-                VulkanParallelRecordDetail::EstimateWorkUnits(
-                    *node->cmd, _submit.cached_args
-                )
-            );
-        }
-    }
-
-    // Scope commands own a reorderer layer. Validate that invariant before
-    // any command payload or tracker state is prepared, then virtualize the
-    // scope across independently recorded primaries below.
-    Array<const ScopeCmd*> scope_validation_stack;
-    for (const auto& commands : command_layers) {
-        uint32 scope_count = 0;
-        for (const Command* command : commands) {
-            scope_count += command->Type() == Command::EType::Scope ? 1u : 0u;
-        }
-        if (scope_count != 0 && (scope_count != 1 || commands.size() != 1)) {
-            verify_fallback("mixed-scope-layer");
-            return false;
-        }
-        if (scope_count == 0) {
-            continue;
-        }
-        const auto* scope = static_cast<const ScopeCmd*>(commands.front());
-        if (scope->IsPush()) {
-            scope_validation_stack.push_back(scope);
-        } else {
-            if (scope_validation_stack.empty() ||
-                scope_validation_stack.back()->ScopeName() != scope->ScopeName() ||
-                scope_validation_stack.back()->QueryTimestamp() != scope->QueryTimestamp()) {
-                verify_fallback("unbalanced-scope");
-                return false;
-            }
-            scope_validation_stack.pop_back();
-        }
-    }
-    if (!scope_validation_stack.empty()) {
-        verify_fallback("unbalanced-scope");
-        return false;
-    }
-
-    Array<ParallelRecordLayerDescription> layer_descriptions;
-    layer_descriptions.reserve(type_layers.size());
-    for (size_t layer_index = 0; layer_index < type_layers.size(); ++layer_index) {
-        bool force_serial = false;
-        if (emits_profiling_queries) {
-            for (const Command* command : command_layers[layer_index]) {
-                if (command->Type() == Command::EType::ShaderDispatch &&
-                    static_cast<const DispatchCmd*>(command)->ProfileSectionName() != "Other") {
-                    force_serial = true;
-                    break;
-                }
-            }
-        }
-        layer_descriptions.push_back({
-            .command_types = std::span<const Command::EType>(
-                type_layers[layer_index].data(), type_layers[layer_index].size()
-            ),
-            .command_work_units = std::span<const uint32_t>(
-                work_unit_layers[layer_index].data(), work_unit_layers[layer_index].size()
-            ),
-            .force_serial = force_serial,
-        });
-    }
-    const ParallelRecordPlan plan = BuildParallelRecordPlan(
-        std::span<const ParallelRecordLayerDescription>(
-            layer_descriptions.data(), layer_descriptions.size()
-        ),
-        parallel_record_workers,
-        parallel_record_min_work_units_per_job
-    );
-    if (!plan.CanRecordInParallel()) {
-        if (parallel_record_verify && batch_serial <= 16) {
-            for (size_t layer_index = 0; layer_index < layer_descriptions.size(); ++layer_index) {
-                const ParallelRecordLayerDescription& layer = layer_descriptions[layer_index];
-                if (layer.command_types.empty()) {
-                    continue;
-                }
-                std::string type_names;
-                uint64      layer_work_units = 0;
-                for (const Command::EType type : layer.command_types) {
-                    if (!type_names.empty()) {
-                        type_names += ',';
-                    }
-                    type_names += GetCommandRecordTraits(type).stable_name;
-                }
-                for (const uint32_t work_units : layer.command_work_units) {
-                    layer_work_units += work_units;
-                }
-                LOG_INFO(
-                    "[ParallelRecord] batch={} candidate-layer={} commands={} work_units={} "
-                    "force_serial={} types={}",
-                    batch_serial,
-                    layer_index,
-                    layer.command_types.size(),
-                    layer_work_units,
-                    layer.force_serial,
-                    type_names
-                );
-            }
-        }
-        verify_fallback(fallback_name(plan.fallback_reason));
-        return false;
-    }
-    uint64 parallel_work_units = 0;
-    for (const ParallelRecordLayerPlan& layer_plan : plan.layers) {
-        if (!layer_plan.parallel) {
-            continue;
-        }
-        for (uint32 job_index = 0; job_index < layer_plan.job_count; ++job_index) {
-            parallel_work_units += plan.jobs[layer_plan.first_job + job_index].work_units;
-        }
-    }
-    for (const ParallelRecordLayerPlan& layer_plan : plan.layers) {
-        if (!layer_plan.parallel) {
-            continue;
-        }
-        for (const Command* command : command_layers[layer_plan.layer_index]) {
-            if (!IsParallelRecordReplaySafe(command->Type())) {
-                verify_fallback("replay-unsafe-command");
-                return false;
-            }
-        }
-    }
-
-    struct ParallelChunkRuntime {
-        ParallelRecordJobRange      range;
-        UniquePtr<VulkanCommandContext> command_context;
-        uint32                      worker_id{0};
-        VkResult                    native_failure{VK_SUCCESS};
-        bool                        recorded{false};
-    };
-    struct ParallelLayerRuntime {
-        Array<const Command*>          commands;
-        Array<const ScopeCmd*>         scopes;
-        Array<const ScopeCmd*>         scopes_after;
-        UniquePtr<VulkanCommandContext>               primary_command_context;
-        Array<ParallelChunkRuntime>    chunks;
-        UniquePtr<VulkanCommandContext>               fallback_command_context;
-        bool                           parallel{false};
-        bool                           use_secondary{false};
-        bool                           graphics_secondary{false};
-        bool                           scope_only{false};
-        bool                           preprocessed{false};
-        bool                           worker_recorded{false};
-        std::optional<VulkanDynamicRenderingEnvelope> rendering_envelope;
-        VulkanResolvedBarrierBatch     barrier_prefix;
-    };
-
-    const std::string queue_label = !_submit.debug_label.empty() ?
-                                        _submit.debug_label :
-                                        "Graphics Exec";
-    const float4 queue_label_color = !_submit.debug_label.empty() ?
-                                         _submit.debug_label_color :
-                                         float4{1.0f, 0.0f, 0.0f, 1.0f};
-    Timer execute_timer;
-    bool  profiling_started = false;
-    auto              begin_primary     = [&](VulkanCommandList&            _cmd_list,
-                             const Array<const ScopeCmd*>& _scopes,
-                             bool                          _coordinator) -> VkResult {
-        const VkResult begin_result = _cmd_list.Begin();
-        if (begin_result != VK_SUCCESS) {
-            return begin_result;
-        }
-        if (_coordinator && begins_profiling_frame && !profiling_started) {
-            profiler_storage.CollectProfiling(_cmd_list.GetHandle());
-            {
-                std::unique_lock<std::mutex> profiler_lock(profiler_mutex);
-                cached_profiler_entry = profiler_storage.GetProfilerEntry();
-            }
-            profiler_storage.BeginProfilerSession(_cmd_list, "Graphics Exec");
-            if (complete_profiling_frame) {
-                ResetSplitProfilingCpuFrame();
-                execute_timer.Start();
-            } else {
-                BeginSplitProfilingCpuFrame();
-            }
-            profiling_started = true;
-        }
-        _cmd_list.BeginLabel(queue_label, queue_label_color);
-        for (const ScopeCmd* scope : _scopes) {
-            _cmd_list.BeginLabel(scope->ScopeName(), scope->Color());
-        }
-        return VK_SUCCESS;
-    };
-    auto begin_compute_secondary = [&](VulkanCommandList&            _cmd_list,
-                                       const Array<const ScopeCmd*>& _scopes) -> VkResult {
-        const VkCommandBufferInheritanceInfo inheritance{
-            .sType                = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
-            .pNext                = nullptr,
-            .renderPass           = VK_NULL_HANDLE,
-            .subpass              = 0,
-            .framebuffer          = VK_NULL_HANDLE,
-            .occlusionQueryEnable = VK_FALSE,
-            .queryFlags           = 0,
-            .pipelineStatistics   = 0,
-        };
-        const VkResult begin_result = _cmd_list.BeginSecondary(inheritance);
-        if (begin_result != VK_SUCCESS) {
-            return begin_result;
-        }
-        _cmd_list.BeginLabel(queue_label, queue_label_color);
-        for (const ScopeCmd* scope : _scopes) {
-            _cmd_list.BeginLabel(scope->ScopeName(), scope->Color());
-        }
-        return VK_SUCCESS;
-    };
-    auto begin_graphics_secondary = [&](VulkanCommandList&                    _cmd_list,
-                                        const Array<const ScopeCmd*>&         _scopes,
-                                        const VulkanDynamicRenderingEnvelope& _envelope) -> VkResult {
-        const VkCommandBufferInheritanceRenderingInfo rendering_inheritance =
-            _envelope.InheritanceInfo();
-        const VkCommandBufferInheritanceInfo inheritance{
-            .sType                = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
-            .pNext                = &rendering_inheritance,
-            .renderPass           = VK_NULL_HANDLE,
-            .subpass              = 0,
-            .framebuffer          = VK_NULL_HANDLE,
-            .occlusionQueryEnable = VK_FALSE,
-            .queryFlags           = 0,
-            .pipelineStatistics   = 0,
-        };
-        const VkResult begin_result = _cmd_list.BeginSecondary(
-            inheritance,
-            VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT |
-                VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT
-        );
-        if (begin_result != VK_SUCCESS) {
-            return begin_result;
-        }
-        _cmd_list.BeginLabel(queue_label, queue_label_color);
-        for (const ScopeCmd* scope : _scopes) {
-            _cmd_list.BeginLabel(scope->ScopeName(), scope->Color());
-        }
-        return VK_SUCCESS;
-    };
-    auto end_command_buffer = [&](VulkanCommandList&            _cmd_list,
-                                  const Array<const ScopeCmd*>& _scopes) -> VkResult {
-        for (auto scope = _scopes.rbegin(); scope != _scopes.rend(); ++scope) {
-            _cmd_list.EndLabel();
-        }
-        _cmd_list.EndLabel();
-        return _cmd_list.End();
-    };
-
-    VulkanDescriptorHeap& descriptor_heap = vk_device.GetGlobalDescriptorHeap();
-
-    auto              tracker_owner = AcquireCommandContext();
-    auto& tracker       = tracker_owner->GetTracker();
-    VkCmdPreprocessor preprocessor(
-        vk_device,
-        tracker,
-        tracker_owner->GetTemporaryBufferAllocator(),
-        _function_table,
-        _submit.cached_args,
-        queue.GetType()
-    );
-
-    Array<ParallelLayerRuntime> runtime_layers(cmd_lists.size());
-    Array<const ScopeCmd*>      active_scopes;
-    double                      preprocess_time = 0.0;
-    auto reject_prepared_recording = [&](std::string_view _reason, VkResult _result) {
-        if (_result == VK_SUCCESS) {
-            _result = VK_ERROR_UNKNOWN;
-        }
-        try {
-            LOG_ERROR(
-                "[ParallelRecord] prepared batch {} rejected: reason={} VkResult={}",
-                batch_serial,
-                _reason,
-                static_cast<int32_t>(_result)
-            );
-        } catch (...) {
-        }
-        ResetSplitProfilingCpuFrame();
-        // Once preprocessing/recording has begun, falling back to replaying
-        // the whole packet is unsafe: serial commands may already have moved
-        // payloads or allocated transient resources, and RestorePreferredStates may have
-        // published preferred layouts. Treat native record failure as terminal
-        // so no later frame can consume partially prepared CPU-side state.
-        vk_device.TryLatchFirstFault(_context, _result, false, false, true);
-        vk_device.RecordRejectedSubmit();
-
-        Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
-        auto collect_command_context = [&](UniquePtr<VulkanCommandContext>& _command_context) {
-            if (_command_context) {
-                abandoned_command_contexts.push_back(std::move(_command_context));
-            }
-        };
-        for (ParallelLayerRuntime& runtime : runtime_layers) {
-            collect_command_context(runtime.primary_command_context);
-            collect_command_context(runtime.fallback_command_context);
-            for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                collect_command_context(chunk.command_context);
-            }
-        }
-        collect_command_context(tracker_owner);
-
-        Array<RHIResource*> deferred_releases = TakeDeferredReleases();
-        CurrentVulkanRecordedSubmit rejected{
-            std::move(_submit), _context, _timeline
-        };
-        rejected.command_contexts.abandoned = std::move(abandoned_command_contexts);
-        rejected.descriptor_lease = std::move(descriptor_lease);
-        rejected.deferred_releases   = std::move(deferred_releases);
-        rejected.retirement_outcome = {
-            EVulkanOperationStatus::Rejected, _result
-        };
-        rejected.native_submit_resolved = true;
-        if (_out_recorded != nullptr) {
-            // Runtime Translate must hand the terminal packet to Submission.
-            // Its pre-Completion hook publishes the entire rejected suffix
-            // before this source can release any Completion callback.
-            _out_recorded->emplace(std::move(rejected));
-        } else {
-            CommitRuntimeSubmitCompletion(
-                rejected, rejected.retirement_outcome
-            );
-        }
-        if (parallel_record_verify) {
-            try {
-                LOG_INFO(
-                    "[ParallelRecord] batch={} requested=true effective=false "
-                    "outcome=record-rejected reason={} coordinator={} VkResult={}",
-                    batch_serial,
-                    _reason,
-                    Platform::GetCurrentThreadID(),
-                    static_cast<int32_t>(_result)
-                );
-            } catch (...) {
-            }
-        }
-    };
-
-    // Freeze scope state and command ownership before any recorder starts.
-    // Synthetic label reopen/close at command-buffer boundaries never emits
-    // timestamp queries; the real Scope command remains in a serial island.
-    for (size_t layer_index = 0; layer_index < runtime_layers.size(); ++layer_index) {
-        ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-        runtime.commands = std::move(command_layers[layer_index]);
-        runtime.scopes = active_scopes;
-        runtime.scope_only = runtime.commands.size() == 1 &&
-                             runtime.commands.front()->Type() == Command::EType::Scope;
-        runtime.parallel = plan.layers[layer_index].parallel;
-        const bool compute_secondary = runtime.parallel &&
-            std::all_of(
-                runtime.commands.begin(),
-                runtime.commands.end(),
-                [](const Command* _command) {
-                    return IsComputeSecondaryRecordSafe(_command->Type());
-                }
-            );
-        runtime.graphics_secondary =
-            runtime.parallel && runtime.commands.size() == 1 &&
-            plan.layers[layer_index].job_count == 1 &&
-            IsGraphicsSecondaryRecordSafe(runtime.commands.front()->Type());
-        if (runtime.graphics_secondary) {
-            const Command* draw_command = runtime.commands.front();
-            const RenderPassInfo& pass_info =
-                draw_command->Type() == Command::EType::SetDrawState ?
-                    static_cast<const SetDrawStateCmd*>(draw_command)->RenderPassInfo() :
-                    static_cast<const MultiDrawCmd*>(draw_command)->RenderPassInfo();
-            runtime.graphics_secondary =
-                UniformRenderPassSampleCount(pass_info).has_value();
-        }
-        runtime.use_secondary = compute_secondary || runtime.graphics_secondary;
-        if (runtime.scope_only) {
-            const auto* scope = static_cast<const ScopeCmd*>(runtime.commands.front());
-            if (scope->IsPush()) {
-                active_scopes.push_back(scope);
-            } else {
-                active_scopes.pop_back();
-            }
-        }
-        runtime.scopes_after = active_scopes;
-    }
-    assert(active_scopes.empty() && "validated scope stack changed during parallel prepare");
-
-    auto prepare_layer_prefix = [&](size_t _layer_index) {
-        ParallelLayerRuntime& runtime = runtime_layers[_layer_index];
-        assert(!runtime.preprocessed && "parallel layer prefix was recorded twice");
-        const auto preprocess_begin = std::chrono::steady_clock::now();
-        for (const Command* command : runtime.commands) {
-            preprocessor.VisitCmd(command);
-        }
-        tracker.ResolveBarriers();
-        runtime.barrier_prefix = tracker.TakeResolvedBarriers();
-        runtime.preprocessed = true;
-        preprocess_time += std::chrono::duration<double, std::milli>(
-                               std::chrono::steady_clock::now() - preprocess_begin
-                           ).count();
-    };
-    auto record_layer_prefix = [&](size_t _layer_index, VulkanCommandList& _cmd_list) {
-        ParallelLayerRuntime& runtime = runtime_layers[_layer_index];
-        prepare_layer_prefix(_layer_index);
-        runtime.barrier_prefix.Record(_cmd_list);
-        _cmd_list.InsertLabel(
-            std::format("[RHI Parallel] Layer {}", _layer_index),
-            {0.15f, 0.25f, 0.55f, 1.0f}
-        );
-    };
-    auto prepare_rendering_envelope = [&](ParallelLayerRuntime& _runtime) {
-        if (!_runtime.graphics_secondary || _runtime.rendering_envelope.has_value()) {
-            return;
-        }
-        const Command* draw_command = _runtime.commands.front();
-        const RenderPassInfo* pass_info = nullptr;
-        bool uses_stencil_attachment = false;
-        if (draw_command->Type() == Command::EType::SetDrawState) {
-            const auto& draw = *static_cast<const SetDrawStateCmd*>(draw_command);
-            pass_info = &draw.RenderPassInfo();
-            uses_stencil_attachment =
-                pass_info->depth_attachment.Valid() &&
-                FormatHasStencil(pass_info->depth_attachment.target->GetFormat()) &&
-                PipelineUsesStencilAttachment(draw.Pipeline());
-        } else {
-            const auto& draw = *static_cast<const MultiDrawCmd*>(draw_command);
-            pass_info = &draw.RenderPassInfo();
-            uses_stencil_attachment =
-                pass_info->depth_attachment.Valid() &&
-                FormatHasStencil(pass_info->depth_attachment.target->GetFormat()) &&
-                DrawBatchUsesStencilAttachment(draw.draw_batch);
-        }
-        _runtime.rendering_envelope.emplace(
-            *pass_info, uses_stencil_attachment
-        );
-    };
-
-    std::atomic<uint32_t> active_jobs{0};
-    std::atomic<uint32_t> max_active_jobs{0};
-    UnorderedSet<uint32>  distinct_workers;
-    uint64                total_job_count = 0;
-    uint32                parallel_wave_count = 0;
-    uint32                serial_island_count = 0;
-    bool                  parallel_recorded = true;
-    double                worker_join_time = 0.0;
-
-    auto finalize_parallel_record = [&](Array<VulkanCommandList*>&&              _ordered_cmd_lists,
-                                        Array<UniquePtr<VulkanCommandContext>>&& _submitted_command_contexts,
-                                        Array<UniquePtr<VulkanCommandContext>>&& _abandoned_command_contexts,
-                                        uint32 _secondary_command_buffer_count,
-                                        uint32 _parallel_layer_count,
-                                        uint64 _job_count,
-                                        uint64 _work_units,
-                                        uint32 _wave_count,
-                                        uint32 _island_count,
-                                        bool   _parallel_recorded) -> bool {
-        tracker.Reset();
-        descriptor_heap.FlushDescriptorWrites(descriptor_lease);
-        const uint64 descriptor_bytes =
-            descriptor_heap.GetUsedDescriptorBytes(descriptor_lease);
-
-        Array<RHIResource*> deferred_releases = TakeDeferredReleases();
-        const double profile_record_wall_ms = parallel_record_profile ?
-                                                  RhiThreadProfileMilliseconds(
-                                                      _profile_started,
-                                                      std::chrono::steady_clock::now()
-                                                  ) :
-                                                  0.0;
-        CurrentVulkanRecordedSubmit recorded_submit{
-            std::move(_submit), _context, _timeline
-        };
-        recorded_submit.presentation_source_program =
-            std::move(_presentation_source_program);
-        recorded_submit.has_commands      = true;
-        recorded_submit.ordered_cmd_lists = std::move(_ordered_cmd_lists);
-        recorded_submit.command_contexts  = VulkanCommandContextBatch{
-            std::move(_submitted_command_contexts), std::move(_abandoned_command_contexts)
-        };
-        recorded_submit.descriptor_lease = std::move(descriptor_lease);
-        recorded_submit.deferred_releases = std::move(deferred_releases);
-        recorded_submit.profile.sample = {
-            .requested       = true,
-            .planned         = true,
-            .effective       = _parallel_recorded,
-            .worker_fallback = !_parallel_recorded,
-            .record_wall_ms  = profile_record_wall_ms,
-            .reorder_ms      = _reorder_time,
-            .preprocess_ms   = preprocess_time,
-            .worker_join_ms  = worker_join_time,
-            .layers          = static_cast<uint32>(runtime_layers.size()),
-            .jobs            = static_cast<uint32>(_job_count),
-            .work_units      = _work_units,
-            .secondary_cb    = _secondary_command_buffer_count,
-            .max_active      = max_active_jobs.load(std::memory_order_relaxed),
-        };
-        if (parallel_record_profile) {
-            recorded_submit.profile.enabled         = true;
-            recorded_submit.profile.execute_started = _profile_started;
-        }
-        const uint32 recorded_cmd_list_count =
-            static_cast<uint32>(recorded_submit.ordered_cmd_lists.size());
-        CurrentVulkanSubmitResult submit_result{};
-        if (_out_recorded != nullptr) {
-            _out_recorded->emplace(std::move(recorded_submit));
-        } else {
-            submit_result = SubmitRecorded(recorded_submit);
-        }
-
-        QueryFrameDiagnostics query_diagnostics{};
-        if (complete_profiling_frame) {
-            execute_timer.Stop();
-            query_diagnostics = profiler_storage.GetCurrentFrameQueryDiagnostics();
-            const double execute_time = execute_timer.ElapsedMilliseconds();
-            profiler_storage.RegisterCpuTimestamp("Queue Execution", execute_time);
-            profiler_storage.RegisterCpuTimestamp("Command Reorder", _reorder_time);
-            profiler_storage.RegisterCpuTimestamp("Command Preprocess", preprocess_time);
-            if (execute_time > 0.0) {
-                profiler_storage.RegisterCpuTimestamp(
-                    "Reorder Percentage", _reorder_time / execute_time
-                );
-                profiler_storage.RegisterCpuTimestamp(
-                    "Preprocess Percentage", preprocess_time / execute_time
-                );
-            }
-            profiler_storage.AdvanceFrame();
-        } else if (emits_profiling_queries) {
-            const bool submission_accepted =
-                _out_recorded != nullptr || submit_result.outcome.Succeeded();
-            if (!submission_accepted) {
-                ResetSplitProfilingCpuFrame();
-            } else {
-                AccumulateSplitProfilingCpuFrame(_reorder_time, preprocess_time);
-                if (ends_profiling_frame) {
-                    query_diagnostics = profiler_storage.GetCurrentFrameQueryDiagnostics();
-                    EndSplitProfilingCpuFrame();
-                }
-            }
-        }
-
-        if (parallel_record_verify) {
-            try {
-                LOG_INFO(
-                    "[ParallelRecord] batch={} requested=true effective={} outcome={} "
-                    "layers={} jobs={} work_units={} ordered_cb={} secondary_cb={} "
-                    "waves={} islands={} workers={} distinct_workers={} max_active={} "
-                    "coordinator={} submit_status={} descriptor_bytes={} "
-                    "query_digest={:016x} queries={}",
-                    batch_serial,
-                    _parallel_recorded,
-                    _parallel_recorded ? "parallel" : "serial-fallback-worker-failure",
-                    _parallel_layer_count,
-                    _job_count,
-                    _work_units,
-                    _out_recorded != nullptr ? recorded_cmd_list_count :
-                                               submit_result.ordered_cmd_list_count,
-                    _secondary_command_buffer_count,
-                    _wave_count,
-                    _island_count,
-                    parallel_record_workers,
-                    distinct_workers.size(),
-                    max_active_jobs.load(std::memory_order_relaxed),
-                    Platform::GetCurrentThreadID(),
-                    _out_recorded != nullptr ? std::numeric_limits<uint32>::max() :
-                                               static_cast<uint32>(submit_result.outcome.status),
-                    descriptor_bytes,
-                    query_diagnostics.digest,
-                    query_diagnostics.used_query_count
-                );
-            } catch (...) {
-            }
-        }
-        return true;
-    };
-
-    // Record every replay-safe compute/draw body into a secondary first, then
-    // assemble barriers, rendering envelopes and executions into one primary
-    // command buffer in dependency order. Unsupported layer shapes stay serial
-    // in that same primary instead of becoming extra native submit entries.
-    // Explicit RDG streams contribute their compiled barriers; legacy streams
-    // additionally append the tracker restore batch to this primary.
-    const bool has_secondary_compatible_layer = std::any_of(
-        runtime_layers.begin(),
-        runtime_layers.end(),
-        [](const ParallelLayerRuntime& _runtime) {
-            return _runtime.parallel && _runtime.use_secondary;
-        }
-    );
-    if (has_secondary_compatible_layer) {
-        uint32 secondary_layer_count = 0;
-        uint64 secondary_work_units  = 0;
-        for (size_t layer_index = 0; layer_index < runtime_layers.size(); ++layer_index) {
-            ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-            runtime.parallel = runtime.parallel && runtime.use_secondary;
-            if (!runtime.parallel) {
-                continue;
-            }
-            ++secondary_layer_count;
-            const ParallelRecordLayerPlan& layer_plan = plan.layers[layer_index];
-            for (uint32 job_index = 0; job_index < layer_plan.job_count; ++job_index) {
-                secondary_work_units +=
-                    plan.jobs[layer_plan.first_job + job_index].work_units;
-            }
-        }
-        VulkanCommandList& assembly_cmd = tracker_owner->GetCommandList();
-        assembly_cmd.SetDescriptorRecordingPlan(descriptor_plan);
-        const VkResult assembly_begin = begin_primary(assembly_cmd, {}, true);
-        if (assembly_begin != VK_SUCCESS) {
-            reject_prepared_recording("assembly-begin-failed", assembly_begin);
-            return true;
-        }
-
-        auto record_secondary_wave = [&](size_t _first_layer, size_t _layer_end) -> bool {
-            Array<ExternalCpuJoinPool::Job> wave_jobs;
-            for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
-                ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-                if (!runtime.parallel) {
-                    continue;
-                }
-                try {
-                    prepare_layer_prefix(layer_index);
-                    prepare_rendering_envelope(runtime);
-                } catch (const std::exception& error) {
-                    try {
-                        LOG_ERROR(
-                            "[ParallelRecord] assembly prefix failed: layer={} error={}",
-                            layer_index,
-                            error.what()
-                        );
-                    } catch (...) {
-                    }
-                    reject_prepared_recording(
-                        "assembly-prefix-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                    );
-                    return false;
-                } catch (...) {
-                    reject_prepared_recording(
-                        "assembly-prefix-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                    );
-                    return false;
-                }
-
-                const ParallelRecordLayerPlan& layer_plan = plan.layers[layer_index];
-                runtime.chunks.reserve(layer_plan.job_count);
-                for (uint32 job_index = 0; job_index < layer_plan.job_count; ++job_index) {
-                    ParallelChunkRuntime chunk{
-                        .range           = plan.jobs[layer_plan.first_job + job_index],
-                        .command_context = AcquireCommandContext(),
-                    };
-                    chunk.command_context->PrepareSecondaryCommandList();
-                    runtime.chunks.push_back(std::move(chunk));
-                }
-
-                for (size_t chunk_index = 0; chunk_index < runtime.chunks.size(); ++chunk_index) {
-                    wave_jobs.emplace_back([&, layer_index, chunk_index] {
-                        RHIThreadRoleScope owner_scope(ERHIThreadRole::RecordWorker);
-                        RHIThreadHeartbeatScope heartbeat(
-                            ERHIThreadRole::RecordWorker,
-                            HeartbeatDomainForQueue(queue.GetType()),
-                            ERHIHeartbeatStage::RecordCommands
-                        );
-                        ParallelLayerRuntime& job_layer = runtime_layers[layer_index];
-                        ParallelChunkRuntime& chunk = job_layer.chunks[chunk_index];
-                        const uint32 now_active =
-                            active_jobs.fetch_add(1, std::memory_order_acq_rel) + 1;
-                        uint32 observed = max_active_jobs.load(std::memory_order_relaxed);
-                        while (observed < now_active &&
-                               !max_active_jobs.compare_exchange_weak(
-                                   observed, now_active, std::memory_order_relaxed
-                               )) {
-                        }
-                        auto finish_active = [&] {
-                            active_jobs.fetch_sub(1, std::memory_order_acq_rel);
-                        };
-
-                        try {
-                            chunk.worker_id = Platform::GetCurrentThreadID();
-                            VulkanCommandList& cmd_list = chunk.command_context->GetSecondaryCommandList();
-                            cmd_list.SetDescriptorRecordingPlan(descriptor_plan);
-                            VkResult worker_begin = VK_SUCCESS;
-                            if (job_layer.graphics_secondary) {
-                                assert(job_layer.rendering_envelope.has_value());
-                                worker_begin = begin_graphics_secondary(
-                                    cmd_list,
-                                    job_layer.scopes,
-                                    job_layer.rendering_envelope.value()
-                                );
-                            } else {
-                                worker_begin = begin_compute_secondary(
-                                    cmd_list, job_layer.scopes
-                                );
-                            }
-                            if (worker_begin != VK_SUCCESS) {
-                                chunk.native_failure = worker_begin;
-                                throw std::runtime_error(
-                                    "secondary command buffer begin failed"
-                                );
-                            }
-#if MOER_VULKAN_TEST_SUPPORT
-                            const bool inject_after_first_command =
-                                VulkanFaultInjection::ShouldFailWorker(queue.GetType());
-#endif
-                            cmd_list.InsertLabel(
-                                std::format(
-                                    "[RHI Parallel] Layer {} Commands {}..{}",
-                                    layer_index,
-                                    chunk.range.command_begin,
-                                    chunk.range.CommandEnd()
-                                ),
-                                {0.1f, 0.55f, 0.8f, 1.0f}
-                            );
-                            VkCmdVisitor visitor(
-                                vk_device,
-                                *chunk.command_context,
-                                chunk.command_context->GetTracker(),
-                                cmd_list,
-                                _submit.cached_args,
-                                nullptr,
-                                false,
-                                job_layer.graphics_secondary
-                            );
-                            for (uint32 command_index = chunk.range.command_begin;
-                                 command_index < chunk.range.CommandEnd(); ++command_index) {
-                                visitor.VisitCmd(job_layer.commands[command_index]);
-#if MOER_VULKAN_TEST_SUPPORT
-                                if (inject_after_first_command) {
-                                    throw std::runtime_error(
-                                        "injected parallel command recorder worker failure"
-                                    );
-                                }
-#endif
-                            }
-                            const VkResult worker_end =
-                                end_command_buffer(cmd_list, job_layer.scopes_after);
-                            if (worker_end != VK_SUCCESS) {
-                                chunk.native_failure = worker_end;
-                                throw std::runtime_error(
-                                    "secondary command buffer end failed"
-                                );
-                            }
-                            chunk.recorded = true;
-                        } catch (...) {
-                            finish_active();
-                            throw;
-                        }
-                        finish_active();
-                    });
-                }
-            }
-
-            const uint32 wave_index = parallel_wave_count++;
-            total_job_count += wave_jobs.size();
-            ExternalJoinResult join_result = ExternalJoinResult::Failed;
-            const auto worker_join_started = std::chrono::steady_clock::now();
-            try {
-                join_result = parallel_record_pool->RunAndWait(
-                    std::span<const ExternalCpuJoinPool::Job>(
-                        wave_jobs.data(), wave_jobs.size()
-                    )
-                );
-            } catch (...) {
-                join_result = ExternalJoinResult::Failed;
-            }
-            worker_join_time += RhiThreadProfileMilliseconds(
-                worker_join_started, std::chrono::steady_clock::now()
-            );
-
-            bool wave_recorded = join_result == ExternalJoinResult::Completed;
-            VkResult native_failure = VK_SUCCESS;
-            for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
-                ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-                if (!runtime.parallel) {
-                    continue;
-                }
-                for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                    if (chunk.native_failure != VK_SUCCESS &&
-                        native_failure == VK_SUCCESS) {
-                        native_failure = chunk.native_failure;
-                    }
-                    wave_recorded = wave_recorded && chunk.recorded;
-                    if (chunk.recorded) {
-                        distinct_workers.insert(chunk.worker_id);
-                    }
-                }
-            }
-            if (native_failure != VK_SUCCESS) {
-                reject_prepared_recording(
-                    "worker-native-record-failed", native_failure
-                );
-                return false;
-            }
-            if (!wave_recorded) {
-                parallel_recorded = false;
-            }
-
-            try {
-                for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
-                    ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-                    if (!runtime.parallel) {
-                        continue;
-                    }
-                    runtime.barrier_prefix.Record(assembly_cmd);
-                    assembly_cmd.InsertLabel(
-                        std::format("[RHI Parallel] Layer {}", layer_index),
-                        {0.15f, 0.25f, 0.55f, 1.0f}
-                    );
-                    if (wave_recorded) {
-                        Array<VkCommandBuffer> secondaries;
-                        secondaries.reserve(runtime.chunks.size());
-                        for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                            secondaries.push_back(chunk.command_context->GetSecondaryCommandList().GetHandle()
-                            );
-                        }
-                        if (runtime.graphics_secondary) {
-                            VkRenderingInfo rendering_info =
-                                runtime.rendering_envelope->RenderingInfo(
-                                    VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT
-                                );
-                            assembly_cmd.BeginRendering(rendering_info);
-                            assembly_cmd.ExecuteSecondaryCommands(secondaries);
-                            assembly_cmd.EndRendering();
-                        } else {
-                            assembly_cmd.ExecuteSecondaryCommands(secondaries);
-                        }
-                        runtime.worker_recorded = true;
-                    } else {
-                        VkCmdVisitor visitor(
-                            vk_device,
-                            *tracker_owner,
-                            tracker,
-                            assembly_cmd,
-                            _submit.cached_args,
-                            nullptr,
-                            false
-                        );
-                        for (const Command* command : runtime.commands) {
-                            visitor.VisitCmd(command);
-                        }
-                    }
-                }
-            } catch (const std::exception& error) {
-                try {
-                    LOG_ERROR(
-                        "[ParallelRecord] assembly record failed: error={}",
-                        error.what()
-                    );
-                } catch (...) {
-                }
-                reject_prepared_recording(
-                    "assembly-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                );
-                return false;
-            } catch (...) {
-                reject_prepared_recording(
-                    "assembly-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                );
-                return false;
-            }
-
-            if (parallel_record_verify) {
-                try {
-                    LOG_INFO(
-                        "[ParallelRecord][Wave] batch={} wave={} layers={}..{} "
-                        "jobs={} join_completed={} worker_recorded={}",
-                        batch_serial,
-                        wave_index,
-                        _first_layer,
-                        _layer_end,
-                        wave_jobs.size(),
-                        join_result == ExternalJoinResult::Completed,
-                        wave_recorded
-                    );
-                } catch (...) {
-                }
-            }
-            return true;
-        };
-
-        for (size_t layer_index = 0; layer_index < runtime_layers.size();) {
-            if (runtime_layers[layer_index].parallel) {
-                const size_t wave_begin = layer_index;
-                while (layer_index < runtime_layers.size() &&
-                       runtime_layers[layer_index].parallel) {
-                    ++layer_index;
-                }
-                if (!record_secondary_wave(wave_begin, layer_index)) {
-                    return true;
-                }
-                continue;
-            }
-
-            ++serial_island_count;
-            try {
-                while (layer_index < runtime_layers.size() &&
-                       !runtime_layers[layer_index].parallel) {
-                    ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-                    if (!runtime.commands.empty()) {
-                        prepare_layer_prefix(layer_index);
-                        runtime.barrier_prefix.Record(assembly_cmd);
-                        assembly_cmd.InsertLabel(
-                            std::format("[RHI Serial] Layer {}", layer_index),
-                            {0.55f, 0.3f, 0.1f, 1.0f}
-                        );
-                        VkCmdVisitor visitor(
-                            vk_device,
-                            *tracker_owner,
-                            tracker,
-                            assembly_cmd,
-                            _submit.cached_args,
-                            emits_profiling_queries ? &profiler_storage : nullptr,
-                            emits_profiling_queries
-                        );
-                        for (const Command* command : runtime.commands) {
-                            visitor.VisitCmd(command);
-                        }
-                    }
-                    ++layer_index;
-                }
-            } catch (const StaleBindlessUpdateBatch& error) {
-                try {
-                    LOG_WARNING(
-                        "[ParallelRecord] assembly rejected stale bindless batch: {}",
-                        error.what()
-                    );
-                } catch (...) {
-                }
-                reject_prepared_recording(
-                    "stale-bindless-update", VK_ERROR_VALIDATION_FAILED_EXT
-                );
-                return true;
-            } catch (const std::exception& error) {
-                try {
-                    LOG_ERROR(
-                        "[ParallelRecord] assembly serial record failed: {}",
-                        error.what()
-                    );
-                } catch (...) {
-                }
-                reject_prepared_recording(
-                    "assembly-serial-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                );
-                return true;
-            } catch (...) {
-                reject_prepared_recording(
-                    "assembly-serial-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                );
-                return true;
-            }
-        }
-
-        if (!_submit.HasExplicitResourceStateOwnership()) {
-            tracker.RestorePreferredStates();
-        }
-        tracker.DispatchBarriers(assembly_cmd);
-        if (ends_profiling_frame) {
-            profiler_storage.EndProfilerSession(assembly_cmd, "Graphics Exec");
-        }
-        const VkResult assembly_end = end_command_buffer(assembly_cmd, {});
-        if (assembly_end != VK_SUCCESS) {
-            reject_prepared_recording("assembly-end-failed", assembly_end);
-            return true;
-        }
-
-        Array<VulkanCommandList*>              ordered_cmd_lists{&assembly_cmd};
-        Array<UniquePtr<VulkanCommandContext>> submitted_command_contexts;
-        Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
-        submitted_command_contexts.reserve(total_job_count + 1);
-        abandoned_command_contexts.reserve(total_job_count);
-        uint32 secondary_command_buffer_count = 0;
-        for (ParallelLayerRuntime& runtime : runtime_layers) {
-            if (!runtime.parallel) {
-                continue;
-            }
-            for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                if (runtime.worker_recorded) {
-                    ++secondary_command_buffer_count;
-                    submitted_command_contexts.push_back(std::move(chunk.command_context));
-                } else {
-                    abandoned_command_contexts.push_back(std::move(chunk.command_context));
-                }
-            }
-        }
-        submitted_command_contexts.push_back(std::move(tracker_owner));
-        return finalize_parallel_record(
-            std::move(ordered_cmd_lists),
-            std::move(submitted_command_contexts),
-            std::move(abandoned_command_contexts),
-            secondary_command_buffer_count,
-            secondary_layer_count,
-            total_job_count,
-            secondary_work_units,
-            parallel_wave_count,
-            serial_island_count,
-            parallel_recorded
-        );
-    }
-
-    // Preserve translate-time side-effect ordering by draining each contiguous
-    // safe wave before the coordinator visits the next serial island. The GPU
-    // submission remains layer ordered, while commands inside the wave may be
-    // translated concurrently regardless of their eventual execution layer.
-    auto run_parallel_wave = [&](size_t _first_layer, size_t _layer_end) -> bool {
-        Array<ExternalCpuJoinPool::Job> wave_jobs;
-        for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
-            ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-            if (!runtime.parallel) {
-                continue;
-            }
-            for (size_t chunk_index = 0; chunk_index < runtime.chunks.size(); ++chunk_index) {
-                wave_jobs.emplace_back([&, layer_index, chunk_index] {
-                    RHIThreadRoleScope owner_scope(ERHIThreadRole::RecordWorker);
-                    RHIThreadHeartbeatScope heartbeat(
-                        ERHIThreadRole::RecordWorker,
-                        HeartbeatDomainForQueue(queue.GetType()),
-                        ERHIHeartbeatStage::RecordCommands
-                    );
-                    ParallelLayerRuntime& job_layer = runtime_layers[layer_index];
-                    ParallelChunkRuntime& chunk     = job_layer.chunks[chunk_index];
-                    const uint32 now_active =
-                        active_jobs.fetch_add(1, std::memory_order_acq_rel) + 1;
-                    uint32 observed = max_active_jobs.load(std::memory_order_relaxed);
-                    while (observed < now_active &&
-                           !max_active_jobs.compare_exchange_weak(
-                               observed, now_active, std::memory_order_relaxed
-                           )) {
-                    }
-                    auto finish_active = [&] {
-                        active_jobs.fetch_sub(1, std::memory_order_acq_rel);
-                    };
-
-                    try {
-                        chunk.worker_id = Platform::GetCurrentThreadID();
-                        VulkanCommandList& cmd_list = job_layer.use_secondary ?
-                                                          chunk.command_context->GetSecondaryCommandList() :
-                                                          chunk.command_context->GetCommandList();
-                        cmd_list.SetDescriptorRecordingPlan(descriptor_plan);
-                        VkResult worker_begin = VK_SUCCESS;
-                        if (job_layer.graphics_secondary) {
-                            assert(job_layer.rendering_envelope.has_value());
-                            worker_begin = begin_graphics_secondary(
-                                cmd_list,
-                                job_layer.scopes,
-                                job_layer.rendering_envelope.value()
-                            );
-                        } else if (job_layer.use_secondary) {
-                            worker_begin = begin_compute_secondary(
-                                cmd_list, job_layer.scopes
-                            );
-                        } else {
-                            worker_begin = begin_primary(
-                                cmd_list, job_layer.scopes, false
-                            );
-                        }
-                        if (worker_begin != VK_SUCCESS) {
-                            chunk.native_failure = worker_begin;
-                            throw std::runtime_error("parallel command buffer begin failed");
-                        }
-#if MOER_VULKAN_TEST_SUPPORT
-                        const bool inject_after_first_command =
-                            VulkanFaultInjection::ShouldFailWorker(queue.GetType());
-#endif
-                        cmd_list.InsertLabel(
-                            std::format(
-                                "[RHI Parallel] Layer {} Commands {}..{}",
-                                layer_index,
-                                chunk.range.command_begin,
-                                chunk.range.CommandEnd()
-                            ),
-                            {0.1f, 0.55f, 0.8f, 1.0f}
-                        );
-                        VkCmdVisitor visitor(
-                            vk_device,
-                            *chunk.command_context,
-                            chunk.command_context->GetTracker(),
-                            cmd_list,
-                            _submit.cached_args,
-                            nullptr,
-                            false,
-                            job_layer.graphics_secondary
-                        );
-                        for (uint32 command_index = chunk.range.command_begin;
-                             command_index < chunk.range.CommandEnd(); ++command_index) {
-                            visitor.VisitCmd(job_layer.commands[command_index]);
-#if MOER_VULKAN_TEST_SUPPORT
-                            if (inject_after_first_command) {
-                                LOG_INFO(
-                                    "[ParallelRecord][Injection] point=worker-throw "
-                                    "phase=after-first-command trigger={} batch={} layer={} "
-                                    "command={}",
-                                    VulkanFaultInjection::GetWorkerTrigger(),
-                                    batch_serial,
-                                    layer_index,
-                                    command_index
-                                );
-                                throw std::runtime_error(
-                                    "injected parallel command recorder worker failure"
-                                );
-                            }
-#endif
-                        }
-                        const VkResult worker_end =
-                            end_command_buffer(cmd_list, job_layer.scopes_after);
-                        if (worker_end != VK_SUCCESS) {
-                            chunk.native_failure = worker_end;
-                            throw std::runtime_error("parallel command buffer end failed");
-                        }
-                        chunk.recorded = true;
-                    } catch (...) {
-                        finish_active();
-                        throw;
-                    }
-                    finish_active();
-                });
-            }
-        }
-
-        if (wave_jobs.empty()) {
-            return true;
-        }
-        const uint32 wave_index = parallel_wave_count++;
-        total_job_count += wave_jobs.size();
-        ExternalJoinResult join_result = ExternalJoinResult::Failed;
-        const auto worker_join_started = std::chrono::steady_clock::now();
-        try {
-            join_result = parallel_record_pool->RunAndWait(
-                std::span<const ExternalCpuJoinPool::Job>(wave_jobs.data(), wave_jobs.size())
-            );
-        } catch (...) {
-            join_result = ExternalJoinResult::Failed;
-        }
-        worker_join_time += RhiThreadProfileMilliseconds(
-            worker_join_started, std::chrono::steady_clock::now()
-        );
-
-        bool     wave_recorded = join_result == ExternalJoinResult::Completed;
-        VkResult native_failure = VK_SUCCESS;
-        for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
-            ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-            if (!runtime.parallel) {
-                continue;
-            }
-            for (const ParallelChunkRuntime& chunk : runtime.chunks) {
-                wave_recorded &= chunk.recorded;
-                if (native_failure == VK_SUCCESS && chunk.native_failure != VK_SUCCESS) {
-                    native_failure = chunk.native_failure;
-                }
-                if (chunk.worker_id != 0) {
-                    distinct_workers.insert(chunk.worker_id);
-                }
-            }
-        }
-        if (parallel_record_verify) {
-            try {
-                LOG_INFO(
-                    "[ParallelRecord][Wave] batch={} wave={} layers={}..{} jobs={} "
-                    "join_completed={} worker_recorded={}",
-                    batch_serial,
-                    wave_index,
-                    _first_layer,
-                    _layer_end,
-                    wave_jobs.size(),
-                    join_result == ExternalJoinResult::Completed,
-                    wave_recorded
-                );
-            } catch (...) {
-            }
-        }
-        // Native command-buffer failures are device/driver failures, not a
-        // replayable translation exception. Match coordinator Begin/End by
-        // latching the original VkResult and rejecting the prepared packet.
-        if (native_failure != VK_SUCCESS) {
-            reject_prepared_recording("worker-native-record-failed", native_failure);
-            return false;
-        }
-        for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
-            if (runtime_layers[layer_index].parallel) {
-                runtime_layers[layer_index].worker_recorded = wave_recorded;
-            }
-        }
-        auto close_secondary_coordinators = [&](bool _execute_workers) -> VkResult {
-            for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
-                ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-                if (!runtime.parallel || !runtime.use_secondary) {
-                    continue;
-                }
-                VulkanCommandList& primary = runtime.primary_command_context->GetCommandList();
-                if (_execute_workers) {
-                    Array<VkCommandBuffer> secondaries;
-                    secondaries.reserve(runtime.chunks.size());
-                    for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                        secondaries.push_back(chunk.command_context->GetSecondaryCommandList().GetHandle());
-                    }
-                    if (runtime.graphics_secondary) {
-                        assert(runtime.rendering_envelope.has_value());
-                        VkRenderingInfo rendering_info =
-                            runtime.rendering_envelope->RenderingInfo(
-                                VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT
-                            );
-                        primary.BeginRendering(rendering_info);
-                        primary.ExecuteSecondaryCommands(secondaries);
-                        primary.EndRendering();
-                    } else {
-                        primary.ExecuteSecondaryCommands(secondaries);
-                    }
-                }
-                const VkResult end_result =
-                    end_command_buffer(primary, runtime.scopes_after);
-                if (end_result != VK_SUCCESS) {
-                    return end_result;
-                }
-            }
-            return VK_SUCCESS;
-        };
-        if (wave_recorded) {
-            const VkResult assembly_result =
-                close_secondary_coordinators(true);
-            if (assembly_result != VK_SUCCESS) {
-                reject_prepared_recording(
-                    "secondary-assembly-end-failed", assembly_result
-                );
-                return false;
-            }
-            return true;
-        }
-
-        parallel_recorded = false;
-        const VkResult close_result = close_secondary_coordinators(false);
-        if (close_result != VK_SUCCESS) {
-            reject_prepared_recording(
-                "secondary-fallback-prefix-end-failed", close_result
-            );
-            return false;
-        }
-        // RunAndWait drains all workers. Their command buffers are abandoned;
-        // fallback contexts restart cursors over the same prepared ranges.
-        for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
-            ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-            if (!runtime.parallel) {
-                continue;
-            }
-            runtime.worker_recorded = false;
-            runtime.fallback_command_context = AcquireCommandContext();
-            VulkanCommandList& fallback_cmd  = runtime.fallback_command_context->GetCommandList();
-            fallback_cmd.SetDescriptorRecordingPlan(descriptor_plan);
-            const VkResult fallback_begin =
-                begin_primary(fallback_cmd, runtime.scopes, true);
-            if (fallback_begin != VK_SUCCESS) {
-                reject_prepared_recording("fallback-begin-failed", fallback_begin);
-                return false;
-            }
-            fallback_cmd.InsertLabel(
-                "[RHI Parallel] Coordinator Fallback", {0.75f, 0.25f, 0.1f, 1.0f}
-            );
-            VkCmdVisitor visitor(
-                vk_device,
-                *runtime.fallback_command_context,
-                runtime.fallback_command_context->GetTracker(),
-                fallback_cmd,
-                _submit.cached_args,
-                nullptr,
-                false
-            );
-            try {
-                for (const Command* command : runtime.commands) {
-                    visitor.VisitCmd(command);
-                }
-            } catch (const StaleBindlessUpdateBatch& error) {
-                try {
-                    LOG_WARNING(
-                        "[ParallelRecord] fallback rejected stale bindless batch: "
-                        "layer={} error={}",
-                        layer_index,
-                        error.what()
-                    );
-                } catch (...) {
-                }
-                reject_prepared_recording(
-                    "stale-bindless-update", VK_ERROR_VALIDATION_FAILED_EXT
-                );
-                return false;
-            } catch (const std::exception& error) {
-                try {
-                    LOG_ERROR(
-                        "[ParallelRecord] fallback record failed: layer={} error={}",
-                        layer_index,
-                        error.what()
-                    );
-                } catch (...) {
-                }
-                reject_prepared_recording(
-                    "fallback-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                );
-                return false;
-            } catch (...) {
-                reject_prepared_recording(
-                    "fallback-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                );
-                return false;
-            }
-            const VkResult fallback_end = end_command_buffer(fallback_cmd, runtime.scopes_after);
-            if (fallback_end != VK_SUCCESS) {
-                reject_prepared_recording("fallback-end-failed", fallback_end);
-                return false;
-            }
-        }
-        return true;
-    };
-
-    // Consecutive coordinator-only layers share one primary. When a serial
-    // island is immediately followed by a parallel layer, its final commands
-    // also carry that layer's barrier prefix. This preserves GPU ordering while
-    // avoiding one primary command context/CB for every reorderer layer.
-    constexpr size_t no_pending_wave = std::numeric_limits<size_t>::max();
-    size_t pending_wave_begin = no_pending_wave;
-    size_t pending_wave_end   = no_pending_wave;
-    auto flush_parallel_wave = [&]() -> bool {
-        if (pending_wave_begin == no_pending_wave) {
-            return true;
-        }
-        const size_t wave_begin = pending_wave_begin;
-        const size_t wave_end   = pending_wave_end;
-        pending_wave_begin = no_pending_wave;
-        pending_wave_end   = no_pending_wave;
-        return run_parallel_wave(wave_begin, wave_end);
-    };
-
-    for (size_t layer_index = 0; layer_index < runtime_layers.size();) {
-        while (layer_index < runtime_layers.size() &&
-               runtime_layers[layer_index].commands.empty()) {
-            ++layer_index;
-        }
-        if (layer_index == runtime_layers.size()) {
-            break;
-        }
-
-        ParallelLayerRuntime& first_runtime = runtime_layers[layer_index];
-        if (first_runtime.parallel) {
-            if (!first_runtime.preprocessed) {
-                first_runtime.primary_command_context = AcquireCommandContext();
-                VulkanCommandList& primary_cmd = first_runtime.primary_command_context->GetCommandList();
-                primary_cmd.SetDescriptorRecordingPlan(descriptor_plan);
-                const VkResult primary_begin =
-                    begin_primary(primary_cmd, first_runtime.scopes, true);
-                if (primary_begin != VK_SUCCESS) {
-                    reject_prepared_recording("coordinator-begin-failed", primary_begin);
-                    return true;
-                }
-                try {
-                    record_layer_prefix(layer_index, primary_cmd);
-                    prepare_rendering_envelope(first_runtime);
-                } catch (const std::exception& error) {
-                    try {
-                        LOG_ERROR(
-                            "[ParallelRecord] coordinator prefix failed: layer={} "
-                            "error={}",
-                            layer_index,
-                            error.what()
-                        );
-                    } catch (...) {
-                    }
-                    reject_prepared_recording(
-                        "coordinator-prefix-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                    );
-                    return true;
-                } catch (...) {
-                    reject_prepared_recording(
-                        "coordinator-prefix-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-                    );
-                    return true;
-                }
-                if (!first_runtime.use_secondary) {
-                    const VkResult primary_end =
-                        end_command_buffer(primary_cmd, first_runtime.scopes_after);
-                    if (primary_end != VK_SUCCESS) {
-                        reject_prepared_recording("coordinator-end-failed", primary_end);
-                        return true;
-                    }
-                }
-            }
-
-            const ParallelRecordLayerPlan& layer_plan = plan.layers[layer_index];
-            first_runtime.chunks.reserve(layer_plan.job_count);
-            for (uint32 job_index = 0; job_index < layer_plan.job_count; ++job_index) {
-                ParallelChunkRuntime chunk{
-                    .range           = plan.jobs[layer_plan.first_job + job_index],
-                    .command_context = AcquireCommandContext(),
-                };
-                if (first_runtime.use_secondary) {
-                    // Allocate from the chunk's private pool on the
-                    // coordinator before the worker can observe it.
-                    chunk.command_context->PrepareSecondaryCommandList();
-                }
-                first_runtime.chunks.push_back(std::move(chunk));
-            }
-            if (pending_wave_begin == no_pending_wave) {
-                pending_wave_begin = layer_index;
-            }
-            pending_wave_end = layer_index + 1;
-            ++layer_index;
-            continue;
-        }
-
-        // No serial visitor may overtake the body translation of an earlier
-        // safe layer. This is the CPU-side counterpart of ordered GPU submit.
-        if (!flush_parallel_wave()) {
-            return true;
-        }
-
-        const uint32 island_index = serial_island_count++;
-        if (parallel_record_verify) {
-            try {
-                LOG_INFO(
-                    "[ParallelRecord][Island] batch={} island={} first_layer={} "
-                    "joined_waves={}",
-                    batch_serial,
-                    island_index,
-                    layer_index,
-                    parallel_wave_count
-                );
-            } catch (...) {
-            }
-        }
-
-        first_runtime.primary_command_context = AcquireCommandContext();
-        VulkanCommandList& island_cmd         = first_runtime.primary_command_context->GetCommandList();
-        island_cmd.SetDescriptorRecordingPlan(descriptor_plan);
-        const VkResult island_begin = begin_primary(island_cmd, first_runtime.scopes, true);
-        if (island_begin != VK_SUCCESS) {
-            reject_prepared_recording("coordinator-begin-failed", island_begin);
-            return true;
-        }
-
-        const Array<const ScopeCmd*>* island_exit_scopes = &first_runtime.scopes;
-        try {
-            while (layer_index < runtime_layers.size() &&
-                   !runtime_layers[layer_index].parallel) {
-                ParallelLayerRuntime& runtime = runtime_layers[layer_index];
-                if (runtime.commands.empty()) {
-                    ++layer_index;
-                    continue;
-                }
-                record_layer_prefix(layer_index, island_cmd);
-                VkCmdVisitor visitor(
-                    vk_device,
-                    *first_runtime.primary_command_context,
-                    tracker,
-                    island_cmd,
-                    _submit.cached_args,
-                    emits_profiling_queries ? &profiler_storage : nullptr,
-                    emits_profiling_queries
-                );
-                for (const Command* command : runtime.commands) {
-                    visitor.VisitCmd(command);
-                }
-                island_exit_scopes = &runtime.scopes_after;
-                ++layer_index;
-            }
-
-            // The serial island executes immediately before the next parallel
-            // body, so its primary can own that body's state-transition prefix.
-            if (layer_index < runtime_layers.size() &&
-                runtime_layers[layer_index].parallel &&
-                !runtime_layers[layer_index].use_secondary &&
-                !runtime_layers[layer_index].commands.empty()) {
-                record_layer_prefix(layer_index, island_cmd);
-                island_exit_scopes = &runtime_layers[layer_index].scopes;
-            }
-        } catch (const StaleBindlessUpdateBatch& error) {
-            try {
-                LOG_WARNING(
-                    "[ParallelRecord] coordinator rejected stale bindless batch: "
-                    "layer={} error={}",
-                    layer_index,
-                    error.what()
-                );
-            } catch (...) {
-            }
-            reject_prepared_recording(
-                "stale-bindless-update", VK_ERROR_VALIDATION_FAILED_EXT
-            );
-            return true;
-        } catch (const std::exception& error) {
-            try {
-                LOG_ERROR(
-                    "[ParallelRecord] coordinator island record failed: layer={} "
-                    "error={}",
-                    layer_index,
-                    error.what()
-                );
-            } catch (...) {
-            }
-            reject_prepared_recording(
-                "coordinator-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-            );
-            return true;
-        } catch (...) {
-            reject_prepared_recording(
-                "coordinator-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
-            );
-            return true;
-        }
-
-        const VkResult island_end = end_command_buffer(island_cmd, *island_exit_scopes);
-        if (island_end != VK_SUCCESS) {
-            reject_prepared_recording("coordinator-end-failed", island_end);
-            return true;
-        }
-    }
-
-    if (!flush_parallel_wave()) {
-        return true;
-    }
-
-    if (!_submit.HasExplicitResourceStateOwnership()) {
-        tracker.RestorePreferredStates();
-    }
-    VulkanCommandList& epilogue_cmd = tracker_owner->GetCommandList();
-    epilogue_cmd.SetDescriptorRecordingPlan(descriptor_plan);
-    const VkResult epilogue_begin = begin_primary(epilogue_cmd, active_scopes, true);
-    if (epilogue_begin != VK_SUCCESS) {
-        reject_prepared_recording("epilogue-begin-failed", epilogue_begin);
-        return true;
-    }
-    epilogue_cmd.InsertLabel("[RHI Parallel] Restore State", {0.15f, 0.25f, 0.55f, 1.0f});
-    tracker.DispatchBarriers(epilogue_cmd);
-    if (ends_profiling_frame) {
-        profiler_storage.EndProfilerSession(epilogue_cmd, "Graphics Exec");
-    }
-    const VkResult epilogue_end = end_command_buffer(epilogue_cmd, active_scopes);
-    if (epilogue_end != VK_SUCCESS) {
-        reject_prepared_recording("epilogue-end-failed", epilogue_end);
-        return true;
-    }
-    Array<VulkanCommandList*>              ordered_cmd_lists;
-    Array<UniquePtr<VulkanCommandContext>> submitted_command_contexts;
-    Array<UniquePtr<VulkanCommandContext>> abandoned_command_contexts;
-    uint32 secondary_command_buffer_count = 0;
-    ordered_cmd_lists.reserve(plan.layers.size() + total_job_count + 1);
-    submitted_command_contexts.reserve(plan.layers.size() + total_job_count + 1);
-    for (ParallelLayerRuntime& runtime : runtime_layers) {
-        if (runtime.primary_command_context) {
-            ordered_cmd_lists.push_back(&runtime.primary_command_context->GetCommandList());
-            submitted_command_contexts.push_back(std::move(runtime.primary_command_context));
-        }
-        if (!runtime.parallel) {
-            continue;
-        }
-        if (runtime.worker_recorded) {
-            for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                if (!runtime.use_secondary) {
-                    ordered_cmd_lists.push_back(&chunk.command_context->GetCommandList());
-                } else {
-                    ++secondary_command_buffer_count;
-                }
-                submitted_command_contexts.push_back(std::move(chunk.command_context));
-            }
-        } else {
-            ordered_cmd_lists.push_back(&runtime.fallback_command_context->GetCommandList());
-            submitted_command_contexts.push_back(std::move(runtime.fallback_command_context));
-            // Keep every abandoned recorder pool alive and retire/reset it as
-            // part of the same timeline transaction, but never submit its CB.
-            for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                abandoned_command_contexts.push_back(std::move(chunk.command_context));
-            }
-        }
-    }
-    ordered_cmd_lists.push_back(&tracker_owner->GetCommandList());
-    submitted_command_contexts.push_back(std::move(tracker_owner));
-    return finalize_parallel_record(
-        std::move(ordered_cmd_lists),
-        std::move(submitted_command_contexts),
-        std::move(abandoned_command_contexts),
-        secondary_command_buffer_count,
-        plan.parallel_layer_count,
-        total_job_count,
-        parallel_work_units,
-        parallel_wave_count,
-        serial_island_count,
-        parallel_recorded
-    );
 }
 
 void VkCommandQueue::ExecuteNow(
@@ -7677,48 +4764,25 @@ void VkCommandQueue::ExecuteNow(
         return;
     }
 
-    const auto parallel_profile_started = parallel_record_profile ?
-                                               std::chrono::steady_clock::now() :
-                                               std::chrono::steady_clock::time_point{};
-    Timer reorder_timer{};
-    FunctionTable function_table{
-        .get_argument_access     = &GetArgumentAccess,
-        .is_resource_in_bindless = &IsResourceInBindlessArray,
-        .lock_bdls_array         = &LockBindlessArray,
-        .unlock_bdls_array       = &UnlockBindlessArray
-    };
     const bool compiled_commands = _submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled;
-    if (RequiresCompiledCommands() && !compiled_commands && !_submit.cmds.empty()) {
+    if (!compiled_commands && !_submit.cmds.empty()) {
         reject_before_native_record(
             {EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT},
             "submission did not provide a compiled resource plan"
         );
         return;
     }
-    if (compiled_commands && !SupportsCompiledCommands(_submit, queue.GetType())) {
+    if (compiled_commands && !SupportsVulkanCompiledCommands(_submit, queue.GetType())) {
         reject_before_native_record(
             {EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT},
             "compiled submission contains an unsupported command or inferred barrier"
         );
         return;
     }
-    UniquePtr<CmdReorderer> reorderer;
-    // Prepare the dependency layers exactly once. A profitability fallback
-    // reuses this immutable reorder result on the serial recorder.
-    reorder_timer.Start();
-    if (!compiled_commands) {
-        reorderer = MakeUnique<CmdReorderer>(function_table, _submit.cached_args);
-        for (const auto& cmd : _submit.cmds) {
-            reorderer->AcceptCmd(cmd.get());
-        }
-    }
-    reorder_timer.Stop();
-    const double reorder_time = reorder_timer.ElapsedMilliseconds();
-
     VulkanDescriptorBufferLease                          descriptor_lease;
     std::shared_ptr<const VulkanDescriptorRecordingPlan> descriptor_plan;
     auto                                                 release_unsubmitted_descriptors = OnScopeExit([&] {
-        // Parallel joins finish before this guard. Moving the lease into a
+        // Moving the lease into a
         // recorded packet transfers retirement to existing Completion handling.
         if (descriptor_lease) {
             vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(std::move(descriptor_lease));
@@ -7743,42 +4807,6 @@ void VkCommandQueue::ExecuteNow(
                 "descriptor batch does not fit available storage (capacity or contiguous bind size)"
             );
             return;
-        }
-    }
-
-    if (reorderer && TryExecuteParallel(
-            _submit,
-            descriptor_lease,
-            descriptor_plan,
-            _timeline,
-            _serial,
-            context,
-            function_table,
-            *reorderer,
-            reorder_time,
-            parallel_profile_started,
-            presentation_source_program,
-            _out_recorded
-        )) {
-        if (_out_terminalized != nullptr && _out_recorded != nullptr &&
-            !_out_recorded->has_value()) {
-            *_out_terminalized = true;
-        }
-        return;
-    }
-
-    UniquePtr<RhiRecordExecuteSample> record_sample;
-    UniquePtr<VulkanSerialGoldenTrace> serial_golden;
-    UnorderedMap<const Command*, uint32_t> original_ordinals;
-    if (!compiled_commands && thread_profile && queue.GetType() == EQueueType::Graphics) {
-        EnsureRecordCalibration();
-        record_sample = MakeUnique<RhiRecordExecuteSample>();
-        serial_golden = MakeUnique<VulkanSerialGoldenTrace>();
-        original_ordinals.reserve(_submit.cmds.size());
-        for (uint32_t ordinal = 0; ordinal < _submit.cmds.size(); ++ordinal) {
-            const Command* command = _submit.cmds[ordinal].get();
-            original_ordinals.emplace(command, ordinal);
-            serial_golden->PrimeCommandResources(command, ordinal, _submit.cached_args);
         }
     }
 
@@ -7816,7 +4844,6 @@ void VkCommandQueue::ExecuteNow(
     }
 #endif
     try {
-        // Explicit Query commands force this source onto the serial recorder.
         // Size (and lazily create) its query pools before Begin() so
         // a legal large query packet cannot fail after native recording has
         // already produced side effects. Timestamp boundaries consume one
@@ -7854,88 +4881,18 @@ void VkCommandQueue::ExecuteNow(
         return;
     }
 
-    //Get Resource State Tracker
-    auto& tracker = vk_command_context.GetTracker();
-
     //Visitor for actual command recording
     VkCmdVisitor visitor(
         vk_device,
         vk_command_context,
-        tracker,
         vk_command_context.GetCommandList(),
         _submit.cached_args,
         &profiler_storage,
         emits_profiling_queries
     );
 
-    //Visitor for barrier generation
-    VkCmdPreprocessor preprocessor(
-        vk_device,
-        tracker,
-        vk_command_context.GetTemporaryBufferAllocator(),
-        function_table,
-        _submit.cached_args,
-        queue.GetType()
-    );
-
-    // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
-    const Array<CmdReorderer::LinkedCommandList> no_layers;
-    const auto& cmd_lists = reorderer ? reorderer->m_cmd_lists : no_layers;
-    bool        has_cmd = !_submit.cmds.empty();
-
-    if (record_sample) {
-        RecordTopologyBuilder topology_builder;
-        uint32                raw_layer_index = 0;
-        record_sample->layer_timings.resize(cmd_lists.size());
-        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
-            topology_builder.BeginLayer(raw_layer_index++);
-            serial_golden->BeginLayer(raw_layer_index - 1);
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                topology_builder.AddCommand(cmdnode->cmd->Type());
-                const auto ordinal = original_ordinals.find(cmdnode->cmd);
-                if (ordinal == original_ordinals.end()) {
-                    serial_golden->MarkUnresolved();
-                    serial_golden->RecordCommand(
-                        cmdnode->cmd,
-                        std::numeric_limits<uint32_t>::max(),
-                        _submit.cached_args
-                    );
-                } else {
-                    serial_golden->RecordCommand(
-                        cmdnode->cmd, ordinal->second, _submit.cached_args
-                    );
-                }
-            }
-            topology_builder.EndLayer();
-            serial_golden->EndLayer();
-        }
-        record_sample->topology = topology_builder.Finish();
-    }
-
-    auto record_barrier_diagnostics = [&](const VulkanResolvedBarrierBatch& _barriers, uint64 _group_index) {
-        const QueueFamilyIndices queue_families = vk_device.GetQueueFamilyIndices();
-        const SerialQueueFamilyMap serial_queue_family_map{
-            .graphics_family = queue_families.graphics.value_or(VK_QUEUE_FAMILY_IGNORED),
-            .compute_family  = queue_families.compute.value_or(VK_QUEUE_FAMILY_IGNORED),
-            .copy_family     = queue_families.transfer.value_or(VK_QUEUE_FAMILY_IGNORED),
-            .ignored_family  = VK_QUEUE_FAMILY_IGNORED,
-        };
-        const BarrierSemanticDiagnostics barriers =
-            serial_golden->RecordBarriers(
-                _barriers, _group_index, serial_queue_family_map
-            );
-        record_sample->barrier_hash.Add(_group_index);
-        record_sample->barrier_hash.Add(barriers.digest);
-        record_sample->barrier_hash.Add(barriers.buffer_count);
-        record_sample->barrier_hash.Add(barriers.texture_count);
-        record_sample->barrier_hash.Add(barriers.memory_count);
-        record_sample->buffer_barriers += barriers.buffer_count;
-        record_sample->texture_barriers += barriers.texture_count;
-        record_sample->memory_barriers += barriers.memory_count;
-    };
-
     // Start batch-local recording and its debug region.
-    double preprocess_time = 0.0;
+    const bool has_cmd = !_submit.cmds.empty();
     struct SerialNativeRecordFailure {
         std::string_view reason;
         VkResult        result{VK_ERROR_UNKNOWN};
@@ -7994,29 +4951,15 @@ void VkCommandQueue::ExecuteNow(
             throw SerialNativeRecordFailure{"command-buffer-begin-failed", begin_result};
         }
         if (begins_profiling_frame) {
-            if (serial_golden) {
-                serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
-            }
+
             profiler_storage.CollectProfiling(vk_command_context.GetCommandList().GetHandle());
-            if (serial_golden) {
-                serial_golden->RecordQueryEvent(
-                    SerialQueryEvent::Reset,
-                    "Graphics Exec",
-                    ProfilerStorage::kResetQueryStage
-                );
-            }
+
             {
                 std::unique_lock<std::mutex> profiler_lock(profiler_mutex);
                 cached_profiler_entry = profiler_storage.GetProfilerEntry();
             }
             profiler_storage.BeginProfilerSession(vk_command_context.GetCommandList(), "Graphics Exec");
-            if (serial_golden) {
-                serial_golden->RecordQueryEvent(
-                    SerialQueryEvent::Begin,
-                    "Graphics Exec",
-                    ProfilerStorage::kBeginTimestampStage
-                );
-            }
+
             if (complete_profiling_frame) {
                 ResetSplitProfilingCpuFrame();
                 timer.Start();
@@ -8036,181 +4979,11 @@ void VkCommandQueue::ExecuteNow(
         vk_command_context.GetCommandList().BeginLabel(queue_label, queue_label_color);
     }
 
-    uint layer = 0;
-    if (compiled_commands) {
-        RecordCompiledCommands(vk_device, vk_command_context, _submit, visitor, queue.GetType());
-    } else if (record_sample) {
-        uint32 raw_layer_index = 0;
-        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
-            const uint32 current_raw_layer = raw_layer_index++;
-            if (cmd_list.head == nullptr) {
-                continue;
-            }
-            if (layer == 0) {
-                vk_command_context.GetCommandList().BeginLabel(
-                    "[RHI Diagnostics] Command Layers", {0.15f, 0.25f, 0.55f, 1.0f}
-                );
-            }
-            reorder_timer.Start();
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                preprocessor.VisitCmd(cmdnode->cmd);
-                serial_golden->RegisterDerivedResources(cmdnode->cmd);
-            }
-            tracker.ResolveBarriers();
-            const VulkanResolvedBarrierBatch barriers = tracker.TakeResolvedBarriers();
-            record_barrier_diagnostics(barriers, current_raw_layer);
-            barriers.Record(vk_command_context.GetCommandList());
-            reorder_timer.Stop();
-            preprocess_time += reorder_timer.ElapsedMilliseconds();
-            vk_command_context.GetCommandList().InsertLabel(
-                std::format("[RHI] Layer {}", layer++), {0.15f, 0.25f, 0.55f, 1.0f}
-            );
-            RecordLayerTiming& layer_timing = record_sample->layer_timings[current_raw_layer];
-            struct DeferredCommandDiagnostics {
-                const Command* cmd{nullptr};
-                uint64         descriptor_begin{0};
-                uint64         descriptor_bytes{0};
-                double         command_ms{0.0};
-            };
-            Array<DeferredCommandDiagnostics> deferred_diagnostics(
-                record_sample->topology.layer_command_counts[current_raw_layer]
-            );
-            size_t     deferred_index = 0;
-            const auto layer_started  = std::chrono::steady_clock::now();
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                const auto* cmd = cmdnode->cmd;
-                const uint64 descriptor_before =
-                    vk_command_context.GetCommandList().GetUsedDescriptorBytes();
-                const auto  command_started = std::chrono::steady_clock::now();
-                visitor.VisitCmd(cmd);
-                const auto command_finished = std::chrono::steady_clock::now();
-                const uint64 descriptor_after =
-                    vk_command_context.GetCommandList().GetUsedDescriptorBytes();
-                assert(deferred_index < deferred_diagnostics.size());
-                deferred_diagnostics[deferred_index++] = {
-                    .cmd              = cmd,
-                    .descriptor_begin = descriptor_before,
-                    .descriptor_bytes = descriptor_after - descriptor_before,
-                    .command_ms       = RhiThreadProfileMilliseconds(
-                        command_started, command_finished
-                    ),
-                };
-            }
-            const auto layer_finished = std::chrono::steady_clock::now();
-            assert(deferred_index == deferred_diagnostics.size());
-            layer_timing.wall_ms = RhiThreadProfileMilliseconds(layer_started, layer_finished);
-
-            // Descriptor/query golden reconstruction is deliberately outside
-            // the timed visitor loop so diagnostic hashing cannot inflate the
-            // hypothetical parallel-recording opportunity.
-            for (const DeferredCommandDiagnostics& diagnostics : deferred_diagnostics) {
-                const Command* cmd     = diagnostics.cmd;
-                const auto     ordinal = original_ordinals.find(cmd);
-                if (ordinal == original_ordinals.end()) {
-                    serial_golden->MarkUnresolved();
-                    serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
-                } else {
-                    serial_golden->SetCurrentCommand(ordinal->second);
-                }
-                serial_golden->RecordDescriptorsForCommand(
-                    cmd,
-                    _submit.cached_args,
-                    diagnostics.descriptor_begin,
-                    diagnostics.descriptor_bytes
-                );
-                if (cmd->Type() == Command::EType::Query) {
-                    const auto& query = *static_cast<const QueryCmd*>(cmd);
-                    const bool is_occlusion = query.IsOcclusion();
-                    serial_golden->RecordQueryEvent(
-                        is_occlusion ?
-                            (query.IsBegin() ?
-                                 SerialQueryEvent::OcclusionBegin :
-                                 SerialQueryEvent::OcclusionEnd) :
-                            (query.IsBegin() ?
-                                 SerialQueryEvent::Begin :
-                                 SerialQueryEvent::End),
-                        query.Token().Name(),
-                        is_occlusion ?
-                            VK_PIPELINE_STAGE_2_NONE :
-                            (query.IsBegin() ?
-                                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT :
-                                 VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT)
-                    );
-                } else if (emits_profiling_queries && cmd->Type() == Command::EType::Scope) {
-                    const auto& scope = *static_cast<const ScopeCmd*>(cmd);
-                    if (scope.QueryTimestamp()) {
-                        serial_golden->RecordQueryEvent(
-                            scope.IsPush() ? SerialQueryEvent::Begin : SerialQueryEvent::End,
-                            scope.ScopeName(),
-                            scope.IsPush() ? ProfilerStorage::kBeginTimestampStage
-                                           : ProfilerStorage::kEndTimestampStage
-                        );
-                    }
-                } else if (emits_profiling_queries && cmd->Type() == Command::EType::ShaderDispatch) {
-                    const auto& dispatch = *static_cast<const DispatchCmd*>(cmd);
-                    if (dispatch.ProfileSectionName() != "Other") {
-                        serial_golden->RecordQueryEvent(
-                            SerialQueryEvent::Begin,
-                            dispatch.ProfileSectionName(),
-                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                        );
-                        serial_golden->RecordQueryEvent(
-                            SerialQueryEvent::End,
-                            dispatch.ProfileSectionName(),
-                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                        );
-                    }
-                }
-                record_sample->serial_command_sum_ms += diagnostics.command_ms;
-                if (IsParallelRecordCandidate(cmd->Type())) {
-                    layer_timing.candidate_units_ms.push_back(diagnostics.command_ms);
-                }
-            }
-        }
-    } else {
-        // Keep the profile-off path on the serial baseline: no diagnostic
-        // counters, per-command clocks, hashes, allocations, formatting, or output.
-        // The pre-existing preprocess timer and debug-label formatting remain unchanged.
-        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
-            if (cmd_list.head == nullptr) {
-                continue;
-            }
-            reorder_timer.Start();
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                preprocessor.VisitCmd(cmdnode->cmd);
-            }
-            tracker.ResolveBarriers();
-            tracker.DispatchBarriers(vk_command_context.GetCommandList());
-            reorder_timer.Stop();
-            preprocess_time += reorder_timer.ElapsedMilliseconds();
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                visitor.VisitCmd(cmdnode->cmd);
-            }
-        }
-    }
-    if (record_sample && layer > 0) {
-        vk_command_context.GetCommandList().EndLabel();
-    }
-
+    RecordCompiledCommands(vk_device, vk_command_context, _submit, visitor, queue.GetType());
     if (has_cmd) {
-        if (!_submit.HasExplicitResourceStateOwnership()) {
-            tracker.RestorePreferredStates();
-        }
-        const VulkanResolvedBarrierBatch barriers = tracker.TakeResolvedBarriers();
-        if (record_sample) {
-            record_barrier_diagnostics(barriers, std::numeric_limits<uint64>::max());
-        }
-        barriers.Record(vk_command_context.GetCommandList());
         if (ends_profiling_frame) {
             profiler_storage.EndProfilerSession(vk_command_context.GetCommandList(), "Graphics Exec");
-            if (serial_golden) {
-                serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
-                serial_golden->RecordQueryEvent(
-                    SerialQueryEvent::End,
-                    "Graphics Exec",
-                    ProfilerStorage::kEndTimestampStage
-                );
-            }
+
         }
         vk_command_context.GetCommandList().EndLabel();
         const VkResult end_result = vk_command_context.GetCommandList().End();
@@ -8218,19 +4991,10 @@ void VkCommandQueue::ExecuteNow(
             throw SerialNativeRecordFailure{"command-buffer-end-failed", end_result};
         }
         if (queue.GetType() != EQueueType::Copy) {
-            if (record_sample) {
-                record_sample->descriptor_bytes =
-                    vk_command_context.GetCommandList().GetUsedDescriptorBytes();
-            }
+
             vk_device.GetGlobalDescriptorHeap().FlushDescriptorWrites(descriptor_lease);
         }
-        if (record_sample && ends_profiling_frame) {
-            const QueryFrameDiagnostics query_diagnostics =
-                profiler_storage.GetCurrentFrameQueryDiagnostics();
-            record_sample->query_digest = query_diagnostics.digest;
-            record_sample->used_queries = query_diagnostics.used_query_count;
-        }
-        tracker.Reset();
+
     }
     };
 
@@ -8258,27 +5022,7 @@ void VkCommandQueue::ExecuteNow(
         return;
     }
 
-    if (record_sample) {
-        StableRecordHash descriptor_hash;
-        descriptor_hash.Add(record_sample->descriptor_bytes);
-        record_sample->descriptor_digest = descriptor_hash.Value();
-        if (!emits_profiling_queries) {
-            StableRecordHash query_hash;
-            query_hash.Add(0);
-            record_sample->query_digest = query_hash.Value();
-        }
-        record_sample->serial_golden = serial_golden->Finish();
-        RecordRhiRecordProfile(*record_sample);
-    }
-
-    const uint32 serial_layer_count = static_cast<uint32>(cmd_lists.size());
     Array<RHIResource*> deferred_releases = TakeDeferredReleases();
-    const double profile_record_wall_ms = parallel_record_profile ?
-                                              RhiThreadProfileMilliseconds(
-                                                  parallel_profile_started,
-                                                  std::chrono::steady_clock::now()
-                                              ) :
-                                              0.0;
     Array<VulkanCommandList*> serial_cmd_lists;
     VulkanCommandContextBatch serial_command_contexts;
     if (has_cmd) {
@@ -8302,23 +5046,6 @@ void VkCommandQueue::ExecuteNow(
     recorded_submit.command_contexts  = std::move(serial_command_contexts);
     recorded_submit.descriptor_lease  = std::move(descriptor_lease);
     recorded_submit.deferred_releases = std::move(deferred_releases);
-    recorded_submit.profile.sample = {
-        .requested       = parallel_record_requested,
-        .planned         = false,
-        .effective       = false,
-        .worker_fallback = false,
-        .record_wall_ms  = profile_record_wall_ms,
-        .reorder_ms      = reorder_time,
-        .preprocess_ms   = preprocess_time,
-        .worker_join_ms  = 0.0,
-        .layers          = serial_layer_count,
-        .jobs            = 0,
-        .max_active      = 0,
-    };
-    if (parallel_record_profile) {
-        recorded_submit.profile.enabled         = true;
-        recorded_submit.profile.execute_started = parallel_profile_started;
-    }
     CurrentVulkanSubmitResult submit_result{};
     if (_out_recorded != nullptr) {
         _out_recorded->emplace(std::move(recorded_submit));
@@ -8329,21 +5056,12 @@ void VkCommandQueue::ExecuteNow(
     if (has_cmd && complete_profiling_frame) {
         timer.Stop();
         profiler_storage.RegisterCpuTimestamp("Queue Execution", timer.ElapsedMilliseconds());
-        profiler_storage.RegisterCpuTimestamp("Command Reorder", reorder_time);
-        profiler_storage.RegisterCpuTimestamp("Command Preprocess", preprocess_time);
-        profiler_storage.RegisterCpuTimestamp(
-            "Reorder Percentage", reorder_time / timer.ElapsedMilliseconds()
-        );
-        profiler_storage.RegisterCpuTimestamp(
-            "Preprocess Percentage", preprocess_time / timer.ElapsedMilliseconds()
-        );
         profiler_storage.AdvanceFrame();
     } else if (has_cmd && emits_profiling_queries) {
         const bool submission_accepted = _out_recorded != nullptr || submit_result.outcome.Succeeded();
         if (!submission_accepted) {
             ResetSplitProfilingCpuFrame();
         } else {
-            AccumulateSplitProfilingCpuFrame(reorder_time, preprocess_time);
             if (ends_profiling_frame) {
                 EndSplitProfilingCpuFrame();
             }
@@ -8503,22 +5221,15 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 // recording never reaches the GPU wait operation.
                 vk_command_context.MarkImageAcquired();
                 auto&      vk_cmd_list   = vk_command_context.GetCommandList();
-                auto&      vk_tracker    = vk_command_context.GetTracker();
+                VulkanBarrierRecorder barriers;
                 auto*      vk_src_tex    = static_cast<VulkanTexture*>(_view.texture);
                 const uint idx           = acquire.image_index;
                 auto*      swapchain_tex = ResourceCast(sc->GetSwapchainImage(idx).texture);
                 VK_CHECK_RESULT(vk_cmd_list.Begin());
                 const std::string present_label = std::format("Present: {}", vk_src_tex->GetName());
                 vk_cmd_list.BeginLabel(present_label, {0.0f, 0.85f, 0.95f, 1.0f});
-                // PRESENTATION_SOURCE is a producer-side terminal
-                // contract. The active graph exports GENERAL with
-                // TRANSFER_READ visibility, while legacy recording
-                // restores these textures to their GENERAL preferred
-                // layout. Present consumes that state directly instead
-                // of guessing and changing the source layout here. A
-                // GENERAL->GENERAL memory barrier still connects the
-                // accepted producer writes to this copy.
-                vk_tracker.EmitExplicitBarrier(
+                // The producer exports GENERAL; Present consumes that boundary.
+                barriers.Append(
                     vk_src_tex,
                     VulkanEnumTranslator::METoVKImageAspectFlags(vk_src_tex->GetAspectFlags()),
                     0,
@@ -8535,14 +5246,12 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     VK_ACCESS_2_TRANSFER_READ_BIT,
                     VK_IMAGE_LAYOUT_GENERAL
                 );
-                vk_tracker.RecordState(
-                    swapchain_tex,
-                    ResolveVulkanTextureState(
-                        ETextureState::TRANSFER, EPassType::Graphics, true, swapchain_tex->GetAspectFlags()
-                    )
-                );
-                vk_tracker.ResolveBarriers();
-                vk_tracker.DispatchBarriers(vk_cmd_list);
+                barriers.Append(swapchain_tex, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1,
+                    EBarrierQueueTransferPhase::None, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+                    VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                barriers.Flush(vk_cmd_list);
                 vk_cmd_list.InsertLabel("Copy Present Image", GpuMarkerPalette::Transfer());
                 vk_cmd_list.CopyTexture(
                     vk_src_tex,
@@ -8555,17 +5264,13 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     VK_IMAGE_LAYOUT_GENERAL,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
                 );
-                vk_tracker.RecordState(
-                    swapchain_tex,
-                    VK_ACCESS_2_NONE,
-                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                    VK_PIPELINE_STAGE_2_COPY_BIT
-                );
-                vk_tracker.ResolveBarriers();
-                vk_tracker.DispatchBarriers(vk_cmd_list);
+                barriers.Append(swapchain_tex, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1,
+                    EBarrierQueueTransferPhase::None, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                barriers.Flush(vk_cmd_list);
                 vk_cmd_list.EndLabel();
                 VK_CHECK_RESULT(vk_cmd_list.End());
-                vk_tracker.Reset();
 
                 recorded.ordered_cmd_lists.push_back(&vk_cmd_list);
                 recorded.has_commands = true;
@@ -9343,6 +6048,5 @@ void VkCommandQueue::CompleteAll(uint64 _timeline) {
 }
 
 #pragma endregion
-
 
 } // namespace Moer::Render

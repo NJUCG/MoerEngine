@@ -89,7 +89,7 @@ VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForT
         RHISubmitSegment{EQueueType::Compute, 1, 2},
     };
     source_submit.resource_state_ownership =
-        ERHIResourceStateOwnership::Explicit;
+        ERHIResourceStateOwnership::Compiled;
     source_submit.async_queue_scope = 0x50483139414B4545ull;
 
     FenceRef source_signal = RenderDevice::Get().CreateFence();

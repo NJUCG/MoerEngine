@@ -133,38 +133,6 @@ void AntialiasPass::RecordTAA(
         .Dispatch(command.dispatch_groups, "TAAPass");
 }
 
-void AntialiasPass::Process(
-    CommandList& cmd_list,
-    Params       params,
-    bool         prev_view_valid,
-    TextureRef   input,
-    TextureRef   output
-) {
-    const PreparedCommand command = Prepare(
-        CaptureSetupInput(params, prev_view_valid, input, output)
-    );
-    const RecordResources resources =
-        CaptureResources(std::move(input), std::move(output));
-    const auto owner = recording_owner;
-
-    cmd_list.PushScopeWithTimeScope("AntiAliasPass");
-    RecordConstantsUpload(cmd_list, *owner, command);
-    RecordTAA(cmd_list, *owner, command, resources);
-    // Normalize the legacy write side through a sampled-read barrier before
-    // the command-list tracker restores its preferred GENERAL layout. This
-    // gives linear and graph frames the same external SRV/read boundary and
-    // preserves graph -> linear transitions on boundary frames.
-    cmd_list.TextureBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        Array<ReadTexture>{
-            {resources.feedback_write->GetView(), ETextureState::SAMPLE}
-        }
-    );
-    cmd_list.PopScopeWithTimeScope();
-}
-
 bool AntialiasPass::AddPasses(
     RenderGraph&                 graph,
     const RTGraphFrameResources& graph_resources,

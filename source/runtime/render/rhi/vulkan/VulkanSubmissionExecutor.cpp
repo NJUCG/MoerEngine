@@ -67,7 +67,7 @@ bool IsCopyCommand(Command::EType _type) {
         case Command::EType::QueueTransfer:
         // Scope commands are queue-agnostic debug-label boundaries. Modern
         // GPU scopes lower to Scope + Query pairs; VkCopyQueue already routes
-        // both through CmdReorderer/VkCmdVisitor, so rejecting the label half
+        // both through VkCmdVisitor, so rejecting the label half
         // would reject an otherwise legal Copy timestamp source.
         case Command::EType::Scope:
         // Timestamp Query commands are legal ordering boundaries inside one
@@ -2488,21 +2488,6 @@ void VulkanSubmissionExecutor::ProcessBatch(
                             slot.source_index
                         )
                     );
-                bool parallel_record_requested = false;
-                bool parallel_record_planned   = false;
-                bool parallel_record_effective = false;
-                if (const auto* graphics_packet =
-                        std::get_if<
-                            VkCommandQueue::
-                                CurrentVulkanRecordedSubmit>(
-                            &slot.recorded
-                        )) {
-                    const auto& sample =
-                        graphics_packet->profile.sample;
-                    parallel_record_requested = sample.requested;
-                    parallel_record_planned   = sample.planned;
-                    parallel_record_effective = sample.effective;
-                }
 #if MOER_VULKAN_TEST_SUPPORT
                 NotifyVulkanSourceTranslation(
                     _batch.sequence,
@@ -2515,10 +2500,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     slot.async_queue_scope,
                     HasRecordedSourcePacket(slot.recorded) ?
                         EVulkanSourceTranslationPhase::Recorded :
-                        EVulkanSourceTranslationPhase::Failed,
-                    parallel_record_requested,
-                    parallel_record_planned,
-                    parallel_record_effective
+                        EVulkanSourceTranslationPhase::Failed
                 );
 #endif
             };

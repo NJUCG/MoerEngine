@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-
 @dataclass(frozen=True)
 class Scenario:
     name: str
@@ -37,7 +36,6 @@ class Scenario:
     @property
     def effective_rhi_thread(self) -> bool:
         return self.rhi_thread and not self.rhi_bypass
-
 
 FUNCTIONAL_SCENARIOS = (
     Scenario("raster_sync", "Raster", False, False, True, 0),
@@ -295,7 +293,6 @@ UPPER_PARALLEL_RECORD_GATES = (
     r"\[RenderGraph\]\[CompiledMerge\] graph=RasterFrame dispatch=task-graph worker_jobs=(?:[2-9]|[1-9][0-9]+) completed=true",
 )
 
-
 SCENARIOS = {
     scenario.name: scenario
     for scenario in (
@@ -322,7 +319,6 @@ SCENARIO_SETS = {
 SECTION_PATTERN = re.compile(r"^\s*\[([^]]+)]\s*(?:#.*)?$")
 ASSIGNMENT_PATTERN = re.compile(r"^(?P<indent>\s*)(?P<key>[A-Za-z0-9_-]+)\s*=")
 
-
 def toml_literal(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -331,7 +327,6 @@ def toml_literal(value: object) -> str:
     if isinstance(value, str):
         return json.dumps(value)
     raise TypeError(f"Unsupported TOML scalar: {value!r}")
-
 
 def generate_config(base_text: str, scenario: Scenario) -> str:
     replacements = {
@@ -403,10 +398,8 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
         raise ValueError(f"Generated config validation failed: expected={replacements}, actual={actual}")
     return generated
 
-
 def bool_text(value: bool) -> str:
     return "true" if value else "false"
-
 
 def required_patterns(scenario: Scenario) -> list[str]:
     execution_thread = "Render" if scenario.render_thread else "Game"
@@ -480,7 +473,6 @@ def required_patterns(scenario: Scenario) -> list[str]:
             + scenario.framebuffer_validation
         )
     return patterns
-
 
 def build_verifier_command(
     verifier: Path,
@@ -622,7 +614,6 @@ def build_verifier_command(
         command.extend(["--soak-seconds", str(args.soak_seconds)])
     return command
 
-
 def parse_profile_value(value: str) -> object:
     try:
         return int(value)
@@ -631,7 +622,6 @@ def parse_profile_value(value: str) -> object:
             return float(value)
         except ValueError:
             return value
-
 
 def parse_profile_windows(path: Path) -> dict[str, list[dict[str, object]]]:
     profiles: dict[str, list[dict[str, object]]] = {
@@ -660,7 +650,6 @@ def parse_profile_windows(path: Path) -> dict[str, list[dict[str, object]]]:
             profiles[profile_type].append(fields)
             break
     return profiles
-
 
 def aggregate_profile_windows(
     windows: list[dict[str, object]], profile_type: str, tail_count: int
@@ -942,11 +931,9 @@ def aggregate_profile_windows(
         )
     return aggregate
 
-
 def profile_number(run: dict[str, object], profile: str, field: str) -> float:
     data = run.get(profile, {})
     return float(data.get(field, 0.0)) if isinstance(data, dict) else 0.0
-
 
 def strict_serial_golden_failures(profile: dict[str, object]) -> list[str]:
     failures: list[str] = []
@@ -982,7 +969,6 @@ def strict_serial_golden_failures(profile: dict[str, object]) -> list[str]:
         )
     return failures
 
-
 def enforce_strict_repeat_manifest_consistency(runs: list[dict[str, object]]) -> None:
     grouped: dict[str, list[dict[str, object]]] = {}
     for run in runs:
@@ -1012,14 +998,12 @@ def enforce_strict_repeat_manifest_consistency(runs: list[dict[str, object]]) ->
             run.setdefault("failure_reasons", []).append(reason)
             run["success"] = False
 
-
 def profile_text(run: dict[str, object], profile: str, field: str) -> str:
     data = run.get(profile, {})
     if not isinstance(data, dict):
         return "-"
     value = data.get(field)
     return str(value) if value is not None else "-"
-
 
 def profile_digest_text(run: dict[str, object], prefix: str) -> str:
     data = run.get("rhi_record_profile", {})
@@ -1029,7 +1013,6 @@ def profile_digest_text(run: dict[str, object], prefix: str) -> str:
     if not isinstance(values, list) or not values:
         return "-"
     return "<br>".join(f"`{value}`" for value in values)
-
 
 def write_markdown_summary(path: Path, summary: dict[str, object]) -> None:
     lines = [
@@ -1223,7 +1206,6 @@ def write_markdown_summary(path: Path, summary: dict[str, object]) -> None:
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-
 def parse_args(repo_root: Path) -> argparse.Namespace:
     default_exe = repo_root / "target" / "bin" / "Debug" / "MoerEditor.exe"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1280,7 +1262,6 @@ def parse_args(repo_root: Path) -> argparse.Namespace:
     if args.profile_tail_windows < 1:
         parser.error("--profile-tail-windows must be at least 1")
     return args
-
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
@@ -1381,7 +1362,7 @@ def main() -> int:
 
             completed = subprocess.run(
                 command, capture_output=True, text=True,
-                env={**os.environ, "MOER_VULKAN_REQUIRE_COMPILED": "1"},
+                env=os.environ.copy(),
             )
             report_path = run_dir / "report.json"
             report = (
@@ -1482,7 +1463,6 @@ def main() -> int:
     write_markdown_summary(outdir / "summary.md", summary)
     print(f"Summary: {outdir / 'summary.md'}")
     return 0 if summary["success"] else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

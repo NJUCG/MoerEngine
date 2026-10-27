@@ -61,11 +61,6 @@ struct VulkanRHIConfig {
     bool   rhi_thread                             = false;
     bool   rhi_bypass                             = true;
     bool   thread_profile_logging                 = false;
-    bool   parallel_recording                     = false;
-    uint32 parallel_record_workers                = 0;
-    bool   parallel_record_verify                 = false;
-    bool   parallel_record_profile                = false;
-    uint32 parallel_record_min_work_units_per_job = 8;
 };
 
 struct VulkanDeviceInfo {
@@ -430,11 +425,6 @@ private:
     // Runtime configuration.
     bool                rhi_thread_enabled                     = false;
     bool                thread_profile_logging                 = false;
-    bool                parallel_recording                     = false;
-    uint32              parallel_record_workers                = 0;
-    bool                parallel_record_verify                 = false;
-    bool                parallel_record_profile                = false;
-    uint32              parallel_record_min_work_units_per_job = 8;
 
     // Fault publication and diagnostics.
     std::atomic<EVulkanFaultPublishState> fault_state{EVulkanFaultPublishState::Healthy};

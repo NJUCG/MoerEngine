@@ -13,7 +13,6 @@
 #include "VulkanDevice.h"
 #include "VulkanFault.h"
 #include "VulkanRHIResource.h"
-#include "VulkanResourceState.h"
 #include <string_view>
 
 #include "shader/ShaderPipeline.h"
@@ -191,10 +190,6 @@ void VulkanCommandList::BindPipeline(const PipelineHandle& _pipeline_handle) {
 
 namespace {
 
-VkImageLayout GetSampledImageLayout(const TextureView& _view) {
-    return ResolveVulkanTextureState(ETextureState::SAMPLE, EPassType::Graphics, false, _view.GetTexture()->GetAspectFlags()).layout;
-}
-
 template<typename View, typename WriteDescriptor>
 void WriteViewDescriptors(
     const TArg&       _argument,
@@ -256,7 +251,7 @@ void WriteResourceBindingDescriptors(
                 is_storage ? "storage-image" : "sampled-image",
                 [&](const TextureView& texture, uint64 destination_byte_offset) {
                     const VkImageLayout image_layout =
-                        is_storage ? VK_IMAGE_LAYOUT_GENERAL : GetSampledImageLayout(texture);
+                        is_storage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                     const VulkanCachedDescriptor descriptor =
                         _heap.GetOrCreateImageDescriptor(&texture, image_layout, descriptor_type);
                     _heap.CopyDescriptorToBuffer(descriptor, destination_byte_offset);

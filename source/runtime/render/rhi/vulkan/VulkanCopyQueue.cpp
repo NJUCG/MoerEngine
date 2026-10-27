@@ -199,6 +199,14 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
                 recorded->native_submit_resolved = true;
             };
 
+        if (!SupportsVulkanCompiledCommands(recorded->submit, EQueueType::Copy)) {
+            reject_before_native_record(
+                {EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT},
+                "Copy submission requires compiled commands and explicit barriers"
+            );
+            return recorded;
+        }
+
         size_t               timestamp_query_slot_count = 0;
         Array<uint64>         open_timestamp_queries{};
         UnorderedSet<uint64>  seen_timestamp_queries{};

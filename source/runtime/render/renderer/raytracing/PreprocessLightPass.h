@@ -112,9 +112,6 @@ public:
     PrepareLightPass(class ShaderManager& manager, BindlessArrayRef bindless_array);
     PreparedCommand
     Prepare(RTContext& rt_ctx, const RaytracingSceneFrameSnapshot& scene_snapshot, uint64 scene_revision);
-    void Process(class CommandList& cmd_list, const PreparedCommand& command);
-    void RecordLightingInputTransitions(CommandList& cmd_list, const PreparedCommand& command);
-    void RecordAcceptedBoundary(CommandList& cmd_list, const PreparedCommand& command);
     bool AddPasses(
         RenderGraph&                       graph,
         const PreparedCommand&             command,
@@ -126,7 +123,6 @@ private:
     RecordResources CaptureResources(const RTContext& rt_ctx) const;
     void            RecordUploads(CommandList& cmd_list, SharedPtr<const RecordPayload> payload);
     void            RecordClears(CommandList& cmd_list, SharedPtr<const RecordPayload> payload);
-    void RecordSceneInputTransitions(CommandList& cmd_list, SharedPtr<const RecordPayload> payload);
     void RecordDispatch(CommandList& cmd_list, SharedPtr<const RecordPayload> payload);
     void
     RecordGenerateMips(CommandList& cmd_list, SharedPtr<const RecordPayload> payload, MipDispatch dispatch);
