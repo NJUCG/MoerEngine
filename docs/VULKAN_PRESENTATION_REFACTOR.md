@@ -171,4 +171,4 @@ A、B、Q 对应三条不同的依赖。A 和 B 是 WSI 接口使用的 binary s
 
 本轮改进逐步消除了“完整呈现任务”对其他资源生命周期的统管：GPU 资源回到通用提交模型，呈现结果回到窗口恢复模型，交换链清理回到生命周期模型。保留的同步关系由真实资源依赖决定。
 
-代码对应：[交换链](../source/runtime/render/rhi/vulkan/VulkanSwapChain.h)、[提交与回收](../source/runtime/render/rhi/vulkan/VulkanQueue.cpp)、[生命周期与恢复](../source/runtime/render/renderer/common/PresentationSurface.cpp)。
+代码对应：[交换链](../source/runtime/render/rhi/backends/vulkan/VulkanSwapChain.h)、[提交与回收](../source/runtime/render/rhi/backends/vulkan/VulkanQueue.cpp)、[生命周期与恢复](../source/runtime/render/renderer/common/PresentationSurface.cpp)。

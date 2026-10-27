@@ -1,7 +1,7 @@
 #pragma once
 
 #include "rhi/VertexFormat.h"
-#include "rhi/vulkan/VulkanCommon.h"
+#include "rhi/backends/vulkan/VulkanCommon.h"
 
 namespace Moer::Render {
 

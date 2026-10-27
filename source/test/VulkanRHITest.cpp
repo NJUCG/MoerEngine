@@ -7,7 +7,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "rhi/vulkan/VulkanRHI.h"
+#include "rhi/backends/vulkan/VulkanRHI.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"

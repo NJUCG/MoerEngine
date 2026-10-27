@@ -1,4 +1,4 @@
-#include "rhi/metal/MetalResource.h"
+#include "rhi/backends/metal/MetalResource.h"
 
 #include <algorithm>
 #include <chrono>

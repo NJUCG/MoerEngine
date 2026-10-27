@@ -7,16 +7,16 @@ configure_file(${moer_runtime_render_dir}/config.h.in ${moer_runtime_render_dir}
 file(GLOB_RECURSE render_module_headers CONFIGURE_DEPENDS "*.h" ".hpp" "*.hlsli")
 file(GLOB_RECURSE render_module_sources CONFIGURE_DEPENDS "*.cpp")
 if (APPLE)
-    file(GLOB_RECURSE metal_module_sources CONFIGURE_DEPENDS "rhi/metal/*.mm")
+    file(GLOB_RECURSE metal_module_sources CONFIGURE_DEPENDS "rhi/backends/metal/*.mm")
     list(APPEND render_module_sources ${metal_module_sources})
 endif()
 if (NOT WIN32)
-    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/d3d12/")
-    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/d3d12/")
+    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/backends/d3d12/")
+    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/backends/d3d12/")
 endif()
 if (APPLE)
-    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/vulkan/")
-    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/vulkan/")
+    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/backends/vulkan/")
+    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/backends/vulkan/")
 endif()
 file(GLOB_RECURSE render_shader_sources CONFIGURE_DEPENDS
     "${moer_shader_dir}/*.hlsl"
@@ -56,7 +56,7 @@ target_compile_definitions(${target_name} PUBLIC
     MOER_VULKAN_TEST_SUPPORT=$<BOOL:${MOER_VULKAN_TEST_SUPPORT}>
 )
 
-# Public dependency contract for every header under rhi/vulkan. Keeping Volk,
+# Public dependency contract for every header under rhi/backends/vulkan. Keeping Volk,
 # Vulkan platform declarations, and VMA includes on one interface target makes
 # the required macros available before any consumer can parse Vulkan headers.
 add_library(moer_vulkan_headers INTERFACE)

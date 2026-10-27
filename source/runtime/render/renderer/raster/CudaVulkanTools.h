@@ -14,8 +14,8 @@
 #include "misc/Traits.h"
 #include "platform/Platform.h"
 #include "rhi/executor/RHIExecutor.h"
-#include "rhi/vulkan/VulkanDevice.h"
-#include "rhi/vulkan/VulkanTimeline.h"
+#include "rhi/backends/vulkan/VulkanDevice.h"
+#include "rhi/backends/vulkan/VulkanTimeline.h"
 #include <cuda_runtime.h>
 #include <cusolverDn.h>
 #include <initializer_list>

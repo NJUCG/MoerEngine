@@ -1,6 +1,6 @@
 #include "resources/vertexfactory/VertexAttributes.h"
 #include "rhi/RHIResource.h"
-#include "rhi/vulkan/VulkanVertexFormat.h"
+#include "rhi/backends/vulkan/VulkanVertexFormat.h"
 #include "shader/ShaderCommon.h"
 
 #include <cstddef>

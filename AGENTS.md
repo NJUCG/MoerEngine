@@ -81,28 +81,30 @@ source/
         executor/                #   Submission admission, recording handoff and backend dispatch
           RHIExecutor.cpp/h      #     Public entry points, batch publication and lifecycle
           testing/               #     Executor test hooks, separate from the public API
-        vulkan/                  #   Vulkan backend
-          VulkanDevice.cpp/h     #     Device setup, capabilities and resource entry points
-          VulkanPipelineCreation.cpp # Shader reflection, native pipeline construction
-          VulkanQueue.cpp/h      #     Queue reservation, native submission and completion handoff
-          VulkanCommandRecorder.cpp/h # Recording workspaces and reusable Context pools
-          VulkanCommandRecording.cpp # RHI command replay into Vulkan command buffers
-          VulkanCopyCommandRecording.cpp # Copy command validation and recording
-          VulkanSubmission.h     #     Owning packets shared by recording, submission and completion
-          VulkanQueueCompletion.cpp # GPU completion, callbacks and resource retirement
-          VulkanQueuePresentation.cpp # Present source contracts and swapchain presentation
-          VulkanQueueInternal.cpp/h # Shared queue dependency and failure publication helpers
-          VulkanNativeQueue.cpp  #     Native queue submits, waits/signals and labels
-          VulkanCopyQueue.cpp    #     Copy queue submission and completion
-          VulkanCommandProfiler.cpp/h # GPU timestamps and CPU recording profiles
-          VulkanRHIResource.cpp/h #    Buffer/Texture ownership and view caches
-          VulkanEnumTranslator.cpp/h # RHI-to-Vulkan enum and pixel-format mapping
-          VulkanPipeline.cpp/h   #     Pipeline layout and binding metadata
-          VulkanBindlessArray.cpp/h #   Bindless updates and slot retirement
-          VulkanRaytracingResource.cpp/h # BLAS/TLAS resources and scene updates
-          VulkanTimeline.cpp/h   #     GPU semaphore and host completion state
-          VulkanDescriptor.cpp/h #    Descriptor byte cache and GPU descriptor storage
-        d3d12/                   #   D3D12 backend (partial)
+        backends/                #   Graphics API implementations
+          vulkan/                  #   Vulkan backend
+            VulkanDevice.cpp/h     #     Device setup, capabilities and resource entry points
+            VulkanPipelineCreation.cpp # Shader reflection, native pipeline construction
+            VulkanQueue.cpp/h      #     Queue reservation, native submission and completion handoff
+            VulkanCommandRecorder.cpp/h # Recording workspaces and reusable Context pools
+            VulkanCommandRecording.cpp # RHI command replay into Vulkan command buffers
+            VulkanCopyCommandRecording.cpp # Copy command validation and recording
+            VulkanSubmission.h     #     Owning packets shared by recording, submission and completion
+            VulkanQueueCompletion.cpp # GPU completion, callbacks and resource retirement
+            VulkanQueuePresentation.cpp # Present source contracts and swapchain presentation
+            VulkanQueueInternal.cpp/h # Shared queue dependency and failure publication helpers
+            VulkanNativeQueue.cpp  #     Native queue submits, waits/signals and labels
+            VulkanCopyQueue.cpp    #     Copy queue submission and completion
+            VulkanCommandProfiler.cpp/h # GPU timestamps and CPU recording profiles
+            VulkanRHIResource.cpp/h #    Buffer/Texture ownership and view caches
+            VulkanEnumTranslator.cpp/h # RHI-to-Vulkan enum and pixel-format mapping
+            VulkanPipeline.cpp/h   #     Pipeline layout and binding metadata
+            VulkanBindlessArray.cpp/h #   Bindless updates and slot retirement
+            VulkanRaytracingResource.cpp/h # BLAS/TLAS resources and scene updates
+            VulkanTimeline.cpp/h   #     GPU semaphore and host completion state
+            VulkanDescriptor.cpp/h #    Descriptor byte cache and GPU descriptor storage
+          metal/                   #   Metal backend
+          d3d12/                   #   D3D12 backend (partial)
       shader/
         ShaderPipeline.h         # ★ Pipeline class macros (DEFINE_SHADER_CONSTANT, etc.)
         ShaderCompiler.cpp/h     #   DXC invocation, SPIR-V generation
@@ -162,7 +164,7 @@ Files in `shaderheaders/shared/` use `#ifdef __cplusplus` guards:
 - Both sides see the same struct layout. **Alignment must be manually kept in sync** (see pitfalls below).
 
 ### Vulkan Header Contract
-- Vulkan RHI code gets Vulkan declarations through `rhi/vulkan/VulkanCommon.h`; do not include `<volk.h>`, `<vulkan/vulkan_core.h>`, or platform Vulkan headers directly in the Render module.
+- Vulkan RHI code gets Vulkan declarations through `rhi/backends/vulkan/VulkanCommon.h`; do not include `<volk.h>`, `<vulkan/vulkan_core.h>`, or platform Vulkan headers directly in the Render module.
 - Targets that expose or consume Vulkan types must link `Moer::VulkanHeaders`. It propagates `VK_NO_PROTOTYPES`, the active Vulkan platform macro, the required include paths, and the Volk dependency.
 - `source/profile/VkLayer.cpp` is a standalone Vulkan layer and is the intentional exception to the Render-module rule.
 - After changing the Vulkan include contract, build `TestVulkanHeaderContract` and run the `VulkanHeaderContract` CTest.

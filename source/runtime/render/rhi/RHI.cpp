@@ -3,10 +3,10 @@
 #include "PixelFormat.h"
 #include "RHIImpl.h"
 #if defined(_WIN32)
-#include "d3d12/D3D12Device.h"
+#include "rhi/backends/d3d12/D3D12Device.h"
 #endif
 #if defined(__APPLE__)
-#include "metal/MetalDevice.h"
+#include "rhi/backends/metal/MetalDevice.h"
 #endif
 #include "log/LogSystem.h"
 #include "rendergraph/RenderGraphResourcePool.h"
@@ -17,7 +17,7 @@
 #include "rhi/RHIThreadHeartbeat.h"
 #include "shader/ShaderResourceManager.h"
 #if !defined(__APPLE__)
-#include "vulkan/VulkanDevice.h"
+#include "rhi/backends/vulkan/VulkanDevice.h"
 #endif
 
 #include <stdexcept>

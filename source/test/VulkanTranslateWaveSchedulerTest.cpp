@@ -1,4 +1,4 @@
-#include "rhi/vulkan/VulkanTranslateWaveScheduler.h"
+#include "rhi/backends/vulkan/VulkanTranslateWaveScheduler.h"
 #include "taskgraph/TaskGraph.h"
 
 #include <array>

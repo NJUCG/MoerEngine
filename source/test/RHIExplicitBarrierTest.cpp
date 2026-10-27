@@ -1,6 +1,6 @@
 #include "rhi/RHIImpl.h"
-#include "rhi/vulkan/VulkanRHIResource.h"
-#include "rhi/vulkan/VulkanBarrier.h"
+#include "rhi/backends/vulkan/VulkanRHIResource.h"
+#include "rhi/backends/vulkan/VulkanBarrier.h"
 
 #include <array>
 #include <iostream>

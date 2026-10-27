@@ -2,9 +2,9 @@
 
 ## Design Notes
 
-* [Swapchain 与 Present 的逻辑模型演进](../../../../../docs/VULKAN_PRESENTATION_REFACTOR.md)：完成条件、资源生命周期和职责边界的逐步拆分，以及 Copy / Direct 路径的取舍。
-* [描述符绑定与分配模型](../../../../../docs/VULKAN_DESCRIPTOR_DESIGN.md)：API 表达、存储所有权及生命周期的区别。
-* [临时描述符预留](../../../../../docs/VULKAN_DESCRIPTOR_RESERVATION.md)：提交前预留、录制游标和失败重录的责任边界。
+* [Swapchain 与 Present 的逻辑模型演进](../../../../../../docs/VULKAN_PRESENTATION_REFACTOR.md)：完成条件、资源生命周期和职责边界的逐步拆分，以及 Copy / Direct 路径的取舍。
+* [描述符绑定与分配模型](../../../../../../docs/VULKAN_DESCRIPTOR_DESIGN.md)：API 表达、存储所有权及生命周期的区别。
+* [临时描述符预留](../../../../../../docs/VULKAN_DESCRIPTOR_RESERVATION.md)：提交前预留、录制游标和失败重录的责任边界。
 
 ## Source responsibilities
 
@@ -73,7 +73,7 @@ supports bufferless push descriptors. Pass authors do not select these APIs.
 | `VulkanPipelineState` | Retain backend choice, layouts or heap mappings, binding offsets, and immediate-data metadata. |
 | `VulkanCommandList` / `VulkanDescriptorBinding.cpp` | Write/bind descriptors and immediate data; own transient native pools and texel views until context completion. |
 
-See [Vulkan descriptor backends](../../../../../docs/VULKAN_DESCRIPTOR_BACKENDS.md)
+See [Vulkan descriptor backends](../../../../../../docs/VULKAN_DESCRIPTOR_BACKENDS.md)
 for selection rules, lifetime guarantees, the cost of maintaining fallback sets,
 and the reproducible GPU readback matrix.
 

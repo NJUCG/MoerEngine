@@ -1,5 +1,5 @@
 #include "VulkanFaultInjection.h"
-#include "rhi/vulkan/VulkanDevice.h"
+#include "rhi/backends/vulkan/VulkanDevice.h"
 #include "log/LogSystem.h"
 
 #include <atomic>

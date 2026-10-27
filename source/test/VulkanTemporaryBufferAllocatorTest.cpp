@@ -1,5 +1,5 @@
-#include "rhi/vulkan/VulkanRHIResource.h"
-#include "rhi/vulkan/VulkanTemporaryBufferAllocator.h"
+#include "rhi/backends/vulkan/VulkanRHIResource.h"
+#include "rhi/backends/vulkan/VulkanTemporaryBufferAllocator.h"
 
 #include <iostream>
 #include <stdexcept>

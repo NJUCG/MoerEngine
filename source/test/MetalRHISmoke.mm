@@ -10,7 +10,7 @@
 #include "rhi/RHI.h"
 #include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIImpl.h"
-#include "rhi/metal/MetalDevice.h"
+#include "rhi/backends/metal/MetalDevice.h"
 #include "config/ConfigManager.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"

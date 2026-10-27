@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rhi/metal/MetalResource.h"
+#include "rhi/backends/metal/MetalResource.h"
 
 #include <mutex>
 #include <vector>

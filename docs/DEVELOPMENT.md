@@ -175,7 +175,7 @@ Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.
 
 此外，**请务必检查头文件是否有额外要求！**例如，`volk` 要求include头文件前定义平台相关宏、`NRD` 要求特定的头文件include顺序。这种情况下，请 **务必创建一个单独的头文件来封装该依赖库的include逻辑**，否则会导致其他开发者错误的include行为。
 
-Vulkan 后端统一通过 `rhi/vulkan/VulkanCommon.h` 获取 Vulkan 声明。Render 模块内不要直接 include `<volk.h>`、`<vulkan/vulkan_core.h>` 或平台 Vulkan 头文件；公开或消费 Vulkan 类型的 CMake target 应链接 `Moer::VulkanHeaders`，由它传递 `VK_NO_PROTOTYPES`、平台宏、头文件路径和 Volk 依赖。`source/profile/VkLayer.cpp` 是独立 Vulkan Layer，不受 Render 模块规则约束。修改该契约后，应构建 `TestVulkanHeaderContract` 并运行名为 `VulkanHeaderContract` 的 CTest。
+Vulkan 后端统一通过 `rhi/backends/vulkan/VulkanCommon.h` 获取 Vulkan 声明。Render 模块内不要直接 include `<volk.h>`、`<vulkan/vulkan_core.h>` 或平台 Vulkan 头文件；公开或消费 Vulkan 类型的 CMake target 应链接 `Moer::VulkanHeaders`，由它传递 `VK_NO_PROTOTYPES`、平台宏、头文件路径和 Volk 依赖。`source/profile/VkLayer.cpp` 是独立 Vulkan Layer，不受 Render 模块规则约束。修改该契约后，应构建 `TestVulkanHeaderContract` 并运行名为 `VulkanHeaderContract` 的 CTest。
 
 ### C++规范
 
@@ -348,7 +348,8 @@ Executor 模块集中在 `source/runtime/render/rhi/executor/`，调用方通过
 `RHIExecutorRecordingHandoff` 负责等待录制完成并按序处理请求；
 `RHIExecutorInternal.h` 只声明实现文件间共享的辅助函数。
 测试钩子放在模块内的 `executor/testing/`，不再由公共 `RHIExecutor.h` 暴露。
-Vulkan 执行器保留在 `rhi/vulkan/`；公共线程设施和提交拓扑仍由 RHI 层共享。
+各图形 API 的实现统一放在 `rhi/backends/` 下的 `vulkan/`、`metal/`、`d3d12/`，
+其中 `VulkanSubmissionExecutor` 属于 Vulkan 后端；公共 Executor、线程设施和提交拓扑保留在 RHI 层。
 提交、Flush、Sync 和关闭共用批次发布过程；待发布批次始终保留未被后端接收的数据，
 失败通知在锁外完成。Present 的接纳和发布仍在同一发布锁范围内，防止后续操作越过它。
 Vulkan 的 `RunTranslateThread` 和 `RunSubmissionThread` 对应后端的两条工作线程。

@@ -1,4 +1,4 @@
-#include "rhi/metal/MetalBindless.h"
+#include "rhi/backends/metal/MetalBindless.h"
 
 #include <algorithm>
 #include <cstring>

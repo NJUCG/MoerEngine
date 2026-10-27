@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rhi/metal/MetalFormat.h"
+#include "rhi/backends/metal/MetalFormat.h"
 
 #import <AppKit/AppKit.h>
 #import <QuartzCore/CAMetalLayer.h>

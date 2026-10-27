@@ -1,7 +1,7 @@
 #pragma once
 
 #include "VulkanSubmissionTestHooks.h"
-#include "rhi/vulkan/VulkanQueue.h"
+#include "rhi/backends/vulkan/VulkanQueue.h"
 
 #include <cstddef>
 

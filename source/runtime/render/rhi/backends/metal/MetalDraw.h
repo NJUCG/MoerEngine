@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rhi/metal/MetalPipeline.h"
+#include "rhi/backends/metal/MetalPipeline.h"
 
 #include <span>
 

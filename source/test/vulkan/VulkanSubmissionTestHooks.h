@@ -3,7 +3,7 @@
 #include "RenderAPI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIThreadOwnership.h"
-#include "rhi/vulkan/VulkanFault.h"
+#include "rhi/backends/vulkan/VulkanFault.h"
 
 namespace Moer::Render {
 

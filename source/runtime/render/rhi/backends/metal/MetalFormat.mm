@@ -1,4 +1,4 @@
-#include "rhi/metal/MetalFormat.h"
+#include "rhi/backends/metal/MetalFormat.h"
 
 #include <stdexcept>
 #include <string>

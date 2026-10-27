@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rhi/metal/MetalFormat.h"
+#include "rhi/backends/metal/MetalFormat.h"
 
 #include <atomic>
 #include <condition_variable>

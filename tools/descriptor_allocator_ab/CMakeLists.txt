@@ -3,19 +3,19 @@ project(DescriptorAllocatorAB LANGUAGES C CXX)
 find_package(Threads REQUIRED)
 get_filename_component(MOER_ROOT "../.." ABSOLUTE)
 add_executable(DescriptorAllocatorAB main.cpp legacy.cpp
-    "${MOER_ROOT}/source/runtime/render/rhi/vulkan/VulkanDescriptorBufferAllocator.cpp")
+    "${MOER_ROOT}/source/runtime/render/rhi/backends/vulkan/VulkanDescriptorBufferAllocator.cpp")
 target_compile_features(DescriptorAllocatorAB PRIVATE cxx_std_20)
 target_include_directories(DescriptorAllocatorAB PRIVATE
-    "${MOER_ROOT}/source/runtime/render/rhi/vulkan")
+    "${MOER_ROOT}/source/runtime/render/rhi/backends/vulkan")
 target_link_libraries(DescriptorAllocatorAB PRIVATE Threads::Threads)
 # Keep both implementations in separate translation units, without LTO.
 set_property(TARGET DescriptorAllocatorAB PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
 
 add_executable(DescriptorAllocatorFailureProbe failure.cpp
-    "${MOER_ROOT}/source/runtime/render/rhi/vulkan/VulkanDescriptorBufferAllocator.cpp")
+    "${MOER_ROOT}/source/runtime/render/rhi/backends/vulkan/VulkanDescriptorBufferAllocator.cpp")
 target_compile_features(DescriptorAllocatorFailureProbe PRIVATE cxx_std_20)
 target_include_directories(DescriptorAllocatorFailureProbe PRIVATE
-    "${MOER_ROOT}/source/runtime/render/rhi/vulkan")
+    "${MOER_ROOT}/source/runtime/render/rhi/backends/vulkan")
 target_link_libraries(DescriptorAllocatorFailureProbe PRIVATE Threads::Threads)
 
 # Standalone, CPU-only experiment. Use the engine's Vulkan include entry point,
@@ -32,7 +32,7 @@ endif()
 add_subdirectory("${MOER_ROOT}/3rdparty/volk" "${CMAKE_CURRENT_BINARY_DIR}/volk")
 target_link_libraries(descriptor_vulkan_headers INTERFACE volk)
 target_include_directories(descriptor_vulkan_headers INTERFACE
-    "${MOER_ROOT}/source/runtime/render/rhi/vulkan"
+    "${MOER_ROOT}/source/runtime/render/rhi/backends/vulkan"
     "${MOER_ROOT}/3rdparty/VulkanMemoryAllocator")
 target_compile_definitions(descriptor_vulkan_headers INTERFACE VK_NO_PROTOTYPES)
 if(WIN32)
@@ -46,7 +46,7 @@ target_compile_features(DescriptorVmaCandidate PUBLIC cxx_std_20)
 target_link_libraries(DescriptorVmaCandidate PUBLIC Moer::VulkanHeaders Threads::Threads)
 set_property(TARGET DescriptorVmaCandidate PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
 add_executable(DescriptorAllocatorVmaExperiment vma_experiment.cpp
-    "${MOER_ROOT}/source/runtime/render/rhi/vulkan/VulkanDescriptorBufferAllocator.cpp")
+    "${MOER_ROOT}/source/runtime/render/rhi/backends/vulkan/VulkanDescriptorBufferAllocator.cpp")
 target_link_libraries(DescriptorAllocatorVmaExperiment PRIVATE DescriptorVmaCandidate)
 set_property(TARGET DescriptorAllocatorVmaExperiment PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
 add_executable(DescriptorAllocatorVmaFailureProbe failure.cpp)

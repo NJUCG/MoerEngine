@@ -11,7 +11,7 @@
 #include <utility>
 
 #if !defined(__APPLE__)
-#include "rhi/vulkan/VulkanSubmissionExecutor.h"
+#include "rhi/backends/vulkan/VulkanSubmissionExecutor.h"
 #endif
 
 namespace Moer::Render::RHIExecutorDetail {

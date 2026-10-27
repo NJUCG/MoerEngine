@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rhi/metal/MetalDevice.h"
+#include "rhi/backends/metal/MetalDevice.h"
 #import <Metal/Metal.h>
 
 #include <memory>

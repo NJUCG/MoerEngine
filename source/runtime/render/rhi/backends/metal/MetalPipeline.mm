@@ -1,4 +1,4 @@
-#include "rhi/metal/MetalPipeline.h"
+#include "rhi/backends/metal/MetalPipeline.h"
 #include "rhi/ShaderStageUtils.h"
 #include "rhi/ShaderConstantLayout.h"
 

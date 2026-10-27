@@ -1,4 +1,4 @@
-#include "rhi/vulkan/VulkanDescriptorMode.h"
+#include "rhi/backends/vulkan/VulkanDescriptorMode.h"
 
 #include <iostream>
 #include <stdexcept>

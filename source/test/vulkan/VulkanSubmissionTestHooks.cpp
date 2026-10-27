@@ -2,8 +2,8 @@
 
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
-#include "rhi/vulkan/VulkanDevice.h"
-#include "rhi/vulkan/VulkanQueue.h"
+#include "rhi/backends/vulkan/VulkanDevice.h"
+#include "rhi/backends/vulkan/VulkanQueue.h"
 
 #include <algorithm>
 #include <atomic>

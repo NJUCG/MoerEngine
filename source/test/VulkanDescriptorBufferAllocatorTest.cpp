@@ -1,4 +1,4 @@
-#include "rhi/vulkan/VulkanDescriptorBufferAllocator.h"
+#include "rhi/backends/vulkan/VulkanDescriptorBufferAllocator.h"
 
 #include <algorithm>
 #include <array>

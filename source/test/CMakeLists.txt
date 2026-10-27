@@ -584,7 +584,7 @@ endif()
 set(test_target TestVulkanDeviceFeatures)
 add_executable(${test_target}
     "VulkanDeviceFeaturesTest.cpp"
-    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanDeviceFeature.cpp"
+    "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanDeviceFeature.cpp"
 )
 target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
@@ -595,7 +595,7 @@ set_tests_properties(VulkanDeviceFeaturesContract PROPERTIES TIMEOUT 60)
 set(test_target TestVulkanDeviceProperties)
 add_executable(${test_target}
     "VulkanDevicePropertiesTest.cpp"
-    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanDeviceProperty.cpp"
+    "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanDeviceProperty.cpp"
 )
 target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
@@ -607,7 +607,7 @@ find_package(Threads REQUIRED)
 set(test_target TestVulkanDescriptorBufferAllocator)
 add_executable(${test_target}
     "VulkanDescriptorBufferAllocatorTest.cpp"
-    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanDescriptorBufferAllocator.cpp"
+    "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanDescriptorBufferAllocator.cpp"
 )
 target_include_directories(${test_target} PRIVATE "${moer_source_dir}/runtime/render")
 target_link_libraries(${test_target} PRIVATE Threads::Threads)
@@ -625,7 +625,7 @@ add_test(NAME VulkanDescriptorPolicyContract COMMAND $<TARGET_FILE:TestVulkanDes
 set(test_target TestVulkanTemporaryBufferAllocator)
 add_executable(${test_target}
     "VulkanTemporaryBufferAllocatorTest.cpp"
-    "${moer_source_dir}/runtime/render/rhi/vulkan/VulkanTemporaryBufferAllocator.cpp"
+    "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanTemporaryBufferAllocator.cpp"
 )
 target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
 target_compile_definitions(${test_target} PRIVATE RENDER_MODULE_SHARED_LIB)

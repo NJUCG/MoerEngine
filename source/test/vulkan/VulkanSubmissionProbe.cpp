@@ -1,8 +1,8 @@
 #include "VulkanSubmissionProbe.h"
 #include "rhi/RHI.h"
-#include "rhi/vulkan/VulkanQueue.h"
-#include "rhi/vulkan/VulkanSubmissionMaterialization.h"
-#include "rhi/vulkan/VulkanTimeline.h"
+#include "rhi/backends/vulkan/VulkanQueue.h"
+#include "rhi/backends/vulkan/VulkanSubmissionMaterialization.h"
+#include "rhi/backends/vulkan/VulkanTimeline.h"
 
 #include <stdexcept>
 

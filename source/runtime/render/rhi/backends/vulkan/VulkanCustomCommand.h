@@ -1,7 +1,7 @@
 #ifndef VULKAN_CUSTOM_COMMAND_H
 #define VULKAN_CUSTOM_COMMAND_H
 
-#include "../RHIImpl.h"
+#include "rhi/RHIImpl.h"
 
 #include "VulkanPipelineArgument.h"
 #include "VulkanPlatform.h"

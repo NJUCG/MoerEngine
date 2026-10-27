@@ -1,4 +1,4 @@
-#include "rhi/metal/MetalSwapchain.h"
+#include "rhi/backends/metal/MetalSwapchain.h"
 
 #include <GLFW/glfw3.h>
 #define GLFW_EXPOSE_NATIVE_COCOA

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "RenderAPI.h"
-#include "rhi/vulkan/VulkanFault.h"
+#include "rhi/backends/vulkan/VulkanFault.h"
 
 namespace Moer::Render {
 class VulkanDevice;

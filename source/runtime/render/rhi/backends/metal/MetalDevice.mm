@@ -1,9 +1,9 @@
-#include "rhi/metal/MetalDevice.h"
-#include "rhi/metal/MetalBindless.h"
-#include "rhi/metal/MetalPipeline.h"
-#include "rhi/metal/MetalQueue.h"
-#include "rhi/metal/MetalResource.h"
-#include "rhi/metal/MetalSwapchain.h"
+#include "rhi/backends/metal/MetalDevice.h"
+#include "rhi/backends/metal/MetalBindless.h"
+#include "rhi/backends/metal/MetalPipeline.h"
+#include "rhi/backends/metal/MetalQueue.h"
+#include "rhi/backends/metal/MetalResource.h"
+#include "rhi/backends/metal/MetalSwapchain.h"
 #include "log/LogSystem.h"
 
 #import <Metal/Metal.h>
