@@ -1092,13 +1092,10 @@ void TestExplicitPreparedPassComposition(TestSuite& suite) {
             record_value.store(immutable_parameters, std::memory_order_release);
         }
     );
-    const RenderGraph::PreparedPassHandle handles{
-        prepared.GetSetupPass(),
-        pass
-    };
 
     suite.Check(
-        handles.IsValid() && prepare_calls.load(std::memory_order_acquire) == 0 &&
+        prepared.IsValid() && pass.IsValid() &&
+            prepare_calls.load(std::memory_order_acquire) == 0 &&
             record_value.load(std::memory_order_acquire) == 0,
         test_name,
         "registration eagerly executed Prepare or Record"
@@ -1122,35 +1119,59 @@ void TestExplicitPreparedPassComposition(TestSuite& suite) {
     );
 }
 
-void TestCombinedPreparedPassContract(TestSuite& suite) {
+void TestSharedSetupResultFeedsRecordPasses(TestSuite& suite) {
     constexpr std::string_view test_name =
-        "combined prepared pass exposes const setup result to record";
+        "one setup result outlives its local handle and feeds multiple record passes";
 
-    RenderGraph     graph("CombinedPreparedPass");
-    const auto      token = graph.CreateTransientToken("Output");
+    RenderGraph graph("SharedSetupResult");
+    const auto first_output = graph.CreateTransientToken("FirstOutput");
+    const auto second_output = graph.CreateTransientToken("SecondOutput");
     std::atomic<int> prepare_calls{0};
-    std::atomic<int> record_value{0};
+    std::atomic<int> first_value{0};
+    std::atomic<int> second_value{0};
+    RenderGraph::PassHandle first_pass{};
+    RenderGraph::PassHandle second_pass{};
+    {
+        const auto prepared = graph.AddSetupPass(
+            "Shared.Prepare",
+            21,
+            [&](const int& input) {
+                prepare_calls.fetch_add(1, std::memory_order_relaxed);
+                return input * 2;
+            }
+        );
+        first_pass = graph.AddRecordPass(
+            "FirstConsumer",
+            [first_output](RenderGraph::PassBuilder& builder) {
+                builder.Write(first_output).SideEffect();
+            },
+            [prepared, &first_value](CommandList&) {
+                first_value.store(prepared.Get(), std::memory_order_release);
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        second_pass = graph.AddRecordPass(
+            "SecondConsumer",
+            [second_output](RenderGraph::PassBuilder& builder) {
+                builder.Write(second_output).SideEffect();
+            },
+            [prepared, &second_value](CommandList&) {
+                second_value.store(prepared.Get() + 1, std::memory_order_release);
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+    }
 
-    const auto handles = graph.AddPreparedPass(
-        "Prepared",
-        21,
-        [&](const int& input) {
-            prepare_calls.fetch_add(1, std::memory_order_relaxed);
-            return input * 2;
-        },
-        [&](RenderGraph::PassBuilder& builder) {
-            builder.Write(token).SideEffect();
-        },
-        [&](CommandList&, const int& immutable_parameters) {
-            static_assert(std::is_const_v<
-                          std::remove_reference_t<decltype(immutable_parameters)>>);
-            record_value.store(immutable_parameters, std::memory_order_release);
-        }
-    );
-
-    suite.Check(handles.IsValid(), test_name, "combined pass handles are invalid");
     suite.Check(
-        graph.Compile() && prepare_calls.load(std::memory_order_acquire) == 1,
+        first_pass.IsValid() && second_pass.IsValid() && first_pass != second_pass &&
+            prepare_calls.load(std::memory_order_acquire) == 0,
+        test_name,
+        "record passes were not registered independently of the deferred setup"
+    );
+    suite.Check(
+        graph.Compile() && prepare_calls.load(std::memory_order_acquire) == 1 &&
+            first_value.load(std::memory_order_acquire) == 0 &&
+            second_value.load(std::memory_order_acquire) == 0,
         test_name,
         graph.GetCompileError()
     );
@@ -1161,7 +1182,9 @@ void TestCombinedPreparedPassContract(TestSuite& suite) {
         [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}
     );
     suite.Check(
-        executed && record_value.load(std::memory_order_acquire) == 42,
+        executed && prepare_calls.load(std::memory_order_acquire) == 1 &&
+            first_value.load(std::memory_order_acquire) == 42 &&
+            second_value.load(std::memory_order_acquire) == 43,
         test_name,
         graph.GetCompileError()
     );
@@ -1237,7 +1260,7 @@ int main(int argc, char** argv) {
     TestFailureJoinAndStableRetry(suite);
     TestParallelRecordingReadsOnePreparedValue(suite);
     TestExplicitPreparedPassComposition(suite);
-    TestCombinedPreparedPassContract(suite);
+    TestSharedSetupResultFeedsRecordPasses(suite);
     TestDeclarationFreezeAfterDispatch(suite);
     TestFailureDiagnosticFaultIsTerminal(suite);
     TestTaskDispatchAndDiagnosticFaultsAreTerminal(suite);

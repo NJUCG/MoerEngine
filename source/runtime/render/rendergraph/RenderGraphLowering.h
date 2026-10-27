@@ -7,7 +7,6 @@
 #include <span>
 #include <string>
 #include <vector>
-#include <limits>
 
 namespace Moer::Render {
 
@@ -22,8 +21,8 @@ namespace Moer::Render {
  */
 class RENDER_API RenderGraphLowering {
 public:
-    static constexpr uint32_t InvalidBarrierIndex = std::numeric_limits<uint32_t>::max();
-    static constexpr uint32_t InvalidAccessIndex  = std::numeric_limits<uint32_t>::max();
+    static constexpr uint32_t InvalidBarrierIndex = RenderGraph::InvalidIndex;
+    static constexpr uint32_t InvalidAccessIndex  = RenderGraph::InvalidIndex;
 
     enum class InstructionKind : uint8_t {
         Barrier,
@@ -109,8 +108,8 @@ public:
         RenderGraph::PassHandle wait_pass{};
         RenderGraph::QueueBinding signal_queue{};
         RenderGraph::QueueBinding wait_queue{};
-        uint32_t signal_batch = RenderGraph::PassHandle::InvalidIndex;
-        uint32_t wait_batch   = RenderGraph::PassHandle::InvalidIndex;
+        uint32_t signal_batch = RenderGraph::InvalidIndex;
+        uint32_t wait_batch   = RenderGraph::InvalidIndex;
         /** Added by lowering to join a fan-in frontier at one release owner. */
         bool synthetic_ownership_join = false;
         std::vector<uint32_t> ownership_join_barriers{};

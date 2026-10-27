@@ -1083,9 +1083,9 @@ void TestTypedPartialExportRequiresOnlyDeclaredRange(TestSuite& suite) {
     );
     suite.Check(
         final_barrier != nullptr && final_barrier->export_boundary &&
-            final_barrier->range.kind == RenderGraph::ResourceKind::Texture &&
-            final_barrier->range.texture.mip_first == 0 &&
-            final_barrier->range.texture.mip_count == 1 &&
+            RenderGraph::GetRangeKind(final_barrier->range) == RenderGraph::ResourceKind::Texture &&
+            std::get<RenderGraph::TextureRange>(final_barrier->range).mip_first == 0 &&
+            std::get<RenderGraph::TextureRange>(final_barrier->range).mip_count == 1 &&
             valid_plan.state_plan_complete,
         test_name,
         "a typed partial export must cover only its initialized declared range"
@@ -1258,8 +1258,8 @@ void TestLogicalResourceVersions(TestSuite& suite) {
         "the next write must advance the resource version"
     );
     suite.Check(
-        buffer.Untyped().index < plan.resources.size() &&
-            plan.resources[buffer.Untyped().index].version_count == 2,
+        buffer.Untyped().resource_id < plan.resources.size() &&
+            plan.resources[buffer.Untyped().resource_id].version_count == 2,
         test_name,
         "compiled resource metadata must expose the final version count"
     );
@@ -3162,8 +3162,8 @@ void TestPartialRangeBarrier(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto* barrier = FindBarrier(graph.GetCompiledPlan(), buffer.Untyped(), {}, write);
     suite.Check(
-        barrier != nullptr && barrier->range.kind == RenderGraph::ResourceKind::Buffer &&
-            barrier->range.buffer == RenderGraph::BufferRange{.offset = 32, .size = 32},
+        barrier != nullptr && RenderGraph::GetRangeKind(barrier->range) == RenderGraph::ResourceKind::Buffer &&
+            std::get<RenderGraph::BufferRange>(barrier->range) == RenderGraph::BufferRange{.offset = 32, .size = 32},
         test_name,
         "a partial access must emit one barrier for exactly its canonical byte interval"
     );
@@ -3744,9 +3744,9 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
             write_export_barrier->discard_previous_contents &&
             write_export_barrier->state_transition && write_export_barrier->memory_dependency &&
             write_export_barrier->after_access == RenderGraph::AccessMode::Write &&
-            write_export_barrier->range.kind == RenderGraph::ResourceKind::Buffer &&
-            write_export_barrier->range.buffer.offset == 0 &&
-            write_export_barrier->range.buffer.size == 64 &&
+            RenderGraph::GetRangeKind(write_export_barrier->range) == RenderGraph::ResourceKind::Buffer &&
+            std::get<RenderGraph::BufferRange>(write_export_barrier->range).offset == 0 &&
+            std::get<RenderGraph::BufferRange>(write_export_barrier->range).size == 64 &&
             write_export_graph.GetCompiledPlan().state_plan_complete,
         test_name,
         "a write-only export of Undefined contents must remain an explicit discard boundary"
@@ -5170,11 +5170,11 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     );
 
     const auto& clear_unit =
-        plan.frontend_record_units[ui_passes.clear.index];
+        plan.frontend_record_units[ui_passes.clear.pass_id];
     const auto& compose_unit =
-        plan.frontend_record_units[ui_passes.compose.index];
+        plan.frontend_record_units[ui_passes.compose.pass_id];
     const auto& draw_unit =
-        plan.frontend_record_units[ui_passes.draw.index];
+        plan.frontend_record_units[ui_passes.draw.pass_id];
     suite.Check(
         clear_unit.record_execution_class ==
                 RenderGraph::PassExecutionClass::SerialRecord &&
@@ -7256,7 +7256,7 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     const auto  next_bindless =
         next_graph.ImportToken("Bindless", &bindless_identity);
     suite.Check(
-        next_bindless.Untyped().owner_id != bindless.Untyped().owner_id,
+        next_bindless.Untyped().graph_id != bindless.Untyped().graph_id,
         test_name,
         "same physical token identity in another graph must remain a distinct transaction"
     );
@@ -7591,9 +7591,9 @@ void TestNrdSerialControlIslandContract(TestSuite& suite) {
         "NRD storage outputs must normalize to Sampled before Composition"
     );
     suite.Check(
-        plan.frontend_record_units[nrd.index].record_execution_class ==
+        plan.frontend_record_units[nrd.pass_id].record_execution_class ==
                 RenderGraph::PassExecutionClass::SerialRecord &&
-            plan.frontend_record_units[nrd.index].native_translate_class ==
+            plan.frontend_record_units[nrd.pass_id].native_translate_class ==
                 Moer::Render::ERHITranslateExecutionClass::SerialControl,
         test_name,
         "only the NRD island must carry the explicit translation frontier"

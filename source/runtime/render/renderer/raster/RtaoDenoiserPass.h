@@ -188,7 +188,7 @@ public:
             );
     }
 
-    RenderGraph::PreparedPassHandle AddToGraph(
+    void AddToGraph(
         RenderGraph& graph,
         RasterContext& context,
         const RasterConfig& ui_config,

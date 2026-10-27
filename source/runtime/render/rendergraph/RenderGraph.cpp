@@ -217,7 +217,7 @@ private:
         }
         try {
             RHICommandAccessRestrictionScope access_scope(
-                jobs[index].safety == PrepareSafety::Restricted
+                jobs[index].safety == SetupPassSafety::Restricted
             );
             jobs[index].execute();
             if (!cancelled.load(std::memory_order_acquire)) {
@@ -656,24 +656,20 @@ void AppendCount(std::ostringstream& stream, uint64_t count, uint64_t remaining)
 }
 
 void AppendRange(std::ostringstream& stream, const RenderGraph::ResourceRange& range) {
-    switch (range.kind) {
-        case RenderGraph::ResourceKind::Texture:
-            stream << "texture[aspect=";
-            AppendTextureAspects(stream, range.texture.aspects);
-            stream << " mip=" << range.texture.mip_first << '+';
-            AppendCount(stream, range.texture.mip_count, RenderGraph::RemainingTextureRange);
-            stream << " layer=" << range.texture.layer_first << '+';
-            AppendCount(stream, range.texture.layer_count, RenderGraph::RemainingTextureRange);
-            stream << ']';
-            break;
-        case RenderGraph::ResourceKind::Buffer:
-            stream << "buffer[offset=" << range.buffer.offset << " size=";
-            AppendCount(stream, range.buffer.size, RenderGraph::RemainingBufferRange);
-            stream << ']';
-            break;
-        case RenderGraph::ResourceKind::Token:
-            stream << "token[all]";
-            break;
+    if (const auto* texture = std::get_if<RenderGraph::TextureRange>(&range)) {
+        stream << "texture[aspect=";
+        AppendTextureAspects(stream, texture->aspects);
+        stream << " mip=" << texture->mip_first << '+';
+        AppendCount(stream, texture->mip_count, RenderGraph::RemainingTextureRange);
+        stream << " layer=" << texture->layer_first << '+';
+        AppendCount(stream, texture->layer_count, RenderGraph::RemainingTextureRange);
+        stream << ']';
+    } else if (const auto* buffer = std::get_if<RenderGraph::BufferRange>(&range)) {
+        stream << "buffer[offset=" << buffer->offset << " size=";
+        AppendCount(stream, buffer->size, RenderGraph::RemainingBufferRange);
+        stream << ']';
+    } else {
+        stream << "token[all]";
     }
 }
 
@@ -711,7 +707,7 @@ RenderGraph::RenderGraph(std::string_view graph_name, QueueTopology topology) :
     name(graph_name),
     queue_topology(topology),
     graph_id(s_next_graph_id.fetch_add(1, std::memory_order_relaxed)) {
-    assert(graph_id != 0 && "RenderGraph id counter wrapped.");
+    assert(graph_id != InvalidGraphId && "RenderGraph id counter wrapped.");
 }
 
 RenderGraph::~RenderGraph() {
@@ -736,16 +732,16 @@ RenderGraph::~RenderGraph() {
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(ResourceHandle resource, std::string_view range) {
-    ResourceRange typed_range = ResourceRange::Token();
+    ResourceRange typed_range = std::monostate{};
     if (graph.IsValidResource(resource)) {
-        typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
+        typed_range = RenderGraph::WholeResourceRange(graph.resources[resource.resource_id].kind);
     }
     graph.AddAccess(
         pass_index,
         resource,
         AccessMode::Read,
         typed_range,
-        ResourceState{.kind = typed_range.kind},
+        ResourceState{.kind = RenderGraph::GetRangeKind(typed_range)},
         false,
         false,
         range
@@ -754,16 +750,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(ResourceHandle resource
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(ResourceHandle resource, std::string_view range) {
-    ResourceRange typed_range = ResourceRange::Token();
+    ResourceRange typed_range = std::monostate{};
     if (graph.IsValidResource(resource)) {
-        typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
+        typed_range = RenderGraph::WholeResourceRange(graph.resources[resource.resource_id].kind);
     }
     graph.AddAccess(
         pass_index,
         resource,
         AccessMode::Write,
         typed_range,
-        ResourceState{.kind = typed_range.kind},
+        ResourceState{.kind = RenderGraph::GetRangeKind(typed_range)},
         false,
         false,
         range
@@ -773,16 +769,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(ResourceHandle resourc
 
 RenderGraph::PassBuilder&
 RenderGraph::PassBuilder::ReadWrite(ResourceHandle resource, std::string_view range) {
-    ResourceRange typed_range = ResourceRange::Token();
+    ResourceRange typed_range = std::monostate{};
     if (graph.IsValidResource(resource)) {
-        typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
+        typed_range = RenderGraph::WholeResourceRange(graph.resources[resource.resource_id].kind);
     }
     graph.AddAccess(
         pass_index,
         resource,
         AccessMode::ReadWrite,
         typed_range,
-        ResourceState{.kind = typed_range.kind},
+        ResourceState{.kind = RenderGraph::GetRangeKind(typed_range)},
         false,
         false,
         range
@@ -795,7 +791,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(TextureHandle resource,
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(TextureState::Automatic),
         true,
         false
@@ -808,7 +804,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(TextureHandle resource
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(TextureState::Automatic),
         true,
         false
@@ -821,7 +817,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TextureHandle reso
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(TextureState::Automatic),
         true,
         false
@@ -835,7 +831,7 @@ RenderGraph::PassBuilder::Read(TextureHandle resource, TextureState state, Textu
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(state),
         true,
         true
@@ -849,7 +845,7 @@ RenderGraph::PassBuilder::Write(TextureHandle resource, TextureState state, Text
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(state),
         true,
         true
@@ -863,7 +859,7 @@ RenderGraph::PassBuilder::ReadWrite(TextureHandle resource, TextureState state, 
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(state),
         true,
         true
@@ -876,7 +872,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(BufferHandle resource, 
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(BufferState::Automatic),
         true,
         false
@@ -889,7 +885,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(BufferHandle resource,
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(BufferState::Automatic),
         true,
         false
@@ -902,7 +898,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(BufferHandle resou
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(BufferState::Automatic),
         true,
         false
@@ -916,7 +912,7 @@ RenderGraph::PassBuilder::Read(BufferHandle resource, BufferState state, BufferR
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(state),
         true,
         true
@@ -930,7 +926,7 @@ RenderGraph::PassBuilder::Write(BufferHandle resource, BufferState state, Buffer
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(state),
         true,
         true
@@ -944,7 +940,7 @@ RenderGraph::PassBuilder::ReadWrite(BufferHandle resource, BufferState state, Bu
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(state),
         true,
         true
@@ -957,7 +953,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(TokenHandle resource) {
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Token(),
+        std::monostate{},
         ResourceState::Token(),
         true,
         false
@@ -970,7 +966,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(TokenHandle resource) 
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Token(),
+        std::monostate{},
         ResourceState::Token(),
         true,
         false
@@ -983,7 +979,7 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TokenHandle resour
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Token(),
+        std::monostate{},
         ResourceState::Token(),
         true,
         false
@@ -1111,7 +1107,7 @@ bool RenderGraphLowering::MaterializeInstruction(
 
     if (instruction.resource_kind == RenderGraph::ResourceKind::Texture) {
         const auto& binding = instruction.physical.texture;
-        const auto& range   = instruction.range.texture;
+        const auto& range   = std::get<RenderGraph::TextureRange>(instruction.range);
         if (!binding.IsValid() || instruction.texture_aspects == ETextureAspectFlags::NONE) {
             error = "texture instruction has no physical binding or aspect";
             return false;
@@ -1149,7 +1145,7 @@ bool RenderGraphLowering::MaterializeInstruction(
 
     if (instruction.resource_kind == RenderGraph::ResourceKind::Buffer) {
         const auto& binding = instruction.physical.buffer;
-        const auto& range   = instruction.range.buffer;
+        const auto& range   = std::get<RenderGraph::BufferRange>(instruction.range);
         if (!binding.IsValid() || range.size == 0 || range.offset > binding->GetByteSize() ||
             range.size > binding->GetByteSize() - range.offset) {
             error = "buffer instruction has no physical binding or has an invalid range";
@@ -1230,7 +1226,7 @@ RenderGraph::ImportTexture(std::string_view resource_name, TextureRef texture, T
     const auto handle =
         ImportInternal(resource_name, ResourceKind::Texture, texture.Get(), &desc, nullptr);
     if (handle.IsValid()) {
-        auto& resource = resources[handle.index];
+        auto& resource = resources[handle.resource_id];
         if (resource.physical_texture.IsValid() &&
             resource.physical_texture.Get() != texture.Get()) {
             declaration_errors.emplace_back(
@@ -1262,7 +1258,7 @@ RenderGraph::ImportBuffer(std::string_view resource_name, BufferRef buffer, Buff
     const auto handle =
         ImportInternal(resource_name, ResourceKind::Buffer, buffer.Get(), nullptr, &desc);
     if (handle.IsValid()) {
-        auto& resource = resources[handle.index];
+        auto& resource = resources[handle.resource_id];
         if (resource.physical_buffer.IsValid() &&
             resource.physical_buffer.Get() != buffer.Get()) {
             declaration_errors.emplace_back(
@@ -1424,7 +1420,7 @@ RenderGraph::TextureHandle RenderGraph::CreateTransientTexture(
             nullptr
         )};
     if (handle.IsValid()) {
-        resources[handle.resource.index].transient_texture_desc =
+        resources[handle.handle.resource_id].transient_texture_desc =
             allocation_desc;
     }
     return handle;
@@ -1452,7 +1448,7 @@ RenderGraph::BufferHandle RenderGraph::CreateTransientBuffer(
             &logical_desc
         )};
     if (handle.IsValid()) {
-        resources[handle.resource.index].transient_buffer_desc =
+        resources[handle.handle.resource_id].transient_buffer_desc =
             allocation_desc;
     }
     return handle;
@@ -1466,7 +1462,7 @@ TextureRef RenderGraph::GetPhysicalTexture(TextureHandle resource) const {
     if (!IsValidResource(resource.Untyped())) {
         return {};
     }
-    const auto& declaration = resources[resource.resource.index];
+    const auto& declaration = resources[resource.handle.resource_id];
     return declaration.kind == ResourceKind::Texture ?
                declaration.physical_texture :
                TextureRef{};
@@ -1476,7 +1472,7 @@ BufferRef RenderGraph::GetPhysicalBuffer(BufferHandle resource) const {
     if (!IsValidResource(resource.Untyped())) {
         return {};
     }
-    const auto& declaration = resources[resource.resource.index];
+    const auto& declaration = resources[resource.handle.resource_id];
     return declaration.kind == ResourceKind::Buffer ?
                declaration.physical_buffer :
                BufferRef{};
@@ -1542,7 +1538,7 @@ bool RenderGraph::MarkExported(ResourceHandle resource, bool whole_resource) {
         declaration_errors.emplace_back("Export received an invalid resource handle");
         return false;
     }
-    auto& declaration                    = resources[resource.index];
+    auto& declaration                    = resources[resource.resource_id];
     declaration.exported                = true;
     declaration.whole_resource_exported |= whole_resource;
     return true;
@@ -1557,7 +1553,7 @@ void RenderGraph::SetInitialState(
 ) {
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(state),
         owner_queue,
         last_access,
@@ -1574,7 +1570,7 @@ void RenderGraph::SetInitialState(
 ) {
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(state),
         owner_queue,
         last_access,
@@ -1594,7 +1590,7 @@ void RenderGraph::Export(
     }
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Texture(range),
+        range,
         ResourceState::Texture(final_state),
         owner_queue,
         next_access,
@@ -1614,7 +1610,7 @@ void RenderGraph::Export(
     }
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Buffer(range),
+        range,
         ResourceState::Buffer(final_state),
         owner_queue,
         next_access,
@@ -1732,8 +1728,8 @@ bool RenderGraph::Execute(const PassCompletedCallback& after_pass) {
         compiled_plan.resources.end(),
         [](const CompiledResource& resource) {
             return !resource.imported &&
-                   resource.first_use != PassHandle::InvalidIndex &&
-                   resource.transient_slot != PassHandle::InvalidIndex;
+                   resource.first_use != InvalidIndex &&
+                   resource.transient_slot != InvalidIndex;
         }
     );
     if (has_active_allocation_backed_transient) {
@@ -1743,14 +1739,14 @@ bool RenderGraph::Execute(const PassCompletedCallback& after_pass) {
     }
     if (std::any_of(compiled_plan.execution_order.begin(),
                     compiled_plan.execution_order.end(),
-                    [&](PassHandle handle) { return static_cast<bool>(passes[handle.index].record); })) {
+                    [&](PassHandle handle) { return static_cast<bool>(passes[handle.pass_id].record); })) {
         compile_error = "serial Execute cannot run command-recording passes without owned CommandLists";
         return false;
     }
     executed = true;
 
     for (const PassHandle pass_handle : compiled_plan.execution_order) {
-        auto& pass = passes[pass_handle.index];
+        auto& pass = passes[pass_handle.pass_id];
         assert(pass.execute);
         pass.execute();
         if (after_pass) {
@@ -1872,8 +1868,8 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         compiled_plan.resources.end(),
         [](const CompiledResource& resource) {
             return !resource.imported &&
-                   resource.first_use != PassHandle::InvalidIndex &&
-                   resource.transient_slot != PassHandle::InvalidIndex;
+                   resource.first_use != InvalidIndex &&
+                   resource.transient_slot != InvalidIndex;
         }
     );
     if (has_active_allocation_backed_transient && !active_recording.enabled) {
@@ -1964,7 +1960,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                         batch.passes.end(),
                         [&](PassHandle pass) {
                             const auto execution =
-                                passes[pass.index].execution_class;
+                                passes[pass.pass_id].execution_class;
                             return execution != PassExecutionClass::SerialRecord &&
                                    execution !=
                                        PassExecutionClass::ParallelRecordEligible;
@@ -2001,7 +1997,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             if (!IsValidPass(instruction.dst_pass) ||
                 !append_instruction(
                     instruction,
-                    active_pass_states[instruction.dst_pass.index].before,
+                    active_pass_states[instruction.dst_pass.pass_id].before,
                     "prologue"
                 )) {
                 if (compile_error.empty()) {
@@ -2016,7 +2012,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 compile_error = "RenderGraph active lowering references an invalid pass";
                 return false;
             }
-            auto& materialized = active_pass_states[pass_instructions.pass.index];
+            auto& materialized = active_pass_states[pass_instructions.pass.pass_id];
             materialized.keepalive = pass_instructions.keepalive;
             for (const auto& instruction : pass_instructions.before) {
                 if (!append_instruction(instruction, materialized.before, "before-pass")) {
@@ -2042,11 +2038,11 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                         std::to_string(sync.correlation_id);
                     return false;
                 }
-                active_pass_states[sync.signal_pass.index]
+                active_pass_states[sync.signal_pass.pass_id]
                     .signal_fences.emplace_back(
                         RHIRecordingFencePoint{.fence = fence, .value = 1}
                     );
-                active_pass_states[sync.wait_pass.index]
+                active_pass_states[sync.wait_pass.pass_id]
                     .wait_fences.emplace_back(
                         RHIRecordingFencePoint{.fence = std::move(fence), .value = 1}
                     );
@@ -2148,7 +2144,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     return unit.record_execution_class !=
                                PassExecutionClass::MainThread ||
                            !IsValidPass(unit.pass) ||
-                           !active_pass_states[unit.pass.index]
+                           !active_pass_states[unit.pass.pass_id]
                                 .RequiresCompletionLifetime();
                 }
             );
@@ -2430,7 +2426,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         }
 
         const PassHandle first_handle = first_unit.pass;
-        auto&            first_pass   = passes[first_handle.index];
+        auto&            first_pass   = passes[first_handle.pass_id];
         // Caller-thread classes are hard recording boundaries and execute inline.
         if (first_unit.record_execution_class ==
                 PassExecutionClass::MainThread ||
@@ -2444,7 +2440,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 return false;
             }
 
-            const auto& pass_state = active_pass_states[first_handle.index];
+            const auto& pass_state = active_pass_states[first_handle.pass_id];
             bool        main_thread_lifetime_attached = false;
             const bool  active_physical_main_thread =
                 active_recording.enabled &&
@@ -2655,7 +2651,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         for (size_t index = record_unit_index; index < unit_end; ++index) {
             const auto& unit = compiled_plan.frontend_record_units[index];
             const auto  handle = unit.pass;
-            auto&       pass   = passes[handle.index];
+            auto&       pass   = passes[handle.pass_id];
             const auto  queue  = ToRHIQueue(unit.target_queue.role);
             if (!pass.record || pass.execute || queue == EQueueType::Ignore) {
                 compile_error = "compiled recording pass has an invalid callback or queue: " +
@@ -2685,7 +2681,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 job.translate_execution_class
             );
             if (active_recording.enabled) {
-                const auto& pass_state = active_pass_states[handle.index];
+                const auto& pass_state = active_pass_states[handle.pass_id];
                 job.before             = pass_state.before;
                 job.after              = pass_state.after;
                 job.keepalive          = pass_state.keepalive;
@@ -2701,7 +2697,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     unit.native_translate_class;
             }
             if (active_recording.enabled) {
-                const auto& pass_state = active_pass_states[handle.index];
+                const auto& pass_state = active_pass_states[handle.pass_id];
                 source.submit_metadata.wait_fences =
                     pass_state.wait_fences;
                 source.submit_metadata.signal_fences =
@@ -3070,7 +3066,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 }
                 const auto pass_handle =
                     compiled_plan.frontend_record_units[index].pass;
-                pass_list << passes[pass_handle.index].name;
+                pass_list << passes[pass_handle.pass_id].name;
             }
 
             const std::string pass_names = pass_list.str();
@@ -3140,7 +3136,7 @@ std::string RenderGraph::Dump() const {
     const bool has_execution_order = compiled_plan.execution_order.size() == passes.size();
     for (uint32_t item_index = 0; item_index < passes.size(); ++item_index) {
         const uint32_t pass_index =
-            has_execution_order ? compiled_plan.execution_order[item_index].index : item_index;
+            has_execution_order ? compiled_plan.execution_order[item_index].pass_id : item_index;
         const auto& pass = passes[pass_index];
         stream << "  [" << item_index << "] " << pass.name << " declared=" << pass_index
                << " scheduled=" << (has_execution_order ? "true" : "false")
@@ -3157,7 +3153,7 @@ std::string RenderGraph::Dump() const {
             }
             stream << ToString(access.mode) << ':';
             if (IsValidResource(access.resource)) {
-                stream << resources[access.resource.index].name;
+                stream << resources[access.resource.resource_id].name;
             } else {
                 stream << "invalid";
             }
@@ -3178,7 +3174,7 @@ std::string RenderGraph::Dump() const {
                 stream << ", ";
             }
             const auto reference = pass.references[reference_index];
-            stream << (IsValidResource(reference) ? resources[reference.index].name : "invalid");
+            stream << (IsValidResource(reference) ? resources[reference.resource_id].name : "invalid");
         }
         stream << "]\n";
     }
@@ -3205,19 +3201,19 @@ std::string RenderGraph::Dump() const {
                    << ']';
         }
         stream << " first=";
-        if (resource.first_use == PassHandle::InvalidIndex) {
+        if (resource.first_use == InvalidIndex) {
             stream << "unused";
         } else {
             stream << resource.first_use;
         }
         stream << " last=";
-        if (resource.last_use == PassHandle::InvalidIndex) {
+        if (resource.last_use == InvalidIndex) {
             stream << "unused";
         } else {
             stream << resource.last_use;
         }
         uint32_t version_count = 0;
-        uint32_t transient_slot = PassHandle::InvalidIndex;
+        uint32_t transient_slot = InvalidIndex;
         if (index < compiled_plan.resources.size()) {
             version_count  = compiled_plan.resources[index].version_count;
             transient_slot = compiled_plan.resources[index].transient_slot;
@@ -3234,7 +3230,7 @@ std::string RenderGraph::Dump() const {
             stream << aliases[alias_index];
         }
         stream << "] slot=";
-        if (transient_slot == PassHandle::InvalidIndex) {
+        if (transient_slot == InvalidIndex) {
             stream << "none";
         } else {
             stream << transient_slot;
@@ -3245,8 +3241,8 @@ std::string RenderGraph::Dump() const {
 
     stream << "compiled_accesses:\n";
     for (const auto& access : compiled_plan.accesses) {
-        stream << "  " << passes[access.pass.index].name << ' ' << ToString(access.mode) << ':'
-               << resources[access.resource.index].name << ' ';
+        stream << "  " << passes[access.pass.pass_id].name << ' ' << ToString(access.mode) << ':'
+               << resources[access.resource.resource_id].name << ' ';
         AppendRange(stream, access.range);
         stream << " state=";
         AppendState(stream, access.state);
@@ -3260,7 +3256,7 @@ std::string RenderGraph::Dump() const {
 
     stream << "edges:\n";
     for (const auto& edge : compiled_plan.edges) {
-        stream << "  " << passes[edge.src.index].name << " -> " << passes[edge.dst.index].name
+        stream << "  " << passes[edge.src.pass_id].name << " -> " << passes[edge.dst.pass_id].name
                << " reasons=[";
         for (uint32_t reason_index = 0; reason_index < edge.reasons.size(); ++reason_index) {
             const auto& reason = edge.reasons[reason_index];
@@ -3269,7 +3265,7 @@ std::string RenderGraph::Dump() const {
             }
             stream << ToString(reason.kind);
             if (reason.resource.IsValid()) {
-                stream << ':' << resources[reason.resource.index].name << '@';
+                stream << ':' << resources[reason.resource.resource_id].name << '@';
                 AppendRange(stream, reason.range);
                 stream << ' ';
                 AppendVersion(stream, reason.input_version);
@@ -3281,8 +3277,8 @@ std::string RenderGraph::Dump() const {
     }
 
     auto append_pass_endpoint = [&](PassHandle pass, bool import_boundary, bool export_boundary) {
-        if (pass.IsValid() && pass.owner_id == graph_id && pass.index < passes.size()) {
-            stream << passes[pass.index].name;
+        if (pass.IsValid() && pass.graph_id == graph_id && pass.pass_id < passes.size()) {
+            stream << passes[pass.pass_id].name;
         } else if (import_boundary) {
             stream << "<import>";
         } else if (export_boundary) {
@@ -3295,7 +3291,7 @@ std::string RenderGraph::Dump() const {
     stream << "barriers:\n";
     for (uint32_t barrier_index = 0; barrier_index < compiled_plan.barriers.size(); ++barrier_index) {
         const auto& barrier = compiled_plan.barriers[barrier_index];
-        stream << "  [" << barrier_index << "] " << resources[barrier.resource.index].name << '@';
+        stream << "  [" << barrier_index << "] " << resources[barrier.resource.resource_id].name << '@';
         AppendRange(stream, barrier.range);
         stream << ' ';
         append_pass_endpoint(barrier.src_pass, barrier.import_boundary, false);
@@ -3350,16 +3346,16 @@ std::string RenderGraph::Dump() const {
     stream << "alias_boundaries:\n";
     for (const auto& alias : compiled_plan.alias_boundaries) {
         stream << "  slot=" << alias.transient_slot << ' '
-               << resources[alias.predecessor_resource.index].name << " -> "
-               << resources[alias.successor_resource.index].name << " passes="
-               << passes[alias.primary_src_pass.index].name << "->"
-               << passes[alias.dst_pass.index].name
+               << resources[alias.predecessor_resource.resource_id].name << " -> "
+               << resources[alias.successor_resource.resource_id].name << " passes="
+               << passes[alias.primary_src_pass.pass_id].name << "->"
+               << passes[alias.dst_pass.pass_id].name
                << " frontier=[";
         for (uint32_t index = 0; index < alias.source_frontier.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
-            stream << passes[alias.source_frontier[index].index].name;
+            stream << passes[alias.source_frontier[index].pass_id].name;
         }
         stream << "] barrier=" << alias.barrier_index << '\n';
     }
@@ -3391,7 +3387,7 @@ std::string RenderGraph::Dump() const {
             if (pass_index != 0) {
                 stream << ',';
             }
-            stream << passes[batch.passes[pass_index].index].name;
+            stream << passes[batch.passes[pass_index].pass_id].name;
         }
         stream << "] pre=[";
         for (uint32_t index = 0; index < batch.pre_barriers.size(); ++index) {
@@ -3447,7 +3443,7 @@ std::string RenderGraph::Dump() const {
 
     stream << "pass_barriers:\n";
     for (const auto& placement : compiled_plan.pass_barriers) {
-        stream << "  " << passes[placement.pass.index].name << " before=[";
+        stream << "  " << passes[placement.pass.pass_id].name << " before=[";
         for (uint32_t index = 0; index < placement.before.size(); ++index) {
             if (index != 0) {
                 stream << ',';
@@ -3469,7 +3465,7 @@ std::string RenderGraph::Dump() const {
             if (pass_index != 0) {
                 stream << ", ";
             }
-            stream << passes[level.passes[pass_index].index].name;
+            stream << passes[level.passes[pass_index].pass_id].name;
         }
         stream << "]\n";
     }
@@ -3483,12 +3479,12 @@ std::string RenderGraph::Dump() const {
                << ToString(unit.record_execution_class) << " native="
                << ToString(unit.native_translate_class) << " work="
                << unit.estimated_record_work << " level=";
-        if (unit.dependency_level_index == PassHandle::InvalidIndex) {
+        if (unit.dependency_level_index == InvalidIndex) {
             stream << "none";
         } else {
             stream << unit.dependency_level_index;
         }
-        stream << " pass=" << passes[unit.pass.index].name << '\n';
+        stream << " pass=" << passes[unit.pass.pass_id].name << '\n';
     }
     return stream.str();
 }
@@ -3516,13 +3512,13 @@ void RenderGraph::AddAccess(
         );
         return;
     }
-    if (range.kind != resources[resource.index].kind) {
+    if (RenderGraph::GetRangeKind(range) != resources[resource.resource_id].kind) {
         declaration_errors.emplace_back(
             "pass '" + passes[pass_index].name + "' used a typed handle with the wrong resource kind"
         );
         return;
     }
-    if (state.kind != resources[resource.index].kind) {
+    if (state.kind != resources[resource.resource_id].kind) {
         declaration_errors.emplace_back(
             "pass '" + passes[pass_index].name + "' used a state with the wrong resource kind"
         );
@@ -3562,8 +3558,8 @@ void RenderGraph::AddStateDeclaration(
         declaration_errors.emplace_back("state declaration received an invalid resource handle");
         return;
     }
-    auto& declaration = resources[resource.index];
-    if (declaration.kind == ResourceKind::Token || range.kind != declaration.kind ||
+    auto& declaration = resources[resource.resource_id];
+    if (declaration.kind == ResourceKind::Token || RenderGraph::GetRangeKind(range) != declaration.kind ||
         state.kind != declaration.kind) {
         declaration_errors.emplace_back(
             "state declaration has the wrong resource kind for '" + declaration.name + "'"
@@ -3589,7 +3585,7 @@ void RenderGraph::AddDependency(uint32_t pass_index, PassHandle dependency) {
         declaration_errors.emplace_back("explicit dependency contains an invalid pass handle");
         return;
     }
-    if (dependency.index == pass_index) {
+    if (dependency.pass_id == pass_index) {
         declaration_errors.emplace_back("pass cannot depend on itself: " + passes[pass_index].name);
         return;
     }
@@ -3694,7 +3690,7 @@ void RenderGraph::SetPassTranslateExecutionClass(
 RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
     std::string_view                         setup_name,
     std::span<const SetupPassHandle>         dependencies,
-    PrepareSafety                            safety,
+    SetupPassSafety                          safety,
     std::function<void()>                    execute,
     std::function<void(std::string_view)>    fail,
     std::function<void(std::string_view)>    annotate_failure
@@ -3729,8 +3725,8 @@ RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
     std::vector<uint32_t> dependency_indices{};
     dependency_indices.reserve(dependencies.size());
     for (const SetupPassHandle dependency : dependencies) {
-        if (!dependency.IsValid() || dependency.owner_id != graph_id ||
-            dependency.index >= setup_passes.size()) {
+        if (!dependency.IsValid() || dependency.graph_id != graph_id ||
+            dependency.setup_pass_id >= setup_passes.size()) {
             declaration_errors.emplace_back(
                 "setup pass '" + std::string(setup_name) +
                 "' has an invalid or forward dependency"
@@ -3740,9 +3736,9 @@ RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
         if (std::find(
                 dependency_indices.begin(),
                 dependency_indices.end(),
-                dependency.index
+                dependency.setup_pass_id
             ) == dependency_indices.end()) {
-            dependency_indices.emplace_back(dependency.index);
+            dependency_indices.emplace_back(dependency.setup_pass_id);
         }
     }
 
@@ -3755,8 +3751,8 @@ RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
         .annotate_failure = std::move(annotate_failure),
     });
     return SetupPassHandle{
-        .index    = static_cast<uint32_t>(setup_passes.size() - 1),
-        .owner_id = graph_id,
+        .setup_pass_id = static_cast<uint32_t>(setup_passes.size() - 1),
+        .graph_id      = graph_id,
     };
 }
 
@@ -3879,8 +3875,8 @@ bool RenderGraph::InvalidateCompile() {
         compiled_plan.Clear();
         ReleaseNonExportedTransientBindings();
         for (auto& resource : resources) {
-            resource.first_use = PassHandle::InvalidIndex;
-            resource.last_use  = PassHandle::InvalidIndex;
+            resource.first_use = InvalidIndex;
+            resource.last_use  = InvalidIndex;
         }
         declaration_errors.emplace_back(
             "graph declarations cannot be mutated after asynchronous setup dispatch"
@@ -3892,8 +3888,8 @@ bool RenderGraph::InvalidateCompile() {
     compiled_plan.Clear();
     ReleaseNonExportedTransientBindings();
     for (auto& resource : resources) {
-        resource.first_use = PassHandle::InvalidIndex;
-        resource.last_use  = PassHandle::InvalidIndex;
+        resource.first_use = InvalidIndex;
+        resource.last_use  = InvalidIndex;
     }
     return true;
 }
@@ -3916,11 +3912,11 @@ bool RenderGraph::FailCompile(std::string message) {
 }
 
 bool RenderGraph::IsValidResource(ResourceHandle resource) const {
-    return resource.IsValid() && resource.owner_id == graph_id && resource.index < resources.size();
+    return resource.IsValid() && resource.graph_id == graph_id && resource.resource_id < resources.size();
 }
 
 bool RenderGraph::IsValidPass(PassHandle pass) const {
-    return pass.IsValid() && pass.owner_id == graph_id && pass.index < passes.size();
+    return pass.IsValid() && pass.graph_id == graph_id && pass.pass_id < passes.size();
 }
 
 } // namespace Moer::Render

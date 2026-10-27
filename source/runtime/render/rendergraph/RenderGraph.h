@@ -1,20 +1,22 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "misc/NumericLimits.h"
 #include "misc/STL.h"
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHIExecutor.h"
 
+#include <compare>
 #include <concepts>
 #include <cstdint>
 #include <functional>
-#include <limits>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace Moer::Render {
@@ -52,9 +54,11 @@ concept RGParameterAccessProvider =
  */
 class RENDER_API RenderGraph {
 public:
-    static constexpr uint32_t RemainingTextureRange = std::numeric_limits<uint32_t>::max();
-    static constexpr uint64_t RemainingBufferRange  = std::numeric_limits<uint64_t>::max();
-    static constexpr uint32_t InvalidVersion        = std::numeric_limits<uint32_t>::max();
+    static constexpr uint32_t InvalidIndex          = MaxValue<uint32_t>;
+    static constexpr uint64_t InvalidGraphId        = MaxValue<uint64_t>;
+    static constexpr uint32_t RemainingTextureRange = MaxValue<uint32_t>;
+    static constexpr uint64_t RemainingBufferRange  = MaxValue<uint64_t>;
+    static constexpr uint32_t InvalidVersion        = InvalidIndex;
 
     enum class ResourceKind : uint8_t {
         Texture,
@@ -124,7 +128,7 @@ public:
             return range;
         }
 
-        friend bool operator==(const TextureRange&, const TextureRange&) = default;
+        friend auto operator<=>(const TextureRange&, const TextureRange&) = default;
     };
 
     struct BufferRange {
@@ -135,144 +139,96 @@ public:
             return {};
         }
 
-        friend bool operator==(const BufferRange&, const BufferRange&) = default;
+        friend auto operator<=>(const BufferRange&, const BufferRange&) = default;
     };
 
-    struct ResourceRange {
-        ResourceKind kind = ResourceKind::Token;
-        TextureRange texture{};
-        BufferRange  buffer{};
+    // A token has no subranges; its monostate is also the default range.
+    using ResourceRange = std::variant<std::monostate, TextureRange, BufferRange>;
 
-        [[nodiscard]] static constexpr ResourceRange Whole(ResourceKind kind) {
-            ResourceRange result{};
-            result.kind = kind;
-            return result;
+    [[nodiscard]] static constexpr ResourceKind GetRangeKind(const ResourceRange& range) {
+        if (std::holds_alternative<TextureRange>(range)) {
+            return ResourceKind::Texture;
         }
-
-        [[nodiscard]] static constexpr ResourceRange Texture(TextureRange range = TextureRange::Whole()) {
-            ResourceRange result{};
-            result.kind    = ResourceKind::Texture;
-            result.texture = range;
-            return result;
+        if (std::holds_alternative<BufferRange>(range)) {
+            return ResourceKind::Buffer;
         }
+        return ResourceKind::Token;
+    }
 
-        [[nodiscard]] static constexpr ResourceRange Buffer(BufferRange range = BufferRange::Whole()) {
-            ResourceRange result{};
-            result.kind   = ResourceKind::Buffer;
-            result.buffer = range;
-            return result;
+    [[nodiscard]] static constexpr ResourceRange WholeResourceRange(ResourceKind kind) {
+        switch (kind) {
+            case ResourceKind::Texture:
+                return TextureRange::Whole();
+            case ResourceKind::Buffer:
+                return BufferRange::Whole();
+            case ResourceKind::Token:
+                return std::monostate{};
         }
+        return std::monostate{};
+    }
 
-        [[nodiscard]] static constexpr ResourceRange Token() {
-            ResourceRange result{};
-            result.kind = ResourceKind::Token;
-            return result;
-        }
-
-        friend bool operator==(const ResourceRange&, const ResourceRange&) = default;
-    };
 
     struct ResourceHandle {
-        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
-
-        uint32_t index    = InvalidIndex;
-        uint64_t owner_id = 0;
+        uint32_t resource_id = InvalidIndex;
+        uint64_t graph_id    = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
-            return index != InvalidIndex && owner_id != 0;
+            return resource_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
         friend bool operator==(ResourceHandle lhs, ResourceHandle rhs) {
-            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
+            return lhs.resource_id == rhs.resource_id && lhs.graph_id == rhs.graph_id;
         }
     };
 
-    struct TextureHandle {
-        ResourceHandle resource{};
+    template<ResourceKind Kind>
+    struct TypedResourceHandle{
+        ResourceHandle handle;
 
-        [[nodiscard]] bool IsValid() const {
-            return resource.IsValid();
-        }
-        [[nodiscard]] ResourceHandle Untyped() const {
-            return resource;
+        [[nodiscard]] bool IsValid() const{
+            return handle.IsValid();
         }
 
-        friend bool operator==(TextureHandle lhs, TextureHandle rhs) {
-            return lhs.resource == rhs.resource;
+        [[nodiscard]] ResourceHandle Untyped() const{
+            return handle;
         }
+
+        friend bool operator==(const TypedResourceHandle&,const TypedResourceHandle&) = default;
+
     };
 
-    struct BufferHandle {
-        ResourceHandle resource{};
-
-        [[nodiscard]] bool IsValid() const {
-            return resource.IsValid();
-        }
-        [[nodiscard]] ResourceHandle Untyped() const {
-            return resource;
-        }
-
-        friend bool operator==(BufferHandle lhs, BufferHandle rhs) {
-            return lhs.resource == rhs.resource;
-        }
-    };
-
-    struct TokenHandle {
-        ResourceHandle resource{};
-
-        [[nodiscard]] bool IsValid() const {
-            return resource.IsValid();
-        }
-        [[nodiscard]] ResourceHandle Untyped() const {
-            return resource;
-        }
-
-        friend bool operator==(TokenHandle lhs, TokenHandle rhs) {
-            return lhs.resource == rhs.resource;
-        }
-    };
+    using TextureHandle= TypedResourceHandle<ResourceKind::Texture>;
+    using BufferHandle = TypedResourceHandle<ResourceKind::Buffer>;
+    using TokenHandle = TypedResourceHandle<ResourceKind::Token>;
 
     struct PassHandle {
-        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
-
-        uint32_t index    = InvalidIndex;
-        uint64_t owner_id = 0;
+        uint32_t pass_id  = InvalidIndex;
+        uint64_t graph_id = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
-            return index != InvalidIndex && owner_id != 0;
+            return pass_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
         friend bool operator==(PassHandle lhs, PassHandle rhs) {
-            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
+            return lhs.pass_id == rhs.pass_id && lhs.graph_id == rhs.graph_id;
         }
     };
 
     /** Stable identity for one graph-owned CPU setup task. */
     struct SetupPassHandle {
-        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
-
-        uint32_t index    = InvalidIndex;
-        uint64_t owner_id = 0;
+        uint32_t setup_pass_id = InvalidIndex;
+        uint64_t graph_id      = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
-            return index != InvalidIndex && owner_id != 0;
+            return setup_pass_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
         friend bool operator==(SetupPassHandle lhs, SetupPassHandle rhs) {
-            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
+            return lhs.setup_pass_id == rhs.setup_pass_id && lhs.graph_id == rhs.graph_id;
         }
     };
 
-    struct PreparedPassHandle {
-        SetupPassHandle setup{};
-        PassHandle      record{};
-
-        [[nodiscard]] bool IsValid() const {
-            return setup.IsValid() && record.IsValid();
-        }
-    };
-
-    enum class PrepareSafety : uint8_t {
+    enum class SetupPassSafety : uint8_t {
         Restricted,
         Unsafe,
     };
@@ -498,11 +454,11 @@ public:
 
     struct CompiledResource {
         ResourceHandle resource{};
-        uint32_t       first_use     = PassHandle::InvalidIndex;
-        uint32_t       last_use      = PassHandle::InvalidIndex;
+        uint32_t       first_use     = InvalidIndex;
+        uint32_t       last_use      = InvalidIndex;
         uint32_t       version_count = 0;
         /** Compiler-assigned whole-object transient allocation slot. */
-        uint32_t       transient_slot = PassHandle::InvalidIndex;
+        uint32_t       transient_slot = InvalidIndex;
         bool           imported      = false;
         bool           exported      = false;
     };
@@ -524,7 +480,7 @@ public:
             ERHITranslateExecutionClass::Parallel
         };
         uint32_t                estimated_record_work = 1;
-        uint32_t                dependency_level_index = PassHandle::InvalidIndex;
+        uint32_t                dependency_level_index = InvalidIndex;
     };
 
     /**
@@ -591,14 +547,14 @@ public:
      * placed-resource / shared-heap aliasing.
      */
     struct CompiledAliasBoundary {
-        uint32_t       transient_slot = PassHandle::InvalidIndex;
+        uint32_t       transient_slot = InvalidIndex;
         ResourceHandle predecessor_resource{};
         ResourceHandle successor_resource{};
         /** Latest source for compact diagnostics; source_frontier is authoritative. */
         PassHandle     primary_src_pass{};
         std::vector<PassHandle> source_frontier{};
         PassHandle     dst_pass{};
-        uint32_t       barrier_index = PassHandle::InvalidIndex;
+        uint32_t       barrier_index = InvalidIndex;
     };
 
     struct CompiledQueueSync {
@@ -607,8 +563,8 @@ public:
         PassHandle   wait_pass{};
         QueueBinding signal_queue{};
         QueueBinding wait_queue{};
-        uint32_t     signal_batch = PassHandle::InvalidIndex;
-        uint32_t     wait_batch   = PassHandle::InvalidIndex;
+        uint32_t     signal_batch = InvalidIndex;
+        uint32_t     wait_batch   = InvalidIndex;
         bool         gpu_wait_required = false;
         std::vector<uint32_t> dependency_edges{};
         std::vector<uint32_t> barriers{};
@@ -1006,7 +962,7 @@ public:
         Input&&          immutable_input,
         Prepare&&        prepare,
         std::span<const SetupPassHandle> dependencies = {},
-        PrepareSafety    safety = PrepareSafety::Restricted
+        SetupPassSafety  safety = SetupPassSafety::Restricted
     ) -> RGPreparedValue<RGSetupResult<Input, Prepare>>;
 
     /** Explicit escape hatch for CPU preparation that must use the RHI. */
@@ -1033,74 +989,7 @@ public:
             std::forward<Input>(immutable_input),
             std::forward<Prepare>(prepare),
             dependencies,
-            PrepareSafety::Unsafe
-        );
-    }
-
-    /**
-     * Convenience wrapper around AddSetupPass followed by AddRecordPass.
-     * Pass-owned registration should prefer the two explicit calls so setup
-     * dependencies and record-pass declaration remain independently visible.
-     */
-    template<typename Input, typename Prepare, typename Record>
-        requires std::invocable<
-                     std::decay_t<Prepare>&,
-                     const std::decay_t<Input>&> &&
-                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
-                 (!std::is_reference_v<
-                     std::invoke_result_t<
-                         std::decay_t<Prepare>&,
-                         const std::decay_t<Input>&>>) &&
-                 std::invocable<
-                     std::decay_t<Record>&,
-                     CommandList&,
-                     const RGSetupResult<Input, Prepare>&>
-    PreparedPassHandle AddPreparedPass(
-        std::string_view                 name,
-        Input&&                          immutable_input,
-        Prepare&&                        prepare,
-        const SetupCallback&             declare_access,
-        Record&&                         record,
-        PassExecutionClass               execution = PassExecutionClass::ParallelRecordEligible,
-        uint32_t                         workload = 1,
-        std::span<const SetupPassHandle>  setup_dependencies = {},
-        PrepareSafety                    prepare_safety = PrepareSafety::Restricted
-    );
-
-    /** Convenience escape hatch for a combined prepared pass that needs RHI access. */
-    template<typename Input, typename Prepare, typename Record>
-        requires std::invocable<
-                     std::decay_t<Prepare>&,
-                     const std::decay_t<Input>&> &&
-                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
-                 (!std::is_reference_v<
-                     std::invoke_result_t<
-                         std::decay_t<Prepare>&,
-                         const std::decay_t<Input>&>>) &&
-                 std::invocable<
-                     std::decay_t<Record>&,
-                     CommandList&,
-                     const RGSetupResult<Input, Prepare>&>
-    PreparedPassHandle AddUnsafePreparedPass(
-        std::string_view                 name,
-        Input&&                          immutable_input,
-        Prepare&&                        prepare,
-        const SetupCallback&             declare_access,
-        Record&&                         record,
-        PassExecutionClass               execution = PassExecutionClass::ParallelRecordEligible,
-        uint32_t                         workload = 1,
-        std::span<const SetupPassHandle>  setup_dependencies = {}
-    ) {
-        return AddPreparedPass(
-            name,
-            std::forward<Input>(immutable_input),
-            std::forward<Prepare>(prepare),
-            declare_access,
-            std::forward<Record>(record),
-            execution,
-            workload,
-            setup_dependencies,
-            PrepareSafety::Unsafe
+            SetupPassSafety::Unsafe
         );
     }
 
@@ -1267,8 +1156,8 @@ private:
         bool                     whole_resource_exported = false;
         std::vector<StateDeclaration> initial_states{};
         std::vector<StateDeclaration> final_states{};
-        uint32_t                 first_use  = PassHandle::InvalidIndex;
-        uint32_t                 last_use   = PassHandle::InvalidIndex;
+        uint32_t                 first_use  = InvalidIndex;
+        uint32_t                 last_use   = InvalidIndex;
     };
 
     struct PassDeclaration {
@@ -1290,7 +1179,7 @@ private:
     struct SetupPassDeclaration {
         std::string                              name{};
         std::vector<uint32_t>                    dependencies{};
-        PrepareSafety                            safety = PrepareSafety::Restricted;
+        SetupPassSafety                          safety = SetupPassSafety::Restricted;
         std::function<void()>                    execute{};
         std::function<void(std::string_view)>    fail{};
         std::function<void(std::string_view)>    annotate_failure{};
@@ -1348,7 +1237,7 @@ private:
     SetupPassHandle RegisterSetupPass(
         std::string_view                         setup_name,
         std::span<const SetupPassHandle>         dependencies,
-        PrepareSafety                           safety,
+        SetupPassSafety                         safety,
         std::function<void()>                    execute,
         std::function<void(std::string_view)>    fail,
         std::function<void(std::string_view)>    annotate_failure
@@ -1381,7 +1270,7 @@ private:
     CompiledPlan                     compiled_plan{};
     std::vector<std::string>         declaration_errors{};
     std::string                      compile_error{};
-    uint64_t                         graph_id = 0;
+    uint64_t                         graph_id = InvalidGraphId;
     QueueTopology                    queue_topology{};
     bool                             compiled = false;
     bool                             executed = false;

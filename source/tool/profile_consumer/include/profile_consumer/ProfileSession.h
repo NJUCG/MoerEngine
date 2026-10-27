@@ -1,11 +1,11 @@
 #ifndef MOER_ENGINE_PROFILE_SESSION_H
 #define MOER_ENGINE_PROFILE_SESSION_H
 
+#include "misc/NumericLimits.h"
 #include "profile/ProfileDumpCodec.h"
 
 #include <cstdint>
 #include <filesystem>
-#include <limits>
 #include <span>
 #include <stop_token>
 #include <string_view>
@@ -15,8 +15,8 @@ namespace Moer::ProfileDump {
 
 using SessionStringId = std::uint32_t;
 
-inline constexpr SessionStringId kInvalidSessionString = std::numeric_limits<SessionStringId>::max();
-inline constexpr std::uint64_t   kInvalidSessionIndex  = std::numeric_limits<std::uint64_t>::max();
+inline constexpr SessionStringId kInvalidSessionString = MaxValue<SessionStringId>;
+inline constexpr std::uint64_t   kInvalidSessionIndex  = MaxValue<std::uint64_t>;
 
 namespace Detail {
 
@@ -26,7 +26,7 @@ namespace Detail {
 template<typename Size>
 [[nodiscard]] constexpr bool TryPacketWireBytes(std::uint32_t _payload_bytes, Size& _result) noexcept {
     static_assert(std::is_unsigned_v<Size>);
-    constexpr std::uint64_t maximum = static_cast<std::uint64_t>(std::numeric_limits<Size>::max());
+    constexpr std::uint64_t maximum = static_cast<std::uint64_t>(MaxValue<Size>);
     const std::uint64_t     total =
         static_cast<std::uint64_t>(kPacketHeaderBytes) + static_cast<std::uint64_t>(_payload_bytes);
     if (total > maximum) {
@@ -222,7 +222,7 @@ struct SessionLoadControl {
     // items are admitted; cancellation occurs before the first item that
     // would exceed N, or at the next zero-work checkpoint after exhaustion.
     // Cancellation follows the same no-publication contract as stop_token.
-    std::uint64_t max_work_items_before_cancel{std::numeric_limits<std::uint64_t>::max()};
+    std::uint64_t max_work_items_before_cancel{MaxValue<std::uint64_t>};
 };
 
 struct SessionLoadResult {

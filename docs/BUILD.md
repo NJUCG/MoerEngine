@@ -102,13 +102,13 @@ Apple 构建还提供独立的 `SP_METAL_MSL` Shader 目标：DXC 先将 HLSL �
 
 * 如果你希望在MoerEngine中启用CUDA、LibTorch、TensorRT，那么你需要手动在系统中安装这三个依赖，再在MoerEngine中配置他们。接下来为启用AI组件的具体操作手册：
 1. 下载依赖
-   * [CUDA Toolkit 12.8 Downloads](https://developer.nvidia.com/cuda-12-8-0-download-archive)
+   * [CUDA Toolkit 12.9 Downloads](https://developer.nvidia.com/cuda-12-9-0-download-archive)
    * [PyTorch Downloads](https://pytorch.org/get-started/locally/)
    * [TensorRT 10.x Downloads](https://developer.nvidia.com/tensorrt/download/10x)
-   * 推荐版本
-     * CUDA Toolkit 12.8
-     * libtorch-2.8.0-cu128
-     * TensorRT-10.12.0.36
+   * 已验证组合（Windows / Debug）
+     * CUDA Toolkit 12.9
+     * LibTorch 2.8.0 cu129 Debug（Windows 的 Debug/Release 包需匹配构建配置）
+     * TensorRT 10.16.1.11 CUDA 12.9
      * **请注意，LibTorch和TensorRT版本需要与CUDAToolkit版本相对应**
 
 2. 根据模板创建配置文件（启用AI组件）
@@ -118,7 +118,7 @@ Apple 构建还提供独立的 `SP_METAL_MSL` Shader 目标：DXC 先将 HLSL �
 
 3. 将动态库添加进PATH
 
-   * 将你安装的LibTorch和TensorRT的 `lib` 目录添加进 `PATH` 环境变量。例子如下图：
+   * 将 LibTorch 的 `lib` 目录和 TensorRT 的 DLL 目录加入 `PATH`。TensorRT 10.15 起 DLL 位于 `bin`，较早版本位于 `lib`；CUDA 的 `bin` 也应可访问。例子如下图：
    * ![image-20250920204538099](BUILD/image-20250920204538099.png)
    * 注：如果动态库缺失，则引擎会在没有任何错误提示的情况下崩溃
 
@@ -138,7 +138,31 @@ Apple 构建还提供独立的 `SP_METAL_MSL` Shader 目标：DXC 先将 HLSL �
    * ![image-20250920201137320](BUILD/image-20250920201137320.png)
    * ![image-20250920201248463](BUILD/image-20250920201248463.png)
 
-### 3.1 注意事项
+### 3.1 GPU 验证
+
+配置 `WITH_CUDA=ON`、`LIBTORCH_DIR`、`TENSORRT_DIR` 后，构建并运行：
+
+```powershell
+cmake --build build --config Debug --parallel 30
+ctest --test-dir build -C Debug -L cuda --output-on-failure
+```
+
+CTest 为这些测试单独配置 SDK 的 DLL 搜索路径。`TestCudaSmoke`、`TestTorchSmoke`、
+`TestTensorRTSmoke` 都执行 GPU 工作并将结果与 CPU 期望值比较，不以 SDK 检测或模型构建成功代替执行验证。
+
+额外配置 `MOER_VULKAN_TEST_SUPPORT=ON` 后，会构建 `TestCudaInterop` 并注册
+`TestCudaInteropSmoke`，验证 compiled 提交、Vulkan/CUDA timeline 交接、颜色双向读回及深度只读交接。
+实际场景的推理生命周期可手动运行（需要上述 DLL 路径）：
+
+```powershell
+$env:MOER_VULKAN_REQUIRE_COMPILED = '1'
+.\target\bin\Debug\TestCudaInterop.exe --raster --config <MoerEngine.toml绝对路径>
+```
+
+该模式使用项目的 ONNX 模型，依次执行全分辨率 AO、半分辨率 AO、关闭 AI、重新启用 AI，最后关闭引擎。
+模型固定输入/输出尺寸对应 1920×1080 视口；首次运行会构建 TensorRT 缓存，后续从缓存加载。
+
+### 3.2 注意事项
 
 * 启用CUDA后，光栅化渲染器就不支持Stencil模板测试了。原因是CUDA不支持 `PF_D32_SFLOAT_S8_UINT`
 

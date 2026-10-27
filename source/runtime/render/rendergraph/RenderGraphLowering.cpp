@@ -319,12 +319,14 @@ template<typename Enum>
 }
 
 void AppendRange(std::ostringstream& stream, const RenderGraph::ResourceRange& range) {
-    if (range.kind == ResourceKind::Texture) {
-        stream << "aspect=" << static_cast<uint32_t>(range.texture.aspects)
-               << ",mip=" << range.texture.mip_first << "+" << range.texture.mip_count
-               << ",layer=" << range.texture.layer_first << "+" << range.texture.layer_count;
+    if (const auto* texture = std::get_if<RenderGraph::TextureRange>(&range)) {
+        stream << "aspect=" << static_cast<uint32_t>(texture->aspects)
+               << ",mip=" << texture->mip_first << "+" << texture->mip_count
+               << ",layer=" << texture->layer_first << "+" << texture->layer_count;
+    } else if (const auto* buffer = std::get_if<RenderGraph::BufferRange>(&range)) {
+        stream << "offset=" << buffer->offset << ",size=" << buffer->size;
     } else {
-        stream << "offset=" << range.buffer.offset << ",size=" << range.buffer.size;
+        stream << "token[all]";
     }
 }
 
@@ -336,7 +338,7 @@ void AppendInstruction(
            << " barrier=" << instruction.barrier_index
            << " access_index=" << instruction.access_index
            << " correlation=" << instruction.correlation_id
-           << " resource=" << instruction.resource.index << " ";
+           << " resource=" << instruction.resource.resource_id << " ";
     AppendRange(stream, instruction.range);
     stream << " src_stage=" << static_cast<uint32_t>(instruction.source.stages)
            << " src_access=" << static_cast<uint32_t>(instruction.source.access)
@@ -408,8 +410,8 @@ std::string RenderGraphLowering::LoweredPlan::Dump() const {
            << " queue_syncs=" << queue_syncs.size() << "\n";
     for (const auto& sync : queue_syncs) {
         stream << "sync=" << sync.correlation_id
-               << " signal_pass=" << sync.signal_pass.index
-               << " wait_pass=" << sync.wait_pass.index
+               << " signal_pass=" << sync.signal_pass.pass_id
+               << " wait_pass=" << sync.wait_pass.pass_id
                << " signal_native=" << sync.signal_queue.native_queue_id
                << " wait_native=" << sync.wait_queue.native_queue_id
                << " signal_batch=" << sync.signal_batch
@@ -440,12 +442,12 @@ std::string RenderGraphLowering::LoweredPlan::Dump() const {
         stream << "\n";
     }
     for (const auto& pass : passes) {
-        stream << "pass=" << pass.pass.index << " keepalive=[";
+        stream << "pass=" << pass.pass.pass_id << " keepalive=[";
         for (uint32_t index = 0; index < pass.keepalive.size(); ++index) {
             if (index != 0) {
                 stream << ",";
             }
-            stream << pass.keepalive[index].resource.index;
+            stream << pass.keepalive[index].resource.resource_id;
         }
         stream << "] before=" << pass.before.size() << " after=" << pass.after.size() << "\n";
         for (const auto& instruction : pass.before) {
@@ -493,7 +495,7 @@ bool RenderGraphLowering::Lower(
     };
     std::vector<bool>     gpu_pass(graph.passes.size(), false);
     std::vector<uint32_t> pass_queue_batch(
-        graph.passes.size(), RenderGraph::PassHandle::InvalidIndex
+        graph.passes.size(), RenderGraph::InvalidIndex
     );
     for (const auto& pass : graph.passes) {
         if (pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
@@ -506,10 +508,10 @@ bool RenderGraphLowering::Lower(
         return fail("execution order does not cover every declared pass");
     }
     for (const auto pass : compiled.execution_order) {
-        if (!graph.IsValidPass(pass) || execution_member[pass.index]) {
+        if (!graph.IsValidPass(pass) || execution_member[pass.pass_id]) {
             return fail("execution order contains an invalid or duplicate pass");
         }
-        execution_member[pass.index] = true;
+        execution_member[pass.pass_id] = true;
     }
     if (compiled.frontend_record_units.size() != compiled.execution_order.size()) {
         return fail("recording schedule does not cover the execution order");
@@ -519,7 +521,7 @@ bool RenderGraphLowering::Lower(
          ++unit_index) {
         const auto& unit = compiled.frontend_record_units[unit_index];
         const auto  pass = compiled.execution_order[unit_index];
-        const auto& declaration = graph.passes[pass.index];
+        const auto& declaration = graph.passes[pass.pass_id];
         if (unit.source_index != unit_index || unit.pass != pass ||
             unit.target_queue !=
                 graph.queue_topology.Resolve(declaration.domain.queue) ||
@@ -549,25 +551,25 @@ bool RenderGraphLowering::Lower(
             return fail("queue batch contains no GPU pass");
         }
         for (const auto pass : batch.passes) {
-            if (!graph.IsValidPass(pass) || !execution_member[pass.index]) {
+            if (!graph.IsValidPass(pass) || !execution_member[pass.pass_id]) {
                 return fail("queue batch references a pass outside execution order");
             }
-            if (gpu_pass[pass.index]) {
+            if (gpu_pass[pass.pass_id]) {
                 return fail("GPU pass belongs to more than one queue batch");
             }
-            gpu_pass[pass.index] = true;
-            pass_queue_batch[pass.index] = batch_index;
-            if (graph.passes[pass.index].domain.queue != batch.queue.role) {
-                return fail("GPU pass '" + graph.passes[pass.index].name +
+            gpu_pass[pass.pass_id] = true;
+            pass_queue_batch[pass.pass_id] = batch_index;
+            if (graph.passes[pass.pass_id].domain.queue != batch.queue.role) {
+                return fail("GPU pass '" + graph.passes[pass.pass_id].name +
                             "' disagrees with its queue batch role");
             }
         }
     }
     for (const auto pass : compiled.execution_order) {
         const bool should_be_gpu =
-            graph.passes[pass.index].execution_class !=
+            graph.passes[pass.pass_id].execution_class !=
             RenderGraph::PassExecutionClass::CpuPrepare;
-        if (gpu_pass[pass.index] != should_be_gpu) {
+        if (gpu_pass[pass.pass_id] != should_be_gpu) {
             return fail(
                 should_be_gpu ?
                     "execution-order GPU pass has no queue batch" :
@@ -633,8 +635,8 @@ bool RenderGraphLowering::Lower(
             sync.wait_pass != wait_batch.passes.front() ||
             sync.signal_queue != signal_batch.queue ||
             sync.wait_queue != wait_batch.queue ||
-            pass_queue_batch[sync.signal_pass.index] != sync.signal_batch ||
-            pass_queue_batch[sync.wait_pass.index] != sync.wait_batch) {
+            pass_queue_batch[sync.signal_pass.pass_id] != sync.signal_batch ||
+            pass_queue_batch[sync.wait_pass.pass_id] != sync.wait_batch) {
             return fail("queue synchronization endpoints disagree with their batches");
         }
         if (std::count(
@@ -669,8 +671,8 @@ bool RenderGraphLowering::Lower(
             seen_edges[edge_index] = true;
             const auto& edge = compiled.edges[edge_index];
             if (!graph.IsValidPass(edge.src) || !graph.IsValidPass(edge.dst) ||
-                pass_queue_batch[edge.src.index] != sync.signal_batch ||
-                pass_queue_batch[edge.dst.index] != sync.wait_batch) {
+                pass_queue_batch[edge.src.pass_id] != sync.signal_batch ||
+                pass_queue_batch[edge.dst.pass_id] != sync.wait_batch) {
                 return fail(
                     "queue synchronization dependency edge disagrees with its batches"
                 );
@@ -688,13 +690,13 @@ bool RenderGraphLowering::Lower(
             const auto& barrier = compiled.barriers[barrier_index];
             const bool matching_destination =
                 graph.IsValidPass(barrier.dst_pass) &&
-                pass_queue_batch[barrier.dst_pass.index] == sync.wait_batch;
+                pass_queue_batch[barrier.dst_pass.pass_id] == sync.wait_batch;
             const bool matching_source = std::any_of(
                 barrier.sources.begin(),
                 barrier.sources.end(),
                 [&](const RenderGraph::CompiledBarrierSource& source) {
                     return graph.IsValidPass(source.pass) &&
-                           pass_queue_batch[source.pass.index] ==
+                           pass_queue_batch[source.pass.pass_id] ==
                                sync.signal_batch;
                 }
             );
@@ -722,10 +724,10 @@ bool RenderGraphLowering::Lower(
         if (!graph.IsValidPass(edge.src) || !graph.IsValidPass(edge.dst)) {
             return fail("compiled dependency edge references an invalid pass");
         }
-        const uint32_t signal_batch = pass_queue_batch[edge.src.index];
-        const uint32_t wait_batch   = pass_queue_batch[edge.dst.index];
-        if (signal_batch == RenderGraph::PassHandle::InvalidIndex ||
-            wait_batch == RenderGraph::PassHandle::InvalidIndex ||
+        const uint32_t signal_batch = pass_queue_batch[edge.src.pass_id];
+        const uint32_t wait_batch   = pass_queue_batch[edge.dst.pass_id];
+        if (signal_batch == RenderGraph::InvalidIndex ||
+            wait_batch == RenderGraph::InvalidIndex ||
             signal_batch == wait_batch) {
             continue;
         }
@@ -761,14 +763,14 @@ bool RenderGraphLowering::Lower(
         if (!graph.IsValidResource(access.resource) || !graph.IsValidPass(access.pass)) {
             return fail("compiled access references an invalid handle");
         }
-        if (access.resource.index >= graph.resources.size()) {
+        if (access.resource.resource_id >= graph.resources.size()) {
             return fail("compiled access resource index is out of range");
         }
-        const auto& resource = graph.resources[access.resource.index];
+        const auto& resource = graph.resources[access.resource.resource_id];
         if (resource.kind == ResourceKind::Token) {
             continue;
         }
-        resource_has_access[access.resource.index] = true;
+        resource_has_access[access.resource.resource_id] = true;
         if (access.state.IsAutomatic()) {
             return fail("physical access uses Automatic state on resource '" + resource.name + "'");
         }
@@ -846,7 +848,7 @@ bool RenderGraphLowering::Lower(
             continue;
         }
         if (!resource_has_access[resource_index] &&
-            resource.first_use == RenderGraph::PassHandle::InvalidIndex) {
+            resource.first_use == RenderGraph::InvalidIndex) {
             continue;
         }
         if (!resource.typed_desc) {
@@ -939,13 +941,13 @@ bool RenderGraphLowering::Lower(
             return fail("transient alias boundary contains an invalid handle or index");
         }
         const auto& predecessor =
-            graph.resources[alias.predecessor_resource.index];
+            graph.resources[alias.predecessor_resource.resource_id];
         const auto& successor =
-            graph.resources[alias.successor_resource.index];
+            graph.resources[alias.successor_resource.resource_id];
         const auto& predecessor_plan =
-            compiled.resources[alias.predecessor_resource.index];
+            compiled.resources[alias.predecessor_resource.resource_id];
         const auto& successor_plan =
-            compiled.resources[alias.successor_resource.index];
+            compiled.resources[alias.successor_resource.resource_id];
         if (predecessor.imported || successor.imported ||
             predecessor.exported || successor.exported ||
             predecessor.physical_identity == nullptr ||
@@ -1036,7 +1038,7 @@ bool RenderGraphLowering::Lower(
         if (!graph.IsValidPass(pass)) {
             return fail("execution order references an invalid pass");
         }
-        if (gpu_pass[pass.index]) {
+        if (gpu_pass[pass.pass_id]) {
             candidate.passes.push_back(PassInstructions{.pass = pass});
         }
     }
@@ -1051,7 +1053,7 @@ bool RenderGraphLowering::Lower(
     };
 
     auto binding_for = [&](RenderGraph::ResourceHandle handle) {
-        const auto& resource = graph.resources[handle.index];
+        const auto& resource = graph.resources[handle.resource_id];
         PhysicalBinding binding{
             .resource = handle,
             .kind     = resource.kind,
@@ -1068,12 +1070,12 @@ bool RenderGraphLowering::Lower(
         std::vector<RenderGraph::ResourceHandle> resources{};
         for (const auto& access : compiled.accesses) {
             if (access.pass == pass_entry.pass &&
-                graph.resources[access.resource.index].kind != ResourceKind::Token) {
+                graph.resources[access.resource.resource_id].kind != ResourceKind::Token) {
                 resources.push_back(access.resource);
             }
         }
-        for (const auto resource : graph.passes[pass_entry.pass.index].references) {
-            if (graph.resources[resource.index].kind != ResourceKind::Token) {
+        for (const auto resource : graph.passes[pass_entry.pass.pass_id].references) {
+            if (graph.resources[resource.resource_id].kind != ResourceKind::Token) {
                 resources.push_back(resource);
             }
         }
@@ -1081,7 +1083,7 @@ bool RenderGraphLowering::Lower(
             resources.begin(),
             resources.end(),
             [](RenderGraph::ResourceHandle lhs, RenderGraph::ResourceHandle rhs) {
-                return lhs.index < rhs.index;
+                return lhs.resource_id < rhs.resource_id;
             }
         );
         resources.erase(
@@ -1089,7 +1091,7 @@ bool RenderGraphLowering::Lower(
                 resources.begin(),
                 resources.end(),
                 [](RenderGraph::ResourceHandle lhs, RenderGraph::ResourceHandle rhs) {
-                    return lhs.index == rhs.index;
+                    return lhs.resource_id == rhs.resource_id;
                 }
             ),
             resources.end()
@@ -1101,10 +1103,10 @@ bool RenderGraphLowering::Lower(
 
     std::vector<uint32_t> execution_position(
         graph.passes.size(),
-        RenderGraph::PassHandle::InvalidIndex
+        RenderGraph::InvalidIndex
     );
     for (uint32_t position = 0; position < compiled.execution_order.size(); ++position) {
-        execution_position[compiled.execution_order[position].index] = position;
+        execution_position[compiled.execution_order[position].pass_id] = position;
     }
 
     auto lower_instruction = [&](uint32_t barrier_index, LoweredInstruction& instruction) {
@@ -1114,7 +1116,7 @@ bool RenderGraphLowering::Lower(
             error = "barrier references an invalid resource";
             return false;
         }
-        const auto& resource = graph.resources[barrier.resource.index];
+        const auto& resource = graph.resources[barrier.resource.resource_id];
         if (resource.kind == ResourceKind::Token) {
             error = "token barrier cannot be physically lowered";
             return false;
@@ -1142,11 +1144,11 @@ bool RenderGraphLowering::Lower(
                     return false;
                 }
                 const uint32_t signal_batch =
-                    pass_queue_batch[source.pass.index];
+                    pass_queue_batch[source.pass.pass_id];
                 const uint32_t wait_batch =
-                    pass_queue_batch[barrier.dst_pass.index];
-                if (signal_batch == RenderGraph::PassHandle::InvalidIndex ||
-                    wait_batch == RenderGraph::PassHandle::InvalidIndex) {
+                    pass_queue_batch[barrier.dst_pass.pass_id];
+                if (signal_batch == RenderGraph::InvalidIndex ||
+                    wait_batch == RenderGraph::InvalidIndex) {
                     error = "queue barrier source or destination has no queue batch";
                     return false;
                 }
@@ -1215,7 +1217,7 @@ bool RenderGraphLowering::Lower(
             .resource_kind           = resource.kind,
             .range                   = barrier.range,
             .texture_aspects         = resource.kind == ResourceKind::Texture ?
-                                           LowerAspects(barrier.range.texture.aspects) :
+                                           LowerAspects(std::get<RenderGraph::TextureRange>(barrier.range).aspects) :
                                            ETextureAspectFlags::NONE,
             .physical                = binding_for(barrier.resource),
             .src_pass                = barrier.src_pass,
@@ -1235,13 +1237,14 @@ bool RenderGraphLowering::Lower(
         };
 
         if (resource.kind == ResourceKind::Texture) {
-            if (barrier.range.texture.aspects == TextureAspect::None ||
-                barrier.range.texture.mip_count == RenderGraph::RemainingTextureRange ||
-                barrier.range.texture.layer_count == RenderGraph::RemainingTextureRange) {
+            const auto& texture = std::get<RenderGraph::TextureRange>(barrier.range);
+            if (texture.aspects == TextureAspect::None ||
+                texture.mip_count == RenderGraph::RemainingTextureRange ||
+                texture.layer_count == RenderGraph::RemainingTextureRange) {
                 error = "texture barrier range is not fully normalized";
                 return false;
             }
-        } else if (barrier.range.buffer.size == RenderGraph::RemainingBufferRange) {
+        } else if (std::get<RenderGraph::BufferRange>(barrier.range).size == RenderGraph::RemainingBufferRange) {
             error = "buffer barrier range is not fully normalized";
             return false;
         }
@@ -1261,15 +1264,15 @@ bool RenderGraphLowering::Lower(
                 }
                 instruction.source_frontier.push_back(source.pass);
                 const uint32_t source_batch =
-                    pass_queue_batch[source.pass.index];
+                    pass_queue_batch[source.pass.pass_id];
                 const uint32_t destination_batch =
                     barrier.dst_pass.IsValid() ?
-                        pass_queue_batch[barrier.dst_pass.index] :
-                        RenderGraph::PassHandle::InvalidIndex;
+                        pass_queue_batch[barrier.dst_pass.pass_id] :
+                        RenderGraph::InvalidIndex;
                 const bool contributes_local_scope =
                     barrier.queue_ownership || !instruction.queue_acquire ||
-                    (source_batch != RenderGraph::PassHandle::InvalidIndex &&
-                     destination_batch != RenderGraph::PassHandle::InvalidIndex &&
+                    (source_batch != RenderGraph::InvalidIndex &&
+                     destination_batch != RenderGraph::InvalidIndex &&
                      compiled.queue_batches[source_batch]
                              .queue.native_queue_id ==
                          compiled.queue_batches[destination_batch]
@@ -1424,8 +1427,8 @@ bool RenderGraphLowering::Lower(
         }
         if (barrier.queue_ownership) {
             const uint32_t destination_batch =
-                pass_queue_batch[barrier.dst_pass.index];
-            if (destination_batch == RenderGraph::PassHandle::InvalidIndex ||
+                pass_queue_batch[barrier.dst_pass.pass_id];
+            if (destination_batch == RenderGraph::InvalidIndex ||
                 destination_batch >= compiled.queue_batches.size()) {
                 return fail(
                     "ownership destination has no managed queue batch"
@@ -1436,10 +1439,10 @@ bool RenderGraphLowering::Lower(
 
             struct SourceNativeTail {
                 uint32_t native_queue_id = 0;
-                uint32_t batch = RenderGraph::PassHandle::InvalidIndex;
+                uint32_t batch = RenderGraph::InvalidIndex;
             };
             std::vector<SourceNativeTail> source_tails{};
-            uint32_t source_family = RenderGraph::PassHandle::InvalidIndex;
+            uint32_t source_family = RenderGraph::InvalidIndex;
             for (const auto& source : barrier.sources) {
                 if (!graph.IsValidPass(source.pass)) {
                     return fail(
@@ -1447,8 +1450,8 @@ bool RenderGraphLowering::Lower(
                     );
                 }
                 const uint32_t source_batch =
-                    pass_queue_batch[source.pass.index];
-                if (source_batch == RenderGraph::PassHandle::InvalidIndex ||
+                    pass_queue_batch[source.pass.pass_id];
+                if (source_batch == RenderGraph::InvalidIndex ||
                     source_batch >= compiled.queue_batches.size() ||
                     source_batch >= destination_batch) {
                     return fail(
@@ -1462,7 +1465,7 @@ bool RenderGraphLowering::Lower(
                         "ownership source domain disagrees with its queue batch"
                     );
                 }
-                if (source_family == RenderGraph::PassHandle::InvalidIndex) {
+                if (source_family == RenderGraph::InvalidIndex) {
                     source_family = source_binding.family_id;
                 } else if (source_family != source_binding.family_id) {
                     return fail(
@@ -1487,7 +1490,7 @@ bool RenderGraphLowering::Lower(
                 }
             }
             if (source_tails.empty() ||
-                source_family == RenderGraph::PassHandle::InvalidIndex ||
+                source_family == RenderGraph::InvalidIndex ||
                 source_family == destination_binding.family_id) {
                 return fail(
                     "ownership transfer does not cross two distinct queue families"
@@ -1593,12 +1596,12 @@ bool RenderGraphLowering::Lower(
             bool found_source = false;
             for (const auto source : instruction.source_frontier) {
                 if (!graph.IsValidPass(source) ||
-                    execution_position[source.index] == RenderGraph::PassHandle::InvalidIndex) {
+                    execution_position[source.pass_id] == RenderGraph::InvalidIndex) {
                     return fail("epilogue barrier source is not in execution order");
                 }
-                if (!found_source || execution_position[source.index] > latest_position) {
+                if (!found_source || execution_position[source.pass_id] > latest_position) {
                     latest = source;
-                    latest_position = execution_position[source.index];
+                    latest_position = execution_position[source.pass_id];
                     found_source = true;
                 }
             }
@@ -1614,7 +1617,7 @@ bool RenderGraphLowering::Lower(
                 }
                 return fail(
                     "epilogue barrier has no managed source pass on resource '" +
-                    graph.resources[instruction.resource.index].name + "'"
+                    graph.resources[instruction.resource.resource_id].name + "'"
                 );
             }
             auto* pass = find_mutable_pass(latest);
@@ -1641,10 +1644,10 @@ bool RenderGraphLowering::Lower(
         });
     };
     for (const auto& access : compiled.accesses) {
-        if (graph.resources[access.resource.index].kind == ResourceKind::Token) {
+        if (graph.resources[access.resource.resource_id].kind == ResourceKind::Token) {
             continue;
         }
-        const auto& declaration = graph.resources[access.resource.index];
+        const auto& declaration = graph.resources[access.resource.resource_id];
         if (declaration.imported && !has_boundary(access, true)) {
             return fail(
                 "physical access lacks a matching explicit import boundary on resource '" +
@@ -1662,7 +1665,7 @@ bool RenderGraphLowering::Lower(
 
     for (uint32_t access_index = 0; access_index < compiled.accesses.size(); ++access_index) {
         const auto& access = compiled.accesses[access_index];
-        const auto& resource = graph.resources[access.resource.index];
+        const auto& resource = graph.resources[access.resource.resource_id];
         if (resource.kind == ResourceKind::Token) {
             continue;
         }
@@ -1708,7 +1711,7 @@ bool RenderGraphLowering::Lower(
             .resource_kind           = resource.kind,
             .range                   = access.range,
             .texture_aspects         = resource.kind == ResourceKind::Texture ?
-                                           LowerAspects(access.range.texture.aspects) :
+                                           LowerAspects(std::get<RenderGraph::TextureRange>(access.range).aspects) :
                                            ETextureAspectFlags::NONE,
             .physical                = binding_for(access.resource),
             .src_pass                = access.pass,

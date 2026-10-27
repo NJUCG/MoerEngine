@@ -1,5 +1,11 @@
 # Vulkan RHI
 
+## Design Notes
+
+* [Swapchain 与 Present 的逻辑模型演进](../../../../../docs/VULKAN_PRESENTATION_REFACTOR.md)：完成条件、资源生命周期和职责边界的逐步拆分，以及 Copy / Direct 路径的取舍。
+* [描述符绑定与分配模型](../../../../../docs/VULKAN_DESCRIPTOR_DESIGN.md)：API 表达、存储所有权及生命周期的区别。
+* [临时描述符预留](../../../../../docs/VULKAN_DESCRIPTOR_RESERVATION.md)：提交前预留、录制游标和失败重录的责任边界。
+
 ## Source responsibilities
 
 | Source | Responsibility |
@@ -60,11 +66,13 @@ Resources retain their CPU cache slot references until destruction. A cached
 descriptor handle does not own the resource; the resource must remain alive
 while its descriptor is copied or used by the GPU.
 
-A submission lease shares descriptor allocation bookkeeping among recorders.
-Creating a lease does not reserve GPU storage. Ranges are allocated as needed,
-flushed after recording joins, and explicitly recycled after GPU completion
-or after all referencing work has been discarded. Dropping a shared pointer
-alone does not authorize reuse of GPU storage.
+A submission lease owns ranges reserved before native command recording.
+An immutable plan assigns ranges to commands; each recorder consumes them with
+a local cursor. Failed parallel work can replay those ranges only after workers
+join and their command buffers are discarded. Writes are flushed after recording
+joins, and storage is recycled after GPU completion or after all referencing
+work has been discarded. Dropping a shared pointer alone does not authorize reuse
+of GPU storage. Persistent bindless tables retain their own leases.
 
 ## Validation
 
@@ -95,3 +103,5 @@ device initialization and queue constructors carry no injection parameters.
 
 The macOS Render target currently excludes the Vulkan backend. A successful
 macOS engine build or CPU contract test does not validate Vulkan GPU execution.
+ * Add dummy descriptor when set or binding are not consistent in shader code.
+ * Fix RT pipleine running errors.

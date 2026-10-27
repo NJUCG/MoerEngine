@@ -1,16 +1,16 @@
 #ifndef MOER_ENGINE_PROFILE_TIMELINE_INDEX_H
 #define MOER_ENGINE_PROFILE_TIMELINE_INDEX_H
 
+#include "misc/NumericLimits.h"
 #include "profile_consumer/ProfileSession.h"
 
 #include <cstdint>
-#include <limits>
 #include <span>
 #include <stop_token>
 
 namespace Moer::ProfileDump {
 
-inline constexpr std::uint32_t kInvalidTimelineAxis = std::numeric_limits<std::uint32_t>::max();
+inline constexpr std::uint32_t kInvalidTimelineAxis = MaxValue<std::uint32_t>;
 
 enum class TimelineAxisKind : std::uint8_t {
     CpuSteadyClock = 0,
@@ -89,7 +89,7 @@ struct TimelineIndexBuildControl {
     // work items may run; the next checkpoint reports Cancelled and follows
     // the same atomic-output contract as stop_token. This can cap background
     // work even when the caller has no timer thread.
-    std::uint64_t max_work_items_before_cancel{std::numeric_limits<std::uint64_t>::max()};
+    std::uint64_t max_work_items_before_cancel{MaxValue<std::uint64_t>};
 };
 
 // CPU and every physical GPU timestamp domain are separate axes. ProfileDump

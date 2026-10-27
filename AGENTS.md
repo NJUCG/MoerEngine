@@ -1,5 +1,17 @@
 # MoerEngine — Project Guidelines
 
+## Analysis, Design & Optimization Principles
+
+Start from real constraints and derive the necessary mechanisms. Distinguish complexity imposed by hardware, API contracts, concurrency and resource lifetimes from complexity introduced by our own design choices.
+
+- Establish the logical model first: who owns each resource, who uses it, which dependencies matter, when use ends, and who permits reuse or destruction.
+- Give each state, object, abstraction and synchronization mechanism a concrete responsibility. "Convenient to manage", "safer" or "UE does it this way" is not sufficient justification; identify the actual condition it guarantees.
+- Before adding machinery to handle a complication, reconsider the design choice that created it. Question whether duplicated state, copying, rebuilding or a separate lifecycle is necessary at all.
+- Prefer fewer independent states and clearer ownership. Reuse existing submission, pooling and completion mechanisms where their guarantees fit; judge simplification by the logical model, not just line count.
+- When removing a mechanism, explicitly answer: **Who now guarantees the condition it used to guarantee?** Distinguish reuse of an existing guarantee, transfer to a coarser boundary, and an accidentally lost guarantee. Explain the cost of moving responsibility; preserve required correctness and synchronization.
+- Keep request outcomes, accepted work, execution completion and resource reclamation conditions distinct whenever their meanings differ.
+- Explain analysis and design documents through the evolution of the model: original coupling, reason for change, new responsibility boundaries and tradeoffs. Keep commit chronology, runtime logs and detailed validation procedures out of that narrative unless requested.
+
 ## Build & Run
 
 ```

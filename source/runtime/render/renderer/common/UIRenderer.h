@@ -4,6 +4,7 @@
 #define MOER_ENGINE_UI_RENDERER_H
 
 #include "RenderAPI.h"
+#include "misc/NumericLimits.h"
 #include "misc/STL.h"
 #include "renderer/common/PresentationSurface.h"
 #include "rhi/RHI.h"
@@ -11,7 +12,6 @@
 #include "window/WindowInput.h"
 #include <atomic>
 #include <cstdint>
-#include <limits>
 #include <type_traits>
 
 namespace Moer::Render {
@@ -100,8 +100,7 @@ struct UiClipRect {
 using UiViewportPresentationSnapshot = PresentationSurfaceSnapshot;
 
 struct UiViewportDrawPacket {
-    static constexpr uint64_t InvalidRecordingSlot =
-        std::numeric_limits<uint64_t>::max();
+    static constexpr uint64_t InvalidRecordingSlot = MaxValue<uint64_t>;
 
     float2 display_position{};
     float2 display_size{};

@@ -4105,10 +4105,10 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
         );
     }
     const auto& plan = graph.GetCompiledPlan();
-    if (plan.resources[first.resource.index].transient_slot ==
-            RenderGraph::PassHandle::InvalidIndex ||
-        plan.resources[first.resource.index].transient_slot !=
-            plan.resources[second.resource.index].transient_slot ||
+    if (plan.resources[first.handle.resource_id].transient_slot ==
+            RenderGraph::InvalidIndex ||
+        plan.resources[first.handle.resource_id].transient_slot !=
+            plan.resources[second.handle.resource_id].transient_slot ||
         plan.alias_boundaries.size() != 1) {
         throw std::runtime_error(
             "active RDG transient alias compiler plan did not reuse one slot"
@@ -4278,8 +4278,8 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
         );
     }
     const auto& plan = graph.GetCompiledPlan();
-    if (plan.resources[first.resource.index].transient_slot !=
-            plan.resources[second.resource.index].transient_slot ||
+    if (plan.resources[first.handle.resource_id].transient_slot !=
+            plan.resources[second.handle.resource_id].transient_slot ||
         plan.alias_boundaries.size() != 1) {
         throw std::runtime_error(
             "active RDG transient texture alias did not reuse one slot"

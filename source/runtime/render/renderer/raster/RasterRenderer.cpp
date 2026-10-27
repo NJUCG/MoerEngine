@@ -354,7 +354,7 @@ public:
         RenderGraph::BufferHandle lighting_data{};
     };
 
-    RenderGraph::PreparedPassHandle AddToGraph(
+    void AddToGraph(
         RenderGraph&                                  graph,
         RasterContext&                                context,
         const RasterConfig&                           config,
@@ -371,10 +371,10 @@ public:
             setup_dependencies
         );
         if (!prepared.IsValid()) {
-            return {};
+            return;
         }
 
-        auto pass = graph.AddRecordPass(
+        graph.AddRecordPass(
             "UploadLightingData",
             [resources](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
@@ -389,7 +389,6 @@ public:
             },
             RenderGraph::PassExecutionClass::ParallelRecordEligible
         );
-        return {prepared.GetSetupPass(), pass};
     }
 };
 
