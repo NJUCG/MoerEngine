@@ -1,12 +1,10 @@
-#include "VulkanQueueTiming.h"
 #include "VulkanQueue.h"
 #include "VulkanDevice.h"
 #include "log/LogSystem.h"
-#include "rhi/RHIThreadHeartbeat.h"
 
-#include <algorithm>
-#include <cmath>
-#include <thread>
+#include <cassert>
+#include <chrono>
+#include <cstring>
 
 namespace Moer::Render {
 
@@ -149,9 +147,9 @@ void VkCommandQueue::EndSplitProfilingCpuFrame() {
         split_profiling_cpu_frame.started = std::chrono::steady_clock::now();
     }
 
-    const double execute_ms = RhiThreadProfileMilliseconds(
-        split_profiling_cpu_frame.started, std::chrono::steady_clock::now()
-    );
+    const double execute_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - split_profiling_cpu_frame.started
+    ).count();
     profiler_storage.RegisterCpuTimestamp("Queue Execution", execute_ms);
     profiler_storage.AdvanceFrame();
     ResetSplitProfilingCpuFrame();
@@ -165,6 +163,4 @@ ProfileData VkCommandQueue::GetProfilerEntry() {
     std::unique_lock<std::mutex> lock(profiler_mutex);
     return cached_profiler_entry;
 }
-
-
 } // namespace Moer::Render

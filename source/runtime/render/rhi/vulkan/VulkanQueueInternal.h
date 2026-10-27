@@ -16,7 +16,6 @@ struct VulkanPresentationSourceMembershipCommit {
 struct VulkanPresentationSourceStateTransaction {
     Array<VulkanPresentationSourceStateDelta>       delta{};
     Array<VulkanPresentationSourceMembershipCommit> membership_commits{};
-    std::unique_lock<std::mutex>                     submission_lock{};
 };
 
 void FinalizeRejectedBindlessUpdates(const CmdSubmit& _submit);

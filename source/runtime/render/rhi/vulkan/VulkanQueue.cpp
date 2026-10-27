@@ -6,7 +6,6 @@
 #include "VulkanQueue.h"
 #include "VulkanBarrier.h"
 #include "VulkanQueueInternal.h"
-#include "VulkanQueueTiming.h"
 #include "PixelFormat.h"
 #include "VulkanCommandContext.h"
 #include "VulkanCommandList.h"
@@ -2702,13 +2701,13 @@ void RecordVulkanCopyCommands(
 
 #pragma region[ VkCommandQueue ]
 
-void VkCommandQueue::Wait(WaitEvent _evt) {
-    auto* fence = reinterpret_cast<VulkanTimeline*>(_evt.timeline_handle);
-    {
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(_evt, _evt.value, false);
-
-        queue_cv.notify_one();
+void VkCommandQueue::Wait(WaitEvent) {
+    try {
+        LOG_ERROR(
+            "[RHIExecutor][Vulkan] direct Wait is unsupported; "
+            "publish dependencies with the submission through RHIExecutor"
+        );
+    } catch (...) {
     }
 }
 
@@ -2917,7 +2916,6 @@ BuildPresentationSourceStateProgram(
                     .bindless_array = _array,
                 }
             );
-            program.has_bindless_state = true;
         };
     const auto record_view =
         [&](const TextureView& _view) {
@@ -3224,7 +3222,6 @@ BuildPresentationSourceStateProgram(
                                             _update.free ? -1 : 1,
                                     }
                                 );
-                                program.has_bindless_state = true;
                             }
                         },
                         update
@@ -3250,15 +3247,14 @@ BuildPresentationSourceStateProgram(
     return program;
 }
 
-static std::mutex& PresentationSourceBindlessSubmissionMutex() {
-    static std::mutex mutex;
-    return mutex;
-}
-
 VulkanPresentationSourceStateTransaction
 EvaluatePresentationSourceStateProgram(
     const VulkanPresentationSourceStateProgram& _program
 ) {
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "presentation state evaluation requires the Submission owner"
+    );
     using Membership =
         VulkanBindlessArray::PresentationSourceMembership;
     struct WorkingMembership {
@@ -3268,15 +3264,6 @@ EvaluatePresentationSourceStateProgram(
 
     VulkanPresentationSourceStateTransaction transaction{};
     transaction.delta.reserve(_program.events.size());
-    if (_program.has_bindless_state) {
-        // The runtime has one Submission owner, but standalone queue use can
-        // still enter this path directly. Keep snapshot -> vkQueueSubmit ->
-        // accepted publication one global transaction in both modes.
-        transaction.submission_lock =
-            std::unique_lock<std::mutex>(
-                PresentationSourceBindlessSubmissionMutex()
-            );
-    }
 
     Array<WorkingMembership> working_memberships{};
     UnorderedMap<VulkanBindlessArray*, size_t>
@@ -3494,8 +3481,8 @@ void CommitAcceptedPresentationSourceStateTransaction(
     VulkanPresentationSourceStateTransaction& _transaction
 ) noexcept {
     assert(
-        _transaction.membership_commits.empty() ||
-        _transaction.submission_lock.owns_lock()
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "presentation state publication requires the Submission owner"
     );
     for (VulkanPresentationSourceMembershipCommit& commit :
          _transaction.membership_commits) {
@@ -3912,9 +3899,7 @@ void VkCommandQueue::RejectForRuntime(
                 _batch_completion.group :
                 nullptr;
         event_queue.emplace_back(
-            std::in_place_type<VulkanSubmitCompletionBatch>,
             0,
-            true,
             retirement_serial,
             outcome,
             VulkanOperationContext{
@@ -4313,9 +4298,7 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
                 _recorded.batch_completion.group :
                 nullptr;
         event_queue.emplace_back(
-            std::in_place_type<VulkanSubmitCompletionBatch>,
             _recorded.timeline,
-            true,
             retirement_serial,
             _outcome,
             _recorded.context,
@@ -5105,14 +5088,6 @@ Array<RHIResource*> VkCommandQueue::TakeDeferredReleases() {
     return deleted_resources;
 }
 
-void VkCommandQueue::EnqueueCompletionMarker(uint64 _timeline) {
-    const uint64 retirement_serial = retirement_enqueued_serial + 1;
-    event_queue.emplace_back(
-        VulkanCompletionMarker{}, _timeline, true, retirement_serial
-    );
-    retirement_enqueued_serial = retirement_serial;
-}
-
 void VkCommandQueue::CompletionThreadMain() {
     Platform::SetCurrentThreadName(
         queue.GetType() == EQueueType::Graphics ? "Vulkan Gfx Completion" : "Vulkan Compute Completion"
@@ -5124,11 +5099,9 @@ void VkCommandQueue::CompletionThreadMain() {
         ERHIHeartbeatStage::PollCompletion
     );
 
-    bool batch_gpu_success = false;
-    bool batch_release_safe = false;
     while (true) {
         heartbeat.Pulse(ERHIHeartbeatStage::PollCompletion);
-        std::optional<QueueEvent> evt;
+        std::optional<CompletionEvent> completion;
         {
             std::unique_lock<std::mutex> lock(event_mutex);
             RHIThreadHeartbeatWaitLock wait_lock(
@@ -5145,409 +5118,288 @@ void VkCommandQueue::CompletionThreadMain() {
                 continue;
             }
 
-            evt.emplace(std::move(event_queue.front()));
+            completion.emplace(std::move(event_queue.front()));
             event_queue.pop_front();
         }
 
         heartbeat.Pulse(ERHIHeartbeatStage::AwaitCompletion);
-        const uint64 event_timeline = evt->timeline;
-        std::visit(
-            Overload{
-                [this, event_timeline, &batch_gpu_success, &batch_release_safe](
-                    VulkanSubmissionEvent& _submission
-                ) {
-                    batch_gpu_success = false;
-                    batch_release_safe =
-                        !_submission.gpu_submitted &&
-                        (_submission.outcome.status == EVulkanOperationStatus::Retry ||
-                         _submission.outcome.status == EVulkanOperationStatus::Recreate);
-                    if (!_submission.gpu_submitted) {
-                        if (_submission.outcome.status ==
-                            EVulkanOperationStatus::Faulted) {
-                            timeline->Fail(_submission.outcome.result);
-                        } else if (
-                            _submission.outcome.status ==
-                            EVulkanOperationStatus::Rejected
-                        ) {
-                            timeline->Reject(event_timeline);
-                        }
-                        return;
-                    }
+        const uint64 event_timeline = completion->timeline;
+        {
+            VulkanSubmitCompletionBatch& batch = completion->batch;
+            bool batch_gpu_success = false;
+            bool batch_release_safe =
+                !batch.gpu_submitted &&
+                (batch.outcome.status == EVulkanOperationStatus::Retry ||
+                 batch.outcome.status == EVulkanOperationStatus::Recreate);
 
-                    if (timeline->Wait(event_timeline) && !vk_device.IsDeviceLost()) {
-                        batch_gpu_success = true;
-                        batch_release_safe = true;
-                    } else {
-                        timeline->Fail(timeline->QueryGpuCompletion(event_timeline));
-                    }
-                },
-                [this, event_timeline, &batch_gpu_success, &batch_release_safe](
-                    VulkanSubmitCompletionBatch& _batch
-                ) {
-                    batch_gpu_success = false;
-                    batch_release_safe =
-                        !_batch.gpu_submitted &&
-                        (_batch.outcome.status == EVulkanOperationStatus::Retry ||
-                         _batch.outcome.status == EVulkanOperationStatus::Recreate);
+            VkResult completion_result = batch.outcome.result;
+            if (completion_result == VK_SUCCESS && !batch.gpu_submitted) {
+                completion_result = VK_ERROR_UNKNOWN;
+            }
+            const bool recoverable_rejection =
+                !batch.gpu_submitted &&
+                batch.outcome.status ==
+                    EVulkanOperationStatus::Rejected &&
+                !vk_device.IsFaulted() &&
+                batch.outcome.result != VK_ERROR_DEVICE_LOST;
 
-                    VkResult completion_result = _batch.outcome.result;
-                    if (completion_result == VK_SUCCESS && !_batch.gpu_submitted) {
-                        completion_result = VK_ERROR_UNKNOWN;
-                    }
-                    const bool recoverable_rejection =
-                        !_batch.gpu_submitted &&
-                        _batch.outcome.status ==
-                            EVulkanOperationStatus::Rejected &&
-                        !vk_device.IsFaulted() &&
-                        _batch.outcome.result != VK_ERROR_DEVICE_LOST;
+            if (batch.gpu_submitted) {
+                if (timeline->Wait(event_timeline) && !vk_device.IsFaulted()) {
+                    batch_gpu_success = true;
+                    batch_release_safe = true;
+                    completion_result = VK_SUCCESS;
 
-                    if (_batch.gpu_submitted) {
-                        if (timeline->Wait(event_timeline) && !vk_device.IsFaulted()) {
-                            batch_gpu_success = true;
-                            batch_release_safe = true;
-                            completion_result = VK_SUCCESS;
-
-                            for (auto& command_context : _batch.command_contexts.submitted) {
-                                const VkResult query_result =
-                                    command_context->PrepareQueriesAfterGpuCompletion(_batch.context);
-                                if (query_result != VK_SUCCESS) {
-                                    completion_result = query_result;
-                                    batch_gpu_success = false;
-                                    batch_release_safe = false;
-                                    break;
-                                }
-                            }
-                            if (batch_gpu_success && vk_device.IsFaulted()) {
-                                completion_result =
-                                    vk_device.GetFirstFaultResult();
-                                batch_gpu_success = false;
-                                batch_release_safe = false;
-                            }
-
-                            if (!batch_gpu_success && _batch.owns_queue_timeline) {
-                                timeline->Fail(completion_result);
-                            }
-                        } else {
-                            // Wait failed or the device faulted; read the recorded error.
-                            completion_result = timeline->QueryGpuCompletion(event_timeline);
-                            if (_batch.owns_queue_timeline) {
-                                timeline->Fail(completion_result);
-                            }
-                        }
-                    } else if (_batch.owns_queue_timeline) {
-                        if (recoverable_rejection) {
-                            timeline->Reject(event_timeline);
-                        } else {
-                            timeline->Fail(completion_result);
+                    for (auto& command_context : batch.command_contexts.submitted) {
+                        const VkResult query_result =
+                            command_context->PrepareQueriesAfterGpuCompletion(batch.context);
+                        if (query_result != VK_SUCCESS) {
+                            completion_result = query_result;
+                            batch_gpu_success = false;
+                            batch_release_safe = false;
+                            break;
                         }
                     }
-
-                    for (const SignalEvent& event : _batch.submit.signal_events) {
-                        auto* fence =
-                            reinterpret_cast<VulkanTimeline*>(event.timeline_handle);
-                        if (fence == nullptr) {
-                            continue;
-                        }
-                        if (batch_gpu_success) {
-                            fence->RecordGpuCompletion(event.value);
-                        } else if (recoverable_rejection) {
-                            fence->Reject(event.value);
-                        } else {
-                            fence->Fail(completion_result);
-                        }
+                    if (batch_gpu_success && vk_device.IsFaulted()) {
+                        completion_result =
+                            vk_device.GetFirstFaultResult();
+                        batch_gpu_success = false;
+                        batch_release_safe = false;
                     }
 
-                    const QueryPublishBatch query_batch =
-                        _batch.submit.query_publish_batch.Valid() ?
-                            _batch.submit.query_publish_batch :
-                            QueryBackendAccess::BeginPublishBatch();
-                    const std::string_view query_failure_reason =
-                        batch_gpu_success ?
-                            "Vulkan query did not resolve after GPU completion" :
-                            "Vulkan submission did not reach successful GPU completion";
-                    for (auto& command_context : _batch.command_contexts.submitted) {
-                        command_context->PublishQueriesAfterGpuCompletion(
-                            query_batch, batch_gpu_success, query_failure_reason
-                        );
+                    if (!batch_gpu_success && batch.owns_queue_timeline) {
+                        timeline->Fail(completion_result);
                     }
-                    for (auto& command_context : _batch.command_contexts.abandoned) {
-                        command_context->PublishQueriesAfterGpuCompletion(
-                            query_batch, false, "Vulkan query recorder was abandoned before native submission"
-                        );
+                } else {
+                    // Wait failed or the device faulted; read the recorded error.
+                    completion_result = timeline->QueryGpuCompletion(event_timeline);
+                    if (batch.owns_queue_timeline) {
+                        timeline->Fail(completion_result);
                     }
-                    // Every CmdSubmit token must become terminal even if a
-                    // backend bug failed to associate it with a native
-                    // command context record. Publish the fallback in the same
-                    // transaction, but defer all notifications.
-                    _batch.submit.PublishPendingQueryErrors(
-                        query_failure_reason, query_batch
+                }
+            } else if (batch.owns_queue_timeline) {
+                if (recoverable_rejection) {
+                    timeline->Reject(event_timeline);
+                } else {
+                    timeline->Fail(completion_result);
+                }
+            }
+
+            for (const SignalEvent& event : batch.submit.signal_events) {
+                auto* fence =
+                    reinterpret_cast<VulkanTimeline*>(event.timeline_handle);
+                if (fence == nullptr) {
+                    continue;
+                }
+                if (batch_gpu_success) {
+                    fence->RecordGpuCompletion(event.value);
+                } else if (recoverable_rejection) {
+                    fence->Reject(event.value);
+                } else {
+                    fence->Fail(completion_result);
+                }
+            }
+
+            const QueryPublishBatch query_batch =
+                batch.submit.query_publish_batch.Valid() ?
+                    batch.submit.query_publish_batch :
+                    QueryBackendAccess::BeginPublishBatch();
+            const std::string_view query_failure_reason =
+                batch_gpu_success ?
+                    "Vulkan query did not resolve after GPU completion" :
+                    "Vulkan submission did not reach successful GPU completion";
+            for (auto& command_context : batch.command_contexts.submitted) {
+                command_context->PublishQueriesAfterGpuCompletion(
+                    query_batch, batch_gpu_success, query_failure_reason
+                );
+            }
+            for (auto& command_context : batch.command_contexts.abandoned) {
+                command_context->PublishQueriesAfterGpuCompletion(
+                    query_batch, false, "Vulkan query recorder was abandoned before native submission"
+                );
+            }
+            // Every CmdSubmit token must become terminal even if a
+            // backend bug failed to associate it with a native
+            // command context record. Publish the fallback in the same
+            // transaction, but defer all notifications.
+            batch.submit.PublishPendingQueryErrors(
+                query_failure_reason, query_batch
+            );
+
+            const GpuCompletionPublishBatch
+                gpu_completion_batch =
+                    batch.submit.
+                            gpu_completion_publish_batch.Valid() ?
+                        batch.submit.
+                            gpu_completion_publish_batch :
+                        GpuCompletionBackendAccess::
+                            BeginPublishBatch();
+            batch.submit.PublishPendingGpuCompletionOutcome(
+                batch_gpu_success,
+                "Vulkan submission did not reach successful GPU completion",
+                gpu_completion_batch
+            );
+
+            bool recycle_batch =
+                batch_gpu_success && !vk_device.IsFaulted();
+            if (recycle_batch) {
+                for (auto& command_context : batch.command_contexts.submitted) {
+                    recycle_batch = command_context->CompleteSuccessCallbacks() && recycle_batch;
+                }
+            }
+
+            if (batch.descriptor_lease) {
+                // A failed completion wait does not prove the GPU stopped
+                // reading. Keep those ranges unavailable until heap teardown.
+                if (!batch.gpu_submitted || batch_gpu_success) {
+                    vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(
+                        std::move(batch.descriptor_lease)
                     );
+                }
+                batch.descriptor_lease.reset();
+            }
 
-                    const GpuCompletionPublishBatch
-                        gpu_completion_batch =
-                            _batch.submit.
-                                    gpu_completion_publish_batch.Valid() ?
-                                _batch.submit.
-                                    gpu_completion_publish_batch :
-                                GpuCompletionBackendAccess::
-                                    BeginPublishBatch();
-                    _batch.submit.PublishPendingGpuCompletionOutcome(
-                        batch_gpu_success,
-                        "Vulkan submission did not reach successful GPU completion",
-                        gpu_completion_batch
+            if (!batch.gpu_submitted) {
+                FinalizeRejectedBindlessUpdates(batch.submit);
+            }
+            Array<std::function<void()>> callbacks{};
+            Array<std::function<void()>> success_callbacks{};
+            std::optional<
+                VulkanBatchCompletionGroup::Participant>
+                grouped_completion{};
+            if (batch.batch_completion.Valid()) {
+                grouped_completion.emplace();
+                grouped_completion->lifetime = std::move(batch.submit.lifetime);
+                grouped_completion->gpu_completion_tokens =
+                    std::move(
+                        batch.submit.gpu_completion_tokens
                     );
+                grouped_completion->gpu_completion_batch =
+                    gpu_completion_batch;
+                grouped_completion->query_tokens =
+                    std::move(batch.submit.query_tokens);
+                grouped_completion->query_batch = query_batch;
+                grouped_completion->callbacks =
+                    std::move(batch.submit.callbacks);
+                grouped_completion->success_callbacks =
+                    std::move(batch.submit.success_callbacks);
+                grouped_completion->deferred_releases =
+                    std::move(batch.deferred_releases);
+                grouped_completion->device       = &vk_device;
+                grouped_completion->gpu_success  =
+                    batch_gpu_success;
+                grouped_completion->release_safe =
+                    batch_release_safe;
+                batch.submit.gpu_completion_publish_batch =
+                    {};
+                batch.submit.query_publish_batch = {};
+            } else {
+                callbacks =
+                    std::move(batch.submit.callbacks);
+                success_callbacks =
+                    std::move(batch.submit.success_callbacks);
+            }
+            batch.submit.cmds.clear();
+            batch.submit.cached_args.clear();
+            batch.submit.segments.clear();
+            batch.submit.wait_events.clear();
+            batch.submit.signal_events.clear();
+            batch.submit.debug_label.clear();
 
-                    bool recycle_batch =
-                        batch_gpu_success && !vk_device.IsFaulted();
-                    if (recycle_batch) {
-                        for (auto& command_context : _batch.command_contexts.submitted) {
-                            recycle_batch = command_context->CompleteSuccessCallbacks() && recycle_batch;
-                        }
-                    }
+            if (!grouped_completion.has_value()) {
+                batch.submit.NotifyPendingGpuCompletions(
+                    gpu_completion_batch
+                );
+                batch.submit.NotifyPendingQueries(query_batch);
+                for (auto& command_context : batch.command_contexts.submitted) {
+                    command_context->NotifyQueriesAfterGpuCompletion(query_batch);
+                }
+                for (auto& command_context : batch.command_contexts.abandoned) {
+                    command_context->NotifyQueriesAfterGpuCompletion(query_batch);
+                }
+                batch.submit.query_tokens.clear();
+            }
 
-                    if (_batch.descriptor_lease) {
-                        // A failed completion wait does not prove the GPU stopped
-                        // reading. Keep those ranges unavailable until heap teardown.
-                        if (!_batch.gpu_submitted || batch_gpu_success) {
-                            vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(
-                                std::move(_batch.descriptor_lease)
-                            );
-                        }
-                        _batch.descriptor_lease.reset();
-                    }
-
-                    if (!_batch.gpu_submitted) {
-                        FinalizeRejectedBindlessUpdates(_batch.submit);
-                    }
-                    Array<std::function<void()>> callbacks{};
-                    Array<std::function<void()>> success_callbacks{};
-                    std::optional<
-                        VulkanBatchCompletionGroup::Participant>
-                        grouped_completion{};
-                    if (_batch.batch_completion.Valid()) {
-                        grouped_completion.emplace();
-                        grouped_completion->lifetime = std::move(_batch.submit.lifetime);
-                        grouped_completion->gpu_completion_tokens =
-                            std::move(
-                                _batch.submit.gpu_completion_tokens
-                            );
-                        grouped_completion->gpu_completion_batch =
-                            gpu_completion_batch;
-                        grouped_completion->query_tokens =
-                            std::move(_batch.submit.query_tokens);
-                        grouped_completion->query_batch = query_batch;
-                        grouped_completion->callbacks =
-                            std::move(_batch.submit.callbacks);
-                        grouped_completion->success_callbacks =
-                            std::move(_batch.submit.success_callbacks);
-                        grouped_completion->deferred_releases =
-                            std::move(_batch.deferred_releases);
-                        grouped_completion->device       = &vk_device;
-                        grouped_completion->gpu_success  =
-                            batch_gpu_success;
-                        grouped_completion->release_safe =
-                            batch_release_safe;
-                        _batch.submit.gpu_completion_publish_batch =
-                            {};
-                        _batch.submit.query_publish_batch = {};
-                    } else {
-                        callbacks =
-                            std::move(_batch.submit.callbacks);
-                        success_callbacks =
-                            std::move(_batch.submit.success_callbacks);
-                    }
-                    _batch.submit.cmds.clear();
-                    _batch.submit.cached_args.clear();
-                    _batch.submit.segments.clear();
-                    _batch.submit.wait_events.clear();
-                    _batch.submit.signal_events.clear();
-                    _batch.submit.debug_label.clear();
-
-                    if (!grouped_completion.has_value()) {
-                        _batch.submit.NotifyPendingGpuCompletions(
-                            gpu_completion_batch
-                        );
-                        _batch.submit.NotifyPendingQueries(query_batch);
-                        for (auto& command_context : _batch.command_contexts.submitted) {
-                            command_context->NotifyQueriesAfterGpuCompletion(query_batch);
-                        }
-                        for (auto& command_context : _batch.command_contexts.abandoned) {
-                            command_context->NotifyQueriesAfterGpuCompletion(query_batch);
-                        }
-                        _batch.submit.query_tokens.clear();
-                    }
-
-                    if (recycle_batch) {
-                        for (auto& command_context : _batch.command_contexts.submitted) {
-                            recycle_batch = command_context->Reset() && recycle_batch;
-                        }
-                    }
-                    if (recycle_batch && !vk_device.IsFaulted()) {
-                        for (auto& command_context : _batch.command_contexts.submitted) {
-                            command_contexts.Push(command_context.release());
-                        }
-                    } else {
-                        for (auto& command_context : _batch.command_contexts.submitted) {
-                            if (!command_context) {
-                                continue;
-                            }
-                            vk_device.RecordAllocatorQuarantine();
-                            vk_device.RecordSkippedCommandPoolReset();
-                            command_context_quarantine.emplace_back(std::move(command_context));
-                        }
-                    }
-                    for (auto& command_context : _batch.command_contexts.abandoned) {
-                        if (!vk_device.IsFaulted() && command_context->ResetAbandoned()) {
-                            command_contexts.Push(command_context.release());
-                        } else if (command_context) {
-                            vk_device.RecordAllocatorQuarantine();
-                            vk_device.RecordSkippedCommandPoolReset();
-                            command_context_quarantine.emplace_back(std::move(command_context));
-                        }
-                    }
-
-                    if (grouped_completion.has_value()) {
-                        VulkanBatchCompletionTicket ticket =
-                            std::move(_batch.batch_completion);
-                        ticket.group->Arrive(
-                            ticket.participant_index,
-                            std::move(*grouped_completion)
-                        );
-                    } else {
-                        InvokeCallbacksNoexcept(
-                            callbacks, "[VulkanQueue] runtime completion"
-                        );
-                        if (batch_gpu_success) {
-                            InvokeCallbacksNoexcept(
-                                success_callbacks,
-                                "[VulkanQueue] runtime success completion"
-                            );
-                        }
-
-                        if (batch_gpu_success || batch_release_safe) {
-                            for (auto* resource : _batch.deferred_releases) {
-                                MoerDelete(resource);
-                            }
-                        } else {
-                            for (auto* resource : _batch.deferred_releases) {
-                                vk_device.EnqueueDeferredRelease(resource);
-                            }
-                        }
-                    }
-                    _batch.deferred_releases.clear();
-                    callbacks.clear();
-                    success_callbacks.clear();
-                    // CompleteAll may permit device teardown as soon as the
-                    // retirement serial is published below.
-                    _batch.submit.lifetime.reset();
-                },
-                [this, &batch_gpu_success](UniquePtr<VulkanCommandContext>& _command_context) {
-                    if (batch_gpu_success && !vk_device.IsFaulted()) {
-                        if (_command_context->CompleteSuccess() && _command_context->Reset()) {
-                            command_contexts.Push(_command_context.release());
-                            return;
-                        }
+            if (recycle_batch) {
+                for (auto& command_context : batch.command_contexts.submitted) {
+                    recycle_batch = command_context->Reset() && recycle_batch;
+                }
+            }
+            if (recycle_batch && !vk_device.IsFaulted()) {
+                for (auto& command_context : batch.command_contexts.submitted) {
+                    command_contexts.Push(command_context.release());
+                }
+            } else {
+                for (auto& command_context : batch.command_contexts.submitted) {
+                    if (!command_context) {
+                        continue;
                     }
                     vk_device.RecordAllocatorQuarantine();
                     vk_device.RecordSkippedCommandPoolReset();
-                    command_context_quarantine.emplace_back(std::move(_command_context));
-                },
-                [this, &batch_gpu_success](VulkanCommandContextBatch& _batch) {
-                    bool recycle_batch = batch_gpu_success && !vk_device.IsFaulted();
-                    if (recycle_batch) {
-                        for (auto& command_context : _batch.submitted) {
-                            recycle_batch = command_context->CompleteSuccess() && recycle_batch;
-                        }
-                    }
-                    if (recycle_batch) {
-                        for (auto& command_context : _batch.submitted) {
-                            recycle_batch = command_context->Reset() && recycle_batch;
-                        }
-                    }
+                    command_context_quarantine.emplace_back(std::move(command_context));
+                }
+            }
+            for (auto& command_context : batch.command_contexts.abandoned) {
+                if (!vk_device.IsFaulted() && command_context->ResetAbandoned()) {
+                    command_contexts.Push(command_context.release());
+                } else if (command_context) {
+                    vk_device.RecordAllocatorQuarantine();
+                    vk_device.RecordSkippedCommandPoolReset();
+                    command_context_quarantine.emplace_back(std::move(command_context));
+                }
+            }
 
-                    if (recycle_batch && !vk_device.IsFaulted()) {
-                        for (auto& command_context : _batch.submitted) {
-                            command_contexts.Push(command_context.release());
-                        }
-                    } else {
-                        for (auto& command_context : _batch.submitted) {
-                            if (command_context) {
-                                vk_device.RecordAllocatorQuarantine();
-                                vk_device.RecordSkippedCommandPoolReset();
-                                command_context_quarantine.emplace_back(std::move(command_context));
-                            }
-                        }
-                    }
+            if (grouped_completion.has_value()) {
+                VulkanBatchCompletionTicket ticket =
+                    std::move(batch.batch_completion);
+                ticket.group->Arrive(
+                    ticket.participant_index,
+                    std::move(*grouped_completion)
+                );
+            } else {
+                InvokeCallbacksNoexcept(
+                    callbacks, "[VulkanQueue] runtime completion"
+                );
+                if (batch_gpu_success) {
+                    InvokeCallbacksNoexcept(
+                        success_callbacks,
+                        "[VulkanQueue] runtime success completion"
+                    );
+                }
 
-                    for (auto& command_context : _batch.abandoned) {
-                        if (!vk_device.IsFaulted() && command_context->ResetAbandoned()) {
-                            command_contexts.Push(command_context.release());
-                        } else if (command_context) {
-                            vk_device.RecordAllocatorQuarantine();
-                            vk_device.RecordSkippedCommandPoolReset();
-                            command_context_quarantine.emplace_back(std::move(command_context));
-                        }
+                if (batch_gpu_success || batch_release_safe) {
+                    for (auto* resource : batch.deferred_releases) {
+                        MoerDelete(resource);
                     }
-                },
-                [this, &batch_gpu_success, &batch_release_safe](VulkanDescriptorBufferLease& _lease) {
-                    if (batch_gpu_success || batch_release_safe) {
-                        vk_device.GetGlobalDescriptorHeap().RecycleDescriptorBufferLease(std::move(_lease));
-                    }
-                },
-
-                [&batch_gpu_success](VulkanCallbackBatch& _batch) {
-                    if (!_batch.success_only || batch_gpu_success) {
-                        InvokeCallbacksNoexcept(
-                            _batch.callbacks, "[VulkanQueue] completion"
-                        );
-                    }
-                },
-                [this, &batch_gpu_success, &batch_release_safe](VulkanDeferredReleaseBatch& _batch) {
-                    if (batch_gpu_success || batch_release_safe) {
-                        for (auto* resource : _batch.resources) {
-                            MoerDelete(resource);
-                        }
-                        return;
-                    }
-                    for (auto* resource : _batch.resources) {
+                } else {
+                    for (auto* resource : batch.deferred_releases) {
                         vk_device.EnqueueDeferredRelease(resource);
                     }
-                },
-                [](VulkanCompletionMarker&) {},
-                [this, &batch_gpu_success](SignalEvent& _evt) {
-                    auto* fence = reinterpret_cast<VulkanTimeline*>(_evt.timeline_handle);
-                    if (batch_gpu_success) {
-                        fence->RecordGpuCompletion(_evt.value);
-                    } else if (vk_device.IsFaulted()) {
-                        fence->Fail(vk_device.GetFirstFaultResult());
-                    }
-                },
-                [](WaitEvent&) {},
-                [](VulkanTimeline*) {
-                    assert(false && "Invalid event");
                 }
-            },
-            evt->event
-        );
-
-        if (evt->wake_thread) {
-            uint64 completed = cpu_settled_frame.load(std::memory_order_relaxed);
-            while (completed < event_timeline &&
-                   !cpu_settled_frame.compare_exchange_weak(
-                       completed, event_timeline, std::memory_order_release, std::memory_order_relaxed
-                   )) {}
-            const uint64 retirement_serial = evt->retirement_serial;
-            uint64 settled_serial =
-                retirement_settled_serial.load(std::memory_order_relaxed);
-            while (settled_serial < retirement_serial &&
-                   !retirement_settled_serial.compare_exchange_weak(
-                       settled_serial,
-                       retirement_serial,
-                       std::memory_order_release,
-                       std::memory_order_relaxed
-                   )) {}
-            queue_cv.notify_all();
+            }
+            batch.deferred_releases.clear();
+            callbacks.clear();
+            success_callbacks.clear();
+            // CompleteAll may permit device teardown as soon as the
+            // retirement serial is published below.
+            batch.submit.lifetime.reset();
         }
+
+        uint64 completed = cpu_settled_frame.load(std::memory_order_relaxed);
+        while (completed < event_timeline &&
+               !cpu_settled_frame.compare_exchange_weak(
+                   completed, event_timeline, std::memory_order_release, std::memory_order_relaxed
+               )) {}
+        const uint64 retirement_serial = completion->retirement_serial;
+        uint64 settled_serial =
+            retirement_settled_serial.load(std::memory_order_relaxed);
+        while (settled_serial < retirement_serial &&
+               !retirement_settled_serial.compare_exchange_weak(
+                   settled_serial,
+                   retirement_serial,
+                   std::memory_order_release,
+                   std::memory_order_relaxed
+               )) {}
+        queue_cv.notify_all();
     }
 }
 
