@@ -213,14 +213,13 @@ struct VulkanPresentSourceContract {
 
 } // namespace
 
-#pragma region[ utils ]
 
 VkRenderingAttachmentInfo FromColorAttachmentInfo(const ColorAttachment& _attachment) {
     VkRenderingAttachmentInfo attachment_info{};
     attachment_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     attachment_info.pNext = nullptr;
 
-    VulkanTexture* vk_texture = reinterpret_cast<VulkanTexture*>(_attachment.target);
+    VulkanTexture* vk_texture = static_cast<VulkanTexture*>(_attachment.target);
     attachment_info.imageView = vk_texture->GetAttachmentView(
         static_cast<uint8>(_attachment.mip_level),
         1,
@@ -352,7 +351,7 @@ VkRenderingAttachmentInfo FromDepthAttachmentInfo(const DepthAttachment& _attach
     attachment_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     attachment_info.pNext = nullptr;
 
-    VulkanTexture* vk_texture = reinterpret_cast<VulkanTexture*>(_attachment.target);
+    VulkanTexture* vk_texture = static_cast<VulkanTexture*>(_attachment.target);
     attachment_info.imageView = vk_texture->GetAttachmentView(
         static_cast<uint8>(_attachment.mip_level),
         1,
@@ -498,7 +497,7 @@ static void FinalizeBindlessUpdatesOnce(
         return;
     }
     try {
-        reinterpret_cast<VulkanBindlessArray*>(_array.Get())
+        static_cast<VulkanBindlessArray*>(_array.Get())
             ->FinalizeUpdateCommand(_updates, _gpu_update_succeeded);
     } catch (const std::exception& error) {
         try {
@@ -767,9 +766,7 @@ public:
         std::runtime_error("stale bindless update batch cannot be submitted with dependent commands") {}
 };
 
-#pragma endregion
 
-#pragma region[ command translation ]
 std::shared_ptr<const VulkanDescriptorRecordingPlan> PrepareDescriptorRecordingPlan(
     VulkanDevice& _device, const CmdSubmit& _submit, const VulkanDescriptorBufferLease& _lease
 ) {
@@ -827,12 +824,7 @@ std::shared_ptr<const VulkanDescriptorRecordingPlan> PrepareDescriptorRecordingP
     return plan;
 }
 
-class VkCmdVisitor : VulkanDeviceObject {
-    enum class EState {
-        Barrier,
-        Draw,
-        Common
-    } state = EState::Common;
+class VulkanCommandRecorder : VulkanDeviceObject {
     VulkanCommandList&     cmd_list;
     VulkanCommandContext&  command_context;
     const TCachedArgArray& cached_args;
@@ -858,7 +850,7 @@ class VkCmdVisitor : VulkanDeviceObject {
     };
 
 public:
-    VkCmdVisitor(
+    VulkanCommandRecorder(
         VulkanDevice&          _device,
         VulkanCommandContext&  _command_context,
         VulkanCommandList&     _cmd_list,
@@ -921,9 +913,6 @@ public:
             case Command::EType::MultiDraw:
                 Visit(static_cast<const MultiDrawCmd&>(*_cmd));
                 break;
-            // case Command::EType::SetGeometryPassDrawState:
-            //     Visit(static_cast<const SetGeometryPassDrawStateCmd&>(*_cmd));
-            //     break;
             case Command::EType::ClearResource:
                 Visit(static_cast<const ClearResourceCmd&>(*_cmd));
                 break;
@@ -953,7 +942,7 @@ public:
         auto          tmp_buffer = _cmd.staging_buffer;
         VulkanBuffer* buffer     = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
         cmd_list.CopyBuffer(
-            reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
+            static_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
             buffer,
             _cmd.ByteSize(),
             tmp_buffer.GetByteOffset(),
@@ -966,7 +955,7 @@ public:
         auto           tmp_buffer = _cmd.staging_buffer;
         VulkanTexture* texture    = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
         cmd_list.CopyBufferToTexture(
-            reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
+            static_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
             texture,
             tmp_buffer.GetByteOffset(),
             _cmd.Offset(),
@@ -991,13 +980,12 @@ public:
 
         cmd_list.CopyBuffer(
             src_buffer,
-            reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
+            static_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
             _cmd.ByteSize(),
             _cmd.Offset(),
             tmp_buffer.GetByteOffset()
         );
 
-        // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
 
         if (_cmd.HasOwningReadback()) {
             const ReadbackToken readback = _cmd.OwningReadback();
@@ -1049,7 +1037,7 @@ public:
 
         cmd_list.CopyTextureToBuffer(
             src_texture,
-            reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
+            static_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
             _cmd.Offset(),
             tmp_buffer.GetByteOffset(),
             _cmd.Size(),
@@ -1175,7 +1163,7 @@ public:
                 },
                 [&](const DispatchIndirectParam& _param) {
                     cmd_list.DispatchIndirect(
-                        reinterpret_cast<VulkanBuffer*>(_param.indirect.GetBuffer()),
+                        static_cast<VulkanBuffer*>(_param.indirect.GetBuffer()),
                         _param.indirect.GetByteOffset()
                     );
                 }
@@ -1192,27 +1180,8 @@ public:
         cmd_list.EndLabel();
     }
 
-    // we don't need to do anything
-    void Visit(const BarrierCmd& _cmd) {
-        // state                      = EState::Barrier;
-        // const auto& read_buffers   = _cmd.ReadBuffers();
-        // const auto& write_buffers  = _cmd.WriteBuffers();
-        // const auto& read_textures  = _cmd.ReadTextures();
-        // const auto& write_textures = _cmd.WriteTextures();
-
-        // for (const auto& buffer : read_buffers) {
-        //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
-        // }
-        // for (const auto& buffer : write_buffers) {
-        //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
-        // }
-        // for (const auto& texture : read_textures) {
-        //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
-        // }
-        // for (const auto& texture : write_textures) {
-        //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
-        // }
-    }
+    // Explicit barriers are emitted by VulkanCommandPreparation before dispatch.
+    void Visit(const BarrierCmd&) {}
 
     void Visit(const SetDrawStateCmd& _cmd) {
 
@@ -1221,7 +1190,6 @@ public:
 
         static float4 draw_color = {0.0f, 1.0f, 0.0f, 1.0f};
         cmd_list.BeginLabel(_cmd.name, draw_color);
-        state = EState::Draw;
 
         const auto&     args = _cmd.Args();
         const PipelineHandle& pso  = _cmd.Pipeline();
@@ -1300,7 +1268,7 @@ public:
                         uint64      offset       = index_buffer.GetByteOffset();
 
                         cmd_list.SetIndexBuffer(
-                            reinterpret_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
+                            static_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
                             index_buffer.GetByteOffset(),
                             VulkanEnumTranslator::METoVKIndexType(_idx_input.stride)
                         );
@@ -1396,7 +1364,6 @@ public:
 
         static float4 draw_color = {0.0f, 1.0f, 0.0f, 1.0f};
         cmd_list.BeginLabel(_cmd.name, draw_color);
-        state = EState::Draw;
 
         const auto& pass_info = _cmd.RenderPassInfo();
         const bool uses_stencil_attachment =
@@ -1460,7 +1427,7 @@ public:
                                         uint64      offset       = index_buffer.GetByteOffset();
 
                                         cmd_list.SetIndexBuffer(
-                                            reinterpret_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
+                                            static_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
                                             index_buffer.GetByteOffset(),
                                             VulkanEnumTranslator::METoVKIndexType(_idx_input.stride)
                                         );
@@ -1600,118 +1567,6 @@ public:
         cmd_list.EndLabel();
     }
 
-    // void Visit(const SetGeometryPassDrawStateCmd& _cmd) {
-    //     static float4 draw_color = {0.0f, 1.0f, 0.0f, 1.0f};
-    //     cmd_list.BeginLabel(_cmd.name, draw_color);
-    //     state = EState::Draw;
-
-    //     const auto& args = _cmd.Args();
-
-    //     const auto&                      pass_info = _cmd.RenderPassInfo();
-    //     Array<VkRenderingAttachmentInfo> color_attachments(pass_info.color_attachments.size());
-    //     for (size_t i = 0; i < pass_info.color_attachments.size(); ++i) {
-    //         color_attachments[i] = FromColorAttachmentInfo(pass_info.color_attachments[i]);
-    //     }
-    //     std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
-    //     if (pass_info.depth_attachment.Valid()) {
-    //         depth_stencil_attachment = FromDepthAttachmentInfo(pass_info.depth_attachment);
-    //     }
-
-    //     VkRenderingInfo dynamic_rendering_info{
-    //         .sType      = VK_STRUCTURE_TYPE_RENDERING_INFO,
-    //         .pNext      = nullptr,
-    //         .flags      = 0,
-    //         .renderArea = {
-    //             .offset = {pass_info.render_area.offset.x, pass_info.render_area.offset.y},
-    //             .extent = {pass_info.render_area.extent.width, pass_info.render_area.extent.height}},
-    //         .layerCount           = 1,
-    //         .colorAttachmentCount = uint(pass_info.color_attachments.size()),
-    //         .pColorAttachments    = color_attachments.data(),
-    //         .pDepthAttachment     = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
-    //         .pStencilAttachment   = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr};
-
-    //     cmd_list.BeginRendering(dynamic_rendering_info);
-
-    //     for (const auto& [bitmask, pso] : _cmd.PipelineMap()) {
-    //         cmd_list.BindPipeline(pso);
-    //         cmd_list.BindShaderArguments(pso, args);
-
-    //         if (args.constants.size() > 0) {
-    //             cmd_list.UploadPushConstants(
-    //                 pso,
-    //                 std::span<const uint>(args.constants.data(), args.constants.size()));
-    //         }
-    //         const auto& draw_datas = _cmd.DrawDataArrayMap().at(bitmask);
-    //         const auto& rect       = pass_info.render_area;
-    //         VkViewport  viewport{
-    //              .x        = float(rect.offset.x),
-    //              .y        = float(rect.offset.y),
-    //              .width    = float(rect.extent.width),
-    //              .height   = float(rect.extent.height),
-    //              .minDepth = 0.0f,
-    //              .maxDepth = 1.0f};
-
-    //         viewport.y += viewport.height;
-    //         viewport.height = -viewport.height;
-
-    //         cmd_list.SetViewport(viewport);
-    //         cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
-    //         for (const auto& draw_data : draw_datas) {
-    //             auto num_of_vertex_buffers = draw_data.vtx_views.size();
-    //             if (num_of_vertex_buffers > 0) {
-
-    //                 Array<VkBuffer>     vertex_buffers;
-    //                 Array<VkDeviceSize> vtx_offsets;
-
-    //                 vertex_buffers.reserve(num_of_vertex_buffers);
-    //                 vtx_offsets.reserve(num_of_vertex_buffers);
-
-    //                 for (const auto& vtx_view : draw_data.vtx_views) {
-    //                     vertex_buffers.emplace_back(ResourceCast(vtx_view.buffer)->GetHandle());
-    //                     vtx_offsets.emplace_back(vtx_view.offset);
-    //                 }
-
-    //                 cmd_list.SetVertexBuffers(0,
-    //                                           num_of_vertex_buffers,
-    //                                           std::span<VkBuffer>(vertex_buffers.data(),
-    //                                                               num_of_vertex_buffers),
-    //                                           std::span<VkDeviceSize>(vtx_offsets.data(),
-    //                                                                   num_of_vertex_buffers));
-    //             }
-
-    //             std::visit(
-    //                 Overload{[&](const IndexBuffer& _idx_input) {
-    //                              const auto& index_buffer = _idx_input.buffer;
-    //                              uint64      offset       = index_buffer.GetByteOffset();
-
-    //                              cmd_list.SetIndexBuffer(
-    //                                  reinterpret_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
-    //                                  index_buffer.GetByteOffset(),
-    //                                  VulkanEnumTranslator::METoVKIndexType(_idx_input.stride));
-
-    //                              for (const auto& draw_param : draw_data.draw_params) {
-    //                                  cmd_list.DrawIndexedInstanced(draw_param.index_cnt,
-    //                                                                draw_param.instance_cnt,
-    //                                                                draw_param.first_index,
-    //                                                                draw_param.vertex_offset,
-    //                                                                draw_param.first_instance);
-    //                              }
-    //                          },
-    //                          [&](uint _idx_input) {
-    //                              for (const auto& draw_param : draw_data.draw_params) {
-    //                                  cmd_list.DrawInstanced(draw_param.index_cnt,
-    //                                                         draw_param.instance_cnt,
-    //                                                         draw_param.vertex_offset,
-    //                                                         draw_param.first_instance);
-    //                              }
-    //                          }},
-    //                 draw_data.idx_view);
-    //         }
-    //     }
-    //     cmd_list.EndRendering();
-    //     cmd_list.EndLabel();
-    // }
-
     void Visit(const ClearResourceCmd& _cmd) {
         ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         std::visit(
@@ -1751,7 +1606,7 @@ public:
     }
 
     void Visit(const UpdateBindlessArrayCmd& _cmd) {
-        VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd.Handle());
+        VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(_cmd.Handle());
         if (!_cmd.HandOffUpdates()) {
             return;
         }
@@ -2032,7 +1887,6 @@ public:
         if (to_update.size() == 0 && !_cmd.ForceUpdate()) {
             return;
         }
-        // VulkanRaytracingScene* scene   = reinterpret_cast<VulkanRaytracingScene*>(_cmd.Handle());
 
         // Calculate 16-byte aligned offset for TLAS instance data (Vulkan spec requirement)
         constexpr uint64 kInstanceDataAlignment = 256; // 256-byte for AMD GPU compatibility
@@ -2165,7 +2019,7 @@ public:
                 Visit(static_cast<const VkCustomDispatchCmd&>(_cmd));
                 break;
             default:
-                assert(false && "Custom Command Not Supported for VkCmdVisitor");
+                assert(false && "Custom Command Not Supported for VulkanCommandRecorder");
         }
         cmd_list.EndLabel();
     }
@@ -2177,51 +2031,9 @@ public:
         _cmd.Execute(context);
     }
 
-    // void Visit(const UpdateDrawStateCmd& _cmd) {
-    // }
 
-    // void Visit(const SetParamsCmd& _cmd) {
-    //     auto&& args      = std::move(_cmd.StealArgs());
-    //     auto&  pso       = _cmd.Pso();
-    //     auto   set_param = [&](uint _idx, const TArg& _arg) {
-    //         if constexpr (std::is_same_v<TArg, TextureView>) {
-    //             pso.SetTexture(_idx, std::get<TextureView>(_arg));
-    //         } else if constexpr (std::is_same_v<TArg, BufferView>) {
-    //             pso.SetBuffer(_idx, std::get<BufferView>(_arg));
-    //         }
-    //     };
-    //     std::visit([&](auto&& _args) {
-    //         using TArgs = std::decay_t<decltype(_args)>;
-    //         if constexpr (std::is_same_v<TArgs, ArrayArguments>) {
-    //             for (size_t i = 0; i < _args.Size(); ++i) {
-    //                 set_param(i, _args[i]);
-    //             }
-    //             cmd_list.UploadDescriptors(pso.handle);
-
-    //             if (_args.constants.size() > 0) {
-    //                 cmd_list.UploadPushConstants(pso.handle, std::span<const uint>(_args.constants.data(), _args.constants.size()));
-    //             }
-    //         } else if constexpr (std::is_same_v<TArgs, Arguments>) {
-    //             for (size_t i = 0; i < _args.Size(); ++i) {
-    //                 set_param(i, _args[i]);
-    //             }
-    //             cmd_list.UploadDescriptors(pso.handle);
-    //         }
-    //     },
-    //                args);
-
-    //     // cmd submit params
-    // }
-
-    // void Visit(const SetConstantCmd& _cmd) {
-    //     auto& pso  = _cmd.Pso();
-    //     auto  data = std::move(_cmd.StealData());
-    //     cmd_list.UploadPushConstants(pso.handle, std::span<uint>(data.data(), data.size()));
-    //     // cmd submit consants
-    // }
 };
 
-#pragma endregion
 
 // Validate before native recording or consuming command payloads. Build/update
 // commands retain their backend-private protocols; application dependencies
@@ -2284,7 +2096,7 @@ bool SupportsVulkanCompiledCommands(const CmdSubmit& submit, EQueueType queue) {
 void RecordCompiledBindlessUpdate(
     VulkanDevice&                 device,
     VulkanCommandList&            native,
-    VkCmdVisitor&                 visitor,
+    VulkanCommandRecorder&                 visitor,
     const UpdateBindlessArrayCmd& command
 ) {
     auto*                      table = static_cast<VulkanBindlessArray*>(command.Handle());
@@ -2340,7 +2152,7 @@ void RecordCompiledBindlessUpdate(
 }
 
 void RecordCompiledTlasUpdate(
-    VulkanCommandList& native, VkCmdVisitor& visitor, const UpdateRaytracingSceneCmd& command
+    VulkanCommandList& native, VulkanCommandRecorder& visitor, const UpdateRaytracingSceneCmd& command
 ) {
     if (command.InstancesToUpdate().empty() && !command.ForceUpdate()) { return; }
     VulkanBarrierBatch before;
@@ -2609,7 +2421,7 @@ void RecordCompiledCommands(
     VulkanDevice&         device,
     VulkanCommandContext& context,
     CmdSubmit&            submit,
-    VkCmdVisitor&         visitor,
+    VulkanCommandRecorder&         visitor,
     EQueueType            queue,
     bool                  suppress_timestamp_queries = false
 ) {
@@ -2691,7 +2503,7 @@ void RecordVulkanCopyCommands(
     bool suppress_timestamp_queries
 ) {
     auto& native = context.GetCommandList();
-    VkCmdVisitor visitor(device, context, native, submit.cached_args);
+    VulkanCommandRecorder visitor(device, context, native, submit.cached_args);
     VK_CHECK_RESULT(native.Begin());
     native.BeginLabel("Copy", {0.0f, 1.0f, 1.0f, 1.0f});
     RecordCompiledCommands(device, context, submit, visitor, EQueueType::Copy, suppress_timestamp_queries);
@@ -2699,7 +2511,6 @@ void RecordVulkanCopyCommands(
     VK_CHECK_RESULT(native.End());
 }
 
-#pragma region[ VkCommandQueue ]
 
 void VkCommandQueue::Wait(WaitEvent) {
     try {
@@ -3704,7 +3515,7 @@ VkCommandQueue::TranslateForRuntime(CmdSubmit&& _submit) noexcept {
     try {
         std::unique_lock<std::mutex> execution_lock(exec_mtx);
         current_timeline =
-            last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+            last_reserved_timeline.fetch_add(1, std::memory_order_relaxed) + 1;
         RecordSubmissionCommands(
             std::move(_submit),
             current_timeline,
@@ -4020,7 +3831,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
 
         auto                         execution_lease = runtime_execution_gate.Acquire();
         std::unique_lock<std::mutex> execution_lock(exec_mtx);
-        const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+        const uint64 current_timeline = last_reserved_timeline.fetch_add(1, std::memory_order_relaxed) + 1;
 #if MOER_VULKAN_TEST_SUPPORT
         if (scripted_override != nullptr) {
             VulkanScriptedPresentResult scripted =
@@ -4573,7 +4384,7 @@ void VkCommandQueue::RecordSubmissionCommands(
     Timer timer{};
 
     //Get Allocators for buffer, texture and commandlist
-    auto  command_context_ptr = std::move(AcquireCommandContext());
+    auto  command_context_ptr = AcquireCommandContext();
     auto& vk_command_context  = *command_context_ptr;
 #if MOER_VULKAN_TEST_SUPPORT
     if (timestamp_query_slot_count != 0) {
@@ -4642,7 +4453,7 @@ void VkCommandQueue::RecordSubmissionCommands(
     }
 
     //Visitor for actual command recording
-    VkCmdVisitor visitor(
+    VulkanCommandRecorder visitor(
         vk_device,
         vk_command_context,
         vk_command_context.GetCommandList(),
@@ -5041,7 +4852,7 @@ void VkCommandQueue::Sync() {
     uint64 target_timeline = 0;
     {
         std::unique_lock<std::mutex> lock(exec_mtx);
-        target_timeline = last_frame.load(std::memory_order_relaxed);
+        target_timeline = last_reserved_timeline.load(std::memory_order_relaxed);
     }
 
     CompleteAll(target_timeline);
@@ -5056,7 +4867,7 @@ void VkCommandQueue::Sync() {
     }
     {
         std::unique_lock<std::mutex> lock(exec_mtx);
-        if (last_frame.load(std::memory_order_relaxed) == target_timeline) {
+        if (last_reserved_timeline.load(std::memory_order_relaxed) == target_timeline) {
             vk_device.deferred_release_queue.PopAll(deleted_resources);
         }
     }
@@ -5389,9 +5200,9 @@ void VkCommandQueue::CompletionThreadMain() {
         {
             // Pair predicate updates with CompleteAll's check-and-wait lock.
             std::lock_guard lock(event_mutex);
-            uint64 completed = cpu_settled_frame.load(std::memory_order_relaxed);
+            uint64 completed = cpu_retired_timeline.load(std::memory_order_relaxed);
             while (completed < event_timeline &&
-                   !cpu_settled_frame.compare_exchange_weak(
+                   !cpu_retired_timeline.compare_exchange_weak(
                        completed, event_timeline, std::memory_order_release, std::memory_order_relaxed
                    )) {}
             const uint64 retirement_serial = completion->retirement_serial;
@@ -5436,7 +5247,7 @@ void VkCommandQueue::CompleteAll(uint64 _timeline) {
         queue_cv.wait(
             lock,
             [this, _timeline, target_retirement_serial]() {
-                return cpu_settled_frame.load(
+                return cpu_retired_timeline.load(
                            std::memory_order_acquire
                        ) >= _timeline &&
                        retirement_settled_serial.load(
@@ -5466,6 +5277,5 @@ void VkCommandQueue::CompleteAll(uint64 _timeline) {
     );
 }
 
-#pragma endregion
 
 } // namespace Moer::Render

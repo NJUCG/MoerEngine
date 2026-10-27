@@ -494,7 +494,7 @@ private:
     RHITransferableOwnershipGate runtime_execution_gate;
     std::atomic_bool            executor_claimed{false};
     std::atomic_bool            runtime_dependency_waits_enabled{true};
-    std::atomic<uint64>          last_frame{0};
+    std::atomic<uint64>          last_reserved_timeline{0};
 
     // CPU retirement also includes requests which never reached the GPU.
     std::mutex                            event_mutex;
@@ -502,7 +502,7 @@ private:
     DEQueue<CompletionEvent>               event_queue;
     bool                                  completion_worker_running{false};
     std::jthread                          completion_thread;
-    std::atomic<uint64>                    cpu_settled_frame{0};
+    std::atomic<uint64>                    cpu_retired_timeline{0};
     uint64                                retirement_enqueued_serial{0};
     std::atomic<uint64>                    retirement_settled_serial{0};
     Array<VulkanBatchCompletionSettlement> batch_completion_settlements{};
