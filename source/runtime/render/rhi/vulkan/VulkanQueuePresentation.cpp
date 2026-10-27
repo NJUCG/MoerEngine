@@ -733,7 +733,7 @@ void CommitAcceptedPresentationSourceStateTransaction(VulkanPresentationSourceSt
 }
 
 VulkanRuntimeSubmissionResult
-VkCommandQueue::PresentForRuntime(SwapchainRef _swapchain, TextureView _source, PresentReceiptRef _receipt) noexcept {
+VulkanCommandQueue::PresentForRuntime(SwapchainRef _swapchain, TextureView _source, PresentReceiptRef _receipt) noexcept {
     assert(executor_claimed.load(std::memory_order_acquire) && "runtime Present requires an exclusively claimed queue");
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission && "runtime Present must run on the Submission owner"
@@ -867,7 +867,7 @@ VkCommandQueue::PresentForRuntime(SwapchainRef _swapchain, TextureView _source, 
     }
 }
 
-void VkCommandQueue::Present(SwapchainRef, TextureView, PresentReceiptRef _receipt) {
+void VulkanCommandQueue::Present(SwapchainRef, TextureView, PresentReceiptRef _receipt) {
     LogQueueErrorNoexcept(
         "[RHIExecutor][Vulkan] direct Present is unsupported; "
         "publish work through RHIExecutor"
@@ -876,7 +876,7 @@ void VkCommandQueue::Present(SwapchainRef, TextureView, PresentReceiptRef _recei
     ResolvePresentReceiptNoexcept(_receipt, false, EPresentStatus::Rejected, EPresentStage::Validation);
 }
 
-VulkanRuntimeSubmissionResult VkCommandQueue::PresentSwapchain(
+VulkanRuntimeSubmissionResult VulkanCommandQueue::PresentSwapchain(
     SwapchainRef&&    _swapchain,
     TextureRef&&      _source_texture,
     TextureView       _source_view,

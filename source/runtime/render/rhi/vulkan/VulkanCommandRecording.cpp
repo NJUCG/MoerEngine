@@ -1883,7 +1883,7 @@ void PrepareQueryPools(
 
 } // namespace
 
-void VkCommandQueue::RecordSubmissionCommands(PendingSubmission& pending) {
+void VulkanCommandQueue::RecordSubmissionCommands(PendingSubmission& pending) {
     assert(GetCurrentRHIThreadRole() == ERHIThreadRole::Translate);
     if (vk_device.IsFaulted()) {
         RejectRecording(
@@ -1996,7 +1996,7 @@ void VkCommandQueue::RecordSubmissionCommands(PendingSubmission& pending) {
     FinishRecordingProfile(pending.submit, elapsed_ms);
 }
 
-double VkCommandQueue::RecordPreparedCommands(
+double VulkanCommandQueue::RecordPreparedCommands(
     PendingSubmission&                                          _pending,
     const std::shared_ptr<const VulkanDescriptorRecordingPlan>& _descriptor_plan
 ) {

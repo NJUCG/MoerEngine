@@ -66,13 +66,13 @@ bool IsCopyCommand(Command::EType _type) {
         case Command::EType::Barrier:
         case Command::EType::QueueTransfer:
         // Scope commands are queue-agnostic debug-label boundaries. Modern
-        // GPU scopes lower to Scope + Query pairs; VkCopyQueue already routes
+        // GPU scopes lower to Scope + Query pairs; VulkanCopyQueue already routes
         // both through VkCmdVisitor, so rejecting the label half
         // would reject an otherwise legal Copy timestamp source.
         case Command::EType::Scope:
         // Timestamp Query commands are legal ordering boundaries inside one
         // Copy segment. Multi-segment sources still reject all queries above,
-        // and VkCopyQueue performs token/queue/LIFO preflight before native
+        // and VulkanCopyQueue performs token/queue/LIFO preflight before native
         // command-buffer recording.
         case Command::EType::Query:
             return true;
@@ -322,14 +322,14 @@ VulkanSubmissionExecutor::VulkanSubmissionExecutor(uint32 _batch_window) :
             _batch_window, queue_topology
         );
 
-    auto& graphics_queue = static_cast<VkCommandQueue&>(
+    auto& graphics_queue = static_cast<VulkanCommandQueue&>(
         RenderDevice::Get().GetCommandQueue(EQueueType::Graphics)
     );
-    auto& compute_queue = static_cast<VkCommandQueue&>(
+    auto& compute_queue = static_cast<VulkanCommandQueue&>(
         RenderDevice::Get().GetCommandQueue(EQueueType::Compute)
     );
     auto& copy_queue =
-        static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+        static_cast<VulkanCopyQueue&>(RenderDevice::Get().GetCopyQueue());
     bool graphics_claimed = false;
     bool compute_claimed  = false;
     bool copy_claimed     = false;
@@ -398,14 +398,14 @@ VulkanSubmissionExecutor::VulkanSubmissionExecutor(uint32 _batch_window) :
 VulkanSubmissionExecutor::~VulkanSubmissionExecutor() {
     ShutDown();
     if (claims_owned) {
-        auto& graphics_queue = static_cast<VkCommandQueue&>(
+        auto& graphics_queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(EQueueType::Graphics)
         );
-        auto& compute_queue = static_cast<VkCommandQueue&>(
+        auto& compute_queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(EQueueType::Compute)
         );
         auto& copy_queue =
-            static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+            static_cast<VulkanCopyQueue&>(RenderDevice::Get().GetCopyQueue());
         copy_queue.ReleaseRuntimeOwnership();
         compute_queue.ReleaseRuntimeOwnership();
         graphics_queue.ReleaseRuntimeOwnership();
@@ -789,14 +789,14 @@ void VulkanSubmissionExecutor::Flush(ERHIFlushDepth) {
 
 void VulkanSubmissionExecutor::BeginShutdown() noexcept {
     try {
-        auto& graphics_queue = static_cast<VkCommandQueue&>(
+        auto& graphics_queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(EQueueType::Graphics)
         );
-        auto& compute_queue = static_cast<VkCommandQueue&>(
+        auto& compute_queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(EQueueType::Compute)
         );
         auto& copy_queue =
-            static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+            static_cast<VulkanCopyQueue&>(RenderDevice::Get().GetCopyQueue());
 
         // A Submission owner can be blocked waiting for a producer timeline
         // which shutdown has stopped admitting. Publish cancellation without
@@ -1208,13 +1208,13 @@ CmdSubmit* VulkanSubmissionExecutor::GetRecordedSourceSubmit(
     RecordedSourcePacket& _packet
 ) noexcept {
     if (auto* packet =
-            std::get_if<VkCommandQueue::PendingSubmission>(
+            std::get_if<VulkanCommandQueue::PendingSubmission>(
                 &_packet
             )) {
         return &packet->submit;
     }
     if (auto* packet =
-            std::get_if<VkCopyQueue::CurrentVulkanCopyRecordedSubmit>(
+            std::get_if<VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>(
                 &_packet
             )) {
         return &packet->submit;
@@ -1230,7 +1230,7 @@ VulkanSubmissionExecutor::TranslateSourceForRuntime(
 ) noexcept {
     if (_queue == EQueueType::Copy) {
         auto& copy_queue =
-            static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+            static_cast<VulkanCopyQueue&>(RenderDevice::Get().GetCopyQueue());
         auto recorded =
             copy_queue.TranslateForRuntime(std::move(_submit));
         if (recorded) {
@@ -1238,7 +1238,7 @@ VulkanSubmissionExecutor::TranslateSourceForRuntime(
                 std::move(_completion_ticket);
             return RecordedSourcePacket{
                 std::in_place_type<
-                    VkCopyQueue::CurrentVulkanCopyRecordedSubmit>,
+                    VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>,
                 std::move(*recorded)
             };
         }
@@ -1247,14 +1247,14 @@ VulkanSubmissionExecutor::TranslateSourceForRuntime(
 
     if (_queue == EQueueType::Graphics ||
         _queue == EQueueType::Compute) {
-        auto& queue = static_cast<VkCommandQueue&>(
+        auto& queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(_queue)
         );
         auto recorded =
             queue.TranslateForRuntime(std::move(_submit));
         recorded.batch_completion = std::move(_completion_ticket);
         return RecordedSourcePacket{
-            std::in_place_type<VkCommandQueue::PendingSubmission>, std::move(recorded)
+            std::in_place_type<VulkanCommandQueue::PendingSubmission>, std::move(recorded)
         };
     }
 
@@ -1277,11 +1277,11 @@ VulkanSubmissionExecutor::SubmitRecordedSourceForRuntime(
     if (_queue == EQueueType::Copy) {
         if (auto* packet =
                 std::get_if<
-                    VkCopyQueue::CurrentVulkanCopyRecordedSubmit>(
+                    VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>(
                     &_packet
                 )) {
             auto& copy_queue =
-                static_cast<VkCopyQueue&>(
+                static_cast<VulkanCopyQueue&>(
                     RenderDevice::Get().GetCopyQueue()
             );
             return copy_queue.SubmitRecordedForRuntime(
@@ -1294,10 +1294,10 @@ VulkanSubmissionExecutor::SubmitRecordedSourceForRuntime(
     ) {
         if (auto* packet =
                 std::get_if<
-                    VkCommandQueue::PendingSubmission>(
+                    VulkanCommandQueue::PendingSubmission>(
                     &_packet
                 )) {
-            auto& queue = static_cast<VkCommandQueue&>(
+            auto& queue = static_cast<VulkanCommandQueue&>(
                 RenderDevice::Get().GetCommandQueue(_queue)
             );
             return queue.SubmitRecordedForRuntime(
@@ -1333,7 +1333,7 @@ void VulkanSubmissionExecutor::RejectRecordedSourceForRuntime(
         _result = VK_ERROR_UNKNOWN;
     }
     if (auto* packet =
-            std::get_if<VkCopyQueue::CurrentVulkanCopyRecordedSubmit>(
+            std::get_if<VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>(
                 &_packet
             )) {
         assert(
@@ -1341,7 +1341,7 @@ void VulkanSubmissionExecutor::RejectRecordedSourceForRuntime(
             "Copy recorded packet queue tag mismatch"
         );
         auto& copy_queue =
-            static_cast<VkCopyQueue&>(
+            static_cast<VulkanCopyQueue&>(
                 RenderDevice::Get().GetCopyQueue()
             );
         copy_queue.RejectRecordedForRuntime(
@@ -1350,7 +1350,7 @@ void VulkanSubmissionExecutor::RejectRecordedSourceForRuntime(
         return;
     }
     if (auto* packet =
-            std::get_if<VkCommandQueue::PendingSubmission>(
+            std::get_if<VulkanCommandQueue::PendingSubmission>(
                 &_packet
             )) {
         EQueueType packet_queue = packet->context.queue_type;
@@ -1362,7 +1362,7 @@ void VulkanSubmissionExecutor::RejectRecordedSourceForRuntime(
             packet_queue == _queue &&
             "command recorded packet queue tag mismatch"
         );
-        auto& queue = static_cast<VkCommandQueue&>(
+        auto& queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(packet_queue)
         );
         queue.RejectRecordedForRuntime(
@@ -1380,7 +1380,7 @@ void VulkanSubmissionExecutor::RejectSourceForRuntime(
 ) noexcept {
     if (_queue == EQueueType::Copy) {
         auto& copy_queue =
-            static_cast<VkCopyQueue&>(
+            static_cast<VulkanCopyQueue&>(
                 RenderDevice::Get().GetCopyQueue()
             );
         copy_queue.RejectForRuntime(
@@ -1393,7 +1393,7 @@ void VulkanSubmissionExecutor::RejectSourceForRuntime(
     }
     if (_queue == EQueueType::Graphics ||
         _queue == EQueueType::Compute) {
-        auto& queue = static_cast<VkCommandQueue&>(
+        auto& queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(_queue)
         );
         queue.RejectForRuntime(
@@ -1419,7 +1419,7 @@ VkResult VulkanSubmissionExecutor::GetQueueFaultResult(
 ) const noexcept {
     if (_queue == EQueueType::Copy) {
         auto& copy_queue =
-            static_cast<VkCopyQueue&>(
+            static_cast<VulkanCopyQueue&>(
                 RenderDevice::Get().GetCopyQueue()
             );
         return copy_queue.device.IsFaulted() ?
@@ -1428,7 +1428,7 @@ VkResult VulkanSubmissionExecutor::GetQueueFaultResult(
     }
     if (_queue == EQueueType::Graphics ||
         _queue == EQueueType::Compute) {
-        auto& queue = static_cast<VkCommandQueue&>(
+        auto& queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(_queue)
         );
         return queue.vk_device.IsFaulted() ?
@@ -1801,7 +1801,7 @@ void VulkanSubmissionExecutor::RejectBatch(
                 _rejection_publication->CompletionTicket(source_index) :
                 VulkanBatchCompletionTicket{};
         if (entry.queue == EQueueType::Copy) {
-            auto& queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+            auto& queue = static_cast<VulkanCopyQueue&>(RenderDevice::Get().GetCopyQueue());
             queue.RejectForRuntime(
                 std::move(entry.submit),
                 result,
@@ -1818,7 +1818,7 @@ void VulkanSubmissionExecutor::RejectBatch(
             IsNativeQueue(entry.queue) && entry.queue != EQueueType::Copy ?
                 entry.queue :
                 EQueueType::Graphics;
-        auto& queue = static_cast<VkCommandQueue&>(
+        auto& queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(queue_type)
         );
         queue.RejectForRuntime(
@@ -2913,8 +2913,8 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 entry.submit.translate_execution_class
             );
         if (entry.queue == EQueueType::Copy) {
-            auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-            std::optional<VkCopyQueue::CurrentVulkanCopyRecordedSubmit>
+            auto& copy_queue = static_cast<VulkanCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+            std::optional<VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>
                 recorded =
                     copy_queue.TranslateForRuntime(std::move(entry.submit));
             if (recorded) {
@@ -3088,10 +3088,10 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 return;
             }
         } else {
-            auto& queue = static_cast<VkCommandQueue&>(
+            auto& queue = static_cast<VulkanCommandQueue&>(
                 RenderDevice::Get().GetCommandQueue(entry.queue)
             );
-            VkCommandQueue::PendingSubmission recorded =
+            VulkanCommandQueue::PendingSubmission recorded =
                 queue.TranslateForRuntime(std::move(entry.submit));
             recorded.batch_completion = rejection_publication->CompletionTicket(source_index);
             // Translation reserves a logical queue timeline and always
@@ -3238,7 +3238,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
         async_scope_entry_frontier.fill(std::nullopt);
         async_scope_seen_queues.fill(false);
         RHIPresentRequest& present = *_batch.present;
-        auto& graphics_queue = static_cast<VkCommandQueue&>(
+        auto& graphics_queue = static_cast<VulkanCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(EQueueType::Graphics)
         );
         CmdSubmit bridge = CommandList(EQueueType::Graphics).Submit();
@@ -3255,7 +3255,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
         if (!bridge.wait_events.empty() || alias_completion_marker) {
             const uint32 bridge_dependency_wait_count =
                 static_cast<uint32>(bridge.wait_events.size());
-            VkCommandQueue::PendingSubmission recorded =
+            VulkanCommandQueue::PendingSubmission recorded =
                 graphics_queue.TranslateForRuntime(std::move(bridge));
             used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
             VulkanRuntimeSubmissionResult bridge_result{};

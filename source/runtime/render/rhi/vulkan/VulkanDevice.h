@@ -26,8 +26,8 @@
 
 namespace Moer::Render {
 
-class VkCommandQueue;
-class VkCopyQueue;
+class VulkanCommandQueue;
+class VulkanCopyQueue;
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics;
@@ -307,7 +307,7 @@ public:
     void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
 
 private:
-    friend VkCommandQueue;
+    friend VulkanCommandQueue;
 #if MOER_VULKAN_TEST_SUPPORT
     friend struct VulkanFaultInjection;
 #endif
@@ -415,9 +415,9 @@ private:
     VulkanDescriptorHeapFunctions                           descriptor_heap_functions;
     std::array<VkSamplerCreateInfo, bindless_sampler_count> immutable_sampler_infos{};
     std::optional<VulkanDescriptorHeap> m_global_descriptor_heap;
-    UniquePtr<VkCommandQueue> m_graphics_command_queue{};
-    UniquePtr<VkCommandQueue> m_compute_command_queue{};
-    UniquePtr<VkCopyQueue>    m_copy_queue{};
+    UniquePtr<VulkanCommandQueue> m_graphics_command_queue{};
+    UniquePtr<VulkanCommandQueue> m_compute_command_queue{};
+    UniquePtr<VulkanCopyQueue>    m_copy_queue{};
 
     // Fault publication and diagnostics.
     std::atomic<EVulkanFaultPublishState> fault_state{EVulkanFaultPublishState::Healthy};

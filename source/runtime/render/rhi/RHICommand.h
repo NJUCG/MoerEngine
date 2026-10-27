@@ -1600,7 +1600,7 @@ public:
         // bool      b_set_params = false;
         // bool      b_set_consts = false;
     };
-    friend class VkCommandQueue;
+    friend class VulkanCommandQueue;
 
     using Dispatcher = std::variant<DrawDispatcher, ComputeDispatcher>;
 

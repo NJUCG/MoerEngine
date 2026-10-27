@@ -13,7 +13,7 @@
 
 namespace Moer::Render {
 
-VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : device(_device), type(_type) {
+VulkanNativeQueue::VulkanNativeQueue(EQueueType _type, VulkanDevice& _device) : device(_device), type(_type) {
     switch (_type) {
         case EQueueType::Graphics:
             queue = _device.GetGraphicsQueue();
@@ -30,9 +30,9 @@ VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : device(_
     assert(queue != VK_NULL_HANDLE && "Invalid queue type!");
 }
 
-VkNativeQueue::~VkNativeQueue() {}
+VulkanNativeQueue::~VulkanNativeQueue() {}
 
-VulkanOperationResult VkNativeQueue::SubmitEmpty(
+VulkanOperationResult VulkanNativeQueue::SubmitEmpty(
     const VulkanOperationContext& _context,
     VkFence                       _fence
 ) {
@@ -68,12 +68,12 @@ VulkanOperationResult VkNativeQueue::SubmitEmpty(
 }
 
 VulkanOperationResult
-VkNativeQueue::Submit(VulkanCommandList& _cmdlist, const VulkanOperationContext& _context, VkFence _fence) {
+VulkanNativeQueue::Submit(VulkanCommandList& _cmdlist, const VulkanOperationContext& _context, VkFence _fence) {
     VulkanCommandList* command_lists[] = {&_cmdlist};
     return Submit(std::span<VulkanCommandList* const>(command_lists), _context, _fence);
 }
 
-VulkanOperationResult VkNativeQueue::Submit(
+VulkanOperationResult VulkanNativeQueue::Submit(
     std::span<VulkanCommandList* const> _cmdlists,
     const VulkanOperationContext&       _context,
     VkFence                             _fence
@@ -138,7 +138,7 @@ VulkanOperationResult VkNativeQueue::Submit(
     return outcome;
 }
 
-void VkNativeQueue::Wait(VulkanTimeline* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
+void VulkanNativeQueue::Wait(VulkanTimeline* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
     VkSemaphore sem = _fence->GetSemaphore();
     wait_infos.push_back(
         VkSemaphoreSubmitInfo{
@@ -151,7 +151,7 @@ void VkNativeQueue::Wait(VulkanTimeline* _fence, uint64 _fence_val, VkPipelineSt
     );
 }
 
-void VkNativeQueue::Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
+void VulkanNativeQueue::Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
     wait_infos.push_back(
         VkSemaphoreSubmitInfo{
             .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -162,7 +162,7 @@ void VkNativeQueue::Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
         }
     );
 }
-void VkNativeQueue::Signal(VulkanTimeline* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
+void VulkanNativeQueue::Signal(VulkanTimeline* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
     VkSemaphore sem = _fence->GetSemaphore();
     signal_infos.push_back(
         VkSemaphoreSubmitInfo{
@@ -174,7 +174,7 @@ void VkNativeQueue::Signal(VulkanTimeline* _fence, uint64 _fence_val, VkPipeline
         }
     );
 }
-void VkNativeQueue::Signal(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
+void VulkanNativeQueue::Signal(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
     signal_infos.push_back(
         VkSemaphoreSubmitInfo{
             .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -187,7 +187,7 @@ void VkNativeQueue::Signal(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
 }
 
 
-void VkNativeQueue::BeginLabel(std::string_view _label, float4 _color) {
+void VulkanNativeQueue::BeginLabel(std::string_view _label, float4 _color) {
     std::unique_lock<std::mutex> guard(*submit_mutex);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
     label.pLabelName = _label.data();
@@ -198,12 +198,12 @@ void VkNativeQueue::BeginLabel(std::string_view _label, float4 _color) {
     vkQueueBeginDebugUtilsLabelEXT(queue, &label);
 }
 
-void VkNativeQueue::EndLabel() {
+void VulkanNativeQueue::EndLabel() {
     std::unique_lock<std::mutex> guard(*submit_mutex);
     vkQueueEndDebugUtilsLabelEXT(queue);
 }
 
-void VkNativeQueue::InsertLabel(std::string_view _label, float4 _color) {
+void VulkanNativeQueue::InsertLabel(std::string_view _label, float4 _color) {
     std::unique_lock<std::mutex> guard(*submit_mutex);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
     label.pLabelName = _label.data();

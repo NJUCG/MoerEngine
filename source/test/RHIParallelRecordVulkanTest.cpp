@@ -12026,7 +12026,7 @@ void RunDirectQueueEntryRejection() {
     using namespace std::chrono_literals;
 
     auto& device = RenderDevice::Get();
-    auto& graphics_queue = static_cast<VkCommandQueue&>(
+    auto& graphics_queue = static_cast<VulkanCommandQueue&>(
         device.GetCommandQueue(EQueueType::Graphics)
     );
     // Exercise the public boundary before any executor can own this queue.

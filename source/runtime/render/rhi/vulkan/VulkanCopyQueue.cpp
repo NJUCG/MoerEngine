@@ -15,7 +15,7 @@
 
 namespace Moer::Render {
 
-VkCopyQueue::VkCopyQueue(VulkanDevice& _device) :
+VulkanCopyQueue::VulkanCopyQueue(VulkanDevice& _device) :
     CopyQueue(),
     device(_device),
     queue(EQueueType::Copy, _device) {
@@ -39,7 +39,7 @@ VkCopyQueue::VkCopyQueue(VulkanDevice& _device) :
     }
 }
 
-VkCopyQueue::~VkCopyQueue() {
+VulkanCopyQueue::~VulkanCopyQueue() {
     CancelRuntimeDependencyWaits();
     CompleteAll(last_frame.load(std::memory_order_acquire));
     {
@@ -61,15 +61,15 @@ VkCopyQueue::~VkCopyQueue() {
     device.RecordQueueSyncComplete();
 }
 
-void VkCopyQueue::EnableRuntimeDependencyWaits() noexcept {
+void VulkanCopyQueue::EnableRuntimeDependencyWaits() noexcept {
     dependency_waits_enabled.store(true, std::memory_order_release);
 }
 
-void VkCopyQueue::CancelRuntimeDependencyWaits() noexcept {
+void VulkanCopyQueue::CancelRuntimeDependencyWaits() noexcept {
     dependency_waits_enabled.store(false, std::memory_order_release);
 }
 
-bool VkCopyQueue::ClaimRuntimeOwnership() {
+bool VulkanCopyQueue::ClaimRuntimeOwnership() {
     bool expected = false;
     if (executor_claimed.compare_exchange_strong(
             expected,
@@ -89,7 +89,7 @@ bool VkCopyQueue::ClaimRuntimeOwnership() {
     return false;
 }
 
-void VkCopyQueue::ReleaseRuntimeOwnership() noexcept {
+void VulkanCopyQueue::ReleaseRuntimeOwnership() noexcept {
     CancelRuntimeDependencyWaits();
     bool expected = true;
     const bool released = executor_claimed.compare_exchange_strong(
@@ -101,7 +101,7 @@ void VkCopyQueue::ReleaseRuntimeOwnership() noexcept {
     assert(released && "only the owning Vulkan runtime may release Copy");
 }
 
-WaitEvent VkCopyQueue::Execute(CmdSubmit&& _evt) {
+WaitEvent VulkanCopyQueue::Execute(CmdSubmit&& _evt) {
     try {
         LOG_ERROR(
             "[RHIExecutor][Vulkan] direct Copy Execute is unsupported; "
@@ -113,8 +113,8 @@ WaitEvent VkCopyQueue::Execute(CmdSubmit&& _evt) {
     return {0, 0};
 }
 
-std::optional<VkCopyQueue::CurrentVulkanCopyRecordedSubmit>
-VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
+std::optional<VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>
+VulkanCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
     assert(
         executor_claimed.load(std::memory_order_acquire) &&
         "runtime Copy translate requires an exclusively claimed queue"
@@ -417,7 +417,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
     return recorded;
 }
 
-VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
+VulkanRuntimeSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(
     CurrentVulkanCopyRecordedSubmit       _recorded,
     const VulkanRuntimePreCompletionHook* _pre_completion
 ) noexcept {
@@ -625,7 +625,7 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
     return runtime_result;
 }
 
-void VkCopyQueue::RejectRecordedForRuntime(
+void VulkanCopyQueue::RejectRecordedForRuntime(
     CurrentVulkanCopyRecordedSubmit&& _recorded,
     VkResult                           _result,
     bool                               _recoverable
@@ -648,7 +648,7 @@ void VkCopyQueue::RejectRecordedForRuntime(
         );
     }
 }
-void VkCopyQueue::RejectForRuntime(
+void VulkanCopyQueue::RejectForRuntime(
     CmdSubmit&& _submit,
     VkResult    _result,
     bool        _recoverable,
@@ -671,7 +671,7 @@ void VkCopyQueue::RejectForRuntime(
     );
 }
 
-void VkCopyQueue::CommitRuntimeSubmitCompletion(
+void VulkanCopyQueue::CommitRuntimeSubmitCompletion(
     CurrentVulkanCopyRecordedSubmit& _recorded,
     const VulkanOperationResult&      _outcome
 ) noexcept {
@@ -757,7 +757,7 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
     queue_cv.notify_one();
 }
 
-void VkCopyQueue::Sync(uint64 _timeline) {
+void VulkanCopyQueue::Sync(uint64 _timeline) {
     if (GetCurrentRHIThreadRole() == ERHIThreadRole::Completion) {
         try {
             LOG_ERROR(
@@ -771,11 +771,11 @@ void VkCopyQueue::Sync(uint64 _timeline) {
     CompleteAll(_timeline);
 }
 
-FenceRef VkCopyQueue::GetFenceHandle() {
+FenceRef VulkanCopyQueue::GetFenceHandle() {
     return FenceRef(timeline);
 }
 
-void VkCopyQueue::ExecuteThread() {
+void VulkanCopyQueue::ExecuteThread() {
     Platform::SetCurrentThreadName("Vulkan Copy Completion");
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
     RHIThreadHeartbeatScope heartbeat(
@@ -1073,7 +1073,7 @@ void VkCopyQueue::ExecuteThread() {
     }
 }
 
-UniquePtr<VulkanCommandContext> VkCopyQueue::AcquireCommandContext() {
+UniquePtr<VulkanCommandContext> VulkanCopyQueue::AcquireCommandContext() {
     auto command_context = std::move(UniquePtr<VulkanCommandContext>(command_contexts.Pop()));
     if (command_context) {
         return std::move(command_context);
@@ -1081,7 +1081,7 @@ UniquePtr<VulkanCommandContext> VkCopyQueue::AcquireCommandContext() {
     return MakeUnique<VulkanCommandContext>(&device, EQueueType::Copy);
 }
 
-void VkCopyQueue::CompleteAll(uint64 _timeline) {
+void VulkanCopyQueue::CompleteAll(uint64 _timeline) {
     Array<std::shared_ptr<VulkanBatchCompletionGroup>>
         completion_groups{};
     uint64 target_retirement_serial = 0;

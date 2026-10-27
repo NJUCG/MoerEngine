@@ -1292,7 +1292,7 @@ public:
     //UniquePtr<DeviceInternalShaders> internal_shaders;
 
 private:
-    //friend VkCommandQueue;
+    //friend VulkanCommandQueue;
 };
 
 } // namespace Moer::Render

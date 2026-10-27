@@ -25,10 +25,10 @@ namespace Moer::Render {
 
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
-class VkNativeQueue {
+class VulkanNativeQueue {
 public:
-    VkNativeQueue(EQueueType _type, VulkanDevice& _device);
-    ~VkNativeQueue();
+    VulkanNativeQueue(EQueueType _type, VulkanDevice& _device);
+    ~VulkanNativeQueue();
 
     VulkanOperationResult Submit(
         VulkanCommandList&            _cmdlist,
@@ -355,10 +355,10 @@ struct VulkanSubmitCompletionBatch {
     VulkanBatchCompletionTicket              batch_completion{};
 };
 
-class VkCommandQueue : public CommandQueue {
+class VulkanCommandQueue : public CommandQueue {
 public:
-    VkCommandQueue(VulkanDevice& _device, EQueueType _type);
-    ~VkCommandQueue();
+    VulkanCommandQueue(VulkanDevice& _device, EQueueType _type);
+    ~VulkanCommandQueue();
 
     WaitEvent Execute(CmdSubmit&& _submit) override;
     void      Wait(WaitEvent _event) override;
@@ -508,9 +508,9 @@ private:
     void EndSplitProfilingCpuFrame();
     void ResetSplitProfilingCpuFrame();
 
-    VulkanDevice&   vk_device;
-    VkNativeQueue   queue;
-    VulkanTimeline* timeline{nullptr};
+    VulkanDevice&     vk_device;
+    VulkanNativeQueue queue;
+    VulkanTimeline*   timeline{nullptr};
 
     // The gate transfers recording ownership with each submission packet.
     std::mutex                   exec_mtx;
@@ -543,10 +543,10 @@ private:
     } split_profiling_cpu_frame;
 };
 
-class VkCopyQueue : public CopyQueue {
+class VulkanCopyQueue : public CopyQueue {
 public:
-    VkCopyQueue(VulkanDevice& _device);
-    ~VkCopyQueue();
+    VulkanCopyQueue(VulkanDevice& _device);
+    ~VulkanCopyQueue();
 
     WaitEvent Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
@@ -636,7 +636,7 @@ private:
     void CompleteAll(uint64 _timeline);
 
     VulkanDevice&     device;
-    VkNativeQueue     queue;
+    VulkanNativeQueue queue;
     VulkanTimelineRef timeline{nullptr};
 
     std::mutex                  exec_mutex;

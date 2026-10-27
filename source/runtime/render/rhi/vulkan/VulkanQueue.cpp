@@ -12,14 +12,14 @@
 
 namespace Moer::Render {
 
-void VkCommandQueue::Wait(WaitEvent) {
+void VulkanCommandQueue::Wait(WaitEvent) {
     LogQueueErrorNoexcept(
         "[RHIExecutor][Vulkan] direct Wait is unsupported; "
         "publish dependencies with the submission through RHIExecutor"
     );
 }
 
-VkCommandQueue::VkCommandQueue(VulkanDevice& _device, EQueueType _type) :
+VulkanCommandQueue::VulkanCommandQueue(VulkanDevice& _device, EQueueType _type) :
     CommandQueue(),
     vk_device(_device),
     queue(_type, _device),
@@ -29,7 +29,7 @@ VkCommandQueue::VkCommandQueue(VulkanDevice& _device, EQueueType _type) :
 
     try {
         completion_worker_running = true;
-        completion_thread         = std::jthread(&VkCommandQueue::CompletionThreadMain, this);
+        completion_thread         = std::jthread(&VulkanCommandQueue::CompletionThreadMain, this);
     } catch (...) {
         {
             std::lock_guard lock(event_mutex);
@@ -46,7 +46,7 @@ VkCommandQueue::VkCommandQueue(VulkanDevice& _device, EQueueType _type) :
     }
 }
 
-VkCommandQueue::~VkCommandQueue() {
+VulkanCommandQueue::~VulkanCommandQueue() {
     Sync();
 
     // Presentation can still own swapchain images after Copy completion.
@@ -72,7 +72,7 @@ VkCommandQueue::~VkCommandQueue() {
     vk_device.RecordQueueSyncComplete();
 }
 
-bool VkCommandQueue::ClaimRuntimeOwnership() {
+bool VulkanCommandQueue::ClaimRuntimeOwnership() {
     bool expected = false;
     if (executor_claimed.compare_exchange_strong(
             expected, true, std::memory_order_acq_rel, std::memory_order_acquire
@@ -90,7 +90,7 @@ bool VkCommandQueue::ClaimRuntimeOwnership() {
     return false;
 }
 
-void VkCommandQueue::ReleaseRuntimeOwnership() noexcept {
+void VulkanCommandQueue::ReleaseRuntimeOwnership() noexcept {
     CancelRuntimeDependencyWaits();
     bool       expected = true;
     const bool released =
@@ -98,11 +98,11 @@ void VkCommandQueue::ReleaseRuntimeOwnership() noexcept {
     assert(released && "only the owning Vulkan runtime may release a queue claim");
 }
 
-void VkCommandQueue::CancelRuntimeDependencyWaits() noexcept {
+void VulkanCommandQueue::CancelRuntimeDependencyWaits() noexcept {
     runtime_dependency_waits_enabled.store(false, std::memory_order_release);
 }
 
-WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
+WaitEvent VulkanCommandQueue::Execute(CmdSubmit&& _submit) {
     LogQueueErrorNoexcept(
         "[RHIExecutor][Vulkan] direct Execute is unsupported; "
         "publish work through RHIExecutor"
@@ -111,7 +111,7 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
     return {0, 0};
 }
 
-VkCommandQueue::PendingSubmission VkCommandQueue::TranslateForRuntime(CmdSubmit&& _submit) noexcept {
+VulkanCommandQueue::PendingSubmission VulkanCommandQueue::TranslateForRuntime(CmdSubmit&& _submit) noexcept {
     assert(executor_claimed.load(std::memory_order_acquire));
     assert(GetCurrentRHIThreadRole() == ERHIThreadRole::Translate);
 
@@ -144,7 +144,7 @@ VkCommandQueue::PendingSubmission VkCommandQueue::TranslateForRuntime(CmdSubmit&
     return pending;
 }
 
-void VkCommandQueue::RejectRecording(
+void VulkanCommandQueue::RejectRecording(
     PendingSubmission&           _pending,
     const VulkanOperationResult& _outcome,
     std::string_view             _reason
@@ -162,7 +162,7 @@ void VkCommandQueue::RejectRecording(
     vk_device.RecordRejectedSubmit();
 }
 
-VulkanRuntimeSubmissionResult VkCommandQueue::SubmitRecordedForRuntime(
+VulkanRuntimeSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
     PendingSubmission                     _recorded,
     const VulkanRuntimePreCompletionHook* _pre_completion
 ) noexcept {
@@ -217,7 +217,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::SubmitRecordedForRuntime(
     return runtime_result;
 }
 
-void VkCommandQueue::RejectRecordedForRuntime(
+void VulkanCommandQueue::RejectRecordedForRuntime(
     PendingSubmission&& _recorded,
     VkResult            _result,
     bool                _recoverable
@@ -236,7 +236,7 @@ void VkCommandQueue::RejectRecordedForRuntime(
     }
 }
 
-void VkCommandQueue::RejectForRuntime(
+void VulkanCommandQueue::RejectForRuntime(
     CmdSubmit&&                 _submit,
     VkResult                    _result,
     bool                        _recoverable,
@@ -304,7 +304,7 @@ void VkCommandQueue::RejectForRuntime(
 }
 
 VulkanOperationResult
-VkCommandQueue::SubmitRecorded(PendingSubmission& _pending, const std::atomic_bool* _continue_waiting) {
+VulkanCommandQueue::SubmitRecorded(PendingSubmission& _pending, const std::atomic_bool* _continue_waiting) {
     assert(
         !_pending.submission_outcome.has_value() && !_pending.completion_enqueued &&
         "a terminal submission cannot be replayed"
@@ -372,7 +372,7 @@ VkCommandQueue::SubmitRecorded(PendingSubmission& _pending, const std::atomic_bo
     return outcome;
 }
 
-void VkCommandQueue::CommitRuntimeSubmitCompletion(
+void VulkanCommandQueue::CommitRuntimeSubmitCompletion(
     PendingSubmission&           _recorded,
     const VulkanOperationResult& _outcome
 ) noexcept {
@@ -440,7 +440,7 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
     queue_cv.notify_all();
 }
 
-void VkCommandQueue::Sync() {
+void VulkanCommandQueue::Sync() {
     if (GetCurrentRHIThreadRole() == ERHIThreadRole::Completion) {
         LogQueueErrorNoexcept(
             "[RHIExecutor][Vulkan] queue={} Completion owner cannot block "
@@ -476,7 +476,7 @@ void VkCommandQueue::Sync() {
     }
 }
 
-UniquePtr<VulkanCommandContext> VkCommandQueue::AcquireCommandContext() {
+UniquePtr<VulkanCommandContext> VulkanCommandQueue::AcquireCommandContext() {
     // Completion publishes only successfully completed and reset command contexts
     // into this pool. Pool membership is therefore the reuse gate; if
     // Completion is delayed by unrelated CPU callbacks, allocate overflow
@@ -488,7 +488,7 @@ UniquePtr<VulkanCommandContext> VkCommandQueue::AcquireCommandContext() {
     return MakeUnique<VulkanCommandContext>(&vk_device, queue.GetType());
 }
 
-Array<RHIResource*> VkCommandQueue::TakeDeferredReleases() {
+Array<RHIResource*> VulkanCommandQueue::TakeDeferredReleases() {
     if (queue.GetType() != EQueueType::Graphics) {
         return {};
     }

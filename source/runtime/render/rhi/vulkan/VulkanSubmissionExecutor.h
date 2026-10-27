@@ -128,8 +128,8 @@ private:
 
     using RecordedSourcePacket = std::variant<
         std::monostate,
-        VkCommandQueue::PendingSubmission,
-        VkCopyQueue::CurrentVulkanCopyRecordedSubmit>;
+        VulkanCommandQueue::PendingSubmission,
+        VulkanCopyQueue::CurrentVulkanCopyRecordedSubmit>;
 
     struct PipelineSourceSlot {
         EQueueType queue{EQueueType::Ignore};

@@ -178,7 +178,7 @@ RemoveVulkanBatchPreflightRejectionObserver(
     const VulkanBatchPreflightRejectionObserver* _observer
 ) noexcept;
 
-// A direct observation at the VkNativeQueue -> VulkanDevice submit boundary.
+// A direct observation at the VulkanNativeQueue -> VulkanDevice submit boundary.
 // Unlike the source-packet observer above, this proves which OS thread and RHI
 // role actually invoked the native queue operation.
 struct VulkanNativeSubmissionEvent {

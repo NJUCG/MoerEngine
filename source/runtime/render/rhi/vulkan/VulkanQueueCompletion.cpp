@@ -124,7 +124,7 @@ void VulkanBatchCompletionGroup::WaitUntilSettled() {
     });
 }
 
-void VkCommandQueue::CompletionThreadMain() {
+void VulkanCommandQueue::CompletionThreadMain() {
     Platform::SetCurrentThreadName(
         queue.GetType() == EQueueType::Graphics ? "Vulkan Gfx Completion" : "Vulkan Compute Completion"
     );
@@ -159,8 +159,8 @@ void VkCommandQueue::CompletionThreadMain() {
     }
 }
 
-VkCommandQueue::SubmissionCompletionOutcome
-VkCommandQueue::ResolveGpuCompletion(VulkanSubmitCompletionBatch& _batch, uint64 _timeline) {
+VulkanCommandQueue::SubmissionCompletionOutcome
+VulkanCommandQueue::ResolveGpuCompletion(VulkanSubmitCompletionBatch& _batch, uint64 _timeline) {
     bool batch_gpu_success  = false;
     bool batch_release_safe = !_batch.gpu_submitted && (_batch.outcome.status == EVulkanOperationStatus::Retry ||
                                                         _batch.outcome.status == EVulkanOperationStatus::Recreate);
@@ -215,7 +215,7 @@ VkCommandQueue::ResolveGpuCompletion(VulkanSubmitCompletionBatch& _batch, uint64
     return {batch_gpu_success, batch_release_safe, completion_result, recoverable_rejection};
 }
 
-void VkCommandQueue::RecycleCommandContexts(VulkanCommandContextBatch& _contexts, bool recycle_batch) {
+void VulkanCommandQueue::RecycleCommandContexts(VulkanCommandContextBatch& _contexts, bool recycle_batch) {
     if (recycle_batch) {
         for (auto& command_context : _contexts.submitted) {
             recycle_batch = command_context->Reset() && recycle_batch;
@@ -246,7 +246,7 @@ void VkCommandQueue::RecycleCommandContexts(VulkanCommandContextBatch& _contexts
     }
 }
 
-void VkCommandQueue::ProcessCompletion(CompletionEvent& _completion) {
+void VulkanCommandQueue::ProcessCompletion(CompletionEvent& _completion) {
     const uint64 event_timeline = _completion.timeline;
     {
         VulkanSubmitCompletionBatch&      batch   = _completion.batch;
@@ -391,7 +391,7 @@ void VkCommandQueue::ProcessCompletion(CompletionEvent& _completion) {
     queue_cv.notify_all();
 }
 
-void VkCommandQueue::CompleteAll(uint64 _timeline) {
+void VulkanCommandQueue::CompleteAll(uint64 _timeline) {
     Array<std::shared_ptr<VulkanBatchCompletionGroup>> completion_groups{};
     uint64                                             target_retirement_serial = 0;
     {

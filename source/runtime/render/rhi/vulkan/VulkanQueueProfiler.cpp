@@ -135,13 +135,13 @@ void ProfilerStorage::EndProfilerSession(
     assert(IsQueryUsed(idx - 1) == true && "Query not used");
 }
 
-void VkCommandQueue::BeginSplitProfilingCpuFrame() {
+void VulkanCommandQueue::BeginSplitProfilingCpuFrame() {
     ResetSplitProfilingCpuFrame();
     split_profiling_cpu_frame.active  = true;
     split_profiling_cpu_frame.started = std::chrono::steady_clock::now();
 }
 
-void VkCommandQueue::EndSplitProfilingCpuFrame() {
+void VulkanCommandQueue::EndSplitProfilingCpuFrame() {
     if (!split_profiling_cpu_frame.active) {
         split_profiling_cpu_frame.active  = true;
         split_profiling_cpu_frame.started = std::chrono::steady_clock::now();
@@ -155,11 +155,11 @@ void VkCommandQueue::EndSplitProfilingCpuFrame() {
     ResetSplitProfilingCpuFrame();
 }
 
-void VkCommandQueue::ResetSplitProfilingCpuFrame() {
+void VulkanCommandQueue::ResetSplitProfilingCpuFrame() {
     split_profiling_cpu_frame = {};
 }
 
-void VkCommandQueue::FinishRecordingProfile(const CmdSubmit& _submit, double _elapsed_ms) noexcept {
+void VulkanCommandQueue::FinishRecordingProfile(const CmdSubmit& _submit, double _elapsed_ms) noexcept {
     if (_submit.cmds.empty()) {
         return;
     }
@@ -180,7 +180,7 @@ void VkCommandQueue::FinishRecordingProfile(const CmdSubmit& _submit, double _el
     }
 }
 
-ProfileData VkCommandQueue::GetProfilerEntry() {
+ProfileData VulkanCommandQueue::GetProfilerEntry() {
     std::unique_lock<std::mutex> lock(profiler_mutex);
     return cached_profiler_entry;
 }

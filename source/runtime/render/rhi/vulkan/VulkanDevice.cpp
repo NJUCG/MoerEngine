@@ -567,11 +567,11 @@ void VulkanDevice::CreateDevice() {
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue_handle);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue_handle);
 
-    m_graphics_command_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
+    m_graphics_command_queue = MakeUnique<VulkanCommandQueue>(*this, EQueueType::Graphics);
     SetResourceName(uint64(m_graphics_queue_handle), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
-    m_compute_command_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
+    m_compute_command_queue = MakeUnique<VulkanCommandQueue>(*this, EQueueType::Compute);
     SetResourceName(uint64(m_compute_queue_handle), VK_OBJECT_TYPE_QUEUE, "ComputeQueue");
-    m_copy_queue = MakeUnique<VkCopyQueue>(*this);
+    m_copy_queue = MakeUnique<VulkanCopyQueue>(*this);
     SetResourceName(uint64(m_transfer_queue_handle), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
 
     m_graphics_command_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_graphics_queue_handle));
