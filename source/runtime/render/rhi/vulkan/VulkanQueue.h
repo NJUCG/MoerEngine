@@ -383,11 +383,13 @@ private:
             const VulkanOperationContext& _context,
             uint64                        _timeline
         ) noexcept :
-            submit(std::move(_submit)), context(_context), timeline(_timeline) {}
+            submit(std::move(_submit)),
+            context(_context),
+            timeline(_timeline) {}
 
-        PendingSubmission(const PendingSubmission&) = delete;
-        PendingSubmission& operator=(const PendingSubmission&) = delete;
-        PendingSubmission(PendingSubmission&&) noexcept = default;
+        PendingSubmission(const PendingSubmission&)                = delete;
+        PendingSubmission& operator=(const PendingSubmission&)     = delete;
+        PendingSubmission(PendingSubmission&&) noexcept            = default;
         PendingSubmission& operator=(PendingSubmission&&) noexcept = default;
 
         CmdSubmit                            submit;
@@ -402,13 +404,11 @@ private:
         VulkanBatchCompletionTicket          batch_completion{};
         VulkanPresentationSourceStateProgram presentation_source_program;
         RHITransferableOwnershipGate::Lease  execution_lease{};
-        VulkanOperationResult                submission_outcome{
-            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
-        };
-        bool recoverable_rejection{false};
-        // Resolved includes rejection before vkQueueSubmit2; it does not mean GPU acceptance.
-        bool submission_resolved{false};
-        bool completion_enqueued{false};
+        // Empty while awaiting a submission decision; a value also represents
+        // rejection before vkQueueSubmit2, not just native acceptance.
+        std::optional<VulkanOperationResult> submission_outcome;
+        bool                                 recoverable_rejection{false};
+        bool                                 completion_enqueued{false};
     };
 
     struct CompletionEvent {
@@ -428,19 +428,28 @@ private:
             retirement_serial(_retirement_serial) {}
     };
 
+    struct SubmissionCompletionOutcome {
+        bool     gpu_success{false};
+        bool     release_safe{false};
+        VkResult result{VK_ERROR_UNKNOWN};
+        bool     recoverable_rejection{false};
+    };
+
     // Executor ownership and phase entry points.
     [[nodiscard]] bool ClaimRuntimeOwnership();
-    void ReleaseRuntimeOwnership() noexcept;
-    void CancelRuntimeDependencyWaits() noexcept;
+    void               ReleaseRuntimeOwnership() noexcept;
+    void               CancelRuntimeDependencyWaits() noexcept;
+
     [[nodiscard]] PendingSubmission TranslateForRuntime(CmdSubmit&& _submit) noexcept;
+
     VulkanRuntimeSubmissionResult SubmitRecordedForRuntime(
-        PendingSubmission           _recorded,
+        PendingSubmission                     _recorded,
         const VulkanRuntimePreCompletionHook* _pre_completion = nullptr
     ) noexcept;
     void RejectRecordedForRuntime(
         PendingSubmission&& _recorded,
-        VkResult                      _result,
-        bool                          _recoverable
+        VkResult            _result,
+        bool                _recoverable
     ) noexcept;
     void RejectForRuntime(
         CmdSubmit&&                 _submit,
@@ -455,16 +464,21 @@ private:
     ) noexcept;
 
     // Recording, native submission and transfer to Completion.
-    void RecordSubmissionCommands(PendingSubmission& _pending);
+    void   RecordSubmissionCommands(PendingSubmission& _pending);
+    double RecordPreparedCommands(
+        PendingSubmission&                                          _pending,
+        const std::shared_ptr<const VulkanDescriptorRecordingPlan>& _descriptor_plan
+    );
     void RejectRecording(
-        PendingSubmission& _pending,
+        PendingSubmission&           _pending,
         const VulkanOperationResult& _outcome,
-        std::string_view _reason
+        std::string_view             _reason
     ) noexcept;
     void FinishRecordingProfile(const CmdSubmit& _submit, double _elapsed_ms) noexcept;
+
     VulkanOperationResult SubmitRecorded(
-        PendingSubmission& _recorded,
-        const std::atomic_bool*      _continue_waiting = nullptr
+        PendingSubmission&      _recorded,
+        const std::atomic_bool* _continue_waiting = nullptr
     );
     VulkanRuntimeSubmissionResult PresentSwapchain(
         SwapchainRef&&    _swapchain,
@@ -475,43 +489,49 @@ private:
         uint64            _serial
     ) noexcept;
     void CommitRuntimeSubmitCompletion(
-        PendingSubmission& _recorded,
+        PendingSubmission&           _recorded,
         const VulkanOperationResult& _outcome
     ) noexcept;
     UniquePtr<VulkanCommandContext> AcquireCommandContext();
-    Array<RHIResource*> TakeDeferredReleases();
+    Array<RHIResource*>             TakeDeferredReleases();
 
+    // Completion confirmation, callbacks and resource retirement.
     void CompletionThreadMain();
+
+    SubmissionCompletionOutcome ResolveGpuCompletion(VulkanSubmitCompletionBatch& _batch, uint64 _timeline);
+
+    void ProcessCompletion(CompletionEvent& _completion);
+    void RecycleCommandContexts(VulkanCommandContextBatch& _contexts, bool _can_recycle);
     void CompleteAll(uint64 _timeline);
 
     void BeginSplitProfilingCpuFrame();
     void EndSplitProfilingCpuFrame();
     void ResetSplitProfilingCpuFrame();
 
-    VulkanDevice&      vk_device;
-    VkNativeQueue      queue;
-    VulkanTimeline*    timeline{nullptr};
+    VulkanDevice&   vk_device;
+    VkNativeQueue   queue;
+    VulkanTimeline* timeline{nullptr};
 
     // The gate transfers recording ownership with each submission packet.
-    std::mutex                  exec_mtx;
+    std::mutex                   exec_mtx;
     RHITransferableOwnershipGate runtime_execution_gate;
-    std::atomic_bool            executor_claimed{false};
-    std::atomic_bool            runtime_dependency_waits_enabled{true};
+    std::atomic_bool             executor_claimed{false};
+    std::atomic_bool             runtime_dependency_waits_enabled{true};
     std::atomic<uint64>          last_reserved_timeline{0};
 
     // CPU retirement also includes requests which never reached the GPU.
-    std::mutex                            event_mutex;
-    std::condition_variable_any           queue_cv;
+    std::mutex                             event_mutex;
+    std::condition_variable_any            queue_cv;
     DEQueue<CompletionEvent>               event_queue;
-    bool                                  completion_worker_running{false};
-    std::jthread                          completion_thread;
-    std::atomic<uint64>                    cpu_retired_timeline{0};
-    uint64                                retirement_enqueued_serial{0};
-    std::atomic<uint64>                    retirement_settled_serial{0};
+    bool                                   completion_worker_running{false};
+    std::jthread                           completion_thread;
+    uint64                                 cpu_retired_timeline{0}; // Protected by event_mutex.
+    uint64                                 retirement_enqueued_serial{0};
+    uint64                                 retirement_settled_serial{0}; // Protected by event_mutex.
     Array<VulkanBatchCompletionSettlement> batch_completion_settlements{};
 
     LockFreeQueueBase<VulkanCommandContext, false> command_contexts;
-    Array<UniquePtr<VulkanCommandContext>>        command_context_quarantine;
+    Array<UniquePtr<VulkanCommandContext>>         command_context_quarantine;
 
     VkNativeQueryPool timestamp_pool;
     ProfilerStorage   profiler_storage;

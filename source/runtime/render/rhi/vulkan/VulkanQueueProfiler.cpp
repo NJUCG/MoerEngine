@@ -159,6 +159,27 @@ void VkCommandQueue::ResetSplitProfilingCpuFrame() {
     split_profiling_cpu_frame = {};
 }
 
+void VkCommandQueue::FinishRecordingProfile(const CmdSubmit& _submit, double _elapsed_ms) noexcept {
+    if (_submit.cmds.empty()) {
+        return;
+    }
+    try {
+        if (_submit.ProfilingPhase() == ERHIProfilingPhase::Complete) {
+            profiler_storage.RegisterCpuTimestamp("Queue Execution", _elapsed_ms);
+            profiler_storage.AdvanceFrame();
+        } else if (_submit.EndsProfilingFrame()) {
+            EndSplitProfilingCpuFrame();
+        }
+    } catch (...) {
+        // Optional CPU statistics cannot invalidate an already recorded packet.
+        ResetSplitProfilingCpuFrame();
+        try {
+            LOG_WARNING("[VulkanQueue] failed to record CPU profiling statistics");
+        } catch (...) {
+        }
+    }
+}
+
 ProfileData VkCommandQueue::GetProfilerEntry() {
     std::unique_lock<std::mutex> lock(profiler_mutex);
     return cached_profiler_entry;

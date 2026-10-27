@@ -81,7 +81,11 @@ source/
         vulkan/                  #   Vulkan backend
           VulkanDevice.cpp/h     #     Device setup, capabilities and resource entry points
           VulkanPipelineCreation.cpp # Shader reflection, native pipeline construction
-          VulkanQueue.cpp/h      #     Graphics queue and shared command recording
+          VulkanQueue.cpp/h      #     Queue lifetime, submission ownership and handoff
+          VulkanCommandRecording.cpp # Native command recording and resource preparation
+          VulkanQueueCompletion.cpp # GPU completion, callbacks and resource retirement
+          VulkanQueuePresentation.cpp # Present source contracts and swapchain presentation
+          VulkanQueueInternal.cpp/h # Shared queue dependency and failure publication helpers
           VulkanNativeQueue.cpp  #     Native queue submits, waits/signals and labels
           VulkanCopyQueue.cpp    #     Copy queue submission and completion
           VulkanQueueProfiler.cpp #    GPU timestamps and CPU recording profiles
