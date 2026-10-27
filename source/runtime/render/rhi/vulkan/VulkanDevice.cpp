@@ -61,15 +61,6 @@
 namespace Moer::Render {
 
 VulkanDevice::VulkanDevice(const VulkanRHIConfig& _config) : RenderDevice::Impl() {
-    rhi_thread_enabled            = _config.rhi_thread && !_config.rhi_bypass;
-    thread_profile_logging        = _config.thread_profile_logging;
-
-    if (_config.rhi_thread && _config.rhi_bypass) {
-        LOG_INFO("[Threading] Vulkan RHI Thread bypass is enabled; graphics submissions stay synchronous.");
-    } else if (!_config.rhi_thread && !_config.rhi_bypass) {
-        LOG_INFO("[Threading] rhi_bypass=false is ignored while rhi_thread=false.");
-    }
-
     try {
         InitVulkanInstance(_config.api_version);
 
@@ -576,16 +567,10 @@ void VulkanDevice::CreateDevice() {
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue_handle);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue_handle);
 
-    m_graphics_command_queue = MakeUnique<VkCommandQueue>(
-        *this,
-        EQueueType::Graphics,
-        rhi_thread_enabled,
-        thread_profile_logging
-    );
+    m_graphics_command_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
     SetResourceName(uint64(m_graphics_queue_handle), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
-    m_compute_command_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute, false);
+    m_compute_command_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
     SetResourceName(uint64(m_compute_queue_handle), VK_OBJECT_TYPE_QUEUE, "ComputeQueue");
-    // transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
     m_copy_queue = MakeUnique<VkCopyQueue>(*this);
     SetResourceName(uint64(m_transfer_queue_handle), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
 

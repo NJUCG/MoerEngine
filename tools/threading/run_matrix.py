@@ -17,8 +17,6 @@ class Scenario:
     name: str
     renderer: str
     render_thread: bool
-    rhi_thread: bool
-    rhi_bypass: bool
     max_frame_lag: int
     render_graph_debug_dump: bool = False
     render_graph_parallel_recording: bool = False
@@ -33,181 +31,58 @@ class Scenario:
     ready_settle_seconds: float | None = None
     require_profile_logs: bool = True
 
-    @property
-    def effective_rhi_thread(self) -> bool:
-        return self.rhi_thread and not self.rhi_bypass
-
 FUNCTIONAL_SCENARIOS = (
-    Scenario("raster_sync", "Raster", False, False, True, 0),
-    Scenario("raster_rhi_bypass", "Raster", False, True, True, 0),
-    Scenario("raster_rhi_gt", "Raster", False, True, False, 0, window_stress=True),
-    Scenario("raster_rt0_rhi", "Raster", True, True, False, 0),
-    Scenario("raster_rt1_rhi", "Raster", True, True, False, 1, window_stress=True),
-    Scenario("raster_rt1_rhi_off", "Raster", True, False, False, 1),
-    Scenario("ray_rhi_gt", "Raytracing", False, True, False, 0),
-    Scenario("ray_rt0_rhi", "Raytracing", True, True, False, 0),
-    Scenario("ray_rt1_rhi", "Raytracing", True, True, False, 1, window_stress=True),
+    Scenario("raster_gt", "Raster", False, 0, window_stress=True),
+    Scenario("raster_rt0", "Raster", True, 0),
+    Scenario("raster_rt1", "Raster", True, 1, window_stress=True),
+    Scenario("ray_gt", "Raytracing", False, 0),
+    Scenario("ray_rt0", "Raytracing", True, 0),
+    Scenario("ray_rt1", "Raytracing", True, 1, window_stress=True),
 )
 
 RENDERGRAPH_SCENARIOS = (
     Scenario(
-        "raster_graph_sync",
-        "Raster",
-        False,
-        False,
-        True,
-        0,
-        render_graph_debug_dump=True,
-    ),
-    Scenario(
-        "raster_graph_rhi_bypass",
-        "Raster",
-        False,
-        True,
-        True,
-        0,
-        render_graph_debug_dump=True,
-    ),
-    Scenario(
-        "raster_graph_rhi_gt",
-        "Raster",
-        False,
-        True,
-        False,
-        0,
+        "raster_graph_gt", "Raster", False, 0,
         render_graph_debug_dump=True,
         window_stress=True,
     ),
     Scenario(
-        "raster_graph_rt0_rhi",
-        "Raster",
-        True,
-        True,
-        False,
-        0,
+        "raster_graph_rt0", "Raster", True, 0,
         render_graph_debug_dump=True,
     ),
     Scenario(
-        "raster_graph_rt1_rhi",
-        "Raster",
-        True,
-        True,
-        False,
-        1,
+        "raster_graph_rt1", "Raster", True, 1,
         render_graph_debug_dump=True,
         window_stress=True,
     ),
     Scenario(
-        "raster_graph_rt1_rhi_off",
-        "Raster",
-        True,
-        False,
-        False,
-        1,
-        render_graph_debug_dump=True,
-    ),
-    Scenario(
-        "raster_graph_rt1_rhi_reload_switch",
-        "Raster",
-        True,
-        True,
-        False,
-        1,
+        "raster_graph_rt1_reload_switch", "Raster", True, 1,
         render_graph_debug_dump=True,
         editor_args=("--threading-renderer-switch-validation",),
         renderer_switch_validation=True,
         expect_exit_after_ready=True,
         ready_log_pattern="[ThreadingValidation][RendererSwitch] Complete:",
+        require_profile_logs=False,
     ),
 )
 
-RENDERGRAPH_RESOURCE_SCENARIOS = (
+RENDERGRAPH_RESOURCE_SCENARIOS = tuple(
     Scenario(
-        "raster_key_base_linear",
-        "Raster",
-        False,
-        False,
-        True,
-        0,
-        framebuffer_validation="base_color",
-    ),
-    Scenario(
-        "raster_key_base_graph",
-        "Raster",
-        False,
-        False,
-        True,
-        0,
+        f"raster_key_{name}_{mode}", "Raster", render_thread, max_frame_lag,
         render_graph_debug_dump=True,
-        framebuffer_validation="base_color",
-    ),
-    Scenario(
-        "raster_key_base_rt1_rhi_linear",
-        "Raster",
-        True,
-        True,
-        False,
-        1,
-        framebuffer_validation="base_color",
-    ),
-    Scenario(
-        "raster_key_base_rt1_rhi_graph",
-        "Raster",
-        True,
-        True,
-        False,
-        1,
-        render_graph_debug_dump=True,
-        framebuffer_validation="base_color",
-    ),
-    Scenario(
-        "raster_key_normal_linear",
-        "Raster",
-        False,
-        False,
-        True,
-        0,
-        framebuffer_validation="normal",
-    ),
-    Scenario(
-        "raster_key_normal_graph",
-        "Raster",
-        False,
-        False,
-        True,
-        0,
-        render_graph_debug_dump=True,
-        framebuffer_validation="normal",
-    ),
-    Scenario(
-        "raster_key_depth_linear",
-        "Raster",
-        False,
-        False,
-        True,
-        0,
-        framebuffer_validation="depth_linear_sampler",
-    ),
-    Scenario(
-        "raster_key_depth_graph",
-        "Raster",
-        False,
-        False,
-        True,
-        0,
-        render_graph_debug_dump=True,
-        framebuffer_validation="depth_linear_sampler",
-    ),
+        framebuffer_validation=framebuffer,
+    )
+    for name, framebuffer in (
+        ("base", "base_color"),
+        ("normal", "normal"),
+        ("depth", "depth_linear_sampler"),
+    )
+    for mode, render_thread, max_frame_lag in (("gt", False, 0), ("rt1", True, 1))
 )
 
 FAULT_SCENARIOS = (
     Scenario(
-        "ray_rt1_rhi_fault_present_submit",
-        "Raytracing",
-        True,
-        True,
-        False,
-        1,
+        "ray_rt1_fault_present_submit", "Raytracing", True, 1,
         editor_args=("--vulkan-fault-inject=present-submit@3",),
         fault_validation=True,
         ready_settle_seconds=1.0,
@@ -216,12 +91,7 @@ FAULT_SCENARIOS = (
 
 FEATURE_VALIDATION_SCENARIOS = (
     Scenario(
-        "feature_renderer_switch",
-        "Raster",
-        True,
-        True,
-        False,
-        1,
+        "feature_renderer_switch", "Raster", True, 1,
         editor_args=("--threading-renderer-switch-validation", "--no-splash"),
         renderer_switch_validation=True,
         expect_exit_after_ready=True,
@@ -229,12 +99,7 @@ FEATURE_VALIDATION_SCENARIOS = (
         require_profile_logs=False,
     ),
     Scenario(
-        "feature_raster_graph_serial_recording",
-        "Raster",
-        True,
-        True,
-        False,
-        1,
+        "feature_raster_graph_serial_recording", "Raster", True, 1,
         render_graph_debug_dump=True,
         editor_args=("--threading-raster-lifecycle-validation", "--no-splash"),
         raster_lifecycle_validation=True,
@@ -243,12 +108,7 @@ FEATURE_VALIDATION_SCENARIOS = (
         require_profile_logs=False,
     ),
     Scenario(
-        "feature_raster_graph_parallel_recording",
-        "Raster",
-        True,
-        True,
-        False,
-        1,
+        "feature_raster_graph_parallel_recording", "Raster", True, 1,
         render_graph_debug_dump=True,
         render_graph_parallel_recording=True,
         editor_args=("--threading-raster-lifecycle-validation", "--no-splash"),
@@ -258,12 +118,7 @@ FEATURE_VALIDATION_SCENARIOS = (
         require_profile_logs=False,
     ),
     Scenario(
-        "feature_raster_graph_parallel_recording_gt",
-        "Raster",
-        False,
-        True,
-        False,
-        0,
+        "feature_raster_graph_parallel_recording_gt", "Raster", False, 0,
         render_graph_debug_dump=True,
         render_graph_parallel_recording=True,
         editor_args=("--threading-raster-lifecycle-validation", "--no-splash"),
@@ -273,12 +128,7 @@ FEATURE_VALIDATION_SCENARIOS = (
         require_profile_logs=False,
     ),
     Scenario(
-        "feature_raster_graph_parallel_recording_reload_switch",
-        "Raster",
-        True,
-        True,
-        False,
-        1,
+        "feature_raster_graph_parallel_recording_reload_switch", "Raster", True, 1,
         render_graph_debug_dump=True,
         render_graph_parallel_recording=True,
         editor_args=("--threading-renderer-switch-validation", "--no-splash"),
@@ -305,13 +155,13 @@ SCENARIOS = {
 }
 
 SCENARIO_SETS = {
-    "smoke": ("raster_sync", "raster_rhi_gt", "ray_rt1_rhi"),
+    "smoke": ("raster_gt", "raster_rt1", "ray_rt1"),
     "full": tuple(scenario.name for scenario in FUNCTIONAL_SCENARIOS),
     "rendergraph": tuple(scenario.name for scenario in RENDERGRAPH_SCENARIOS),
     "rendergraph-resources": tuple(
         scenario.name for scenario in RENDERGRAPH_RESOURCE_SCENARIOS
     ),
-    "soak": ("raster_rt1_rhi", "ray_rt1_rhi"),
+    "soak": ("raster_rt1", "ray_rt1"),
     "fault": tuple(scenario.name for scenario in FAULT_SCENARIOS),
     "feature": tuple(scenario.name for scenario in FEATURE_VALIDATION_SCENARIOS),
 }
@@ -331,8 +181,6 @@ def toml_literal(value: object) -> str:
 def generate_config(base_text: str, scenario: Scenario) -> str:
     replacements = {
         ("engine.threading", "render_thread"): scenario.render_thread,
-        ("engine.threading", "rhi_thread"): scenario.rhi_thread,
-        ("engine.threading", "rhi_bypass"): scenario.rhi_bypass,
         ("engine.threading", "max_frame_lag"): scenario.max_frame_lag,
         ("engine.threading", "profile_logging"): True,
         ("engine.render", "default_render_method"): scenario.renderer,
@@ -382,8 +230,6 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
     raster = render["raster"]
     actual = {
         ("engine.threading", "render_thread"): threading["render_thread"],
-        ("engine.threading", "rhi_thread"): threading["rhi_thread"],
-        ("engine.threading", "rhi_bypass"): threading["rhi_bypass"],
         ("engine.threading", "max_frame_lag"): threading["max_frame_lag"],
         ("engine.threading", "profile_logging"): threading["profile_logging"],
         ("engine.render", "default_render_method"): render["default_render_method"],
@@ -407,45 +253,31 @@ def required_patterns(scenario: Scenario) -> list[str]:
         "[Config] Using command-line config override:",
         (
             f"[Threading] render_thread={bool_text(scenario.render_thread)}, "
-            f"rhi_thread={bool_text(scenario.rhi_thread)}, "
-            f"rhi_bypass={bool_text(scenario.rhi_bypass)}, "
             f"max_frame_lag={scenario.max_frame_lag}"
         ),
-        (
-            "[Threading] Vulkan graphics queue RHI mode: "
-            + ("threaded" if scenario.effective_rhi_thread else "synchronous")
-        ),
+        "[RHIExecutor][Vulkan] ownership runtime started",
         (
             f"[Threading] {scenario.renderer} frames execute on "
             f"{execution_thread} thread id ="
         ),
     ]
-    # Layer-based RHI/RHIRecord samples belong to the legacy recorder. Compiled
-    # runs validate the selected path, actual frame work and native rejection
-    # diagnostics instead of requiring an unused recorder to produce samples.
     patterns.append(f"[RenderGraph] {scenario.renderer} execution mode: compiled")
     if scenario.require_profile_logs and not scenario.fault_validation:
         patterns.append("[ThreadingProfile][Prepare]")
-    if scenario.effective_rhi_thread:
-        patterns.append("[Threading] RHIThread id =")
     if scenario.render_thread and scenario.max_frame_lag == 1:
         patterns.append("[Threading] GT/RT overlap active")
-    if scenario.render_thread and scenario.require_profile_logs:
+    if scenario.render_thread and scenario.require_profile_logs and not scenario.fault_validation:
         patterns.append("[ThreadingProfile][RT]")
-    if scenario.renderer == "Raster":
+    if scenario.renderer == "Raster" and scenario.render_graph_debug_dump:
+        patterns.append("[RenderGraph][DebugDump]")
         patterns.append(
-            "[RenderGraph] Raster execution mode: compiled"
-        )
-        if scenario.render_graph_debug_dump:
-            patterns.append("[RenderGraph][DebugDump]")
-            patterns.append(
-                "upper recording: "
-                + (
-                    "parallel-frontend/merged-submit"
-                    if scenario.render_graph_parallel_recording
-                    else "serial-frontend/merged-submit"
-                )
+            "upper recording: "
+            + (
+                "parallel-frontend/merged-submit"
+                if scenario.render_graph_parallel_recording
+                else "serial-frontend/merged-submit"
             )
+        )
     if scenario.renderer_switch_validation:
         patterns.extend(
             [
@@ -604,8 +436,6 @@ def build_verifier_command(
         )
         for pattern in fault_log_patterns:
             command.extend(["--require-log-count", pattern, "1"])
-    if not scenario.effective_rhi_thread:
-        command.extend(["--forbid-log-pattern", r"\[Threading\] RHIThread id ="])
     if args.skip_window_stress or not scenario.window_stress:
         command.append("--skip-window-stress")
     if args.detach_configs:
@@ -625,8 +455,6 @@ def parse_profile_value(value: str) -> object:
 
 def parse_profile_windows(path: Path) -> dict[str, list[dict[str, object]]]:
     profiles: dict[str, list[dict[str, object]]] = {
-        "RHI": [],
-        "RHIRecord": [],
         "RT": [],
         "Prepare": [],
     }
@@ -643,10 +471,7 @@ def parse_profile_windows(path: Path) -> dict[str, list[dict[str, object]]]:
             for key, value in re.findall(
                 r"([A-Za-z_]+)=([^\s]+)", line[marker_index + len(marker) :]
             ):
-                # Digests are fixed-width hexadecimal identifiers. Preserve them
-                # as strings even when a particular value happens to contain only
-                # decimal digits, otherwise int() drops leading zeroes.
-                fields[key] = value if key.endswith("_digest") else parse_profile_value(value)
+                fields[key] = parse_profile_value(value)
             profiles[profile_type].append(fields)
             break
     return profiles
@@ -658,7 +483,7 @@ def aggregate_profile_windows(
     if not selected:
         return {}
 
-    sample_key = "samples" if profile_type in ("RHI", "RHIRecord", "Prepare") else "frames"
+    sample_key = "samples" if profile_type == "Prepare" else "frames"
     sample_count = sum(int(window.get(sample_key, 0)) for window in selected)
     window_ms = sum(float(window.get("window_ms", 0.0)) for window in selected)
 
@@ -692,162 +517,7 @@ def aggregate_profile_windows(
         "samples_per_second": sample_count * 1000.0 / window_ms if window_ms > 0.0 else 0.0,
         "windows": selected,
     }
-    if profile_type == "RHI":
-        aggregate.update(
-            {
-                "mode": selected[-1].get("mode"),
-                "caller_avg_ms": weighted_average("caller_avg_ms"),
-                "caller_max_ms": max(float(window.get("caller_max_ms", 0.0)) for window in selected),
-                "queue_wait_avg_ms": weighted_average("queue_wait_avg_ms"),
-                "queue_wait_max_ms": max(
-                    float(window.get("queue_wait_max_ms", 0.0)) for window in selected
-                ),
-                "work_avg_ms": weighted_average("work_avg_ms"),
-                "work_max_ms": max(float(window.get("work_max_ms", 0.0)) for window in selected),
-                "execute_caller_avg_ms": weighted_average_by(
-                    "execute_caller_avg_ms", "execute"
-                ),
-                "execute_wait_avg_ms": weighted_average_by("execute_wait_avg_ms", "execute"),
-                "execute_work_avg_ms": weighted_average_by("execute_work_avg_ms", "execute"),
-                "present_caller_avg_ms": weighted_average_by(
-                    "present_caller_avg_ms", "present"
-                ),
-                "present_wait_avg_ms": weighted_average_by("present_wait_avg_ms", "present"),
-                "present_work_avg_ms": weighted_average_by("present_work_avg_ms", "present"),
-                "max_enqueue_depth": max(
-                    int(window.get("max_enqueue_depth", 0)) for window in selected
-                ),
-                "max_gpu_pending": max(int(window.get("gpu_pending", 0)) for window in selected),
-            }
-        )
-    elif profile_type == "RHIRecord":
-        average_fields = (
-            "layers_avg",
-            "commands_avg",
-            "candidate_commands_avg",
-            "safe_commands_avg",
-            "parallel_layers_avg",
-            "serial_record_wall_avg_ms",
-            "serial_command_sum_avg_ms",
-            "eligible_record_avg_ms",
-            "predicted_critical_avg_ms",
-            "dispatch_join_est_avg_ms",
-            "predicted_net_avg_ms",
-            "descriptor_bytes_avg",
-            "buffer_barriers_avg",
-            "texture_barriers_avg",
-            "memory_barriers_avg",
-            "used_queries_avg",
-        )
-        digest_prefixes = ("command", "layer", "barrier", "descriptor", "query")
-        golden_digest_prefixes = (
-            "golden_command",
-            "golden_layer",
-            "golden_barrier",
-            "golden_descriptor",
-            "golden_query",
-            "golden_combined",
-            "golden_manifest",
-        )
-        aggregate.update({field: weighted_average(field) for field in average_fields})
-        serial_wall_total_ms = sum(
-            float(window.get("serial_record_wall_avg_ms", 0.0))
-            * int(window.get(sample_key, 0))
-            for window in selected
-        )
-        predicted_net_total_ms = sum(
-            float(window.get("predicted_net_avg_ms", 0.0))
-            * int(window.get(sample_key, 0))
-            for window in selected
-        )
-        aggregate.update(
-            {
-                "queue": selected[-1].get("queue"),
-                "mode": selected[-1].get("mode"),
-                "model_workers": int(selected[-1].get("model_workers", 0)),
-                "model_worker_values": sorted(
-                    {int(window.get("model_workers", 0)) for window in selected}
-                ),
-                "layers_max": max(int(window.get("layers_max", 0)) for window in selected),
-                "commands_max": max(
-                    int(window.get("commands_max", 0)) for window in selected
-                ),
-                "parallel_layers_max": max(
-                    int(window.get("parallel_layers_max", 0)) for window in selected
-                ),
-                "serial_record_wall_max_ms": max(
-                    float(window.get("serial_record_wall_max_ms", 0.0))
-                    for window in selected
-                ),
-                # Derive the tail percentage from weighted totals. Averaging the
-                # per-window percentages would bias windows with little record work.
-                "predicted_net_pct": (
-                    predicted_net_total_ms / serial_wall_total_ms * 100.0
-                    if serial_wall_total_ms > 0.0
-                    else 0.0
-                ),
-                "topology_changes": sum(
-                    int(window.get("topology_changes", 0)) for window in selected
-                ),
-                "golden_complete": sum(
-                    int(window.get("golden_complete", 0)) for window in selected
-                ),
-                "golden_incomplete": sum(
-                    int(window.get("golden_incomplete", 0)) for window in selected
-                ),
-                "golden_unresolved": sum(
-                    int(window.get("golden_unresolved", 0)) for window in selected
-                ),
-                "golden_opaque": sum(
-                    int(window.get("golden_opaque", 0)) for window in selected
-                ),
-                "calibration_tail_ms": max(
-                    float(window.get("calibration_tail_ms", 0.0))
-                    for window in selected
-                ),
-            }
-        )
-        for prefix in digest_prefixes:
-            digest_field = f"{prefix}_digest"
-            variants_field = f"{prefix}_variants"
-            digests = sorted(
-                {
-                    str(window[digest_field])
-                    for window in selected
-                    if digest_field in window
-                }
-            )
-            aggregate[digest_field] = selected[-1].get(digest_field)
-            aggregate[f"{prefix}_digests"] = digests
-            aggregate[f"{prefix}_digest_window_variants"] = len(digests)
-            aggregate[variants_field] = max(
-                int(window.get(variants_field, 0)) for window in selected
-            )
-        golden_total = int(aggregate["golden_complete"]) + int(
-            aggregate["golden_incomplete"]
-        )
-        aggregate["golden_complete_pct"] = (
-            float(aggregate["golden_complete"]) / golden_total * 100.0
-            if golden_total > 0
-            else 0.0
-        )
-        for prefix in golden_digest_prefixes:
-            digest_field = f"{prefix}_digest"
-            variants_field = f"{prefix}_variants"
-            digests = sorted(
-                {
-                    str(window[digest_field])
-                    for window in selected
-                    if digest_field in window
-                }
-            )
-            aggregate[digest_field] = selected[-1].get(digest_field)
-            aggregate[f"{prefix}_digests"] = digests
-            aggregate[f"{prefix}_digest_window_variants"] = len(digests)
-            aggregate[variants_field] = max(
-                int(window.get(variants_field, 0)) for window in selected
-            )
-    elif profile_type == "RT":
+    if profile_type == "RT":
         aggregate.update(
             {
                 "prepare_sample_count": sum(
@@ -935,215 +605,24 @@ def profile_number(run: dict[str, object], profile: str, field: str) -> float:
     data = run.get(profile, {})
     return float(data.get(field, 0.0)) if isinstance(data, dict) else 0.0
 
-def strict_serial_golden_failures(profile: dict[str, object]) -> list[str]:
-    failures: list[str] = []
-    sample_count = int(profile.get("sample_count", 0))
-    complete = int(profile.get("golden_complete", 0))
-    incomplete = int(profile.get("golden_incomplete", 0))
-    unresolved = int(profile.get("golden_unresolved", 0))
-    opaque = int(profile.get("golden_opaque", 0))
-    if sample_count == 0:
-        failures.append("strict serial golden: no RHIRecord tail samples")
-    if complete != sample_count:
-        failures.append(
-            f"strict serial golden: complete={complete}, samples={sample_count}"
-        )
-    if incomplete != 0 or unresolved != 0 or opaque != 0:
-        failures.append(
-            "strict serial golden: "
-            f"incomplete={incomplete}, unresolved={unresolved}, opaque={opaque}"
-        )
-
-    manifest_digests = profile.get("golden_manifest_digests", [])
-    manifest_window_variants = int(
-        profile.get("golden_manifest_digest_window_variants", 0)
-    )
-    if sample_count > 0 and (
-        not isinstance(manifest_digests, list)
-        or len(manifest_digests) != 1
-        or manifest_window_variants != 1
-    ):
-        failures.append(
-            "strict serial golden: unstable tail manifest windows "
-            f"variants={manifest_window_variants}, digests={manifest_digests}"
-        )
-    return failures
-
-def enforce_strict_repeat_manifest_consistency(runs: list[dict[str, object]]) -> None:
-    grouped: dict[str, list[dict[str, object]]] = {}
-    for run in runs:
-        grouped.setdefault(str(run.get("scenario", "")), []).append(run)
-
-    for scenario, scenario_runs in grouped.items():
-        if len(scenario_runs) < 2:
-            continue
-        signatures: set[tuple[str, ...]] = set()
-        for run in scenario_runs:
-            profile = run.get("rhi_record_profile", {})
-            if not isinstance(profile, dict):
-                continue
-            digests = profile.get("golden_manifest_digests", [])
-            if isinstance(digests, list) and digests:
-                signatures.add(tuple(str(value) for value in digests))
-        if len(signatures) <= 1:
-            continue
-
-        signature_text = ";".join(",".join(signature) for signature in sorted(signatures))
-        reason = (
-            "strict serial golden: repeat manifest mismatch "
-            f"scenario={scenario}, manifests={signature_text}"
-        )
-        for run in scenario_runs:
-            run.setdefault("strict_golden_failures", []).append(reason)
-            run.setdefault("failure_reasons", []).append(reason)
-            run["success"] = False
-
-def profile_text(run: dict[str, object], profile: str, field: str) -> str:
-    data = run.get(profile, {})
-    if not isinstance(data, dict):
-        return "-"
-    value = data.get(field)
-    return str(value) if value is not None else "-"
-
-def profile_digest_text(run: dict[str, object], prefix: str) -> str:
-    data = run.get("rhi_record_profile", {})
-    if not isinstance(data, dict):
-        return "-"
-    values = data.get(f"{prefix}_digests", [])
-    if not isinstance(values, list) or not values:
-        return "-"
-    return "<br>".join(f"`{value}`" for value in values)
-
 def write_markdown_summary(path: Path, summary: dict[str, object]) -> None:
     lines = [
-        "# RT/RHI Threading Validation",
+        "# Renderer Threading Validation",
         "",
         f"- Started: `{summary['started_at']}`",
         f"- Duration: `{summary['duration_seconds']:.1f}s`",
         f"- Result: `{'PASS' if summary['success'] else 'FAIL'}`",
         "",
-        "| Scenario | Iteration | Result | RHI caller | RHI wait | RHI work | Depth | RT queue | RT render | GT wait |",
-        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Scenario | Iteration | Result | RT queue | RT render | GT wait |",
+        "|---|---:|---|---:|---:|---:|",
     ]
     for run in summary["runs"]:
         lines.append(
             f"| {run['scenario']} | {run['iteration']} | "
             f"{'PASS' if run['success'] else 'FAIL'} | "
-            f"{profile_number(run, 'rhi_profile', 'caller_avg_ms'):.3f} ms | "
-            f"{profile_number(run, 'rhi_profile', 'queue_wait_avg_ms'):.3f} ms | "
-            f"{profile_number(run, 'rhi_profile', 'work_avg_ms'):.3f} ms | "
-            f"{profile_number(run, 'rhi_profile', 'max_enqueue_depth'):.0f} | "
             f"{profile_number(run, 'rt_profile', 'queue_wait_avg_ms'):.3f} ms | "
             f"{profile_number(run, 'rt_profile', 'render_avg_ms'):.3f} ms | "
             f"{profile_number(run, 'rt_profile', 'gt_wait_avg_ms'):.3f} ms |"
-        )
-    lines.extend(
-        [
-            "",
-            "## Legacy RHI Recording Diagnostics",
-            "",
-            "Compiled renderer runs do not use the layer recorder. Its metrics below are unavailable "
-            "when no `RHIRecord` samples exist; zero entries do not mean zero GPU work.",
-            "",
-            "| Scenario | Iteration | Mode | Workers | Samples/s | Layers avg/max | Commands avg/max | Candidate avg | Safe avg | Parallel layers avg/max | Serial wall avg/max | Command sum avg | Eligible avg | Predicted critical | Dispatch/join | Predicted net | Net % |",
-            "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-        ]
-    )
-    for run in summary["runs"]:
-        lines.append(
-            f"| {run['scenario']} | {run['iteration']} | "
-            f"{profile_text(run, 'rhi_record_profile', 'mode')} | "
-            f"{profile_number(run, 'rhi_record_profile', 'model_workers'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'samples_per_second'):.1f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'layers_avg'):.2f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'layers_max'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'commands_avg'):.2f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'commands_max'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'candidate_commands_avg'):.2f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'safe_commands_avg'):.2f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'parallel_layers_avg'):.2f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'parallel_layers_max'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'serial_record_wall_avg_ms'):.3f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'serial_record_wall_max_ms'):.3f} ms | "
-            f"{profile_number(run, 'rhi_record_profile', 'serial_command_sum_avg_ms'):.3f} ms | "
-            f"{profile_number(run, 'rhi_record_profile', 'eligible_record_avg_ms'):.3f} ms | "
-            f"{profile_number(run, 'rhi_record_profile', 'predicted_critical_avg_ms'):.3f} ms | "
-            f"{profile_number(run, 'rhi_record_profile', 'dispatch_join_est_avg_ms'):.3f} ms | "
-            f"{profile_number(run, 'rhi_record_profile', 'predicted_net_avg_ms'):.3f} ms | "
-            f"{profile_number(run, 'rhi_record_profile', 'predicted_net_pct'):.2f}% |"
-        )
-    lines.extend(
-        [
-            "",
-            "| Scenario | Iteration | Descriptor bytes avg | Barriers B/T/M avg | Queries avg | Per-window max variants C/L/B/D/Q | Tail digest variants C/L/B/D/Q | Topology changes | Calibration tail |",
-            "|---|---:|---:|---:|---:|---|---|---:|---:|",
-        ]
-    )
-    for run in summary["runs"]:
-        lines.append(
-            f"| {run['scenario']} | {run['iteration']} | "
-            f"{profile_number(run, 'rhi_record_profile', 'descriptor_bytes_avg'):.1f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'buffer_barriers_avg'):.2f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'texture_barriers_avg'):.2f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'memory_barriers_avg'):.2f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'used_queries_avg'):.2f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'command_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'layer_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'barrier_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'descriptor_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'query_variants'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'command_digest_window_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'layer_digest_window_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'barrier_digest_window_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'descriptor_digest_window_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'query_digest_window_variants'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'topology_changes'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'calibration_tail_ms'):.6f} ms |"
-        )
-    lines.extend(
-        [
-            "",
-            "| Scenario | Iteration | Command digests | Layer digests | Barrier digests | Descriptor digests | Query digests |",
-            "|---|---:|---|---|---|---|---|",
-        ]
-    )
-    for run in summary["runs"]:
-        lines.append(
-            f"| {run['scenario']} | {run['iteration']} | "
-            f"{profile_digest_text(run, 'command')} | "
-            f"{profile_digest_text(run, 'layer')} | "
-            f"{profile_digest_text(run, 'barrier')} | "
-            f"{profile_digest_text(run, 'descriptor')} | "
-            f"{profile_digest_text(run, 'query')} |"
-        )
-    lines.extend(
-        [
-            "",
-            "### Serial Golden Contract",
-            "",
-            "`complete` is fail-closed: any opaque command, unresolved native resource, "
-            "or descriptor replay mismatch makes that submission incomplete.",
-            "",
-            "| Scenario | Iteration | Complete / incomplete | Complete % | Unresolved | Opaque | Golden variants C/L/B/D/Q/Combined/Manifest | Manifest digests |",
-            "|---|---:|---:|---:|---:|---:|---|---|",
-        ]
-    )
-    for run in summary["runs"]:
-        lines.append(
-            f"| {run['scenario']} | {run['iteration']} | "
-            f"{profile_number(run, 'rhi_record_profile', 'golden_complete'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'golden_incomplete'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'golden_complete_pct'):.2f}% | "
-            f"{profile_number(run, 'rhi_record_profile', 'golden_unresolved'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'golden_opaque'):.0f} | "
-            f"{profile_number(run, 'rhi_record_profile', 'golden_command_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'golden_layer_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'golden_barrier_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'golden_descriptor_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'golden_query_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'golden_combined_variants'):.0f}/"
-            f"{profile_number(run, 'rhi_record_profile', 'golden_manifest_variants'):.0f} | "
-            f"{profile_digest_text(run, 'golden_manifest')} |"
         )
     lines.extend(
         [
@@ -1210,7 +689,7 @@ def parse_args(repo_root: Path) -> argparse.Namespace:
     default_exe = repo_root / "target" / "bin" / "Debug" / "MoerEditor.exe"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     parser = argparse.ArgumentParser(
-        description="Run repeatable MoerEngine RT/RHI runtime validation matrices."
+        description="Run repeatable MoerEngine renderer threading validation matrices."
     )
     parser.add_argument("--exe", type=Path, default=default_exe)
     parser.add_argument("--workdir", type=Path)
@@ -1233,26 +712,12 @@ def parse_args(repo_root: Path) -> argparse.Namespace:
     parser.add_argument("--ready-log-pattern", default="Copied ImGui frame includes")
     parser.add_argument("--min-nonblack-ratio", type=float, default=0.01)
     parser.add_argument("--profile-tail-windows", type=int, default=5)
-    parser.add_argument(
-        "--strict-serial-golden",
-        action="store_true",
-        help=(
-            "fail a run unless every selected RHIRecord tail sample has a complete "
-            "serial golden, every selected tail window has the same manifest, "
-            "and repeated runs of one scenario preserve that manifest"
-        ),
-    )
     parser.add_argument("--skip-window-stress", action="store_true")
     parser.add_argument("--detach-configs", action="store_true")
     parser.add_argument("--continue-on-failure", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
-    if args.strict_serial_golden:
-        parser.error(
-            "--strict-serial-golden requires the retired renderer layer recorder; "
-            "use TestRHIParallelRecordVulkan --compiled-commands for GPU output comparisons"
-        )
     if args.repeat < 1:
         parser.error("--repeat must be at least 1")
     if args.soak_seconds is None:
@@ -1271,7 +736,6 @@ def main() -> int:
         for name, scenario in SCENARIOS.items():
             print(
                 f"{name}: renderer={scenario.renderer}, rt={scenario.render_thread}, "
-                f"rhi={scenario.rhi_thread}, bypass={scenario.rhi_bypass}, "
                 f"lag={scenario.max_frame_lag}, execution=compiled, "
                 f"graph_dump={scenario.render_graph_debug_dump}, "
                 f"graph_parallel_record={scenario.render_graph_parallel_recording}, "
@@ -1372,12 +836,6 @@ def main() -> int:
             )
             captures = report.get("captures", [])
             profile_windows = parse_profile_windows(run_dir / "stdout.log")
-            rhi_profile = aggregate_profile_windows(
-                profile_windows["RHI"], "RHI", args.profile_tail_windows
-            )
-            rhi_record_profile = aggregate_profile_windows(
-                profile_windows["RHIRecord"], "RHIRecord", args.profile_tail_windows
-            )
             rt_profile = aggregate_profile_windows(
                 profile_windows["RT"], "RT", args.profile_tail_windows
             )
@@ -1389,18 +847,8 @@ def main() -> int:
                 if captures
                 else None
             )
-            strict_golden_failures = (
-                strict_serial_golden_failures(rhi_record_profile)
-                if args.strict_serial_golden
-                else []
-            )
-            success = (
-                completed.returncode == 0
-                and bool(report.get("success"))
-                and not strict_golden_failures
-            )
+            success = completed.returncode == 0 and bool(report.get("success"))
             failure_reasons = list(report.get("failure_reasons", []))
-            failure_reasons.extend(strict_golden_failures)
             run = {
                 "scenario": scenario.name,
                 "iteration": iteration,
@@ -1413,10 +861,6 @@ def main() -> int:
                 "min_nonblack_ratio": min_nonblack,
                 "duration_seconds": report.get("duration_seconds", 0.0),
                 "failure_reasons": failure_reasons,
-                "strict_serial_golden": args.strict_serial_golden,
-                "strict_golden_failures": strict_golden_failures,
-                "rhi_profile": rhi_profile,
-                "rhi_record_profile": rhi_record_profile,
                 "rt_profile": rt_profile,
                 "prepare_profile": prepare_profile,
                 "report": str(report_path),
@@ -1442,9 +886,6 @@ def main() -> int:
         if stop:
             break
 
-    if args.strict_serial_golden:
-        enforce_strict_repeat_manifest_consistency(runs)
-
     summary = {
         "started_at": started_at,
         "duration_seconds": time.monotonic() - started,
@@ -1453,7 +894,6 @@ def main() -> int:
         "repeat": args.repeat,
         "soak_seconds": args.soak_seconds,
         "profile_tail_windows": args.profile_tail_windows,
-        "strict_serial_golden": args.strict_serial_golden,
         "dry_run": args.dry_run,
         "success": all(run["success"] for run in runs)
         and len(runs) == len(selected_names) * args.repeat,

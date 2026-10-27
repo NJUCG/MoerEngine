@@ -37,9 +37,6 @@ struct DeviceInitInfo {
     ERHIType         rhi_type;
     std::string_view name;
     std::string_view rhi_api_version;
-    bool             rhi_thread                          = false;
-    bool             rhi_bypass                          = true;
-    bool             thread_profile_logging              = false;
     uint32_t         submission_batch_window =
         Moer::Render::RHISubmissionPipelinePolicy::DefaultBatchWindow;
     bool             rhi_heartbeat_enabled               = false;

@@ -36,9 +36,6 @@ double SnapshotFloat(std::string_view name) {
 int main() {
     EngineConsoleStartupConfig startup_config{
         .render_thread                          = true,
-        .rhi_thread                             = true,
-        .rhi_bypass                             = false,
-
         .configured_submission_batch_window     = 5,
         .rhi_heartbeat_enabled                  = true,
         .rhi_heartbeat_stall_timeout_ms         = 7000,

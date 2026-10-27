@@ -167,16 +167,6 @@ struct EngineConsoleControl::Impl {
             &EngineConsoleStartupConfig::render_thread
         );
         register_bool(
-            "Engine.Threading.RHIThread",
-            "Configured request for a dedicated RHI thread; bypass and backend policy may disable it.",
-            &EngineConsoleStartupConfig::rhi_thread
-        );
-        register_bool(
-            "Engine.Threading.RHIBypass",
-            "Configured request to bypass queued RHI translation.",
-            &EngineConsoleStartupConfig::rhi_bypass
-        );
-        register_bool(
             "Engine.Threading.ProfileLogging",
             "Configured request for periodic threading profile diagnostics.",
             &EngineConsoleStartupConfig::profile_logging

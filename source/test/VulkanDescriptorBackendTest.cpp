@@ -319,8 +319,6 @@ int main(int argc, char** argv) {
             .rhi_type                               = ERHIType::Vulkan,
             .name                                   = "DescriptorBackendTest",
             .rhi_api_version                        = "1.3",
-            .rhi_thread                             = true,
-            .rhi_bypass                             = false,
         });
         device  = true;
         shaders = true;

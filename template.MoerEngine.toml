@@ -16,8 +16,6 @@ font_size = 17.0
 
 [engine.threading]
 render_thread = false
-rhi_thread = false
-rhi_bypass = true
 max_frame_lag = 0
 profile_logging = false
 # Bounded number of RHI batches allowed to overlap Translate and Submission.

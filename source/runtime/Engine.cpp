@@ -243,8 +243,6 @@ StartupCVarOverrides ParseStartupCVarOverrides(int argc, const char** argv) {
 EngineConsoleStartupConfig MakeConsoleStartupConfig(const Config::GlobalConfig& config) {
     return {
         .render_thread = config.engine.threading.render_thread,
-        .rhi_thread = config.engine.threading.rhi_thread,
-        .rhi_bypass = config.engine.threading.rhi_bypass,
         .profile_logging = config.engine.threading.profile_logging,
         .configured_submission_batch_window = config.engine.threading.submission_batch_window,
         .rhi_heartbeat_enabled = config.engine.threading.rhi_heartbeat_enabled,
@@ -1314,13 +1312,11 @@ void Engine::Init(
 
     LOG_INFO("[Threading] GameThread id = {}", GetGameThreadId());
     LOG_INFO(
-        "[Threading] render_thread={}, rhi_thread={}, rhi_bypass={}, max_frame_lag={}, "
+        "[Threading] render_thread={}, max_frame_lag={}, "
         "profile_logging={}, submission_batch_window={}, "
         "rhi_heartbeat_enabled={}, rhi_heartbeat_stall_timeout_ms={}, "
         "rhi_heartbeat_poll_interval_ms={}",
         startup_config.render_thread,
-        startup_config.rhi_thread,
-        startup_config.rhi_bypass,
         startup_config.max_frame_lag,
         startup_config.profile_logging,
         submission_batch_window,
@@ -1383,9 +1379,6 @@ void Engine::Init(
                 .rhi_type        = rhi_type,
                 .name            = "MoerEngine",
                 .rhi_api_version = config.engine.rhi.api_version,
-                .rhi_thread              = startup_config.rhi_thread,
-                .rhi_bypass              = startup_config.rhi_bypass,
-                .thread_profile_logging  = startup_config.profile_logging,
                 .submission_batch_window = submission_batch_window,
                 .rhi_heartbeat_enabled =
                     startup_config.rhi_heartbeat_enabled,

@@ -437,12 +437,7 @@ public:
             retirement_serial(_other.retirement_serial) {}
     };
 
-    VkCommandQueue(
-        VulkanDevice& _device,
-        EQueueType    _type,
-        bool          _enable_rhi_thread = false,
-        bool = false
-    );
+    VkCommandQueue(VulkanDevice& _device, EQueueType _type);
     ~VkCommandQueue();
     WaitEvent   Execute(CmdSubmit&& _submit) override;
     void        Wait(WaitEvent _event) override;
@@ -579,8 +574,6 @@ private:
         bool                                  active{false};
         std::chrono::steady_clock::time_point started{};
     } split_profiling_cpu_frame;
-
-    bool                    rhi_thread_enabled{false};
 
     std::mutex   exec_mtx;
     RHITransferableOwnershipGate runtime_execution_gate;

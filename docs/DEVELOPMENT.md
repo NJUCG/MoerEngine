@@ -332,6 +332,13 @@ Vulkan 只接受 `Compiled` 命令流；任何非空的非 compiled 提交和推
 翻译。旧 `RHI.CommandRecording.Parallel*` 配置已移除。资源保活仍随提交进入 Completion，
 回读 staging 在 GPU 完成后读取并回收；没有新增一份资源生命周期。
 
+Vulkan 提交统一由 `RHIExecutor` 调度：Translate 只录制并交接拥有资源的提交包，Submission
+独占原生提交，Completion 在 GPU 完成后发布结果并回收。Queue 不再保存另一套 RHI 工作队列；
+直接调用 Queue 的 `Execute/Present` 会被拒绝。提交顺序由 Executor 保证，共享 `VkQueue`
+的 host 锁仍负责原生队列互斥。同步边界先排空 Executor 的录制与提交，再等待 Queue 的完成
+处理，不能只等待 GPU timeline 而漏掉 CPU 回收。`rhi_thread/rhi_bypass` 和旧
+`parallel_record*` 配置已移除；Render Thread、帧延迟和 RDG 并行录制仍是独立的上层选择。
+
 CUDA/TensorRT 使用两个 compiled 图之间的显式交接，不在 RDG 录制回调内提交队列。
 前图先导出固定边界并提交；interop owner 把具体共享纹理从 `Sampled` 转为 `GENERAL`、
 交给 external queue family，并通过导出的 RHI timeline 让 CUDA 等待。

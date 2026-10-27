@@ -57,10 +57,7 @@ struct QueueFamilyIndices {
 };
 
 struct VulkanRHIConfig {
-    uint32 api_version                            = VK_API_VERSION_1_3;
-    bool   rhi_thread                             = false;
-    bool   rhi_bypass                             = true;
-    bool   thread_profile_logging                 = false;
+    uint32 api_version = VK_API_VERSION_1_3;
 };
 
 struct VulkanDeviceInfo {
@@ -421,10 +418,6 @@ private:
     UniquePtr<VkCommandQueue> m_graphics_command_queue{};
     UniquePtr<VkCommandQueue> m_compute_command_queue{};
     UniquePtr<VkCopyQueue>    m_copy_queue{};
-
-    // Runtime configuration.
-    bool                rhi_thread_enabled                     = false;
-    bool                thread_profile_logging                 = false;
 
     // Fault publication and diagnostics.
     std::atomic<EVulkanFaultPublishState> fault_state{EVulkanFaultPublishState::Healthy};

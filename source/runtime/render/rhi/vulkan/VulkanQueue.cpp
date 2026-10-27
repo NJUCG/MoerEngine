@@ -50,6 +50,9 @@
 namespace Moer::Render {
 namespace {
 
+// Keep the Submission owner's wait for a swapchain image bounded.
+constexpr uint64 kPresentAcquireTimeoutNanoseconds = 50'000'000;
+
 void ValidateTextureTransferDataSize(const VulkanTexture& _texture, uint3 _extent, uint64 _byte_size) {
     const uint64 expected_byte_size = GetSizeFromImageFormat(_texture.GetFormat(), _extent);
     if (_byte_size != expected_byte_size) {
@@ -3583,12 +3586,7 @@ QueryPublishBatch PublishUnsubmittedQueryErrors(
     return query_batch;
 }
 
-VkCommandQueue::VkCommandQueue(
-    VulkanDevice& _device,
-    EQueueType    _type,
-    bool          _enable_rhi_thread,
-    bool
-) :
+VkCommandQueue::VkCommandQueue(VulkanDevice& _device, EQueueType _type) :
     CommandQueue(),
     vk_device(_device),
     queue(_type, _device),
@@ -3598,8 +3596,7 @@ VkCommandQueue::VkCommandQueue(
         s_queue_max_frame_in_flight * s_query_max_storage * 4,
         _type
     ),
-    profiler_storage(timestamp_pool),
-    rhi_thread_enabled(_enable_rhi_thread) {
+    profiler_storage(timestamp_pool) {
     timeline = MoerNew(VulkanTimeline(vk_device));
 
     try {
@@ -4900,7 +4897,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentSwapchain(
             recorded.command_contexts.submitted.push_back(AcquireCommandContext());
             auto& vk_command_context = *recorded.command_contexts.submitted.back();
             const auto acquire            = sc->AcquireNextImage(
-                vk_command_context.GetImageReadySemaphore(), rhi_thread_enabled ? 0 : 50'000'000
+                vk_command_context.GetImageReadySemaphore(), kPresentAcquireTimeoutNanoseconds
             );
             final_outcome = acquire.outcome;
             AccumulatePresentReceiptOutcome(

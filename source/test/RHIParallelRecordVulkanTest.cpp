@@ -17158,13 +17158,10 @@ int main(int argc, const char** argv) {
 
         VulkanFaultInjection::Configure(0);
         RenderDevice::Init(DeviceInitInfo{
-            .rhi_type           = ERHIType::Vulkan,
-            .name               = "RHIParallelRecordVulkanTest",
-            .rhi_api_version    = "1.3",
-            .rhi_thread         = true,
-            .rhi_bypass         = false,
-
-            .submission_batch_window                = submission_batch_window,
+            .rhi_type                = ERHIType::Vulkan,
+            .name                    = "RHIParallelRecordVulkanTest",
+            .rhi_api_version         = "1.3",
+            .submission_batch_window = submission_batch_window,
         });
         render_device_initialized = true;
 

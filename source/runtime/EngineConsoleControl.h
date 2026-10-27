@@ -15,8 +15,6 @@ struct EditorConfig;
 
 struct EngineConsoleStartupConfig {
     bool          render_thread                          = false;
-    bool          rhi_thread                             = false;
-    bool          rhi_bypass                             = true;
     bool          profile_logging                        = false;
     std::uint32_t configured_submission_batch_window     = 2;
     bool          rhi_heartbeat_enabled                  = false;

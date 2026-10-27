@@ -1,28 +1,27 @@
-# RT/RHI Threading Validation
+# Renderer Threading Validation
 
-These Windows-only tools turn the editor runtime checks used during the RT/RHI
-split into repeatable validation runs.
+These Windows-only tools validate the compiled RDG renderer and the shared
+Executor → Translate → Submission → Completion path. The configurable frontend
+choices are the Render Thread, its frame-lag limit, and RDG parallel recording.
+Every Vulkan scenario uses the same submission executor.
 
-## Tools
+## Tools and Configuration
 
-- `runtime_verify.py` launches one `MoerEditor` process, waits for a renderer
-  ready marker, captures the main window and platform viewports, optionally
-  stresses window state, closes the editor, and validates its logs.
-- `run_matrix.py` generates an isolated TOML config for each scenario and runs
-  `runtime_verify.py`. It never rewrites the base config or the config next to
-  the executable.
+- `runtime_verify.py` launches one editor process, waits for a renderer-ready
+  marker, captures windows, optionally stresses window state, closes the editor,
+  and validates its logs.
+- `run_matrix.py` creates an isolated TOML config for each scenario and invokes
+  the verifier. It does not rewrite the base config or the executable's config.
+- `compare_captures.py` compares corresponding captures from two runs.
+- `run_parallel_record_vulkan_test.py` runs the compiled-submission integration
+  tests independently of editor captures.
 
-`MoerEditor --config <path>` selects the generated config. Launches without
-`--config` keep using `MoerEngine.toml` next to the executable.
-`run_matrix.py` defaults to the tracked `template.MoerEngine.toml`; pass
-`--base-config` only when intentionally testing another complete template.
-
-Matrix configs set `engine.threading.profile_logging=true`. The regular and
-template configs keep it disabled, so normal editor runs do not emit profiling
-windows. They also set `engine.render.raster.render_graph` and
-`render_graph_debug_dump` plus `render_graph_parallel_recording` explicitly for every scenario. The existing
-functional sets keep the RenderGraph path off; the dedicated `rendergraph` set
-enables both the graph and its one-time debug dump.
+`MoerEditor --config <path>` selects a generated config. The matrix defaults to
+`template.MoerEngine.toml`; use `--base-config` to choose another complete template.
+Generated configs enable `engine.threading.profile_logging` and set the Render
+Thread, frame lag, renderer, Raster graph debug dump, and Raster parallel-recording
+choices explicitly. All renderer paths use compiled RDG commands; graph debug
+output is an observation option, not a switch between submission models.
 
 ## Common Commands
 
@@ -32,291 +31,149 @@ Build first:
 cmake --build build --config Debug --target MoerEditor --parallel 4
 ```
 
-List scenarios:
+List scenarios, run the smoke set, or validate generated configs without launching:
 
 ```powershell
 python tools/threading/run_matrix.py --list
+python tools/threading/run_matrix.py --set smoke
+python tools/threading/run_matrix.py --set full --dry-run
 ```
 
-Run the three-scenario smoke set:
+Run complete functional, graph-dump, resource-display, and lifecycle checks:
 
 ```powershell
-python tools/threading/run_matrix.py --set smoke --base-config template.MoerEngine.toml
-```
-
-Run the self-terminating optional-feature lifecycle checks:
-
-```powershell
-python tools/threading/run_matrix.py --set feature --base-config template.MoerEngine.toml
-```
-
-The `feature_renderer_switch` scenario uses the linear Raster path and validates
-Raster reload, Raster-to-Raytracing, Raytracing-to-Raster, normal shutdown, and
-the exact renderer destruction counts. It is intentionally independent of the
-dedicated RenderGraph validation set so it can gate every optional-feature
-build without coupling feature coverage to RenderGraph coverage. It gates on
-functional lifecycle markers rather than periodic profiling markers, which are
-not guaranteed to be emitted before a fast Release validation run exits.
-
-The Raster recording feature checks form an isolated correctness matrix. Both
-`feature_raster_graph_serial_recording` and
-`feature_raster_graph_parallel_recording` use RT + threaded RHI; only the upper
-`render_graph_parallel_recording` switch differs. The
-`feature_raster_graph_parallel_recording_gt` variant exercises the same upper
-worker handoff without a Render Thread. The
-`feature_raster_graph_parallel_recording_reload_switch` variant keeps upper
-recording enabled while recreating Raster and switching Raster→Raytracing→Raster,
-covering snapshot ownership across renderer teardown. All four leave the lower
-`engine.threading.parallel_recording` switch off and use the Raster-only exit
-or renderer-switch completion marker, so they validate RDG recording ownership,
-join behavior, and normal shutdown without coupling the result to the separate
-lower parallel translator. Parallel variants also require the graph dump to
-classify `HiZBuild`, `DirectionalShadowMask`, `Lighting`, and `Skybox` as
-`parallel-record`, and require completed TaskGraph dispatch markers for both
-two-pass production groups. A silent no-TaskGraph serial fallback therefore
-fails the feature gate.
-
-Run the full functional matrix:
-
-```powershell
-python tools/threading/run_matrix.py --set full --continue-on-failure --base-config template.MoerEngine.toml
-```
-
-Run the seven-scenario Raster RenderGraph matrix:
-
-```powershell
-python tools/threading/run_matrix.py --set rendergraph --continue-on-failure --base-config template.MoerEngine.toml
-```
-
-This covers the same Raster RT/RHI/bypass/lag combinations as `full`, but with
-the graph and graph debug dump enabled. It also contains a validation-only
-Raster reload, Raster-to-Raytracing switch and Raytracing-to-Raster switch.
-`full` remains the original nine functional scenarios and exercises the linear
-Raster fallback.
-
-The reload/switch scenario emits its final marker and requests a normal editor
-shutdown itself. `runtime_verify.py --expect-exit-after-ready` then validates
-the exit code, four render-queue drains, four renderer destructions, three
-Raster destructor completions and one Raytracing destructor completion without calling `PrintWindow`
-on a window that has crossed several renderer lifetimes. That lifecycle-only
-scenario intentionally produces no capture; the other graph scenarios retain
-the visual and resize/restore coverage.
-
-Compare the corresponding maximized captures from graph-off and graph-on runs:
-
-```powershell
-python tools/threading/compare_captures.py `
-  target/validation/rt_rhi/<linear-run>/raster_sync `
-  target/validation/rt_rhi/<graph-run>/raster_graph_sync `
-  --output target/validation/rt_rhi/<comparison>/report.json `
-  --max-mean-absolute-error 1 `
-  --max-rmse 3 `
-  --max-p99 10 `
-  --min-all-channels-le-2-ratio 0.80
-```
-
-The comparator deterministically prefers the common `01_maximized.bmp`,
-requires equal dimensions, reports RGB error distribution and exits nonzero
-when an enabled threshold fails. The nonzero tolerance accounts for dynamic
-sampling between two independent editor processes; retain the JSON report with
-the validation evidence, not in Git.
-
-Run paired graph-off/on captures for the key GBuffer textures:
-
-```powershell
+python tools/threading/run_matrix.py --set full --continue-on-failure
+python tools/threading/run_matrix.py --set rendergraph --continue-on-failure
 python tools/threading/run_matrix.py --set rendergraph-resources --continue-on-failure
+python tools/threading/run_matrix.py --set feature --continue-on-failure
 ```
 
-This eight-scenario set forces the editor display to `base_color`, `normal`, and
-`depth_linear_sampler`, with one synchronous linear and graph run for each
-texture. A second `base_color` pair runs with RT + threaded RHI to cover the
-non-empty framebuffer-selection snapshot across GT/RT. Use
-`compare_captures.py` on every corresponding pair: the matrix summary validates
-each process independently and is not, by itself, a graph-off/on visual-equivalence
-result. The validation-only framebuffer flag is strictly limited to those
-textures plus `tonemapping_output`; normal launches leave the selection empty
-and preserve the UI-controlled framebuffer.
-
-Run the isolated synthetic device-loss scenario:
+For repeated steady-state checks, keep the scene fixed and avoid window stress:
 
 ```powershell
-python tools/threading/run_matrix.py --set fault --base-config template.MoerEngine.toml
-```
-
-The `fault` set passes `--vulkan-fault-inject=present-submit@3` to the editor.
-Build the editor with `MOER_VULKAN_TEST_SUPPORT=ON` for this scenario and for
-Ordinary builds reject fault-injection arguments.
-It is deliberately separate from `full`, which remains the original nine
-non-fault functional scenarios.
-
-Run repeated threaded RT soak checks for five minutes per process:
-
-```powershell
-python tools/threading/run_matrix.py --set soak --repeat 3 --soak-seconds 300 --base-config template.MoerEngine.toml
-```
-
-The old `--strict-serial-golden` renderer comparison mode is retired and the
-runner rejects it. Use `TestRHIParallelRecordVulkan --compiled-commands` for GPU
-output comparisons. Low-level legacy recordings may still collect serial
-summaries when profiling is enabled; these do not validate the active compiled
-renderer path. Barrier summaries consume resolved batches in diagnostics code,
-without inferring resource dependencies in the backend.
-
-Generate and validate all scenario configs without launching the editor:
-
-```powershell
-python tools/threading/run_matrix.py --set full --dry-run --base-config template.MoerEngine.toml
+python tools/threading/run_matrix.py --set soak --repeat 3 --soak-seconds 300
+python tools/threading/run_matrix.py --scenario raster_rt1 --repeat 3 --skip-window-stress
+python tools/threading/run_matrix.py --scenario ray_rt1 --repeat 3 --skip-window-stress
 ```
 
 ## Scenario Coverage
 
-| Scenario | Renderer | Graph | Dump | RT | RHI | Bypass | Lag | Window stress |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| `raster_sync` | Raster | off | off | off | off | on | 0 | no |
-| `raster_rhi_bypass` | Raster | off | off | off | configured | on | 0 | no |
-| `raster_rhi_gt` | Raster | off | off | off | on | off | 0 | yes |
-| `raster_rt0_rhi` | Raster | off | off | on | on | off | 0 | no |
-| `raster_rt1_rhi` | Raster | off | off | on | on | off | 1 | yes |
-| `raster_rt1_rhi_off` | Raster | off | off | on | off | off | 1 | no |
-| `raster_graph_sync` | Raster | on | on | off | off | on | 0 | no |
-| `raster_graph_rhi_bypass` | Raster | on | on | off | configured | on | 0 | no |
-| `raster_graph_rhi_gt` | Raster | on | on | off | on | off | 0 | yes |
-| `raster_graph_rt0_rhi` | Raster | on | on | on | on | off | 0 | no |
-| `raster_graph_rt1_rhi` | Raster | on | on | on | on | off | 1 | yes |
-| `raster_graph_rt1_rhi_off` | Raster | on | on | on | off | off | 1 | no |
-| `raster_graph_rt1_rhi_reload_switch` | Raster→Raster→Raytracing→Raster | on (Raster) | on | on | on | off | 1 | no |
-| `ray_rhi_gt` | Raytracing | n/a | n/a | off | on | off | 0 | no |
-| `ray_rt0_rhi` | Raytracing | n/a | n/a | on | on | off | 0 | no |
-| `ray_rt1_rhi` | Raytracing | n/a | n/a | on | on | off | 1 | yes |
-| `ray_rt1_rhi_fault_present_submit` | Raytracing | n/a | n/a | on | on | off | 1 | no |
-| `feature_renderer_switch` | Raster→Raster→Raytracing→Raster | off | off | on | on | off | 1 | no |
-| `feature_raster_graph_serial_recording` | Raster | on | on | on | on | off | 1 | no |
-| `feature_raster_graph_parallel_recording` | Raster | on | on | on | on | off | 1 | no |
-| `feature_raster_graph_parallel_recording_gt` | Raster | on | on | off | on | off | 0 | no |
-| `feature_raster_graph_parallel_recording_reload_switch` | Raster→Raster→Raytracing→Raster | on | on | on | on | off | 1 | no |
+| Set | Scenarios | What varies |
+|---|---|---|
+| `smoke` | `raster_gt`, `raster_rt1`, `ray_rt1` | Renderer and frontend ownership |
+| `full` | `raster_gt`, `raster_rt0`, `raster_rt1`, `ray_gt`, `ray_rt0`, `ray_rt1` | Game Thread or Render Thread, lag 0 or 1 |
+| `rendergraph` | `raster_graph_gt`, `raster_graph_rt0`, `raster_graph_rt1`, `raster_graph_rt1_reload_switch` | Same frontend choices with graph dumps, plus reload/switch |
+| `rendergraph-resources` | `raster_key_{base,normal,depth}_{gt,rt1}` | GBuffer selection and GT/RT snapshot ownership |
+| `soak` | `raster_rt1`, `ray_rt1` | Long-running RT with lag 1 |
+| `fault` | `ray_rt1_fault_present_submit` | Synthetic device loss at Present submit |
+| `feature` | Five scenarios below | Recording and renderer lifecycle |
 
-## Pass Criteria
+`raster_gt`, `raster_rt1`, `ray_rt1` and their corresponding graph-dump scenarios
+also stress window resizing, minimizing and restoring unless disabled by
+`--skip-window-stress`. The remaining scenarios isolate their selected behavior.
 
-Vulkan integration tests require a build configured with
-`cmake -S . -B build -DMOER_VULKAN_TEST_SUPPORT=ON` before building
-`TestRHIParallelRecordVulkan`. Test observers and scripted overrides are excluded
-from ordinary builds; this option defaults to `OFF`.
+The feature scenarios are:
 
-A run passes only when all of the following are true:
+- `feature_renderer_switch`: Raster reload, Raster→Raytracing→Raster, and normal
+  shutdown with exact renderer-destruction counts.
+- `feature_raster_graph_serial_recording`: RT with lag 1 and serial RDG recording.
+- `feature_raster_graph_parallel_recording`: the same lifecycle with parallel RDG
+  recording enabled.
+- `feature_raster_graph_parallel_recording_gt`: parallel RDG recording without a
+  Render Thread.
+- `feature_raster_graph_parallel_recording_reload_switch`: parallel recording
+  across renderer reload and switching.
 
-- The expected GT/RT/RHI mode markers appear in the log.
-- Every non-fault run emits both PrepareFrame and RHI serial-recording profile
-  windows. The short synthetic fault run is exempt because it can exit before
-  either one-second window completes.
-- Raster runs emit exactly one execution-mode marker per Raster renderer
-  instance. The reload/switch seam requires exactly three Raster mode markers
-  and at least three graph dumps; topology changes may legitimately add another
-  unique dump. Graph runs must not emit `[RenderGraph][Fallback]`.
-- No default forbidden pattern appears, including assertion, Vulkan VUID,
-  device lost, queue submission failure, access violation, or tracked resource
-  residue.
-- Every requested screenshot succeeds and exceeds the nonblack threshold.
-- The process handles `WM_CLOSE`, exits within the timeout, and returns code 0.
+Lifecycle scenarios terminate themselves after publishing the final marker and
+validate exit status and teardown counts. They deliberately omit screenshots and
+periodic profiling gates, which may not appear before a fast run exits. Parallel
+variants require completed TaskGraph dispatch markers with at least two worker
+jobs; a serial fallback does not satisfy the gate.
 
-The fault scenario keeps the default forbidden scan active and exempts only the
-fully anchored, expected `[VulkanFault][First]` error line. Injection and summary
-lines receive no exemption. It requires exactly one of each marker. The
-first-fault line must identify the synthetic fault injected at the third
-Present-submit attempt as `VK_ERROR_DEVICE_LOST`, including its queue, timeline,
-and work serial. Before publishing that fault, the injector takes the exclusive
-native-operation gate, locks every unique queue, and uses `vkDeviceWaitIdle` to
-make `predrained=true` safe even when compute or transfer has a dedicated queue.
-The summary must prove that the first fault was latched once, the latched result
-was `VK_ERROR_DEVICE_LOST`, no native submit or present occurred afterward, at
-least one later logical operation was rejected, command-pool reset was skipped,
-failed allocators were quarantined, and all queue `Sync` paths completed.
-
-For focused verifier runs, `--allow-forbidden-log-pattern REGEX` exempts only
-matching lines from forbidden-pattern checks; it does not disable checks for
-other lines. `--require-log-count REGEX COUNT` requires an exact regex match
-count across `stdout.log` and `stderr.log`. Both options may be repeated.
-
-Each run writes `stdout.log`, `stderr.log`, screenshots, its generated
-`MoerEngine.toml`, and `report.json`. The matrix root also contains
-`summary.json` and `summary.md`. The default output root is ignored build output
-under `target/validation/rt_rhi/`.
-
-The summary aggregates the last five one-second profile windows by default.
-RHI data includes caller cost, enqueue-to-start latency, backend work time,
-Execute/Present splits, maximum queue depth, and pending GPU timeline distance.
-RHI serial-recording data is stored in each run's `rhi_record_profile` object.
-It includes layer and command counts, measurement-candidate and currently-safe
-counts, serial wall and per-command sums, eligible work, modelled critical path,
-dispatch/join estimate, predicted net saving, descriptor bytes, barrier/query
-counts, calibration tail, topology changes, and command/layer/barrier/descriptor/
-query digests. The `golden_*` fields additionally report the semantic serial
-contract captured at the actual recording sites: reordered command/layer
-shape, emitted barriers, descriptor layout and resource bindings, and timestamp
-query events. `golden_complete` plus `golden_incomplete` equals the sampled
-submission count; incomplete samples fail closed and are never accepted as a
-baseline. Timing and count averages are weighted by `samples`; maxima are
-taken across the selected tail windows. `predicted_net_pct` is derived from the
-weighted net-saving and serial-wall totals instead of averaging percentages.
-For each digest family, `*_digests` contains the sorted unique window rollups,
-`*_digest_window_variants` counts those rollups, and `*_variants` is the maximum
-number of per-frame variants reported by any selected window. `summary.md`
-contains timing, workload/digest-variant, and digest tables for the same data.
-RT data includes frame prepare, task queue latency, render execution, GT
-lag-limit wait, and maximum pending frames; Prepare, Render, and GT wait use
-their own sample counts when tail windows are combined. PrepareFrame data is emitted for
-both game-thread and render-thread scenarios. It separates window handling,
-scripting/test/UI hooks, camera and test state, config snapshotting, scene
-update and snapshot construction, UI composition and draw-packet copying, plus
-unattributed time. The report also retains per-window maxima and workload
-counters so a timing change can be distinguished from a change in scene or UI
-work. PrepareFrame averages are weighted by the `samples` count. Use
-`--profile-tail-windows` to change the steady-state window.
-
-For attribution work, keep the scene fixed and run at least three processes per
-scenario. Skipping window stress avoids mixing resize/minimize behavior into the
-steady-state tail windows:
+Resource-display scenarios select `base_color`, `normal` or
+`depth_linear_sampler`. Each selection runs once from GT and once with RT lag 1.
+Compare corresponding captures to inspect their visual consistency:
 
 ```powershell
-python tools/threading/run_matrix.py --scenario raster_rt1_rhi --repeat 3 --skip-window-stress --base-config template.MoerEngine.toml --outdir target/validation/rt_rhi/prepare_raster
-python tools/threading/run_matrix.py --scenario ray_rt1_rhi --repeat 3 --skip-window-stress --base-config template.MoerEngine.toml --outdir target/validation/rt_rhi/prepare_ray
+python tools/threading/compare_captures.py `
+  target/validation/rt_rhi/<run>/raster_key_base_gt `
+  target/validation/rt_rhi/<run>/raster_key_base_rt1 `
+  --output target/validation/rt_rhi/<comparison>/report.json `
+  --max-mean-absolute-error 1 --max-rmse 3 --max-p99 10 `
+  --min-all-channels-le-2-ratio 0.80
 ```
 
-Each run's `prepare_profile` object in `summary.json` contains the weighted
-breakdown and workload totals. `summary.md` presents the same data in timing and
-workload tables. Every non-fault profiled matrix scenario requires at least one
-`[ThreadingProfile][Prepare]` and one `[ThreadingProfile][RHIRecord]` window
-before it can pass. The short synthetic fault scenario is exempt because it may
-terminate before the first one-second profile window is complete.
+The comparator prefers the common `01_maximized.bmp`, requires equal dimensions,
+and reports RGB error distribution. Tolerances account for dynamic sampling
+between independent processes. A successful matrix run verifies each process;
+it does not by itself establish image equivalence.
 
-The runner refuses to reuse a non-empty scenario directory so a failed launch
-cannot accidentally consume a stale report from an earlier run.
+## Pass Criteria and Evidence
 
-## Notes
+A run passes when its configured GT/RT markers, compiled renderer marker and
+Vulkan executor startup marker appear; requested captures succeed and exceed the
+nonblack threshold; teardown completes normally; and no unexpected assertion,
+Vulkan VUID, device loss, queue failure or tracked-resource residue appears.
+Raster runs require one compiled execution marker per renderer instance. Reload
+and switch runs require three Raster instances and at least three graph dumps
+when dumps are enabled.
 
-- The ready marker defaults to `Copied ImGui frame includes`, which is emitted
-  after the first copied draw packet is consumed. The runner then waits 12
-  seconds by default so asynchronous scene and ProbeGI initialization can
-  reach a visually stable frame before sampling. The fault scenario uses a
-  one-second settle because its first two real presents already provide the
-  frame captured after the third synthetic submit fault.
-- The base TOML is parsed after scenario values are patched, and all five
-  threading values, the renderer, and all three Raster RenderGraph values are
-  checked before launch.
-- `--continue-on-failure` is recommended for a full matrix so one failed
-  scenario does not hide the state of later scenarios.
+Profiled runs require `[ThreadingProfile][Prepare]`, and RT runs additionally
+require `[ThreadingProfile][RT]`. Fault and self-terminating lifecycle scenarios
+are exempt from the profiling gates. The tool reports only currently produced
+RT and PrepareFrame measurements. It does not interpret absent backend recording
+samples as zero work.
 
-## Parallel Command Recording Experiment
+Each run stores generated config, stdout/stderr, captures and `report.json`.
+The root stores `summary.json` and `summary.md` under the default ignored output
+folder `target/validation/rt_rhi/`. The runner refuses a nonempty scenario folder
+so a retry cannot inherit stale results.
 
-There are two independent switches:
+The summary combines the last five one-second profile windows by default:
+
+- RT: prepare cost, task queue latency, render time, GT lag-limit wait and pending
+  frame count. Prepare, render and GT-wait measurements use their own sample counts.
+- PrepareFrame: window handling, scripting/test/UI hooks, camera state, config
+  snapshots, scene updates and snapshots, UI composition and draw-packet copying.
+  Workload counters and maxima remain available in the JSON report.
+
+Use `--profile-tail-windows` to choose the steady-state interval. Runs default to
+the `Copied ImGui frame includes` ready marker, followed by a 12-second settle
+period for scene initialization. Fault runs use one second. Every generated
+config is parsed and its requested values checked before launch.
+
+## Fault Validation
+
+Build with `MOER_VULKAN_TEST_SUPPORT=ON` for scripted faults and Vulkan integration
+tests. Ordinary builds reject fault-injection arguments; the option defaults to
+`OFF`.
+
+```powershell
+python tools/threading/run_matrix.py --set fault
+```
+
+This passes `--vulkan-fault-inject=present-submit@3`. The verifier exempts only the
+fully anchored expected first-fault error, while still checking all other errors.
+It requires exactly one injection, first-fault and summary marker. The summary
+must show one latched `VK_ERROR_DEVICE_LOST`, no later native submit/present,
+rejected later work, skipped command-pool reset, quarantined unsafe resources,
+and completed queue synchronization.
+
+Before injecting, the test takes the exclusive native-operation gate, locks each
+unique queue and waits for device idle. That is the basis for its
+`predrained=true` claim even with dedicated compute or transfer queues.
+`--allow-forbidden-log-pattern REGEX` only exempts matching lines;
+`--require-log-count REGEX COUNT` verifies an exact marker count.
+
+## Parallel Command Recording
 
 ```toml
 [engine.render.raster]
-# Upper topology: RDG batches record independent CommandLists on TaskGraph workers.
+# RDG records independent CommandLists on TaskGraph workers.
 render_graph_parallel_recording = false
-
 ```
 
-The upper switch currently migrates two audited Raster recording groups:
+The switch currently covers two audited Raster recording groups:
 `HiZBuild` + `DirectionalShadowMask`, then `Lighting` + `Skybox`. Each pass owns
 an independent CommandList and an immutable, strongly-owned Prepare snapshot.
 The second pair deliberately spans two GPU dependency waves: GPU hazards still

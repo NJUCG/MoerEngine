@@ -32,10 +32,6 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
 
     loaded_config.engine.threading.render_thread =
         toml_config.at_path("engine.threading.render_thread").value_or(false);
-    loaded_config.engine.threading.rhi_thread =
-        toml_config.at_path("engine.threading.rhi_thread").value_or(false);
-    loaded_config.engine.threading.rhi_bypass =
-        toml_config.at_path("engine.threading.rhi_bypass").value_or(true);
     loaded_config.engine.threading.profile_logging =
         toml_config.at_path("engine.threading.profile_logging").value_or(false);
 

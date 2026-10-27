@@ -33,8 +33,6 @@ struct CORE_API GlobalConfig {
     struct Engine {
         struct Threading {
             bool render_thread           = false;
-            bool rhi_thread              = false;
-            bool rhi_bypass              = true;
             bool profile_logging         = false;
             uint submission_batch_window = 2;
             bool rhi_heartbeat_enabled = false;
