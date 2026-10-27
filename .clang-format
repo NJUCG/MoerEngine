@@ -56,7 +56,6 @@ BreakBeforeInheritanceComma: false
 BreakAfterJavaFieldAnnotations: true
 BreakStringLiterals: true
 BreakConstructorInitializersBeforeComma: false
-# ColumnLimit: 110
 # ConstructorInitializerAllOnOneLineOrOnePerLine: true
 # SortIncludes: true
 CompactNamespaces: true
@@ -95,8 +94,9 @@ SpacesInConditionalStatement: false
 SortUsingDeclarations: true
 Standard: c++20
 
-# 同一行长度限制
-ColumnLimit: 110
+# 不按列宽自动折行，优先保留参数列表和嵌套模板的手工分行。
+# 其他显式格式规则仍然生效；长行由编写者主动拆分。
+ColumnLimit: 0
 
 # 排序include
 SortIncludes: true
@@ -104,7 +104,7 @@ SortIncludes: true
 # 注释前面需要有1个空格
 SpacesBeforeTrailingComments: 1
 
-# 如果某行太长，则总是在左小括号后换行，同时右小括号也换行
+# 参数列表分行时使用块缩进，右小括号另起一行
 AlignAfterOpenBracket: BlockIndent
 
 # 构造函数的初始化列表前需要换行
