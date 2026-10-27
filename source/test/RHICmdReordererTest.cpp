@@ -49,7 +49,7 @@ void PipelineMovesReleaseEachStateOnce() {
             const PipelineHandle copy = reference;
             Expect(copy == reference, "copied pipeline reference changed identity");
         }
-        Expect(destruction_count == 0, "non-owning handle released its pipeline");
+        Expect(destruction_count == 0, "shared handle released a still-owned pipeline");
 
         TPipeline owner{reference};
         TPipeline moved{std::move(owner)};
@@ -234,8 +234,10 @@ void ShaderArgumentAccessUsesPipelineAndFullSlotIndex() {
         uint            queries = 0;
     };
     constexpr uint argument_index = 40;
-    ArgumentAccess write_access{argument_index, ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE};
-    ArgumentAccess read_access{argument_index, ERHIAccessFlags::SHADER_READ};
+    CountableRef<ArgumentAccess> write_access_owner(MoerNew(ArgumentAccess)(argument_index, ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE));
+    auto&                        write_access = *write_access_owner;
+    CountableRef<ArgumentAccess> read_access_owner(MoerNew(ArgumentAccess)(argument_index, ERHIAccessFlags::SHADER_READ));
+    auto&                        read_access    = *read_access_owner;
     FunctionTable  functions      = MakeFunctionTable();
     functions.get_argument_access = [](const PipelineHandle& pipeline, uint index) {
         auto& info = *static_cast<ArgumentAccess*>(pipeline.GetState());
@@ -245,8 +247,10 @@ void ShaderArgumentAccessUsesPipelineAndFullSlotIndex() {
     };
     TCachedArgArray cached_args;
     CmdReorderer    reorderer(functions, cached_args);
-    TestBuffer      first_buffer(16, 4, EBufferUsageFlags::VERTEX_BUFFER);
-    TestBuffer      second_buffer(16, 4, EBufferUsageFlags::VERTEX_BUFFER);
+    CountableRef<TestBuffer> first_buffer_owner(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::VERTEX_BUFFER));
+    auto&                    first_buffer = *first_buffer_owner;
+    CountableRef<TestBuffer> second_buffer_owner(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::VERTEX_BUFFER));
+    auto&                    second_buffer = *second_buffer_owner;
     PipelineHandle  writer{&write_access};
     PipelineHandle  reader{&read_access};
     ArrayArguments  write_args;
@@ -276,8 +280,7 @@ void ShaderArgumentAccessUsesPipelineAndFullSlotIndex() {
 
 void ResourceFreeCommandsRespectOrderingBoundaries() {
     TCachedArgArray cached_args;
-    PipelineState  empty_state(0);
-    PipelineHandle pipeline(&empty_state);
+    PipelineHandle  pipeline(MoerNew(PipelineState)(0));
     DispatchCmd dispatch(
         TShaderArgArray{ArrayArguments{}}, pipeline, uint3{1, 1, 1}, ProfileSection("NoResources")
     );
@@ -293,7 +296,8 @@ void ResourceFreeCommandsRespectOrderingBoundaries() {
 
     ScopeCmd scope("Boundary", true, false, GpuMarkerPalette::Pass());
     QueryCmd query(QueryToken{}, QueryCmd::EOp::BeginTimestamp, EQueueType::Graphics);
-    TestBuffer buffer(16, 4, EBufferUsageFlags::UNORDERED_ACCESS);
+    CountableRef<TestBuffer> buffer_owner(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::UNORDERED_ACCESS));
+    auto&                    buffer = *buffer_owner;
     BarrierCmd barrier(1, EQueueType::Graphics, EQueueType::Graphics);
     barrier.AddExplicitBarrier(BarrierCreateInfo::Transition(
         BufferView(&buffer),
@@ -326,19 +330,18 @@ void IndependentShaderCommandsDoNotInheritPriorLayers() {
     FunctionTable functions = MakeFunctionTable();
     functions.get_argument_access = [](const PipelineHandle&, uint) { return ERHIAccessFlags::SHADER_READ; };
     CmdReorderer reorderer(functions, cached_args);
-    TestBuffer buffer(16, 4, EBufferUsageFlags::UNORDERED_ACCESS);
+    CountableRef<TestBuffer> buffer_owner(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::UNORDERED_ACCESS));
+    auto&                    buffer = *buffer_owner;
     std::array<byte, 16> data{};
     UploadBufferCmd first_write(uint64(&buffer), 0, data.size(), data.data());
     UploadBufferCmd second_write(uint64(&buffer), 0, data.size(), data.data());
-    PipelineState state(1);
-    PipelineHandle pipeline(&state);
+    PipelineHandle           pipeline(MoerNew(PipelineState)(1));
     ArrayArguments args;
     args.args.emplace_back(BufferView(&buffer));
     DispatchCmd dependent(
         TShaderArgArray{std::move(args)}, pipeline, uint3{1, 1, 1}, ProfileSection("Dependent")
     );
-    PipelineState empty_state(0);
-    PipelineHandle empty_pipeline(&empty_state);
+    PipelineHandle empty_pipeline(MoerNew(PipelineState)(0));
     DispatchCmd independent(
         TShaderArgArray{ArrayArguments{}}, empty_pipeline, uint3{1, 1, 1}, ProfileSection("Independent")
     );
@@ -353,11 +356,11 @@ void IndependentShaderCommandsDoNotInheritPriorLayers() {
 void IndirectDispatchTracksItsParameterRange() {
     TCachedArgArray cached_args;
     CmdReorderer reorderer(MakeFunctionTable(), cached_args);
-    TestBuffer buffer(16, 4, EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+    CountableRef<TestBuffer> buffer_owner(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST));
+    auto&                    buffer = *buffer_owner;
     std::array<byte, 12> data{};
     UploadBufferCmd upload(uint64(&buffer), 16, data.size(), data.data());
-    PipelineState state(0);
-    PipelineHandle pipeline(&state);
+    PipelineHandle           pipeline(MoerNew(PipelineState)(0));
     DispatchCmd dispatch(
         TShaderArgArray{ArrayArguments{}}, pipeline, BufferView(&buffer, 16, 3, 4), ProfileSection("Indirect")
     );
@@ -378,8 +381,7 @@ void DiscardedAttachmentsStillParticipateInWriteDependencies() {
     TCachedArgArray cached_args;
     FunctionTable functions = MakeFunctionTable();
     functions.get_argument_access = [](const PipelineHandle&, uint) { return ERHIAccessFlags::SHADER_READ; };
-    PipelineState state(1);
-    PipelineHandle pipeline(&state);
+    PipelineHandle          pipeline(MoerNew(PipelineState)(1));
     const EAttachmentAction color_actions[] = {
         AC_CLEAR_NO_STORE, AC_LOAD_NO_STORE, AC_NO_LOAD_NO_STORE, AC_CLEAR_RESOLVE
     };
@@ -388,7 +390,8 @@ void DiscardedAttachmentsStillParticipateInWriteDependencies() {
     };
     for (bool depth : {false, true}) {
         for (EAttachmentAction action : depth ? depth_actions : color_actions) {
-            TestTexture texture(3, 2);
+            CountableRef<TestTexture> texture_owner(MoerNew(TestTexture)(3, 2));
+            auto&                     texture = *texture_owner;
             TextureView view(&texture);
             view.mip_level   = 1;
             view.num_mips    = 1;
@@ -578,13 +581,15 @@ void ResourceImportsMayFollowNonResourceOrderingBoundaries() {
         "timestamp source did not emit its query pair"
     );
 
-    TestTexture texture;
-    TestBuffer  buffer(
+    CountableRef<TestTexture> texture_owner(MoerNew(TestTexture)());
+    auto&                     texture = *texture_owner;
+    CountableRef<TestBuffer>  buffer_owner(MoerNew(TestBuffer)(
         16,
         4,
         EBufferUsageFlags::UNORDERED_ACCESS |
             EBufferUsageFlags::TRANSFER_DST
-    );
+    ));
+    auto&                     buffer = *buffer_owner;
     QueueTransferCmd import(
         EQueueType::Copy,
         Array<ImportTexture>{
@@ -666,13 +671,15 @@ void ResourceImportsDetectPriorTextureAndBufferReads() {
         "prior-read timestamp source did not emit its query pair"
     );
 
-    TestTexture texture;
-    TestBuffer  buffer(
+    CountableRef<TestTexture> texture_owner(MoerNew(TestTexture)());
+    auto&                     texture = *texture_owner;
+    CountableRef<TestBuffer>  buffer_owner(MoerNew(TestBuffer)(
         16,
         4,
         EBufferUsageFlags::UNORDERED_ACCESS |
             EBufferUsageFlags::TRANSFER_DST
-    );
+    ));
+    auto&                     buffer         = *buffer_owner;
     auto* texture_handle = static_cast<CmdReorderer::RangeHandle*>(
         reorderer.GetHandle(
             uint64(&texture),
@@ -760,13 +767,15 @@ void ResourceImportsDetectPriorTextureAndBufferWrites() {
     TCachedArgArray cached_args;
     CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
 
-    TestTexture texture;
-    TestBuffer  buffer(
+    CountableRef<TestTexture> texture_owner(MoerNew(TestTexture)());
+    auto&                     texture = *texture_owner;
+    CountableRef<TestBuffer>  buffer_owner(MoerNew(TestBuffer)(
         16,
         4,
         EBufferUsageFlags::UNORDERED_ACCESS |
             EBufferUsageFlags::TRANSFER_DST
-    );
+    ));
+    auto&                     buffer         = *buffer_owner;
     auto* texture_handle = static_cast<CmdReorderer::RangeHandle*>(
         reorderer.GetHandle(
             uint64(&texture),
@@ -836,13 +845,15 @@ void VerifyOpaqueBindlessImportWait(
     uint64 _bindless_handle
 ) {
     TCachedArgArray cached_args;
-    TestTexture texture;
-    TestBuffer  buffer(
+    CountableRef<TestTexture> texture_owner(MoerNew(TestTexture)());
+    auto&                     texture = *texture_owner;
+    CountableRef<TestBuffer>  buffer_owner(MoerNew(TestBuffer)(
         16,
         4,
         EBufferUsageFlags::UNORDERED_ACCESS |
             EBufferUsageFlags::TRANSFER_DST
-    );
+    ));
+    auto&                     buffer = *buffer_owner;
     ScopedBindlessMembership membership(
         _current_membership ? uint64(&texture) : 0,
         _current_membership ? uint64(&buffer) : 0,
@@ -942,13 +953,15 @@ void ResourceImportsConservativelyWaitForOpaqueBindlessAccess() {
 
 void QueueTransferWritesFeedBindlessAliasOrderingWithoutExactPollution() {
     TCachedArgArray cached_args;
-    TestTexture texture;
-    TestBuffer  buffer(
+    CountableRef<TestTexture> texture_owner(MoerNew(TestTexture)());
+    auto&                     texture = *texture_owner;
+    CountableRef<TestBuffer>  buffer_owner(MoerNew(TestBuffer)(
         16,
         4,
         EBufferUsageFlags::UNORDERED_ACCESS |
             EBufferUsageFlags::TRANSFER_DST
-    );
+    ));
+    auto&                     buffer          = *buffer_owner;
     constexpr uint64 bindless_handle = 0xB1AD1E57;
     ScopedBindlessMembership membership(
         uint64(&texture),
@@ -1029,13 +1042,15 @@ void ExactImportHistoryIsBoundedAndMergesDuplicateRanges() {
     TCachedArgArray cached_args;
     CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
 
-    TestBuffer buffer(
+    CountableRef<TestBuffer>  buffer_owner(MoerNew(TestBuffer)(
         300,
         4,
         EBufferUsageFlags::UNORDERED_ACCESS |
             EBufferUsageFlags::TRANSFER_DST
-    );
-    TestTexture texture(132);
+    ));
+    auto&                     buffer = *buffer_owner;
+    CountableRef<TestTexture> texture_owner(MoerNew(TestTexture)(132));
+    auto&                     texture       = *texture_owner;
     auto* buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
         reorderer.GetHandle(
             uint64(&buffer),
@@ -1162,20 +1177,24 @@ void ResourceImportExactHistorySurvivesReadWriteAndTwoDimensionalCompression() {
     TCachedArgArray cached_args;
     CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
 
-    TestBuffer read_buffer(
+    CountableRef<TestBuffer>  read_buffer_owner(MoerNew(TestBuffer)(
         64,
         4,
         EBufferUsageFlags::UNORDERED_ACCESS |
             EBufferUsageFlags::TRANSFER_DST
-    );
-    TestBuffer write_buffer(
+    ));
+    auto&                     read_buffer = *read_buffer_owner;
+    CountableRef<TestBuffer>  write_buffer_owner(MoerNew(TestBuffer)(
         64,
         4,
         EBufferUsageFlags::UNORDERED_ACCESS |
             EBufferUsageFlags::TRANSFER_DST
-    );
-    TestTexture read_texture(34, 2);
-    TestTexture write_texture(34, 2);
+    ));
+    auto&                     write_buffer = *write_buffer_owner;
+    CountableRef<TestTexture> read_texture_owner(MoerNew(TestTexture)(34, 2));
+    auto&                     read_texture = *read_texture_owner;
+    CountableRef<TestTexture> write_texture_owner(MoerNew(TestTexture)(34, 2));
+    auto&                     write_texture = *write_texture_owner;
 
     auto* read_buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
         reorderer.GetHandle(
@@ -1372,7 +1391,8 @@ void MultiviewAttachmentsPublishEveryLayerWrite() {
     TCachedArgArray cached_args;
     CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
 
-    TestTexture draw_color(8);
+    CountableRef<TestTexture> draw_color_owner(MoerNew(TestTexture)(8));
+    auto&                     draw_color = *draw_color_owner;
     RenderPassInfo draw_pass{};
     draw_pass.color_attachments.emplace_back(ColorAttachment{
         .target      = &draw_color,
@@ -1402,7 +1422,8 @@ void MultiviewAttachmentsPublishEveryLayerWrite() {
         "set-draw attachment published a write outside its layer range"
     );
 
-    TestTexture multi_draw_depth(8);
+    CountableRef<TestTexture> multi_draw_depth_owner(MoerNew(TestTexture)(8));
+    auto&                     multi_draw_depth = *multi_draw_depth_owner;
     RenderPassInfo multi_draw_pass{};
     multi_draw_pass.depth_attachment.target       = &multi_draw_depth;
     multi_draw_pass.depth_attachment.action       = AC_DS_CLEAR_STORE;
@@ -1433,10 +1454,14 @@ void CommandResourcePreprocessingIsTaskGraphIndependent() {
     std::exception_ptr worker_error;
     std::jthread worker([&] {
         try {
-            TestBuffer vertex_buffer(16, 4, EBufferUsageFlags::VERTEX_BUFFER);
-            TestBuffer index_buffer(16, 4, EBufferUsageFlags::INDEX_BUFFER);
-            TestBuffer indirect_buffer(16, 4, EBufferUsageFlags::INDIRECT_BUFFER);
-            TestBuffer count_buffer(4, 4, EBufferUsageFlags::INDIRECT_BUFFER);
+            CountableRef<TestBuffer> vertex_buffer_owner(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::VERTEX_BUFFER));
+            auto&                    vertex_buffer = *vertex_buffer_owner;
+            CountableRef<TestBuffer> index_buffer_owner(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::INDEX_BUFFER));
+            auto&                    index_buffer = *index_buffer_owner;
+            CountableRef<TestBuffer> indirect_buffer_owner(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::INDIRECT_BUFFER));
+            auto&                    indirect_buffer = *indirect_buffer_owner;
+            CountableRef<TestBuffer> count_buffer_owner(MoerNew(TestBuffer)(4, 4, EBufferUsageFlags::INDIRECT_BUFFER));
+            auto&                    count_buffer = *count_buffer_owner;
 
             MeshDrawData mesh{};
             mesh.vtx_views.emplace_back(VertexBuffer{&vertex_buffer, 12});
@@ -1475,11 +1500,16 @@ void CommandResourcePreprocessingIsTaskGraphIndependent() {
                 draw_state.DrawCountBuffers(), &count_buffer, 4, 8, "draw state missed count range"
             );
 
-            TestBuffer batch_vertex(32, 4, EBufferUsageFlags::VERTEX_BUFFER);
-            TestBuffer batch_index(32, 4, EBufferUsageFlags::INDEX_BUFFER);
-            TestBuffer batch_indirect(32, 4, EBufferUsageFlags::INDIRECT_BUFFER);
-            TestBuffer dispatch_indirect(32, 4, EBufferUsageFlags::INDIRECT_BUFFER);
-            TestBuffer dispatch_count(4, 4, EBufferUsageFlags::INDIRECT_BUFFER);
+            CountableRef<TestBuffer> batch_vertex_owner(MoerNew(TestBuffer)(32, 4, EBufferUsageFlags::VERTEX_BUFFER));
+            auto&                    batch_vertex = *batch_vertex_owner;
+            CountableRef<TestBuffer> batch_index_owner(MoerNew(TestBuffer)(32, 4, EBufferUsageFlags::INDEX_BUFFER));
+            auto&                    batch_index = *batch_index_owner;
+            CountableRef<TestBuffer> batch_indirect_owner(MoerNew(TestBuffer)(32, 4, EBufferUsageFlags::INDIRECT_BUFFER));
+            auto&                    batch_indirect = *batch_indirect_owner;
+            CountableRef<TestBuffer> dispatch_indirect_owner(MoerNew(TestBuffer)(32, 4, EBufferUsageFlags::INDIRECT_BUFFER));
+            auto&                    dispatch_indirect = *dispatch_indirect_owner;
+            CountableRef<TestBuffer> dispatch_count_owner(MoerNew(TestBuffer)(4, 4, EBufferUsageFlags::INDIRECT_BUFFER));
+            auto&                    dispatch_count = *dispatch_count_owner;
 
             MeshDrawData batch_mesh{};
             batch_mesh.vtx_views.emplace_back(VertexBuffer{&batch_vertex, 20});

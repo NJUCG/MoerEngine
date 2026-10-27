@@ -105,7 +105,7 @@ GraphEventRef MakeCompletedBackendEvent() {
 }
 
 bool SubmitHasWork(const CmdSubmit& _submit) {
-    return !_submit.cmds.empty() || !_submit.callbacks.empty() ||
+    return _submit.lifetime || !_submit.cmds.empty() || !_submit.callbacks.empty() ||
            !_submit.success_callbacks.empty() ||
            !_submit.gpu_completion_tokens.empty() ||
            !_submit.query_tokens.empty() ||
@@ -1238,6 +1238,7 @@ public:
 
 private:
     static void ResetAcceptedSubmit(CmdSubmit& _submit) noexcept {
+        _submit.lifetime.reset();
         _submit.cmds.clear();
         _submit.callbacks.clear();
         _submit.success_callbacks.clear();

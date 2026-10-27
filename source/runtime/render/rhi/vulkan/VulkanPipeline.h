@@ -109,6 +109,10 @@ public:
         m_type(_type) {};
     virtual ~VulkanPipelineState();
 
+protected:
+    void Destroy() override;
+
+public:
     inline VkPipeline GetHandle() const {
         return m_pipeline;
     }

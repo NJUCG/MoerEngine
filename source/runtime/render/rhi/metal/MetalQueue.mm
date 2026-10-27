@@ -107,6 +107,7 @@ void ValidateBarrier(const BarrierCmd& barrier) {
 class MetalCompletionDispatcher final {
 public:
     struct Packet {
+        std::shared_ptr<const RHICommandLifetime> lifetime;
         uint64 timeline{0};
         Array<std::function<void()>> callbacks;
         Array<std::function<void()>> success_callbacks;
@@ -303,7 +304,7 @@ public:
             }
         }
         std::list<MetalCompletionDispatcher::Packet> prepared;
-        if (!submit.callbacks.empty() || !submit.success_callbacks.empty()) {
+        if (submit.lifetime || !submit.callbacks.empty() || !submit.success_callbacks.empty()) {
             prepared.emplace_back(); // Reserve before accepting GPU work.
         }
         for (const WaitEvent& event : submit.wait_events) Wait(event);
@@ -529,6 +530,7 @@ public:
             prepared.front().timeline = ++next_callback_timeline_;
             prepared.front().callbacks = std::move(submit.callbacks);
             prepared.front().success_callbacks = std::move(submit.success_callbacks);
+            prepared.front().lifetime          = std::move(submit.lifetime);
             completions_.Enqueue(prepared);
         }
         return {0, 0};
@@ -704,6 +706,7 @@ public:
         prepared.front().timeline = timeline;
         prepared.front().callbacks = std::move(submit.callbacks);
         prepared.front().success_callbacks = std::move(submit.success_callbacks);
+        prepared.front().lifetime          = std::move(submit.lifetime);
         completions_.Enqueue(prepared);
         return {uint64(timeline_fence_.Get()), timeline};
     }

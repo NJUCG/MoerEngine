@@ -2393,12 +2393,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     .execute   = std::move(execute),
                 }
             );
-            // Ordinary callbacks run before success callbacks. Holding the
-            // same token in both tails keeps raw command/callback captures
-            // alive through every user callback on success, failure, or
-            // cancellation.
-            command_list.AddCallback([lifetime] {});
-            command_list.AddSuccessCallback([lifetime] {});
+            command_list.KeepAlive(std::move(lifetime));
         };
 
     // Consume the compiler-built frontend dispatch groups in stable graph order.

@@ -280,11 +280,12 @@ void PresentationSourceUsageSelectsGeneralPreferredLayout() {
 }
 
 void BackendTrackedPublicationMarkerPreservesLegacyOwnership() {
-    TestTexture texture_resource(
+    CountableRef<TestTexture> texture_resource_owner(MoerNew(TestTexture)(
         3,
         2,
         ETextureAspectFlags::COLOR
-    );
+    ));
+    auto&                     texture_resource = *texture_resource_owner;
     Array<ReadTexture> publications{
         ReadTexture{
             texture_resource.GetView(0, 3),
@@ -337,8 +338,10 @@ void BackendTrackedPublicationMarkerPreservesLegacyOwnership() {
 }
 
 void LocalExplicitPayloadAndOwnershipArePreserved() {
-    TestBuffer       buffer_resource(256);
-    TestTexture      texture_resource(6, 4, ETextureAspectFlags::DEPTH_SLICE);
+    CountableRef<TestBuffer>  buffer_resource_owner(MoerNew(TestBuffer)(256));
+    auto&                     buffer_resource = *buffer_resource_owner;
+    CountableRef<TestTexture> texture_resource_owner(MoerNew(TestTexture)(6, 4, ETextureAspectFlags::DEPTH_SLICE));
+    auto&                     texture_resource = *texture_resource_owner;
     const uint64     buffer_handle  = reinterpret_cast<uint64>(&buffer_resource);
     const uint64     texture_handle = reinterpret_cast<uint64>(&texture_resource);
     const BufferView buffer(&buffer_resource, 64, 32, 4);
@@ -497,8 +500,10 @@ void ExpectQueueTransferPayload(
 }
 
 void ReleaseAndAcquirePayloadsPreserveEndpointAffinity() {
-    TestBuffer       buffer_resource(256);
-    TestTexture      texture_resource(4, 3, ETextureAspectFlags::DEPTH_SLICE);
+    CountableRef<TestBuffer>  buffer_resource_owner(MoerNew(TestBuffer)(256));
+    auto&                     buffer_resource = *buffer_resource_owner;
+    CountableRef<TestTexture> texture_resource_owner(MoerNew(TestTexture)(4, 3, ETextureAspectFlags::DEPTH_SLICE));
+    auto&                     texture_resource = *texture_resource_owner;
     const BufferView buffer(&buffer_resource, 32, 16, 4);
     TextureView      texture{};
     texture.texture     = &texture_resource;
@@ -632,7 +637,8 @@ void ExpectRejectedWithoutMutation(
 }
 
 void ExternalOwnershipRequiresCompiledSubmission() {
-    TestBuffer       resource(64);
+    CountableRef<TestBuffer> resource_owner(MoerNew(TestBuffer)(64));
+    auto&                    resource = *resource_owner;
     const BufferView view(&resource, 0, 16, 4);
     const auto       state = BarrierState::Buffer(
         ERHIPipelineStageFlags::PS_ALL_COMMANDS, ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE
@@ -688,7 +694,8 @@ void ExternalOwnershipRequiresCompiledSubmission() {
 }
 
 void InvalidQueueTransferEndpointsFailWithoutMutation() {
-    TestBuffer         buffer_resource(64);
+    CountableRef<TestBuffer> buffer_resource_owner(MoerNew(TestBuffer)(64));
+    auto&                    buffer_resource = *buffer_resource_owner;
     const BufferView   buffer(&buffer_resource, 0, 16, 4);
     const BarrierState src =
         BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE);
@@ -724,7 +731,8 @@ void InvalidQueueTransferEndpointsFailWithoutMutation() {
 }
 
 void InvalidResourceRangeFailsWithoutMutation() {
-    TestBuffer         buffer_resource(128);
+    CountableRef<TestBuffer> buffer_resource_owner(MoerNew(TestBuffer)(128));
+    auto&                    buffer_resource = *buffer_resource_owner;
     const BarrierState src =
         BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE);
     const BarrierState dst =
@@ -746,7 +754,8 @@ void InvalidResourceRangeFailsWithoutMutation() {
 }
 
 void LegacyBarrierRemainsCompatible() {
-    constexpr uint64 buffer_handle = 0x3000;
+    BufferRef        buffer(MoerNew(TestBuffer)(64));
+    const uint64     buffer_handle = reinterpret_cast<uint64>(buffer.Get());
     CommandList      list(EQueueType::Graphics);
     list.Barriers(
         EQueueType::Graphics,

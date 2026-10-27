@@ -1604,11 +1604,12 @@ void TestActiveRecordingLifetimeOutlivesUserCallbacks(TestSuite& suite) {
     );
     submit.callbacks.clear();
     submit.success_callbacks.clear();
+    submit.lifetime.reset();
     published.clear();
     suite.Check(
         *destroyed,
         test_name,
-        "recording lifetime was retained after all callback payloads were released"
+        "recording lifetime was retained after the completion payload was released"
     );
 }
 

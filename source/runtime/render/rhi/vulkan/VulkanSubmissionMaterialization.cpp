@@ -90,6 +90,7 @@ MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTo
             const size_t            command_count = descriptor.end - descriptor.begin;
 
             CmdSubmit segment_submit = MakeEmptySubmit();
+            segment_submit.lifetime  = source_submit.lifetime;
             segment_submit.cmds.reserve(command_count);
             segment_submit.callbacks.reserve(1);
             segment_submit.success_callbacks.reserve(1);

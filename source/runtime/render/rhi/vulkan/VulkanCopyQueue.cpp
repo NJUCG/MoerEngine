@@ -926,6 +926,7 @@ void VkCopyQueue::ExecuteThread() {
             grouped_completion{};
         if (batch.batch_completion.Valid()) {
             grouped_completion.emplace();
+            grouped_completion->lifetime = std::move(batch.submit.lifetime);
             grouped_completion->gpu_completion_tokens =
                 std::move(
                     batch.submit.gpu_completion_tokens
@@ -1031,6 +1032,9 @@ void VkCopyQueue::ExecuteThread() {
             }
         }
         batch.deferred_releases.clear();
+        callbacks.clear();
+        success_callbacks.clear();
+        batch.submit.lifetime.reset();
 
         uint64 settled = cpu_settled_frame.load(std::memory_order_relaxed);
         while (settled < event_timeline &&

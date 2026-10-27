@@ -148,7 +148,8 @@ BufferView FakeBufferView(
     std::uint64_t _byte_offset = 0,
     std::uint64_t _byte_size = 16
 ) {
-    static ReadbackTestBuffer supported_buffer{true};
+    static CountableRef<ReadbackTestBuffer> supported_owner(MoerNew(ReadbackTestBuffer)(true));
+    auto&                                   supported_buffer = *supported_owner;
     return BufferView(
         &supported_buffer,
         _byte_offset,
@@ -632,7 +633,8 @@ void CommandOwnershipAndDestructionAreTerminal() {
 }
 
 void UnsupportedBackendFailsBeforeRecording() {
-    ReadbackTestBuffer unsupported_buffer{false};
+    CountableRef<ReadbackTestBuffer> unsupported_buffer_owner(MoerNew(ReadbackTestBuffer)(false));
+    auto&                            unsupported_buffer = *unsupported_buffer_owner;
     CommandList        list(EQueueType::Copy);
     const ReadbackFuture future = list.Readback(
         BufferView(&unsupported_buffer, 0, 16, 1),
@@ -694,7 +696,8 @@ BufferView LegacyCounterBufferView(ReadbackTestBuffer& _buffer) {
 void LegacyFallbackPublishesReadyAfterPayload() {
     using namespace Moer::Render::Raster::Detail;
 
-    ReadbackTestBuffer unsupported_buffer{false};
+    CountableRef<ReadbackTestBuffer> unsupported_buffer_owner(MoerNew(ReadbackTestBuffer)(false));
+    auto&                            unsupported_buffer = *unsupported_buffer_owner;
     CommandList        list(EQueueType::Copy);
     auto state = QueueLegacyCounterReadback(
         list,
@@ -759,7 +762,8 @@ void LegacyFallbackPublishesReadyAfterPayload() {
 void LegacyFallbackRejectionAndAbandonAreTerminal() {
     using namespace Moer::Render::Raster::Detail;
 
-    ReadbackTestBuffer unsupported_buffer{false};
+    CountableRef<ReadbackTestBuffer> unsupported_buffer_owner(MoerNew(ReadbackTestBuffer)(false));
+    auto&                            unsupported_buffer = *unsupported_buffer_owner;
     {
         CommandList list(EQueueType::Copy);
         auto state = QueueLegacyCounterReadback(
@@ -814,7 +818,8 @@ void LegacyFallbackRejectionAndAbandonAreTerminal() {
 void LegacyFallbackLeaseOutlivesConsumer() {
     using namespace Moer::Render::Raster::Detail;
 
-    ReadbackTestBuffer unsupported_buffer{false};
+    CountableRef<ReadbackTestBuffer> unsupported_buffer_owner(MoerNew(ReadbackTestBuffer)(false));
+    auto&                            unsupported_buffer = *unsupported_buffer_owner;
     CommandList        list(EQueueType::Copy);
     auto consumer_state = QueueLegacyCounterReadback(
         list,

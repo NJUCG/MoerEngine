@@ -10,6 +10,10 @@
 
 namespace Moer::Render {
 
+void VulkanPipelineState::Destroy() {
+    m_device->EnqueueDeferredRelease(this);
+}
+
 VulkanPipelineState::~VulkanPipelineState() {
     if (m_pipeline_layout) {
         vkDestroyPipelineLayout(m_device->GetDevice(), m_pipeline_layout, nullptr);

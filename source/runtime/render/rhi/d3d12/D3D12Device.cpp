@@ -1782,6 +1782,9 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
         );
     }
 
+    // The last retirement event releases owners after every callback tier.
+    retirement_events.back().lifetime = _submit.lifetime;
+
     // Acquire the retirement queue lock before native submission. Once every
     // native Signal succeeds, list::splice and the remaining state updates are
     // allocation-free, so Execute cannot leak a post-native exception back to

@@ -1149,7 +1149,8 @@ private:
     const uint64 active_argument_bits;
 };
 
-// Non-owning reference. The owning pipeline must outlive commands using this handle.
+// Shared ownership, like BufferRef and TextureRef. Recorded work may outlive
+// the ShaderPipeline that selected this state (including hot replacement).
 class PipelineHandle {
 public:
     PipelineHandle() = default;
@@ -1163,10 +1164,12 @@ public:
         return state != nullptr;
     }
 
-    bool operator==(const PipelineHandle&) const = default;
+    bool operator==(const PipelineHandle& other) const {
+        return state.Get() == other.state.Get();
+    }
 
 private:
-    PipelineState* state = nullptr;
+    CountableRef<PipelineState> state;
 };
 
 struct SingleShaderInfo {

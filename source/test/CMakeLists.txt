@@ -329,6 +329,13 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHICmdReordererContract COMMAND $<TARGET_FILE:${test_target}>)
 
+set(test_target TestRHIResourceLifetime)
+add_executable(${test_target} "RHIResourceLifetimeTest.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::Render)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIResourceLifetimeContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RHIResourceLifetimeContract PROPERTIES TIMEOUT 60)
+
 # State conversion is CPU-only. Compile it directly on macOS, where the Render
 # library excludes the Vulkan backend; other platforms use the Render symbols.
 set(test_target TestRHIExplicitBarrier)

@@ -683,6 +683,7 @@ void VulkanBatchCompletionGroup::Arrive(
         }
     }
 
+    ready.clear(); // Release retained owners before publishing settlement.
     {
         std::lock_guard lock(mutex);
         if (!released || settled) {
@@ -9059,6 +9060,7 @@ void VkCommandQueue::CompletionThreadMain() {
                         grouped_completion{};
                     if (_batch.batch_completion.Valid()) {
                         grouped_completion.emplace();
+                        grouped_completion->lifetime = std::move(_batch.submit.lifetime);
                         grouped_completion->gpu_completion_tokens =
                             std::move(
                                 _batch.submit.gpu_completion_tokens
@@ -9167,6 +9169,11 @@ void VkCommandQueue::CompletionThreadMain() {
                         }
                     }
                     _batch.deferred_releases.clear();
+                    callbacks.clear();
+                    success_callbacks.clear();
+                    // CompleteAll may permit device teardown as soon as the
+                    // retirement serial is published below.
+                    _batch.submit.lifetime.reset();
                 },
                 [this, &batch_gpu_success](UniquePtr<VulkanCommandContext>& _command_context) {
                     if (batch_gpu_success && !vk_device.IsFaulted()) {

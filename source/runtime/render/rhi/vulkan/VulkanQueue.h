@@ -297,6 +297,7 @@ struct VulkanDeferredReleaseBatch {
 class VulkanBatchCompletionGroup final {
 public:
     struct Participant {
+        std::shared_ptr<const RHICommandLifetime> lifetime;
         Array<GpuCompletionToken>         gpu_completion_tokens;
         GpuCompletionPublishBatch         gpu_completion_batch{};
         Array<QueryToken>                query_tokens;

@@ -517,8 +517,7 @@ private:
             auto lifetime = std::make_shared<RecordCallback>(
                 std::move(job.record_callback)
             );
-            job.frontend_command_list->AddCallback([lifetime] {});
-            job.frontend_command_list->AddSuccessCallback([lifetime] {});
+            job.frontend_command_list->KeepAlive(std::move(lifetime));
             completion->Finish();
         } catch (const std::exception& exception) {
             fail(exception.what());

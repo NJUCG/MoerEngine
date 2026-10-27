@@ -49,7 +49,6 @@ inline void InitializeGraphicsTextures(std::span<const TextureRef> textures) {
         return;
     }
     commands.Barriers(barriers);
-    commands.AddCallback([owners = std::vector<TextureRef>(textures.begin(), textures.end())] {});
     RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
 }
 

@@ -1,7 +1,8 @@
 #include "VulkanSubmissionProbe.h"
+#include "rhi/RHI.h"
+#include "rhi/vulkan/VulkanQueue.h"
 #include "rhi/vulkan/VulkanSubmissionMaterialization.h"
 #include "rhi/vulkan/VulkanTimeline.h"
-#include "rhi/RHI.h"
 
 #include <stdexcept>
 
@@ -68,7 +69,11 @@ VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForT
     result.ordinary_callback_count        = ordinary_callback_count;
     result.success_callback_count         = success_callback_count;
 
+    // Every materialized segment must retain the same source ownership payload.
+    auto                                    source_owner    = std::make_shared<RHICommandLifetime>();
+    std::weak_ptr<const RHICommandLifetime> source_lifetime = source_owner;
     CmdSubmit source_submit = MakeEmptySubmit();
+    source_submit.lifetime                                  = std::move(source_owner);
     source_submit.cmds.emplace_back(
         MakeUnique<VulkanMaterializationProbeCommand>(
             EQueueType::Graphics
@@ -138,6 +143,36 @@ VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForT
 
     const CmdSubmit& prefix_submit = batch.submits[0].submit;
     const CmdSubmit& suffix_submit = batch.submits[1].submit;
+    if (!prefix_submit.lifetime || prefix_submit.lifetime != suffix_submit.lifetime ||
+        prefix_submit.lifetime != source_lifetime.lock()) {
+        throw std::runtime_error("materialized segments did not share source resource ownership");
+    }
+
+    // An early-arriving packet must survive later participants and every tier.
+    VulkanBatchCompletionGroup              group(2);
+    auto                                    owner               = std::make_shared<RHICommandLifetime>();
+    std::weak_ptr<const RHICommandLifetime> weak_owner          = owner;
+    bool                                    callbacks_saw_owner = true;
+    VulkanBatchCompletionGroup::Participant first;
+    first.lifetime    = std::move(owner);
+    first.gpu_success = true;
+    first.callbacks.emplace_back([&] {
+        callbacks_saw_owner &= !weak_owner.expired();
+    });
+    group.Arrive(0, std::move(first));
+    if (weak_owner.expired()) {
+        throw std::runtime_error("batch completion dropped an early participant's owner");
+    }
+    VulkanBatchCompletionGroup::Participant last;
+    last.gpu_success = true;
+    last.success_callbacks.emplace_back([&] {
+        callbacks_saw_owner &= !weak_owner.expired();
+    });
+    group.Arrive(1, std::move(last));
+    group.WaitUntilSettled();
+    if (!callbacks_saw_owner || !weak_owner.expired()) {
+        throw std::runtime_error("batch completion resource lifetime did not cover callback tiers");
+    }
     result.materialized_prefix_signal_count =
         static_cast<uint32>(prefix_submit.signal_events.size());
     result.materialized_prefix_keepalive_count =

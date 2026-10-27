@@ -1014,6 +1014,7 @@ private:
         WaitEvent>;
 
     struct QueueEvent {
+        std::shared_ptr<const RHICommandLifetime> lifetime;
         EventType event;
         uint64    timeline;
         bool      wake_thread;
@@ -1025,6 +1026,7 @@ private:
             wake_thread(_wake_thread) {}
 
         QueueEvent(QueueEvent&& _other) noexcept :
+            lifetime(std::move(_other.lifetime)),
             event(std::move(_other.event)),
             timeline(_other.timeline),
             wake_thread(_other.wake_thread) {}

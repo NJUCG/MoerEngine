@@ -57,8 +57,8 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
     if (!_max_size || _max_size > RenderDevice::k_default_bindless_array_size)
         throw std::invalid_argument("Bindless array exceeds the shader table capacity");
     CreateLegacySets(_max_size);
-    const auto create_buffer = [&](std::string_view name, uint64 bytes, VkBufferUsageFlags usage) {
-        return std::make_unique<VulkanBuffer>(
+    const auto create_buffer = [&](std::string_view name, uint64 bytes, VkBufferUsageFlags usage) -> VulkanBufferRef {
+        return MoerNew(VulkanBuffer)(
             name,
             BufferInfo(bytes, 1, EBufferUsageFlags::UNORDERED_ACCESS),
             *m_device,
@@ -67,7 +67,7 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
                     usage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 .needs_device_address = true,
             },
-            false
+            true
         );
     };
     m_index_buffer = create_buffer(

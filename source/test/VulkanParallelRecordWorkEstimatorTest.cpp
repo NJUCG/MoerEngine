@@ -29,8 +29,7 @@ public:
 
 PipelineHandle MakePipeline() {
     // The fourth argument below is deliberately inactive and must not affect the estimate.
-    static PipelineState state{(uint64{1} << 0) | (uint64{1} << 1) | (uint64{1} << 2)};
-    return PipelineHandle{&state};
+    return PipelineHandle{MoerNew(PipelineState)((uint64{1} << 0) | (uint64{1} << 1) | (uint64{1} << 2))};
 }
 
 ArrayArguments MakeArguments() {

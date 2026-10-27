@@ -437,29 +437,18 @@ protected:
     };
 
 public:
-    ShaderPipeline(PipelineHandle _handle) : handle(_handle) {}
+    ShaderPipeline(PipelineHandle _handle) :
+        handle(std::move(_handle)) {}
     PipelineHandle handle;
 
     ShaderPipeline() = default;
-    ShaderPipeline(ShaderPipeline&& _other) noexcept : handle(std::exchange(_other.handle, {})) {}
-
-    ShaderPipeline& operator=(ShaderPipeline&& _other) noexcept {
-        if (this != &_other) {
-            if (handle.IsValid()) {
-                MoerDelete(handle.GetState());
-            }
-            handle = std::exchange(_other.handle, {});
-        }
-        return *this;
-    }
+    ShaderPipeline(ShaderPipeline&&) noexcept            = default;
+    ShaderPipeline& operator=(ShaderPipeline&&) noexcept = default;
 
     ShaderPipeline(const ShaderPipeline& _other)            = delete;
     ShaderPipeline& operator=(const ShaderPipeline& _other) = delete;
 
-    virtual ~ShaderPipeline() {
-        if (handle.IsValid())
-            MoerDelete(handle.GetState());
-    }
+    virtual ~ShaderPipeline() = default;
 
     bool operator==(const ShaderPipeline& _other) const {
         return handle == _other.handle;

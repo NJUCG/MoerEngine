@@ -1126,6 +1126,7 @@ void TestMainThreadReferenceRetainsCompletionLifetime(TestSuite& suite) {
             "ordinary callbacks released a reference before the success tail"
         );
         InvokeCallbacks(submit.success_callbacks);
+        submit.lifetime.reset();
         suite.Check(
             pool.AvailableBufferCount() == 1,
             test,

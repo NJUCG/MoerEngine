@@ -79,18 +79,18 @@ public:
     bool BeginUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates);
 
     uint64 ArrayHandle() const override {
-        return reinterpret_cast<uint64>(m_index_buffer.get());
+        return reinterpret_cast<uint64>(m_index_buffer.Get());
     }
 
     // Borrowed storage; the array owns it through completion of its updates.
     VulkanBuffer* GetIndexBuffer() const {
-        return m_index_buffer.get();
+        return m_index_buffer.Get();
     }
     VulkanBuffer* GetBufferDescriptorBuffer() const {
-        return heap_buffer ? heap_buffer : m_buffer_descriptors.get();
+        return heap_buffer ? heap_buffer : m_buffer_descriptors.Get();
     }
     VulkanBuffer* GetTextureSamplerDescriptorBuffer() const {
-        return heap_buffer ? heap_buffer : m_texture_sampler_descriptors.get();
+        return heap_buffer ? heap_buffer : m_texture_sampler_descriptors.Get();
     }
 
     VkDescriptorSet GetLegacySet(VkDescriptorType type) const;
@@ -118,11 +118,13 @@ private:
     // Persistent ranges share the existing lease allocator; the array owns them.
     VulkanDescriptorBufferLease heap_lease;
     VulkanBuffer*               heap_buffer = nullptr;
+    // Initialization uploads cross the frontend CommandList boundary, so the
+    // table and its submissions must share ownership of this storage.
     // Plain uint index table, read by device address from push constants.
-    std::unique_ptr<VulkanBuffer> m_index_buffer;
+    VulkanBufferRef m_index_buffer;
     // Descriptor storage bound through vkCmdBindDescriptorBuffersEXT.
-    std::unique_ptr<VulkanBuffer> m_buffer_descriptors;
-    std::unique_ptr<VulkanBuffer> m_texture_sampler_descriptors;
+    VulkanBufferRef m_buffer_descriptors;
+    VulkanBufferRef m_texture_sampler_descriptors;
 
     struct UpdateCompletionPlan;
     // Caller holds mtx. Plans borrow command data and never outlive that call.

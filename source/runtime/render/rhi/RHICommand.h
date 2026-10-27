@@ -294,7 +294,16 @@ enum class ERHIResourceStateOwnership : uint8 {
     Compiled,
 };
 
+// One recording generation owns its direct resources and any opaque owners
+// supplied by custom commands / bindless users. Sealed submissions share this
+// immutable payload when split; retirement owns it through all callback tiers.
+struct RHICommandLifetime {
+    UnorderedMap<RHIResource*, CountableRef<RHIResource>> resources;
+    Array<std::shared_ptr<const void>>                    owners;
+};
+
 struct CmdSubmit {
+    std::shared_ptr<const RHICommandLifetime> lifetime;
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
     Array<std::function<void(void)>> success_callbacks;
@@ -411,6 +420,7 @@ struct CmdSubmit {
     }
 
     CmdSubmit(CmdSubmit&& _other) noexcept {
+        lifetime              = std::move(_other.lifetime);
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
         success_callbacks  = std::move(_other.success_callbacks);
@@ -452,7 +462,8 @@ struct CmdSubmit {
             std::move(cmds),
             std::move(callbacks),
             std::move(success_callbacks),
-            std::move(cached_args)
+            std::move(cached_args),
+            std::move(lifetime)
         );
         replaced.gpu_completion_tokens =
             std::move(gpu_completion_tokens);
@@ -477,6 +488,7 @@ struct CmdSubmit {
         replaced.debug_label = std::move(debug_label);
         replaced.debug_label_color = debug_label_color;
 
+        lifetime              = std::move(_other.lifetime);
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
         success_callbacks  = std::move(_other.success_callbacks);
@@ -546,6 +558,7 @@ struct CmdSubmit {
     }
 
     ~CmdSubmit() {
+        auto                      rejected_lifetime = std::move(lifetime);
         Array<UniquePtr<Command>> rejected_cmds =
             std::move(cmds);
         Array<std::function<void(void)>> rejected_callbacks =
@@ -719,11 +732,13 @@ struct CmdSubmit {
         NotifyPendingQueries(batch);
     }
     CmdSubmit(
-        Array<UniquePtr<Command>>&&        _cmds,
-        Array<std::function<void(void)>>&& _callbacks,
-        Array<std::function<void(void)>>&& _success_callbacks,
-        TCachedArgArray&&                  _cached_args
+        Array<UniquePtr<Command>>&&               _cmds,
+        Array<std::function<void(void)>>&&        _callbacks,
+        Array<std::function<void(void)>>&&        _success_callbacks,
+        TCachedArgArray&&                         _cached_args,
+        std::shared_ptr<const RHICommandLifetime> _lifetime = {}
     ) noexcept :
+        lifetime(std::move(_lifetime)),
         cmds(std::move(_cmds)),
         callbacks(std::move(_callbacks)),
         success_callbacks(std::move(_success_callbacks)),
@@ -1960,6 +1975,12 @@ public:
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
+    // Direct command arguments are retained automatically. Custom commands
+    // and bindless users must retain resources reachable only through opaque
+    // handles. Owners survive rejection cleanup or GPU retirement callbacks.
+    RENDER_API void RetainResource(RHIResource* _resource);
+    RENDER_API void KeepAlive(std::shared_ptr<const void> _owner);
+
     // Terminal rejection-only ownership path. The producer must have stopped
     // mutating this CommandList before it is called. It destructively drops all
     // partial GPU commands, cached arguments, success callbacks and unclosed
@@ -2157,6 +2178,20 @@ private:
     RENDER_API void TraceRayIndirect(PipelineHandle _pipeline, BufferView _buffer);
 #pragma endregion
 
+    void Retain(BufferView _view) {
+        RetainResource(_view.GetBuffer());
+    }
+    void Retain(TextureView _view) {
+        RetainResource(_view.GetTexture());
+    }
+    void Retain(const ArrayArguments& _args);
+    void Retain(const TShaderArgArray& _args);
+    void Retain(const RenderPassInfo& _pass);
+    void Retain(const MeshDrawData& _draw);
+    void Retain(const DispatchMeshData& _draw);
+    void Retain(const IndirectDrawParam& _draw);
+
+    std::shared_ptr<RHICommandLifetime> lifetime;
     Array<UniquePtr<Command>>    commands;
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;

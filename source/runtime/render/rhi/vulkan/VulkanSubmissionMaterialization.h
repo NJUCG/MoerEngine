@@ -12,7 +12,7 @@
 namespace Moer::Render::VulkanSubmissionDetail {
 
 inline bool SubmitHasSideEffects(const CmdSubmit& _submit) {
-    return !_submit.callbacks.empty() || !_submit.success_callbacks.empty() ||
+    return _submit.lifetime || !_submit.callbacks.empty() || !_submit.success_callbacks.empty() ||
            !_submit.gpu_completion_tokens.empty() ||
            !_submit.query_tokens.empty() ||
            !_submit.wait_events.empty() || !_submit.signal_events.empty() || _submit.b_sync ||
