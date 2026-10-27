@@ -64,7 +64,7 @@ struct SubmissionRequestPayload {
     std::optional<RHIPresentRequest> present{};
 };
 
-class HandoffSyncCompletion final {
+class ExecutorSyncCompletion final {
 public:
     void Signal(std::exception_ptr _failure = {}) noexcept {
         {
@@ -185,7 +185,7 @@ void RHIExecutor::StartUp(uint32 _submission_batch_window) {
         RHISubmissionPipelinePolicy::ClampBatchWindow(
             _submission_batch_window
         );
-    executor.recording_handoff.Start();
+    executor.work_queue.Start();
     executor.lifecycle_state = ELifecycleState::Running;
 }
 
@@ -268,19 +268,17 @@ void RHIExecutor::Submit(
     }
 
     try {
-        RHIExecutorRecordingHandoffWork work{
+        RHIExecutorWork work{
             .prerequisites = {},
-            .resolve       = [this, payload](
-                                 ERHIRecordingHandoffResult _result
-                             ) {
+            .callback      = [this, payload](ERHIExecutorWorkAction _action) {
                 RHIPresentRequest* present =
                     payload->present.has_value() ?
                         &*payload->present :
                         nullptr;
-                if (_result != ERHIRecordingHandoffResult::Consume) {
+                if (_action != ERHIExecutorWorkAction::Execute) {
                     FinalizeRejectedSubmissions(
                         std::move(payload->submits),
-                        "recording handoff is stopped",
+                        "executor work queue is stopped",
                         present
                     );
                     return;
@@ -288,14 +286,14 @@ void RHIExecutor::Submit(
                 ProcessSubmissionRequests(std::move(payload->submits), payload->flags, present);
             },
         };
-        recording_handoff.RouteReady(std::move(work));
+        work_queue.Enqueue(std::move(work));
     } catch (...) {
         RHIPresentRequest* present = payload->present.has_value() ?
                                          &*payload->present :
                                          nullptr;
         FinalizeRejectedSubmissions(
             std::move(payload->submits),
-            "ready handoff queue admission failed",
+            "executor work queue admission failed",
             present
         );
     }
@@ -398,10 +396,10 @@ void RHIExecutor::Present(RHIPresentRequest&& _present, bool _flush) {
 }
 
 void RHIExecutor::Flush(ERHIFlushDepth _depth) {
-    recording_handoff.RouteReady(RHIExecutorRecordingHandoffWork{
+    work_queue.Enqueue(RHIExecutorWork{
         .prerequisites = {},
-        .resolve       = [this, _depth](ERHIRecordingHandoffResult _result) {
-            if (_result == ERHIRecordingHandoffResult::Consume) {
+        .callback      = [this, _depth](ERHIExecutorWorkAction _action) {
+            if (_action == ERHIExecutorWorkAction::Execute) {
                 ProcessFlushRequest(_depth);
             }
         },
@@ -436,12 +434,12 @@ void RHIExecutor::Sync(ERHISyncDepth _depth) {
         }
         return;
     }
-    auto completion = std::make_shared<HandoffSyncCompletion>();
-    recording_handoff.RouteReady(RHIExecutorRecordingHandoffWork{
+    auto completion = std::make_shared<ExecutorSyncCompletion>();
+    work_queue.Enqueue(RHIExecutorWork{
         .prerequisites = {},
-        .resolve       = [this, _depth, completion](ERHIRecordingHandoffResult _result) {
+        .callback      = [this, _depth, completion](ERHIExecutorWorkAction _action) {
             try {
-                if (_result == ERHIRecordingHandoffResult::Consume) {
+                if (_action == ERHIExecutorWorkAction::Execute) {
                     ProcessSyncRequest(_depth);
                 } else if (_depth == ERHISyncDepth::Present) {
                     throw std::runtime_error("Present sync cancelled before backend publication");
@@ -561,19 +559,19 @@ void RHIExecutor::ShutDown() {
         };
     auto finish_shutdown_guard = OnScopeExit(std::move(finish_shutdown));
 
-    // Publish backend cancellation before joining the handoff owner. That
+    // Publish backend cancellation before joining the Executor worker. That
     // owner may currently be inside ProcessSyncRequest waiting behind a Submission
     // dependency which can no longer acquire a producer during shutdown.
     if (backend_to_cancel) {
         backend_to_cancel->BeginShutdown();
     }
 
-    // Stop accepting handoffs before taking the final pending batch. The
+    // Stop accepting work before taking the final pending batch. The
     // worker's stop token interrupts an unfinished recording gate, rejects it
     // and every later FIFO operation, and joins without depending on producer
     // progress. Any callback already inside ProcessSubmissionRequests/ProcessSyncRequest is allowed
     // to finish before backend ownership is detached below.
-    executor.recording_handoff.ShutDown();
+    executor.work_queue.ShutDown();
 
     {
         std::lock_guard dispatch_lock(executor.dispatch_mutex);

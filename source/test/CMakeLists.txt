@@ -478,15 +478,15 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHISubmissionTopologyContract COMMAND $<TARGET_FILE:${test_target}>)
 
-set(test_target TestRHIExecutorRecordingHandoff)
-add_executable(${test_target} "RHIExecutorRecordingHandoffTest.cpp")
+set(test_target TestRHIExecutorWorkQueue)
+add_executable(${test_target} "RHIExecutorWorkQueueTest.cpp")
 target_link_libraries(${test_target}
     PRIVATE Moer::Render
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME RHIExecutorRecordingHandoffContract COMMAND $<TARGET_FILE:${test_target}>)
+add_test(NAME RHIExecutorWorkQueueContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(
-    RHIExecutorRecordingHandoffContract
+    RHIExecutorWorkQueueContract
     PROPERTIES TIMEOUT 60
 )
 

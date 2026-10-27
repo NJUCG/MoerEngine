@@ -1,9 +1,9 @@
 #pragma once
 
 #include "RenderAPI.h"
-#include "rhi/executor/RHIExecutorBackend.h"
-#include "rhi/executor/RHIExecutorRecordingHandoff.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
+#include "rhi/executor/RHIExecutorBackend.h"
+#include "rhi/executor/RHIExecutorWorkQueue.h"
 
 #include <condition_variable>
 #include <memory>
@@ -38,7 +38,7 @@ struct RHIRecordingSubmitMetadata {
 // a graph-wide transaction boundary: the RHI worker may observe completed
 // producers early, but cannot seal any source until the owner commits the
 // complete graph. submit_metadata is immutable at publication and deliberately
-// contains data rather than an arbitrary handoff-thread callback, so
+// contains data rather than an arbitrary Executor-thread callback, so
 // finalization cannot recursively Flush/Sync. The producer owns the only
 // mutable reference until it calls Signal()/Fail(). It must not call
 // RHIExecutor::Flush, Sync or ShutDown while recording; those are
@@ -81,8 +81,8 @@ public:
         RHIPresentRequest*   _present = nullptr
     );
 
-    // Recording handoff API. Sources remain shared and mutable until their
-    // explicit gates and any optional commit gate complete; the RHI handoff
+    // Submit asynchronously recorded sources. They remain shared and mutable
+    // until their recording and optional commit gates complete; the Executor
     // worker then seals them into CmdSubmit payloads in input order. A batch
     // may use one common gate or a distinct gate per source through the
     // RHIRecordingSource overload. If any producer or transaction fails, the
@@ -125,7 +125,7 @@ private:
     std::shared_ptr<RHIBackendExecutor> GetOrCreateBackendExecutorLocked();
     RHISubmissionBatch                  TakePendingSubmissionBatchLocked();
 
-    // Run on the Executor worker after preceding recording handoffs resolve.
+    // Run on the Executor worker after preceding work has been processed.
     void ProcessSubmissionRequests(
         Array<RHISubmissionRequest>&& _submits,
         ERHIExecSubmitFlags           _flags,
@@ -146,7 +146,7 @@ private:
     uint64                              completed_shutdown_generation{0};
     uint32                              submission_batch_window{RHISubmissionPipelinePolicy::DefaultBatchWindow};
     ELifecycleState                     lifecycle_state{ELifecycleState::Stopped};
-    RHIExecutorRecordingHandoffQueue    recording_handoff{};
+    RHIExecutorWorkQueue                work_queue{};
 };
 
 } // namespace Moer::Render

@@ -23,10 +23,10 @@ using namespace Moer::Render;
 using namespace std::chrono_literals;
 
 struct ResolutionLog {
-    void Push(int _id, ERHIRecordingHandoffResult _result) {
+    void Push(int _id, ERHIExecutorWorkAction _action) {
         {
             std::lock_guard lock(mutex);
-            entries.emplace_back(_id, _result);
+            entries.emplace_back(_id, _action);
         }
         cv.notify_all();
     }
@@ -38,21 +38,21 @@ struct ResolutionLog {
         });
     }
 
-    std::vector<std::pair<int, ERHIRecordingHandoffResult>> Snapshot() const {
+    std::vector<std::pair<int, ERHIExecutorWorkAction>> Snapshot() const {
         std::lock_guard lock(mutex);
         return entries;
     }
 
     mutable std::mutex mutex;
     std::condition_variable cv;
-    std::vector<std::pair<int, ERHIRecordingHandoffResult>> entries{};
+    std::vector<std::pair<int, ERHIExecutorWorkAction>> entries{};
 };
 
 bool Expect(bool _condition, const char* _message) {
     if (_condition) {
         return true;
     }
-    std::cerr << "RHIExecutorRecordingHandoffContract: " << _message << '\n';
+    std::cerr << "RHIExecutorWorkQueueContract: " << _message << '\n';
     return false;
 }
 
@@ -2298,23 +2298,23 @@ bool SubmitRecordingRefreshesAStaleCompletionCancellationView() {
 }
 
 bool PerSourceGatesPreserveFifo() {
-    RHIExecutorRecordingHandoffQueue queue{};
+    RHIExecutorWorkQueue queue{};
     queue.Start();
 
     ResolutionLog log{};
     auto first_gate  = RHIRecordingGate::Create();
     auto second_gate = RHIRecordingGate::Create();
 
-    queue.EnqueueRecording(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {first_gate, second_gate},
-        .resolve = [&log](ERHIRecordingHandoffResult _result) {
-            log.Push(1, _result);
+        .callback      = [&log](ERHIExecutorWorkAction _action) {
+            log.Push(1, _action);
         },
     });
-    queue.RouteReady(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {},
-        .resolve = [&log](ERHIRecordingHandoffResult _result) {
-            log.Push(2, _result);
+        .callback      = [&log](ERHIExecutorWorkAction _action) {
+            log.Push(2, _action);
         },
     });
 
@@ -2330,18 +2330,18 @@ bool PerSourceGatesPreserveFifo() {
     const auto entries   = log.Snapshot();
     queue.ShutDown();
 
-    return Expect(completed, "completed gates did not release the handoff") &&
+    return Expect(completed, "completed gates did not release the queued work") &&
            Expect(entries.size() == 2, "unexpected FIFO result count") &&
            Expect(entries[0].first == 1 && entries[1].first == 2, "FIFO order changed") &&
            Expect(
-               entries[0].second == ERHIRecordingHandoffResult::Consume &&
-                   entries[1].second == ERHIRecordingHandoffResult::Consume,
-               "completed work was not consumed"
+               entries[0].second == ERHIExecutorWorkAction::Execute &&
+                   entries[1].second == ERHIExecutorWorkAction::Execute,
+               "completed work was not executed"
            );
 }
 
 bool ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() {
-    RHIExecutorRecordingHandoffQueue queue{};
+    RHIExecutorWorkQueue queue{};
     queue.Start();
 
     ResolutionLog log{};
@@ -2355,9 +2355,9 @@ bool ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() {
     ERHIThreadRole first_role{ERHIThreadRole::Unknown};
     ERHIThreadRole second_role{ERHIThreadRole::Unknown};
 
-    queue.RouteReady(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {},
-        .resolve = [&](ERHIRecordingHandoffResult _result) {
+        .callback      = [&](ERHIExecutorWorkAction _action) {
             {
                 std::unique_lock lock(block_mutex);
                 first_owner = std::this_thread::get_id();
@@ -2366,7 +2366,7 @@ bool ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() {
                 block_cv.notify_all();
                 block_cv.wait(lock, [&] { return release_first; });
             }
-            log.Push(1, _result);
+            log.Push(1, _action);
         },
     });
 
@@ -2381,12 +2381,12 @@ bool ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() {
     }
 
     auto completed_gate = RHIRecordingGate::Create(true);
-    queue.EnqueueRecording(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {completed_gate},
-        .resolve = [&log, &second_owner, &second_role](ERHIRecordingHandoffResult _result) {
+        .callback      = [&log, &second_owner, &second_role](ERHIExecutorWorkAction _action) {
             second_owner = std::this_thread::get_id();
             second_role  = GetCurrentRHIThreadRole();
-            log.Push(2, _result);
+            log.Push(2, _action);
         },
     });
     std::this_thread::sleep_for(30ms);
@@ -2425,22 +2425,22 @@ bool ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() {
 }
 
 bool FailedGateRejectsOnlyItsGroupAndPreservesFifo() {
-    RHIExecutorRecordingHandoffQueue queue{};
+    RHIExecutorWorkQueue queue{};
     queue.Start();
 
     ResolutionLog log{};
     auto failed_gate = RHIRecordingGate::Create();
     auto later_gate  = RHIRecordingGate::Create();
-    queue.EnqueueRecording(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {failed_gate, later_gate},
-        .resolve = [&log](ERHIRecordingHandoffResult _result) {
-            log.Push(1, _result);
+        .callback      = [&log](ERHIExecutorWorkAction _action) {
+            log.Push(1, _action);
         },
     });
-    queue.RouteReady(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {},
-        .resolve = [&log](ERHIRecordingHandoffResult _result) {
-            log.Push(2, _result);
+        .callback      = [&log](ERHIExecutorWorkAction _action) {
+            log.Push(2, _action);
         },
     });
 
@@ -2463,11 +2463,11 @@ bool FailedGateRejectsOnlyItsGroupAndPreservesFifo() {
                 Expect(entries.size() == 2, "unexpected failed-gate result count") &&
                 Expect(entries[0].first == 1 && entries[1].first == 2, "failed group reordered FIFO") &&
                 Expect(
-                    entries[0].second == ERHIRecordingHandoffResult::Reject,
-                    "failed recording group was consumed"
+                    entries[0].second == ERHIExecutorWorkAction::Reject,
+                    "failed recording group was executed"
                 ) &&
                 Expect(
-                    entries[1].second == ERHIRecordingHandoffResult::Consume,
+                    entries[1].second == ERHIExecutorWorkAction::Execute,
                     "ready work after failed group was rejected"
                 ) &&
                 Expect(
@@ -3149,21 +3149,21 @@ bool ShutdownUsesOneTerminalSnapshotForSignalAndQueryNotification() {
 }
 
 bool ShutdownCancelsAnUnsignalledGate() {
-    RHIExecutorRecordingHandoffQueue queue{};
+    RHIExecutorWorkQueue queue{};
     queue.Start();
 
     ResolutionLog log{};
     auto never_signalled = RHIRecordingGate::Create();
-    queue.EnqueueRecording(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {never_signalled},
-        .resolve = [&log](ERHIRecordingHandoffResult _result) {
-            log.Push(1, _result);
+        .callback      = [&log](ERHIExecutorWorkAction _action) {
+            log.Push(1, _action);
         },
     });
-    queue.RouteReady(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {},
-        .resolve = [&log](ERHIRecordingHandoffResult _result) {
-            log.Push(2, _result);
+        .callback      = [&log](ERHIExecutorWorkAction _action) {
+            log.Push(2, _action);
         },
     });
 
@@ -3176,17 +3176,17 @@ bool ShutdownCancelsAnUnsignalledGate() {
                 Expect(entries.size() == 2, "shutdown did not resolve every FIFO entry") &&
                 Expect(entries[0].first == 1 && entries[1].first == 2, "reject order changed") &&
                 Expect(
-                    entries[0].second == ERHIRecordingHandoffResult::Cancel &&
-                        entries[1].second == ERHIRecordingHandoffResult::Cancel,
-                    "shutdown consumed cancelled work"
+                    entries[0].second == ERHIExecutorWorkAction::Cancel &&
+                        entries[1].second == ERHIExecutorWorkAction::Cancel,
+                    "shutdown executed cancelled work"
                 );
 
     std::atomic<int> stopped_result{-1};
-    queue.RouteReady(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {},
-        .resolve = [&stopped_result](ERHIRecordingHandoffResult _result) {
+        .callback      = [&stopped_result](ERHIExecutorWorkAction _action) {
             stopped_result.store(
-                _result == ERHIRecordingHandoffResult::Cancel ? 1 : 0,
+                _action == ERHIExecutorWorkAction::Cancel ? 1 : 0,
                 std::memory_order_release
             );
         },
@@ -3199,17 +3199,17 @@ bool ShutdownCancelsAnUnsignalledGate() {
     // The queue is restartable across device lifetimes.
     queue.Start();
     ResolutionLog restarted{};
-    queue.EnqueueRecording(RHIExecutorRecordingHandoffWork{
+    queue.Enqueue(RHIExecutorWork{
         .prerequisites = {RHIRecordingGate::Create(true)},
-        .resolve = [&restarted](ERHIRecordingHandoffResult _result) {
-            restarted.Push(3, _result);
+        .callback      = [&restarted](ERHIExecutorWorkAction _action) {
+            restarted.Push(3, _action);
         },
     });
-    okay &= Expect(restarted.WaitForSize(1), "restarted queue did not consume work");
+    okay &= Expect(restarted.WaitForSize(1), "restarted queue did not execute work");
     const auto restarted_entries = restarted.Snapshot();
     okay &= Expect(
         restarted_entries.size() == 1 &&
-            restarted_entries[0].second == ERHIRecordingHandoffResult::Consume,
+            restarted_entries[0].second == ERHIExecutorWorkAction::Execute,
         "restarted queue returned the wrong resolution"
     );
     queue.ShutDown();
@@ -3217,7 +3217,7 @@ bool ShutdownCancelsAnUnsignalledGate() {
 }
 
 bool ShutdownDrainsAcceptedReadyWork() {
-    RHIExecutorRecordingHandoffQueue queue{};
+    RHIExecutorWorkQueue queue{};
     queue.Start();
 
     ResolutionLog        log{};
@@ -3226,15 +3226,15 @@ bool ShutdownDrainsAcceptedReadyWork() {
     bool                 first_entered{false};
     bool                 release_first{false};
 
-    queue.RouteReady(RHIExecutorRecordingHandoffWork{
-        .resolve = [&](ERHIRecordingHandoffResult _result) {
+    queue.Enqueue(RHIExecutorWork{
+        .callback = [&](ERHIExecutorWorkAction _action) {
             {
                 std::unique_lock lock(mutex);
                 first_entered = true;
                 cv.notify_all();
                 cv.wait(lock, [&] { return release_first; });
             }
-            log.Push(1, _result);
+            log.Push(1, _action);
         },
     });
     {
@@ -3246,9 +3246,9 @@ bool ShutdownDrainsAcceptedReadyWork() {
             return Expect(false, "ready shutdown head did not enter the Executor");
         }
     }
-    queue.RouteReady(RHIExecutorRecordingHandoffWork{
-        .resolve = [&log](ERHIRecordingHandoffResult _result) {
-            log.Push(2, _result);
+    queue.Enqueue(RHIExecutorWork{
+        .callback = [&log](ERHIExecutorWorkAction _action) {
+            log.Push(2, _action);
         },
     });
 
@@ -3264,8 +3264,8 @@ bool ShutdownDrainsAcceptedReadyWork() {
     return Expect(entries.size() == 2, "shutdown dropped accepted ready work") &&
            Expect(entries[0].first == 1 && entries[1].first == 2, "shutdown reordered ready work") &&
            Expect(
-               entries[0].second == ERHIRecordingHandoffResult::Consume &&
-                   entries[1].second == ERHIRecordingHandoffResult::Consume,
+               entries[0].second == ERHIExecutorWorkAction::Execute &&
+                   entries[1].second == ERHIExecutorWorkAction::Execute,
                "shutdown cancelled work that was already safe for the Executor to drain"
            );
 }
@@ -3306,6 +3306,6 @@ int main() {
         !ShutdownDrainsAcceptedReadyWork()) {
         return EXIT_FAILURE;
     }
-    std::cout << "RHIExecutor recording handoff contract passed\n";
+    std::cout << "RHIExecutor work queue contract passed\n";
     return EXIT_SUCCESS;
 }

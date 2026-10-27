@@ -1,4 +1,4 @@
-#include "rhi/executor/RHIExecutorRecordingHandoff.h"
+#include "rhi/executor/RHIExecutorWorkQueue.h"
 
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
@@ -13,7 +13,7 @@ namespace Moer::Render {
 
 std::shared_ptr<RHIRecordingGate> RHIRecordingGate::Create(bool _initially_complete) {
     // The constructor is deliberately private so a gate always has shared
-    // ownership while it is registered with the handoff worker.
+    // ownership while it is registered with the Executor worker.
     return std::shared_ptr<RHIRecordingGate>(new RHIRecordingGate(_initially_complete));
 }
 
@@ -61,11 +61,11 @@ ERHIRecordingStatus RHIRecordingGate::Wait(std::stop_token _stop_token) const no
     return completed ? status : ERHIRecordingStatus::Pending;
 }
 
-RHIExecutorRecordingHandoffQueue::~RHIExecutorRecordingHandoffQueue() {
+RHIExecutorWorkQueue::~RHIExecutorWorkQueue() {
     ShutDown();
 }
 
-void RHIExecutorRecordingHandoffQueue::Start() {
+void RHIExecutorWorkQueue::Start() {
     std::lock_guard lock(mutex);
     if (accepting) {
         return;
@@ -81,46 +81,26 @@ void RHIExecutorRecordingHandoffQueue::Start() {
     accepting = true;
 }
 
-void RHIExecutorRecordingHandoffQueue::EnqueueRecording(
-    RHIExecutorRecordingHandoffWork&& _work
+void RHIExecutorWorkQueue::Enqueue(
+    RHIExecutorWork&& _work
 ) {
-    bool reject = false;
+    bool cancel = false;
     {
         std::lock_guard lock(mutex);
         if (!accepting) {
-            reject = true;
+            cancel = true;
         } else {
             pending.emplace_back(std::move(_work));
         }
     }
-    if (reject) {
-        ResolveNoThrow(_work, ERHIRecordingHandoffResult::Cancel);
+    if (cancel) {
+        InvokeCallbackNoThrow(_work, ERHIExecutorWorkAction::Cancel);
         return;
     }
     work_cv.notify_all();
 }
 
-void RHIExecutorRecordingHandoffQueue::RouteReady(
-    RHIExecutorRecordingHandoffWork&& _work
-) {
-    bool reject = false;
-    {
-        std::lock_guard lock(mutex);
-        if (!accepting) {
-            reject = true;
-        } else {
-            pending.emplace_back(std::move(_work));
-        }
-    }
-
-    if (reject) {
-        ResolveNoThrow(_work, ERHIRecordingHandoffResult::Cancel);
-        return;
-    }
-    work_cv.notify_all();
-}
-
-void RHIExecutorRecordingHandoffQueue::ShutDown() {
+void RHIExecutorWorkQueue::ShutDown() {
     {
         std::lock_guard lock(mutex);
         accepting = false;
@@ -136,12 +116,12 @@ void RHIExecutorRecordingHandoffQueue::ShutDown() {
     idle_cv.wait(lock, [this] { return !worker_busy && pending.empty(); });
 }
 
-bool RHIExecutorRecordingHandoffQueue::IsIdle() const noexcept {
+bool RHIExecutorWorkQueue::IsIdle() const noexcept {
     std::lock_guard lock(mutex);
     return pending.empty() && !worker_busy;
 }
 
-void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept {
+void RHIExecutorWorkQueue::Run(std::stop_token _stop_token) noexcept {
     Platform::SetCurrentThreadName("Moer RHI Executor");
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Executor);
     RHIThreadHeartbeatScope heartbeat(
@@ -151,7 +131,7 @@ void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept
     );
 
     for (;;) {
-        RHIExecutorRecordingHandoffWork work{};
+        RHIExecutorWork work{};
         {
             heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             std::unique_lock lock(mutex);
@@ -195,11 +175,11 @@ void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept
             }
         }
 
-        ResolveNoThrow(
+        InvokeCallbackNoThrow(
             work,
-            cancelled ? ERHIRecordingHandoffResult::Cancel :
-            ready     ? ERHIRecordingHandoffResult::Consume :
-                        ERHIRecordingHandoffResult::Reject
+            cancelled ? ERHIExecutorWorkAction::Cancel :
+            ready     ? ERHIExecutorWorkAction::Execute :
+                        ERHIExecutorWorkAction::Reject
         );
 
         {
@@ -214,40 +194,40 @@ void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept
         }
     }
 
-    std::deque<RHIExecutorRecordingHandoffWork> rejected{};
+    std::deque<RHIExecutorWork> cancelled_work{};
     {
         std::lock_guard lock(mutex);
-        rejected.swap(pending);
+        cancelled_work.swap(pending);
         worker_busy = false;
     }
     idle_cv.notify_all();
 
-    for (RHIExecutorRecordingHandoffWork& work : rejected) {
-        ResolveNoThrow(work, ERHIRecordingHandoffResult::Cancel);
+    for (RHIExecutorWork& work : cancelled_work) {
+        InvokeCallbackNoThrow(work, ERHIExecutorWorkAction::Cancel);
     }
     heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
 }
 
-void RHIExecutorRecordingHandoffQueue::ResolveNoThrow(
-    RHIExecutorRecordingHandoffWork& _work,
-    ERHIRecordingHandoffResult       _result
+void RHIExecutorWorkQueue::InvokeCallbackNoThrow(
+    RHIExecutorWork&       _work,
+    ERHIExecutorWorkAction _action
 ) noexcept {
-    if (!_work.resolve) {
+    if (!_work.callback) {
         return;
     }
     try {
-        _work.resolve(_result);
+        _work.callback(_action);
     } catch (const std::exception& exception) {
         try {
             LOG_ERROR(
-                "[RHIExecutor] recording handoff resolver threw: {}",
+                "[RHIExecutor] work callback threw: {}",
                 exception.what()
             );
         } catch (...) {
         }
     } catch (...) {
         try {
-            LOG_ERROR("[RHIExecutor] recording handoff resolver threw");
+            LOG_ERROR("[RHIExecutor] work callback threw");
         } catch (...) {
         }
     }

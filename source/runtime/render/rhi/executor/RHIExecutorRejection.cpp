@@ -654,7 +654,7 @@ void FinalizeFailedRecordingSources(
             );
         } catch (...) {
         }
-        // Materialization is entered only after the handoff queue observes
+        // Materialization is entered only after the Executor work queue observes
         // every prerequisite terminal. Keep this invariant explicit: an
         // immutable prefix combined with an opaque producer cannot be safely
         // notified as one transaction.

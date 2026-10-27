@@ -460,12 +460,10 @@ void RHIExecutor::SubmitRecording(
     payload->flags = _flags;
 
     try {
-        RHIExecutorRecordingHandoffWork work{
+        RHIExecutorWork work{
             .prerequisites = std::move(prerequisites),
-            .resolve       = [this, payload](
-                                 ERHIRecordingHandoffResult _result
-                             ) {
-                if (_result == ERHIRecordingHandoffResult::Cancel) {
+            .callback      = [this, payload](ERHIExecutorWorkAction _action) {
+                if (_action == ERHIExecutorWorkAction::Cancel) {
                     FinalizeCancelledRecordingSources(
                         std::move(payload->sources),
                         "completion gate cancelled during shutdown",
@@ -475,7 +473,7 @@ void RHIExecutor::SubmitRecording(
                     );
                     return;
                 }
-                if (_result == ERHIRecordingHandoffResult::Reject) {
+                if (_action == ERHIExecutorWorkAction::Reject) {
                     FinalizeFailedRecordingSources(
                         std::move(payload->sources),
                         "recording completion gate failed",
@@ -493,7 +491,7 @@ void RHIExecutor::SubmitRecording(
                 ProcessSubmissionRequests(std::move(*submits), payload->flags, nullptr);
             },
         };
-        recording_handoff.EnqueueRecording(std::move(work));
+        work_queue.Enqueue(std::move(work));
     } catch (...) {
         // Work construction/queue admission is still part of preparation.
         // No producer generation has been inspected or sealed, so restore the

@@ -78,7 +78,7 @@ source/
         RHI.h, RHIResource.h     #   Core types (BufferRef, TextureRef, EBufferUsageFlags)
         RHICommon.h              #   Enums (EBufferUsageFlags, EPixelFormat, etc.)
         RHICommand.h             #   Command list / draw dispatching
-        executor/                #   Submission admission, recording handoff and backend dispatch
+        executor/                #   Submission admission, ordered work queue and backend dispatch
           RHIExecutor.cpp/h      #     Public entry points, batch publication and lifecycle
           testing/               #     Executor test hooks, separate from the public API
         backends/                #   Graphics API implementations

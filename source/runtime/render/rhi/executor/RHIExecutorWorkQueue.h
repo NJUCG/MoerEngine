@@ -22,7 +22,7 @@ enum class ERHIRecordingStatus : uint8_t {
 
 // One-shot CPU publication gate used to hand a CommandList to the RHI
 // executor before its producer has finished recording it. Signal() publishes
-// all writes performed by the recorder before the call; the handoff worker
+// all writes performed by the recorder before the call; the Executor worker
 // acquires them before consuming the CommandList.
 class RENDER_API RHIRecordingGate final {
 public:
@@ -39,7 +39,7 @@ public:
     [[nodiscard]] ERHIRecordingStatus Wait() const noexcept;
 
 private:
-    friend class RHIExecutorRecordingHandoffQueue;
+    friend class RHIExecutorWorkQueue;
 
     explicit RHIRecordingGate(bool _initially_complete) :
         status(
@@ -88,67 +88,59 @@ private:
     RHIRecordingGateRef gate{};
 };
 
-enum class ERHIRecordingHandoffResult : uint8_t {
-    Consume,
+enum class ERHIExecutorWorkAction : uint8_t {
+    // All prerequisites succeeded; the callback may process the work normally.
+    Execute,
     // Every prerequisite reached a terminal state, but at least one producer
-    // failed. The resolver may safely inspect every protected CommandList for
+    // failed. The callback may safely inspect every protected CommandList for
     // frontend cleanup, but must never publish its commands to a GPU queue.
     Reject,
-    // The queue stopped before all prerequisites became terminal. Protected
-    // CommandLists remain opaque because a producer may still be mutating one.
+    // The work was cancelled during shutdown or enqueued while stopped.
+    // Prerequisites may still be pending; protected CommandLists remain opaque.
     Cancel,
 };
 
-// A work item can depend on one gate per source CommandList. The worker waits
-// for the complete set in input order and resolves the item exactly once.
-struct RHIExecutorRecordingHandoffWork {
+// Optional CPU recording prerequisites and one callback for normal processing
+// or rejection/cancellation cleanup. An empty prerequisite list still respects FIFO.
+struct RHIExecutorWork {
     std::vector<RHIRecordingGateRef> prerequisites{};
-    std::function<void(ERHIRecordingHandoffResult)> resolve{};
+    std::function<void(ERHIExecutorWorkAction)> callback{};
 };
 
-// Small FIFO used by RHIExecutor to bridge asynchronously recorded sources to
-// the existing backend submission path. Ready operations are routed through
-// the same ordering domain while a recording handoff is active, so Submit,
-// Present, Flush and Sync cannot overtake an unfinished recording source.
-//
-// A normal failed group waits for every source gate to become terminal before
-// resolving Reject, so its resolver can safely drain frontend cleanup. ShutDown
-// never waits for a gate: requesting stop interrupts the current gate wait and
-// resolves that work plus every later FIFO entry as Cancel.
-class RENDER_API RHIExecutorRecordingHandoffQueue final {
+// Owns the Executor worker and its FIFO. Submit, SubmitRecording, Present, Flush
+// and Sync share this queue so ready work cannot overtake pending recording.
+// A failed group waits for every prerequisite before receiving Reject.
+// Shutdown drains ready work; an interrupted prerequisite wait cancels that
+// item and the remaining FIFO without waiting for producers to finish.
+class RENDER_API RHIExecutorWorkQueue final {
 public:
-    RHIExecutorRecordingHandoffQueue() = default;
-    ~RHIExecutorRecordingHandoffQueue();
+    RHIExecutorWorkQueue() = default;
+    ~RHIExecutorWorkQueue();
 
-    RHIExecutorRecordingHandoffQueue(const RHIExecutorRecordingHandoffQueue&) = delete;
-    RHIExecutorRecordingHandoffQueue& operator=(const RHIExecutorRecordingHandoffQueue&) = delete;
+    RHIExecutorWorkQueue(const RHIExecutorWorkQueue&)            = delete;
+    RHIExecutorWorkQueue& operator=(const RHIExecutorWorkQueue&) = delete;
 
     void Start();
 
-    // Establishes the asynchronous FIFO even when all prerequisites are
-    // already complete. Used by SubmitRecording.
-    void EnqueueRecording(RHIExecutorRecordingHandoffWork&& _work);
-
-    // Always enters the Executor worker FIFO, including when no recording
-    // prerequisite is active. This gives accepted Submit/Present/Flush/Sync
-    // work one stable thread owner and prevents callback affinity from
-    // depending on whether a recording handoff happened to be pending.
-    void RouteReady(RHIExecutorRecordingHandoffWork&& _work);
+    // Accepted work always runs on the Executor worker, even without prerequisites.
+    // If stopped, invokes the callback with Cancel on the calling thread.
+    // If insertion throws, ownership stays with the caller for cleanup.
+    void Enqueue(RHIExecutorWork&& _work);
 
     void ShutDown();
     [[nodiscard]] bool IsIdle() const noexcept;
 
 private:
     void Run(std::stop_token _stop_token) noexcept;
-    static void ResolveNoThrow(
-        RHIExecutorRecordingHandoffWork& _work,
-        ERHIRecordingHandoffResult       _result
+    static void InvokeCallbackNoThrow(
+        RHIExecutorWork&       _work,
+        ERHIExecutorWorkAction _action
     ) noexcept;
 
     mutable std::mutex                        mutex;
     std::condition_variable_any               work_cv;
     std::condition_variable                   idle_cv;
-    std::deque<RHIExecutorRecordingHandoffWork> pending{};
+    std::deque<RHIExecutorWork>               pending{};
     std::jthread                              worker{};
     bool                                      accepting{false};
     bool                                      worker_busy{false};

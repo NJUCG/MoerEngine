@@ -345,7 +345,9 @@ Executor 模块集中在 `source/runtime/render/rhi/executor/`，调用方通过
 `RHIExecutorRecording.cpp` 负责将录制结果封装为提交请求并应用元数据；
 `RHIExecutorRejection.cpp` 负责失败、取消时的结果通知和清理；
 `RHIExecutorBackend.cpp` 负责后端工厂及非 Vulkan 队列适配。
-`RHIExecutorRecordingHandoff` 负责等待录制完成并按序处理请求；
+`RHIExecutorWorkQueue` 持有 Executor 工作线程，所有操作统一通过 `Enqueue` 入队。
+任务的 `prerequisites` 表示需要等待的 CPU 录制条件；即使为空也遵循 FIFO 顺序。
+回调接收 `Execute`、`Reject` 或 `Cancel`，分别执行正常处理、录制失败收尾或关闭取消收尾。
 `RHIExecutorInternal.h` 只声明实现文件间共享的辅助函数。
 测试钩子放在模块内的 `executor/testing/`，不再由公共 `RHIExecutor.h` 暴露。
 各图形 API 的实现统一放在 `rhi/backends/` 下的 `vulkan/`、`metal/`、`d3d12/`，
