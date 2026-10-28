@@ -20,7 +20,7 @@ public:
         bool                    is_editor_view = false;
         GaussianViewSettings    settings{};
         TextureRef              opaque_depth{};
-        bool                    is_engine_linear = true;
+        bool                    is_engine_view   = true;
         bool                    needs_reference  = false;
         BufferRef               shadow_data{};
         BindlessArrayRef        shadow_bindless{};
@@ -69,15 +69,16 @@ public:
         const Camera&           camera,
         uint2                   resolution,
         bool                    is_editor_view,
-        bool                    is_invalid       = false,
-        GaussianViewSettings    settings         = {},
-        TextureRef              opaque_depth     = {},
-        bool                    is_engine_linear = false,
-        bool                    needs_reference  = false,
-        BufferRef               shadow_data      = {},
-        BindlessArrayRef        shadow_bindless  = {}
+        bool                    is_invalid      = false,
+        GaussianViewSettings    settings        = {},
+        TextureRef              opaque_depth    = {},
+        bool                    is_engine_view  = false,
+        bool                    needs_reference = false,
+        BufferRef               shadow_data     = {},
+        BindlessArrayRef        shadow_bindless = {}
     );
     TextureRef           RecordDisplay(CommandList& commands, GaussianViewSettings settings = {});
+    // Premultiplied source RGB, before layer decoding in GaussianCompositePass.
     const TextureRef&    GetColor() const;
     const TextureRef&    GetTransmittance() const;
     GaussianRasterStatus GetStatus() const;

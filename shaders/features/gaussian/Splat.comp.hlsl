@@ -24,6 +24,10 @@ float3 SRGBToLinear(float3 color) {
     color = max(color, 0);
     return select(color <= 0.04045, color / 12.92, pow((color + 0.055) / 1.055, 2.4));
 }
+float3 LinearToSRGB(float3 color) {
+    color = max(color, 0);
+    return select(color <= 0.0031308, color * 12.92, 1.055 * pow(color, 1.0 / 2.4) - 0.055);
+}
 [numthreads(16,16,1)]
 void main(uint3 group_id : SV_GroupID, uint3 local_id : SV_GroupThreadID) {
     uint2 pixel = group_id.xy * 16 + local_id.xy;
@@ -61,9 +65,11 @@ void main(uint3 group_id : SV_GroupID, uint3 local_id : SV_GroupThreadID) {
             Moer::GProjectedGaussian gaussian = projected[pairs[pair_id].z];
             batch_centers_cutoffs[lane_id] = gaussian.center_depth;
             batch_conics[lane_id] = gaussian.conic_opacity;
-            // Decode once per tile batch and share the linear result across pixels.
-            batch_colors[lane_id] = param.job.x != 0 ?
-                SRGBToLinear(gaussian.color.xyz) * exp2(camera.background.w) * lerp(1.0,gaussian.color.w,asfloat(param.job.w & 0x7fffffffu)) : gaussian.color.xyz;
+            // Preserve the original SH RGB alpha blending. Optional receiving shadows
+            // modulates linear color, then returns it to the source domain before blending.
+            float shadow_factor = lerp(1.0, gaussian.color.w, asfloat(param.job.w & 0x7fffffffu));
+            batch_colors[lane_id] = param.job.x != 0 && shadow_factor < 1.0 ?
+                LinearToSRGB(SRGBToLinear(gaussian.color.xyz) * shadow_factor) : gaussian.color.xyz;
             if ((param.job.w & 0x80000000u) != 0) batch_colors[lane_id] = gaussian.color.www;
             if (param.job.y != 0) batch_reference_colors[lane_id] = gaussian.color.xyz;
         }

@@ -478,7 +478,9 @@ void RunHybrid(
     bool           use_graph,
     float          shadow_strength  = -1,
     bool           cube_shadow      = false,
-    bool           debug_visibility = false
+    bool           debug_visibility = false,
+    bool           is_gaussian_only = false,
+    float          exposure_ev      = 1.f
 ) {
     constexpr uint width = 65, height = 49;
     Camera         camera;
@@ -517,10 +519,14 @@ void RunHybrid(
             float z = y < height / 2 ? (x < width / 2 ? 1.f : 3.f) : (x < width / 2 ? 5.f : 0.f);
             if (y == height / 2)
                 z = 2.f;
+            if (is_gaussian_only)
+                z = 0;
             depths[y * width + x]                = z > 0 ? (-z * projection[2][2] + projection[2][3]) /
                                                                (-z * projection[3][2] + projection[3][3]) :
                                                            0.f;
-            mesh_pixels[(y * width + x) * 4 + 2] = 1;
+            mesh_pixels[(y * width + x) * 4]     = .125f;
+            mesh_pixels[(y * width + x) * 4 + 1] = .0625f;
+            mesh_pixels[(y * width + x) * 4 + 2] = 2.5f; // HDR Mesh must not be decoded or clamped.
             mesh_pixels[(y * width + x) * 4 + 3] = 1;
         }
     auto                          bindless = device.CreateBindlessArray();
@@ -537,7 +543,8 @@ void RunHybrid(
         mesh->GetView()
     );
     GaussianViewSettings settings;
-    settings.exposure_ev = 1;
+    settings.exposure_ev       = exposure_ev;
+    settings.background        = is_gaussian_only ? float3(.15f, .3f, .7f) : float3(0);
     auto parameters      = splats.Prepare(&scene, camera, uint2(width, height), false, settings, depth, true);
     BufferRef  shadow_buffer;
     TextureRef shadow_texture;
@@ -586,12 +593,14 @@ void RunHybrid(
         if (debug_visibility)
             parameters.settings.debug_view = EGaussianDebugView::ShadowVisibility;
     }
-    auto merge           = composite.Prepare(
+    auto merge = composite.Prepare(
         TextureWithHandle{.tex = mesh},
         splats.GetColor(),
         splats.GetTransmittance(),
         BufferRef(splats.GetStatusBuffer().GetBuffer()),
-        splats.GetRanges()
+        splats.GetRanges(),
+        EGaussianDebugView::Color,
+        parameters.settings
     );
     if (use_graph) {
         RenderGraph graph("HybridContract", RenderGraph::QueueTopology::FromRHI());
@@ -630,11 +639,16 @@ void RunHybrid(
     const auto decode = [](float c) {
         return c <= .04045f ? c / 12.92f : std::pow((c + .055f) / 1.055f, 2.4f);
     };
+    const auto encode = [](float c) {
+        return c <= .0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.f / 2.4f) - .055f;
+    };
     for (uint y = 0; y < height; ++y)
         for (uint x = 0; x < width; ++x) {
             float limit = y < height / 2 ? (x < width / 2 ? 1.f : 3.f) : (x < width / 2 ? 5.f : 1000.f);
             if (y == height / 2)
                 limit = 2.f;
+            if (is_gaussian_only)
+                limit = 1000.f;
             float  expected_t = 1;
             float3 expected(0), expected_reference(0);
             for (uint i = 0; i < 2; ++i) {
@@ -648,11 +662,10 @@ void RunHybrid(
                 if (alpha < 1.f / 255.f)
                     continue;
                 for (uint c = 0; c < 3; ++c) {
-                    expected[c] += (debug_visibility ?
-                                        (i == 0 ? 1.f : 0.f) :
-                                        decode(rgb[i][c]) * 2.f *
-                                            (shadow_strength >= 0 && i == 1 ? 1 - shadow_strength : 1.f)) *
-                                   alpha * expected_t;
+                    const float shadow_factor = shadow_strength >= 0 && i == 1 ? 1 - shadow_strength : 1.f;
+                    const float source =
+                        shadow_factor < 1 ? encode(decode(rgb[i][c]) * shadow_factor) : rgb[i][c];
+                    expected[c] += (debug_visibility ? (i == 0 ? 1.f : 0.f) : source) * alpha * expected_t;
                     expected_reference[c] += rgb[i][c] * alpha * expected_t;
                 }
                 expected_t *= 1 - alpha;
@@ -661,20 +674,43 @@ void RunHybrid(
             Require(std::abs((*t)[pixel] - expected_t) < .00003f, "Hybrid depth/alpha mismatch");
             for (uint c = 0; c < 3; ++c) {
                 Require(
-                    std::abs((*reference_pixels)[pixel * 4 + c] - decode(expected_reference[c])) < .00003f,
-                    "Reference export domain must remain independent of engine linear accumulation"
+                    std::abs(
+                        (*reference_pixels)[pixel * 4 + c] -
+                        decode(
+                            std::clamp(expected_reference[c] + expected_t * settings.background[c], 0.f, 1.f)
+                        )
+                    ) < .00003f,
+                    "Reference export must remain independent of viewport brightness and shadows"
                 );
                 Require(
                     std::abs((*color)[pixel * 4 + c] - expected[c]) < .00003f,
-                    "Hybrid linear SH accumulation mismatch"
+                    "Hybrid source RGB accumulation mismatch"
                 );
+                const float alpha          = 1 - expected_t;
+                const float layer          = alpha > 0 ? expected[c] / alpha : 0;
+                const float linear_layer   = decode(layer) * std::exp2(exposure_ev);
+                float       expected_image = alpha * linear_layer + expected_t * mesh_pixels[pixel * 4 + c];
+                if (debug_visibility)
+                    expected_image = expected[c] + expected_t * mesh_pixels[pixel * 4 + c];
+                if (!std::isfinite((*image)[pixel * 4 + c]) ||
+                    std::abs((*image)[pixel * 4 + c] - expected_image) >= .00003f)
+                    std::cerr << "Composite mismatch pure=" << is_gaussian_only << " EV=" << exposure_ev
+                              << " pixel=" << pixel << " c=" << c << " actual=" << (*image)[pixel * 4 + c]
+                              << " expected=" << expected_image << " raw=" << (*color)[pixel * 4 + c]
+                              << " T=" << (*t)[pixel] << std::endl;
                 Require(
-                    std::abs((*image)[pixel * 4 + c] - (expected[c] + (c == 2 ? expected_t : 0))) < .00003f,
-                    "Hybrid premultiplied scene composite mismatch"
+                    std::isfinite((*image)[pixel * 4 + c]) &&
+                        std::abs((*image)[pixel * 4 + c] - expected_image) < .00003f,
+                    "Hybrid source-layer decode/composite mismatch"
                 );
+                if (expected_t == 1)
+                    Require(
+                        (*image)[pixel * 4 + c] == mesh_pixels[pixel * 4 + c],
+                        "Uncovered HDR Mesh pixels must remain exactly unchanged"
+                    );
             }
         }
-    std::cout << "hybrid depth/linear-color/composite passed (graph=" << use_graph << ")" << std::endl;
+    std::cout << "hybrid depth/source-RGB/composite passed (graph=" << use_graph << ")" << std::endl;
 }
 
 } // namespace
@@ -931,6 +967,9 @@ int main(int argc, char** argv) {
         RunViewportPng();
         RunHybrid(manager, false);
         RunHybrid(manager, true);
+        for (bool graph : {false, true})
+            for (float exposure : {0.f, 1.f, 4.f})
+                RunHybrid(manager, graph, -1.f, false, false, true, exposure);
         for (float strength : {0.f, .5f, 1.f}) {
             RunHybrid(manager, false, strength, false);
             RunHybrid(manager, true, strength, false);

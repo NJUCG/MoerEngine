@@ -1495,9 +1495,15 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         m_gaussian_splat_pass->Record(commands, parameters);
                     }
                 );
-                const auto composite = m_gaussian_composite_pass->Prepare(processing_image,
-                    m_gaussian_splat_pass->GetColor(), m_gaussian_splat_pass->GetTransmittance(),
-                    BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()), m_gaussian_splat_pass->GetRanges());
+                const auto composite = m_gaussian_composite_pass->Prepare(
+                    processing_image,
+                    m_gaussian_splat_pass->GetColor(),
+                    m_gaussian_splat_pass->GetTransmittance(),
+                    BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),
+                    m_gaussian_splat_pass->GetRanges(),
+                    EGaussianDebugView::Color,
+                    frame_packet.gaussian_view_settings
+                );
                 schedule_prepared("GaussianComposite", [&](RenderGraph::PassBuilder&) {},
                     [composite]() { return composite; },
                     [&](CommandList& commands, const GaussianCompositePass::RecordParameters& parameters) {
@@ -2182,9 +2188,15 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         gaussian_parameters.shadow_data ? graph_resources.shadow_maps :
                                                           RenderGraph::TokenHandle{}
                     );
-                    const auto composite = m_gaussian_composite_pass->Prepare(processing_image,
-                        m_gaussian_splat_pass->GetColor(), m_gaussian_splat_pass->GetTransmittance(),
-                        BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()), m_gaussian_splat_pass->GetRanges());
+                    const auto composite = m_gaussian_composite_pass->Prepare(
+                        processing_image,
+                        m_gaussian_splat_pass->GetColor(),
+                        m_gaussian_splat_pass->GetTransmittance(),
+                        BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),
+                        m_gaussian_splat_pass->GetRanges(),
+                        EGaussianDebugView::Color,
+                        frame_packet.gaussian_view_settings
+                    );
                     auto composite_resource = graph.ImportTexture("gs_scene_composite", composite.output.tex, {});
                     m_gaussian_composite_pass->AddToGraph(graph, composite, processing_image_resource,
                         gaussian_graph.color, gaussian_graph.transmittance, gaussian_graph.status,

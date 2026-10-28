@@ -7,21 +7,23 @@ namespace Moer::Render::Raster {
 class RENDER_API GaussianCompositePass {
 public:
     struct RecordParameters {
-        TextureWithHandle  input{}, output{};
-        TextureRef         color{}, transmittance{};
-        BufferRef          status{}, ranges{};
-        EGaussianDebugView debug_view = EGaussianDebugView::Color;
-        bool               is_shadow_depth_valid = false;
+        TextureWithHandle    input{}, output{};
+        TextureRef           color{}, transmittance{};
+        BufferRef            status{}, ranges{};
+        EGaussianDebugView   debug_view = EGaussianDebugView::Color;
+        GaussianViewSettings settings{};
+        bool                 is_shadow_depth_valid = false;
     };
     GaussianCompositePass(ShaderManager& manager, BindlessArrayRef bindless);
     ~GaussianCompositePass();
     RecordParameters Prepare(
-        TextureWithHandle  input,
-        TextureRef         color,
-        TextureRef         transmittance,
-        BufferRef          status,
-        BufferRef          ranges,
-        EGaussianDebugView debug_view = EGaussianDebugView::Color
+        TextureWithHandle    input,
+        TextureRef           color,
+        TextureRef           transmittance,
+        BufferRef            status,
+        BufferRef            ranges,
+        EGaussianDebugView   debug_view = EGaussianDebugView::Color,
+        GaussianViewSettings settings   = {}
     );
     void                    Record(CommandList& commands, const RecordParameters& parameters);
     RenderGraph::PassHandle AddToGraph(

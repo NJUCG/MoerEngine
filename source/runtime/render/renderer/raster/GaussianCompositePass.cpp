@@ -8,7 +8,7 @@ namespace {
 class GaussianCompositePipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianCompositePipeline);
-    DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
+    DEFINE_SHADER_CONSTANT(GaussianCompositeParams, param);
     DEFINE_SHADER_TEX(scene_color);
     DEFINE_SHADER_TEX(gaussian_color);
     DEFINE_SHADER_TEX(transmittance);
@@ -68,12 +68,13 @@ const TextureWithHandle& GaussianCompositePass::GetOutput() const {
     return m_impl->output;
 }
 GaussianCompositePass::RecordParameters GaussianCompositePass::Prepare(
-    TextureWithHandle  input,
-    TextureRef         color,
-    TextureRef         transmittance,
-    BufferRef          status,
-    BufferRef          ranges,
-    EGaussianDebugView debug_view
+    TextureWithHandle    input,
+    TextureRef           color,
+    TextureRef           transmittance,
+    BufferRef            status,
+    BufferRef            ranges,
+    EGaussianDebugView   debug_view,
+    GaussianViewSettings settings
 ) {
     auto& state = *m_impl;
     if (!state.output.tex || state.output.GetSize() != input.GetSize()) {
@@ -98,7 +99,8 @@ GaussianCompositePass::RecordParameters GaussianCompositePass::Prepare(
         std::move(transmittance),
         std::move(status),
         std::move(ranges),
-        debug_view
+        debug_view,
+        settings
     };
 }
 void GaussianCompositePass::Record(CommandList& commands, const RecordParameters& parameters) {
@@ -109,10 +111,11 @@ void GaussianCompositePass::Record(CommandList& commands, const RecordParameters
     }
     commands.PushScopeWithTimeScope("Gaussian composite");
     commands.UpdateBindlessArray(m_impl->bindless);
-    GaussianDispatchParams param{};
-    const auto             size = parameters.output.GetSize();
-    param.info                  = uint4(size.x, size.y, (size.x + 15) / 16, 0);
-    param.job                   = uint4(uint(parameters.debug_view), 0, 0, 0);
+    GaussianCompositeParams param{};
+    const auto              size = parameters.output.GetSize();
+    param.viewport               = uint4(size.x, size.y, (size.x + 15) / 16, uint(parameters.debug_view));
+    param.brightness_gain        = std::exp2(parameters.settings.exposure_ev);
+    param.is_visibility_debug = uint(parameters.settings.debug_view == EGaussianDebugView::ShadowVisibility);
     commands
         .Compute(
             m_impl->pipeline,

@@ -37,7 +37,16 @@ struct GaussianDispatchParams {
     uint4 job;  // kernel-specific indices/counts; never CPU pointers
 };
 
+// The accumulated layer remains in the source display RGB domain until compositing.
+struct GaussianCompositeParams {
+    uint4 viewport; // width, height, tile columns, debug view
+    float brightness_gain;
+    uint  is_visibility_debug;
+    uint2 reserved;
+};
+
 #ifdef __cplusplus
+static_assert(sizeof(GaussianCompositeParams) == 32);
 static_assert(sizeof(GGaussianCamera) == 256);
 static_assert(sizeof(GProjectedGaussian) == 64);
 static_assert(sizeof(GaussianDispatchParams) == 32);

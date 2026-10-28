@@ -174,7 +174,7 @@ struct GaussianSplatPass::Impl {
     };
     std::vector<ScanLevel> m_scan;
     TextureRef             m_color, m_transmittance, m_display, m_reference, m_empty_depth;
-    bool                   m_is_engine_linear = false;
+    bool                   m_is_engine_view = false;
     ReadbackFuture         m_status_readback;
     bool                   m_has_reported_overflow = false;
     GaussianRasterStatus   m_telemetry{};
@@ -347,7 +347,7 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     bool                    is_invalid_scene,
     GaussianViewSettings    view_settings,
     TextureRef              opaque_depth,
-    bool                    is_engine_linear,
+    bool                    is_engine_view,
     bool                    needs_reference,
     BufferRef               shadow_data,
     BindlessArrayRef        shadow_bindless
@@ -377,8 +377,8 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     state.m_telemetry.geometry_bytes = uint64(state.m_telemetry.unique_gaussian_count) * sizeof(GGaussian) +
                                        uint64(state.m_telemetry.instance_count) * sizeof(GGaussianInstance);
     state.Resize(resolution, work_count);
-    state.m_is_engine_linear = is_engine_linear;
-    if ((!is_engine_linear || needs_reference) &&
+    state.m_is_engine_view = is_engine_view;
+    if ((!is_engine_view || needs_reference) &&
         (state.m_display->GetWidth() != resolution.x || state.m_display->GetHeight() != resolution.y))
         state.m_display = RenderDevice::Get().CreateTexture(
             "Gaussian reference display",
@@ -571,7 +571,7 @@ TextureRef GaussianSplatPass::RecordAccumulation(
         if (!(instance.range.w & visibility_mask) || !instance.range.y)
             continue;
         param.job = uint4(instance.range.x, instance_id, work_offset, instance.range.y);
-        if (shadow_data && shadow_bindless && (instance.range.w & 8u) && is_engine_linear) {
+        if (shadow_data && shadow_bindless && (instance.range.w & 8u) && is_engine_view) {
             received = true;
             if (!receive_token.Valid() && !state.m_receive_timing.Valid()) {
                 receive_token          = commands.BeginTimestampQuery("Gaussian shadow receiving");
@@ -648,7 +648,7 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     begin_stage(2);
     // The sign bit selects visibility debug; the remaining bits store nonnegative strength.
     param.job = uint4(
-        uint(is_engine_linear),
+        uint(is_engine_view),
         uint(needs_reference),
         uint(bool(opaque_depth)),
         (std::bit_cast<uint>(view_settings.shadow_receive_strength) & 0x7fffffffu) |
@@ -688,7 +688,7 @@ TextureRef GaussianSplatPass::RecordDisplay(CommandList& commands, GaussianViewS
         .Compute(
             state.m_display_pipeline,
             param,
-            (state.m_is_engine_linear ? state.m_reference : state.m_color)->GetView(),
+            (state.m_is_engine_view ? state.m_reference : state.m_color)->GetView(),
             state.m_transmittance->GetView(),
             state.m_ranges->GetView(),
             state.m_status->GetView(),
@@ -765,7 +765,7 @@ void GaussianSplatPass::Record(CommandList& commands, const RecordParameters& pa
         false,
         parameters.settings,
         parameters.opaque_depth,
-        parameters.is_engine_linear,
+        parameters.is_engine_view,
         parameters.needs_reference,
         parameters.shadow_data,
         parameters.shadow_bindless

@@ -1036,9 +1036,8 @@ void EditorUI::ShowGaussianSettings(Scene& scene) {
     has_changed |= ImGui::SliderFloat("Shadow receive strength", &settings.shadow_receive_strength, 0.f, 1.f);
     has_changed |= ImGui::DragFloat("Shadow world bias", &settings.shadow_world_bias, .001f, 0.f, 100.f);
     ImGui::TextDisabled("SH shadow receiving is an approximate brightness modulation.");
-    ImGui::TextDisabled(
-        "Viewport uses shared exposure and tone mapping. Reference PNG uses its own background."
-    );
+    ImGui::TextDisabled("Viewport uses the scene background, exposure and tone mapping.");
+    ImGui::TextDisabled("Reference PNG preserves source RGB blending; transparent edges may look different.");
     const bool has_visible_gaussians =
         content == EGaussianSceneContent::GaussianOnly || content == EGaussianSceneContent::Mixed;
     const auto requested_aa = m_config->raster_config.aa_mode;
