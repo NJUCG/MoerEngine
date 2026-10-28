@@ -756,10 +756,7 @@ void VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
     {
         std::lock_guard lock(mutex);
         if (!accepting) {
-            if (_depth == ERHISyncDepth::Present) {
-                throw std::runtime_error("Present sync rejected during shutdown");
-            }
-            return;
+            throw std::runtime_error("Sync rejected during shutdown");
         }
         requests.emplace_back(
             WorkerRequest{
@@ -896,7 +893,6 @@ void VulkanSubmissionExecutor::RunTranslateThread() {
                 ERHIHeartbeatStage::AwaitCompletion
         );
         BatchExceptionState exception_state{};
-        std::exception_ptr  request_failure{};
         const VulkanSubmissionDetail::WorkerRequestDispatchResult dispatch_result =
             VulkanSubmissionDetail::DispatchWorkerRequestNoexcept(
                 request.kind,
@@ -931,21 +927,18 @@ void VulkanSubmissionExecutor::RunTranslateThread() {
                         exception_state.rejection_publication
                     );
                 },
-                [&] {
+                [&](const std::exception_ptr& _failure) {
+                    // Stop must still release its waiter so ShutDown can join
+                    // the owners. Sync reports failure for every requested depth.
                     CompleteRequest(
                         request.completion,
-                        request.kind == ERequestKind::Sync && request.sync_depth == ERHISyncDepth::Present ?
-                            request_failure :
+                        request.kind == ERequestKind::Sync ?
+                            _failure :
                             std::exception_ptr{}
                     );
                 },
                 [&](VulkanSubmissionDetail::EWorkerRequestFailurePhase _phase,
                     const std::exception_ptr&                          _exception) {
-                    if (request.kind == ERequestKind::Sync && request.sync_depth == ERHISyncDepth::Present &&
-                        _phase == VulkanSubmissionDetail::EWorkerRequestFailurePhase::Process &&
-                        !request_failure) {
-                        request_failure = _exception;
-                    }
                     LatchHardFailure(
                         StreamPosition{
                             request.batch.sequence,

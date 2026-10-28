@@ -435,10 +435,7 @@ void RHIExecutor::ProcessFlushRequest() {
 
 void RHIExecutor::Sync(ERHISyncDepth _depth) {
     if (RejectOwnedThreadBlockingCall("Sync")) {
-        if (_depth == ERHISyncDepth::Present) {
-            throw std::logic_error("Present sync cannot block on an RHI owner thread");
-        }
-        return;
+        throw std::logic_error("Sync cannot block on an RHI owner thread");
     }
     auto completion = std::make_shared<ExecutorSyncCompletion>();
     work_queue.Enqueue(RHIExecutorWork{
@@ -447,8 +444,8 @@ void RHIExecutor::Sync(ERHISyncDepth _depth) {
             try {
                 if (_action == ERHIExecutorWorkAction::Execute) {
                     ProcessSyncRequest(_depth);
-                } else if (_depth == ERHISyncDepth::Present) {
-                    throw std::runtime_error("Present sync cancelled before backend publication");
+                } else {
+                    throw std::runtime_error("Sync cancelled before backend publication");
                 }
                 completion->Signal();
             } catch (...) {
@@ -460,16 +457,6 @@ void RHIExecutor::Sync(ERHISyncDepth _depth) {
 }
 
 void RHIExecutor::ProcessSyncRequest(ERHISyncDepth _depth) {
-    {
-        std::lock_guard lock(submit_mutex);
-        if (lifecycle_state != ELifecycleState::Running) {
-            if (_depth == ERHISyncDepth::Present) {
-                throw std::runtime_error("Present sync rejected while RHIExecutor is not running");
-            }
-            return;
-        }
-    }
-
     PendingBatchPublication publication{};
     bool                    sync_registered   = false;
     auto                    finish_sync_guard = OnScopeExit([this, &publication, &sync_registered] {
@@ -490,22 +477,20 @@ void RHIExecutor::ProcessSyncRequest(ERHISyncDepth _depth) {
         std::lock_guard dispatch_lock(dispatch_mutex);
         {
             std::lock_guard lock(submit_mutex);
-            if (lifecycle_state == ELifecycleState::Running) {
-                publication = PreparePendingBatchLocked();
-                if (publication.backend) {
-                    ++active_sync_calls;
-                    sync_registered = true;
-                }
+            if (lifecycle_state != ELifecycleState::Running) {
+                throw std::runtime_error("Sync rejected while RHIExecutor is not running");
+            }
+            publication = PreparePendingBatchLocked();
+            if (publication.backend) {
+                ++active_sync_calls;
+                sync_registered = true;
             }
         }
         publication.Publish();
         publication.Flush();
     }
     if (publication.RejectIfFailed("Sync")) {
-        if (_depth == ERHISyncDepth::Present) {
-            std::rethrow_exception(publication.failure->exception);
-        }
-        return;
+        std::rethrow_exception(publication.failure->exception);
     }
 
     if (publication.backend) {

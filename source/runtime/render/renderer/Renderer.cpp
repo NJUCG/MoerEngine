@@ -162,6 +162,8 @@ void Renderer::ReleaseResources() {
         cmd_list.Submit().DeleteResources(),
         ERHIExecSubmitFlags::FlushGPU
     );
+    // Failure must stop teardown: GPU idle alone does not guarantee that CPU
+    // completion callbacks have released the scene and pooled resources.
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     scene.Reset();

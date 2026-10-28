@@ -100,6 +100,9 @@ public:
     virtual void Enqueue(RHISubmissionBatch&& _batch) = 0;
 
     // Blocking host boundary for preceding backend work at the requested depth.
+    // Return only after the boundary completes, including CPU retirement;
+    // rejected submissions may still satisfy it. Throw if Sync itself cannot
+    // complete. Failure does not imply resources are safe to release.
     virtual void Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) = 0;
 
     // Non-blocking request for progress; does not guarantee native GPU

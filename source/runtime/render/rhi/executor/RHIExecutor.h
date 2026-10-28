@@ -112,6 +112,10 @@ public:
     void Flush();
     // Blocking lifecycle boundaries must not be called recursively from an
     // RHI completion callback whose completion they are waiting for.
+    // Normal return confirms the preceding work has reached the requested
+    // completion boundary; individual submissions may have been rejected.
+    // Throws if this Sync is cancelled, rejected or fails to reach that boundary.
+    // Failure does not make in-flight resources safe to release.
     void        Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI);
     static void ShutDown();
 

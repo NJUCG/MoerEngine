@@ -2328,6 +2328,85 @@ bool MissingPrerequisitePreservesCallerOwnership() {
     return okay && Expect(entries.size() == 1 && entries[0].second == ERHIExecutorWorkAction::Execute, "corrected work was not executed exactly once");
 }
 
+bool StoppedSyncReportsFailureAtEveryDepth() {
+    RHIExecutor::ShutDown();
+
+    bool okay = true;
+    for (ERHISyncDepth depth : {ERHISyncDepth::RHI, ERHISyncDepth::Present}) {
+        bool rejected = false;
+        try {
+            RHIExecutor::Get().Sync(depth);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        } catch (...) {
+        }
+        okay &= Expect(
+            rejected,
+            depth == ERHISyncDepth::RHI ?
+                "stopped RHI Sync did not report runtime_error" :
+                "stopped Present Sync did not report runtime_error"
+        );
+    }
+    return okay;
+}
+
+bool RunningEmptySyncCompletesAtEveryDepth() {
+    RHIExecutor::StartUp();
+
+    bool okay = true;
+    for (ERHISyncDepth depth : {ERHISyncDepth::RHI, ERHISyncDepth::Present}) {
+        bool completed = false;
+        try {
+            RHIExecutor::Get().Sync(depth);
+            completed = true;
+        } catch (...) {
+        }
+        okay &= Expect(
+            completed,
+            depth == ERHISyncDepth::RHI ?
+                "running empty RHI Sync failed without a backend" :
+                "running empty Present Sync failed without a backend"
+        );
+    }
+    RHIExecutor::ShutDown();
+    return okay;
+}
+
+bool SyncRejectsEveryRHIOwnerRoleAtEveryDepth() {
+    RHIExecutor::StartUp();
+
+    constexpr std::array owner_roles{
+        ERHIThreadRole::Executor,
+        ERHIThreadRole::Translate,
+        ERHIThreadRole::Submission,
+        ERHIThreadRole::Completion,
+        ERHIThreadRole::RecordWorker,
+    };
+    bool okay = true;
+    for (ERHIThreadRole role : owner_roles) {
+        for (ERHISyncDepth depth : {ERHISyncDepth::RHI, ERHISyncDepth::Present}) {
+            bool rejected = false;
+            {
+                RHIThreadRoleScope role_scope(role);
+                try {
+                    RHIExecutor::Get().Sync(depth);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                } catch (...) {
+                }
+            }
+            okay &= Expect(
+                rejected,
+                depth == ERHISyncDepth::RHI ?
+                    "RHI owner role did not reject RHI Sync with logic_error" :
+                    "RHI owner role did not reject Present Sync with logic_error"
+            );
+        }
+    }
+    RHIExecutor::ShutDown();
+    return okay;
+}
+
 bool PerSourceGatesPreserveFifo() {
     RHIExecutorWorkQueue queue{};
     queue.Start();
@@ -3324,6 +3403,9 @@ int main() {
         !SubmitRecordingRefreshesAStaleQueryCancellationView() ||
         !SubmitRecordingRefreshesAStaleCompletionCancellationView() ||
         !MissingPrerequisitePreservesCallerOwnership() ||
+        !StoppedSyncReportsFailureAtEveryDepth() ||
+        !RunningEmptySyncCompletesAtEveryDepth() ||
+        !SyncRejectsEveryRHIOwnerRoleAtEveryDepth() ||
         !PerSourceGatesPreserveFifo() ||
         !ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() ||
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||
