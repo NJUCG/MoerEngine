@@ -1,5 +1,6 @@
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
+#include "rendergraph/RenderGraphRecordingPlan.h"
 
 #include "log/LogSystem.h"
 #include "profile/ProfileScope.h"
@@ -66,10 +67,15 @@ private:
     std::string             error{};
 };
 
+struct FrontendRecordingLifetime {
+    std::vector<RenderGraph::RecordCallback> callbacks{};
+    std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
+};
+
 struct FrontendRecordJob {
-    std::string                 pass_name{};
-    RenderGraph::RecordCallback record_callback{};
+    Detail::RecordingRange      range{};
     SharedPtr<CommandList>      frontend_command_list{};
+    std::shared_ptr<FrontendRecordingLifetime> lifetime{};
     ERHIResourceStateOwnership state_ownership = ERHIResourceStateOwnership::BackendTracked;
     bool                        gpu_profile_requested = false;
     bool                        gpu_profile_bound     = false;
@@ -199,27 +205,27 @@ public:
 
         MOER_PROFILE_SCOPE("RenderGraph.RecordAndMergeFrontendCommands");
         graph.executed = true;
-        // Allocate stable result slots before any worker starts recording.
+        // Only range-sized streams are retained; no per-pass CommandList slots.
         try {
-            frontend_streams_by_unit.resize(
+            frontend_streams.reserve(
                 graph.compiled_plan.frontend_record_units.size()
             );
+            const auto dispatches = Detail::BuildRecordingDispatches(
+                graph.compiled_plan, parallel_recording_enabled
+            );
+            // Respect CPU recording boundaries; commit only after every range succeeds.
+            for (const auto& dispatch : dispatches) {
+                if (!RecordFrontendDispatchGroup(dispatch)) {
+                    return false;
+                }
+            }
         } catch (const std::exception& exception) {
             return Fail(
-                std::string("failed to allocate recording slots: ") +
+                std::string("failed to prepare frontend recording: ") +
                 exception.what()
             );
         } catch (...) {
-            return Fail("failed to allocate recording slots");
-        }
-
-        // Respect compiler-defined CPU boundaries; commit to the destination
-        // only after every group has recorded successfully.
-        for (const CompiledFrontendDispatchGroup& group :
-             graph.compiled_plan.frontend_dispatch_groups) {
-            if (!RecordFrontendDispatchGroup(group)) {
-                return false;
-            }
+            return Fail("failed to prepare frontend recording");
         }
         return AppendFrontendStreamsInCompiledOrder();
     }
@@ -277,11 +283,11 @@ private:
             before.resize(graph.passes.size());
             after.resize(graph.passes.size());
             const auto append = [&](const auto& instruction, auto& barriers) {
-                BarrierCreateInfo barrier{};
+                std::optional<BarrierCreateInfo> barrier;
                 if (!RenderGraphLowering::MaterializeInstruction(instruction, barrier, graph.compile_error)) {
                     return false;
                 }
-                barriers.push_back(std::move(barrier));
+                if (barrier) { barriers.push_back(std::move(*barrier)); }
                 return true;
             };
             for (const auto& instruction : lowered.prologue) {
@@ -347,254 +353,198 @@ private:
     }
 
     [[nodiscard]] bool CreateFrontendRecordJobs(
-        const CompiledFrontendDispatchGroup& group,
-        Array<FrontendRecordJob>&             jobs
+        const Detail::RecordingDispatch& dispatch,
+        Array<FrontendRecordJob>&         jobs
     ) {
-        // Materialize one job and output slot per pass; callbacks do not run here.
         try {
-            jobs.reserve(group.unit_count);
-            for (uint32_t offset = 0; offset < group.unit_count; ++offset) {
-                const size_t unit_index = group.first_unit + offset;
-                const auto&  unit =
-                    graph.compiled_plan.frontend_record_units[unit_index];
-                const PassHandle pass_handle = unit.pass;
-                const auto&      pass = graph.passes[pass_handle.pass_id];
-
-                auto pass_command_list =
-                    MakeShared<CommandList>(EQueueType::Graphics);
-                pass_command_list->SetTranslateExecutionClass(
-                    unit.native_translate_class
-                );
-
+            const uint32_t worker_count = TaskGraph::IsInitialized() ?
+                TaskGraph::GetInterface().GetWorkerThreadCount() : 1;
+            const auto ranges = Detail::PartitionRecordingRange(
+                graph.compiled_plan.frontend_record_units, dispatch, worker_count
+            );
+            jobs.reserve(ranges.size());
+            for (const auto range : ranges) {
+                const auto& first_unit =
+                    graph.compiled_plan.frontend_record_units[range.first_unit];
                 const auto ownership = destination.GetResourceStateOwnership();
-                pass_command_list->SetResourceStateOwnership(ownership);
-                auto record_callback = pass.record;
-                if (ownership == ERHIResourceStateOwnership::Compiled) {
-                    const auto keepalive = lowered.Keepalive(pass_handle);
-                    record_callback = [record = pass.record,
-                                       prologue = before.at(pass_handle.pass_id),
-                                       epilogue = after.at(pass_handle.pass_id),
-                                       resources = std::vector<RenderGraphLowering::PhysicalBinding>(
-                                           keepalive.begin(), keepalive.end())](CommandList& commands) {
-                        if (!prologue.empty()) { commands.Barriers(prologue); }
-                        record(commands);
-                        if (!epilogue.empty()) { commands.Barriers(epilogue); }
-                    };
+                auto command_list = MakeShared<CommandList>(EQueueType::Graphics);
+                command_list->SetTranslateExecutionClass(first_unit.native_translate_class);
+                command_list->SetResourceStateOwnership(ownership);
+
+                auto lifetime = std::make_shared<FrontendRecordingLifetime>();
+                lifetime->callbacks.reserve(range.unit_count);
+                for (uint32_t offset = 0; offset < range.unit_count; ++offset) {
+                    const auto pass_handle =
+                        graph.compiled_plan.frontend_record_units[range.first_unit + offset].pass;
+                    lifetime->callbacks.push_back(graph.passes[pass_handle.pass_id].record);
+                    if (ownership == ERHIResourceStateOwnership::Compiled) {
+                        const auto resources = lowered.Keepalive(pass_handle);
+                        lifetime->keepalive.insert(
+                            lifetime->keepalive.end(), resources.begin(), resources.end()
+                        );
+                    }
                 }
                 bool gpu_profile_bound = false;
                 if (gpu_profiling.try_bind_source) {
-                    const GpuProfileBindOutcome bind_outcome =
-                        graph.BindGpuProfileSource(
-                            gpu_profiling,
-                            graph.MakeExecutedPassInfo(pass_handle),
-                            *pass_command_list,
-                            GraphicsQueueBinding(unit.target_queue),
-                            gpu_profiling.source_order_base +
-                                static_cast<uint64>(unit.source_index)
-                        );
-                    if (bind_outcome == GpuProfileBindOutcome::Failed) {
-                        return false;
-                    }
-                    gpu_profile_bound =
-                        bind_outcome == GpuProfileBindOutcome::Bound;
+                    const GpuProfileBindOutcome bind_outcome = graph.BindGpuProfileSource(
+                        gpu_profiling,
+                        graph.MakeExecutedPassInfo(first_unit.pass),
+                        *command_list,
+                        GraphicsQueueBinding(first_unit.target_queue),
+                        gpu_profiling.source_order_base + static_cast<uint64>(first_unit.source_index)
+                    );
+                    if (bind_outcome == GpuProfileBindOutcome::Failed) { return false; }
+                    gpu_profile_bound = bind_outcome == GpuProfileBindOutcome::Bound;
                 }
+                // Bind profiling while empty, then retain the complete range before recording it.
+                command_list->KeepAlive(lifetime);
 
-                frontend_streams_by_unit[unit_index] = pass_command_list;
+                frontend_streams.emplace_back(command_list);
                 jobs.emplace_back(FrontendRecordJob{
-                    .pass_name       = pass.name,
-                    .record_callback = std::move(record_callback),
-                    .frontend_command_list = std::move(pass_command_list),
+                    .range = range,
+                    .frontend_command_list = std::move(command_list),
+                    .lifetime = std::move(lifetime),
                     .state_ownership = ownership,
-                    .gpu_profile_requested =
-                        static_cast<bool>(gpu_profiling.try_bind_source),
+                    .gpu_profile_requested = static_cast<bool>(gpu_profiling.try_bind_source),
                     .gpu_profile_bound = gpu_profile_bound,
-                    .native_translate_class = unit.native_translate_class,
+                    .native_translate_class = first_unit.native_translate_class,
                 });
             }
         } catch (const std::exception& exception) {
-            return Fail(
-                std::string("failed to create frontend record jobs: ") +
-                exception.what()
-            );
+            return Fail(std::string("failed to create frontend record jobs: ") + exception.what());
         } catch (...) {
             return Fail("failed to create frontend record jobs");
         }
         return true;
     }
 
-    static void RecordFrontendPass(
-        FrontendRecordJob                         job,
-        const SharedPtr<FrontendGroupCompletion>& completion
-    ) noexcept {
-        // Record exactly one pass into its exclusively owned frontend CommandList.
-        auto fail = [&](std::string_view detail) noexcept {
-            try {
-                std::string message =
-                    "record pass '" + job.pass_name + "' failed";
-                if (!detail.empty()) {
-                    message += ": ";
-                    message += detail;
-                }
-                completion->Finish(std::move(message));
-            } catch (...) {
-                completion->Finish("frontend record job failed");
-            }
-        };
-
+    [[nodiscard]] std::string RecordFrontendRange(FrontendRecordJob job) noexcept {
+        std::string_view pass_name{};
         try {
             RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
-            ProfileDump::ScopedCpuProfile profile_scope(
-                "RenderGraph.Record",
-                job.pass_name
-            );
-
-            const uint64 seal_generation =
-                job.frontend_command_list->GetSealGeneration();
-            if (job.gpu_profile_requested) {
-                ScopedGpuMarker pass_marker(
-                    *job.frontend_command_list,
-                    job.pass_name,
-                    GpuMarkerPalette::Pass(),
-                    job.gpu_profile_bound ?
-                        EGpuMarkerMode::Timestamp :
-                        EGpuMarkerMode::Label
-                );
-                job.record_callback(*job.frontend_command_list);
-            } else {
-                job.record_callback(*job.frontend_command_list);
+            CommandList& commands = *job.frontend_command_list;
+            for (uint32_t offset = 0; offset < job.range.unit_count; ++offset) {
+                const auto handle =
+                    graph.compiled_plan.frontend_record_units[job.range.first_unit + offset].pass;
+                pass_name = graph.passes[handle.pass_id].name;
+                ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Record", pass_name);
+                const uint64 seal_generation = commands.GetSealGeneration();
+                const auto record_body = [&] {
+                    if (job.state_ownership == ERHIResourceStateOwnership::Compiled &&
+                        !before[handle.pass_id].empty()) {
+                        commands.Barriers(before[handle.pass_id]);
+                    }
+                    job.lifetime->callbacks[offset](commands);
+                    if (job.state_ownership == ERHIResourceStateOwnership::Compiled &&
+                        !after[handle.pass_id].empty()) {
+                        commands.Barriers(after[handle.pass_id]);
+                    }
+                };
+                if (job.gpu_profile_requested) {
+                    ScopedGpuMarker pass_marker(
+                        commands, pass_name, GpuMarkerPalette::Pass(),
+                        job.gpu_profile_bound ? EGpuMarkerMode::Timestamp : EGpuMarkerMode::Label
+                    );
+                    record_body();
+                } else {
+                    record_body();
+                }
+                // Validate after every callback, before another pass can write the shared stream.
+                if (commands.GetSealGeneration() != seal_generation) {
+                    throw std::logic_error("record callback sealed its CommandList");
+                }
+                if (commands.GetResourceStateOwnership() != job.state_ownership) {
+                    throw std::logic_error("record callback changed resource-state ownership");
+                }
+                if (commands.GetTranslateExecutionClass() != job.native_translate_class) {
+                    throw std::logic_error("record callback changed its translation class");
+                }
             }
-
-            if (job.frontend_command_list->GetSealGeneration() !=
-                seal_generation) {
-                throw std::logic_error(
-                    "record callback sealed its CommandList"
-                );
-            }
-            if (job.frontend_command_list->GetResourceStateOwnership() != job.state_ownership) {
-                throw std::logic_error(
-                    "record callback changed resource-state ownership"
-                );
-            }
-            if (job.frontend_command_list->GetTranslateExecutionClass() !=
-                job.native_translate_class) {
-                throw std::logic_error(
-                    "record callback changed its translation class"
-                );
-            }
-
-            auto lifetime = std::make_shared<RecordCallback>(
-                std::move(job.record_callback)
-            );
-            job.frontend_command_list->KeepAlive(std::move(lifetime));
-            completion->Finish();
+            return {};
         } catch (const std::exception& exception) {
-            fail(exception.what());
+            try {
+                return "record pass '" + std::string(pass_name) + "' failed: " + exception.what();
+            } catch (...) {
+                return "frontend record job failed";
+            }
         } catch (...) {
-            fail({});
+            try {
+                return "record pass '" + std::string(pass_name) + "' failed";
+            } catch (...) {
+                return "frontend record job failed";
+            }
         }
     }
 
-    /**
-     * Records one compiler-defined group into independent frontend CommandLists.
-     * Eligible passes may run concurrently; their results are retained in
-     * compiled order for the later merge. This does not translate or submit GPU work.
-     */
-    [[nodiscard]] bool RecordFrontendDispatchGroup(
-        const CompiledFrontendDispatchGroup& group
-    ) {
-        // Create one independently owned frontend CommandList per pass.
+    [[nodiscard]] bool RecordFrontendDispatchGroup(const Detail::RecordingDispatch& dispatch) {
         Array<FrontendRecordJob> jobs{};
-        if (!CreateFrontendRecordJobs(group, jobs)) {
-            return false;
-        }
-
-        SharedPtr<FrontendGroupCompletion> group_completion{};
-        try {
-            group_completion =
-                std::make_shared<FrontendGroupCompletion>(jobs.size());
-        } catch (const std::exception& exception) {
-            return Fail(
-                std::string("failed to create recording completion: ") +
-                exception.what()
-            );
-        } catch (...) {
-            return Fail("failed to create recording completion");
-        }
-
-        const bool can_dispatch_parallel =
-            group.record_policy ==
-                PassRecordPolicy::ParallelAllowed &&
-            parallel_recording_enabled && TaskGraph::IsInitialized() &&
-            jobs.size() > 1;
-        GraphEventArray record_task_events{};
-        // Avoid task-dispatch overhead when the group cannot expose concurrency.
+        if (!CreateFrontendRecordJobs(dispatch, jobs)) { return false; }
+        const bool can_dispatch_parallel = dispatch.parallel && jobs.size() > 1;
+        // Serial regions share a private stream and need neither a task nor a completion mutex.
         if (!can_dispatch_parallel) {
             for (auto& job : jobs) {
-                RecordFrontendPass(std::move(job), group_completion);
+                auto error = RecordFrontendRange(std::move(job));
+                if (!error.empty()) { return Fail(std::move(error)); }
             }
-        } else {
-            record_task_events.reserve(jobs.size());
-            size_t dispatched_count = 0;
-            try {
-                for (; dispatched_count < jobs.size(); ++dispatched_count) {
-                    record_task_events.emplace_back(LambdaTask::Dispatch(
-                        [job = std::move(jobs[dispatched_count]),
-                         group_completion]() mutable {
-                            RecordFrontendPass(
-                                std::move(job), group_completion
-                            );
-                        }
-                    ));
-                }
-            } catch (const std::exception& exception) {
-                const size_t undispatched_count =
-                    jobs.size() - dispatched_count;
-                for (size_t index = 0; index < undispatched_count; ++index) {
-                    group_completion->Finish(
-                        std::string("failed to dispatch recording task: ") +
-                        exception.what()
-                    );
-                }
-            } catch (...) {
-                const size_t undispatched_count =
-                    jobs.size() - dispatched_count;
-                for (size_t index = 0; index < undispatched_count; ++index) {
-                    group_completion->Finish(
-                        "failed to dispatch recording task"
-                    );
-                }
+            return true;
+        }
+
+        auto completion = std::make_shared<FrontendGroupCompletion>(jobs.size());
+        GraphEventArray record_task_events{};
+        record_task_events.reserve(jobs.size());
+        size_t dispatched_count = 0;
+        std::exception_ptr dispatch_error;
+        try {
+            for (; dispatched_count < jobs.size(); ++dispatched_count) {
+                record_task_events.emplace_back(LambdaTask::Dispatch(
+                    [this, job = std::move(jobs[dispatched_count]), completion]() mutable {
+                        // Finish only after recording and job destruction stop touching this executor.
+                        auto error = RecordFrontendRange(std::move(job));
+                        completion->Finish(std::move(error));
+                    }
+                ));
+            }
+        } catch (...) {
+            // Save the failure without allocating: formatting it must not
+            // unwind this executor while dispatched workers still use it.
+            dispatch_error = std::current_exception();
+            for (size_t index = dispatched_count; index < jobs.size(); ++index) {
+                completion->Finish();
             }
         }
 
         std::string group_error{};
-        // Join at the compiler-defined CPU recording boundary before continuing.
-        if (!group_completion->Wait(group_error)) {
-            return Fail(std::move(group_error));
+        // A plain join cannot pump another RenderFrame re-entrantly on the caller.
+        if (!completion->Wait(group_error)) { return Fail(std::move(group_error)); }
+        if (dispatch_error) {
+            try {
+                std::rethrow_exception(dispatch_error);
+            } catch (const std::exception& exception) {
+                return Fail(std::string("failed to dispatch recording task: ") + exception.what());
+            } catch (...) {
+                return Fail("failed to dispatch recording task");
+            }
         }
-        if (can_dispatch_parallel) {
-            static std::once_flag logged_parallel_merge;
-            std::call_once(logged_parallel_merge, [&] {
-                LOG_INFO(
-                    "[RenderGraph][CompiledMerge] graph={} dispatch=task-graph worker_jobs={} completed=true",
-                    graph.name,
-                    jobs.size()
-                );
-            });
-        }
+        static std::once_flag logged_parallel_merge;
+        std::call_once(logged_parallel_merge, [&] {
+            LOG_INFO(
+                "[RenderGraph][CompiledMerge] graph={} dispatch=task-graph worker_jobs={} completed=true",
+                graph.name, jobs.size()
+            );
+        });
         return true;
     }
 
     [[nodiscard]] bool AppendFrontendStreamsInCompiledOrder() {
-        // All recording succeeded; append streams once in compiled unit order.
+        // Assemble privately first: a later merge-contract failure must not
+        // leave an earlier range in the caller's destination.
         try {
-            for (auto& frontend_stream : frontend_streams_by_unit) {
-                if (!frontend_stream) {
-                    throw std::logic_error(
-                        "frontend record unit left an empty CommandList slot"
-                    );
-                }
-                destination.AppendRecorded(std::move(*frontend_stream));
+            if (frontend_streams.empty()) { return true; }
+            auto& assembled = *frontend_streams.front();
+            for (size_t index = 1; index < frontend_streams.size(); ++index) {
+                assembled.AppendRecorded(std::move(*frontend_streams[index]));
             }
+            destination.AppendRecorded(std::move(assembled));
         } catch (const std::exception& exception) {
             return Fail(
                 std::string("failed to merge frontend CommandLists: ") +
@@ -610,7 +560,7 @@ private:
     CommandList&               destination;
     bool                       parallel_recording_enabled = true;
     const GpuProfilingOptions& gpu_profiling;
-    Array<SharedPtr<CommandList>> frontend_streams_by_unit{};
+    Array<SharedPtr<CommandList>> frontend_streams{};
     RenderGraphLowering::LoweredPlan lowered{};
     std::vector<std::vector<BarrierCreateInfo>> before{}, after{};
 };

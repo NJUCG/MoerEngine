@@ -24,8 +24,8 @@ using ResourceRange = RenderGraph::ResourceRange;
     return (AspectMask(mask) & AspectMask(aspect)) != 0;
 }
 
-template<typename T>
-void SortUnique(std::vector<T>& values) {
+template<typename T, typename Allocator>
+void SortUnique(std::vector<T, Allocator>& values) {
     std::sort(values.begin(), values.end());
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
@@ -217,10 +217,14 @@ bool RenderGraphCompiler::Compile() {
         return Fail("graph contains no passes");
     }
 
-    normalized_accesses.assign(graph.passes.size(), {});
-    normalized_initial_states.assign(graph.resources.size(), {});
-    normalized_final_states.assign(graph.resources.size(), {});
-    resource_cells.assign(graph.resources.size(), {});
+    normalized_accesses.clear();
+    normalized_accesses.resize(graph.passes.size());
+    normalized_initial_states.clear();
+    normalized_initial_states.resize(graph.resources.size());
+    normalized_final_states.clear();
+    normalized_final_states.resize(graph.resources.size());
+    resource_cells.clear();
+    resource_cells.resize(graph.resources.size());
     resource_version_counts.assign(graph.resources.size(), 0);
     resource_ever_written.assign(graph.resources.size(), false);
 
@@ -320,7 +324,7 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
         const auto& resource = graph.resources[resource_index];
         auto normalize_states = [&](
                                     const std::vector<RenderGraph::StateDeclaration>& declarations,
-                                    std::vector<NormalizedStateDeclaration>&          normalized_states,
+                                    std::pmr::vector<NormalizedStateDeclaration>&     normalized_states,
                                     bool                                              initial
                                 ) -> bool {
             for (const auto& declaration : declarations) {
@@ -560,7 +564,8 @@ bool RenderGraphCompiler::BuildAtomicCells() {
         TextureAspect::Color, TextureAspect::Depth, TextureAspect::Stencil
     };
 
-    std::vector<std::vector<const ResourceRange*>> ranges_by_resource(graph.resources.size());
+    std::pmr::vector<std::pmr::vector<const ResourceRange*>> ranges_by_resource{&scratch_memory};
+    ranges_by_resource.resize(graph.resources.size());
     for (const auto& accesses : normalized_accesses) {
         for (const auto& access : accesses) {
             ranges_by_resource[access.resource.resource_id].push_back(&access.range);
@@ -568,9 +573,9 @@ bool RenderGraphCompiler::BuildAtomicCells() {
     }
 
     // Endpoints are temporary; reuse their capacity across resources.
-    std::vector<uint32_t> mip_boundaries;
-    std::vector<uint32_t> layer_boundaries;
-    std::vector<uint64_t> boundaries;
+    std::pmr::vector<uint32_t> mip_boundaries{&scratch_memory};
+    std::pmr::vector<uint32_t> layer_boundaries{&scratch_memory};
+    std::pmr::vector<uint64_t> boundaries{&scratch_memory};
     for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         auto&       cells    = resource_cells[resource_index];
@@ -726,8 +731,9 @@ bool RenderGraphCompiler::BuildAtomicCells() {
 bool RenderGraphCompiler::BuildSemanticDependencies() {
     // Reuse cell storage across passes, and visit only resources that the
     // current pass accesses. Unused resources have no per-pass state to merge.
-    std::vector<std::vector<CellUsage>> usages(graph.resources.size());
-    std::vector<uint32_t> accessed_resources;
+    std::pmr::vector<std::pmr::vector<CellUsage>> usages{&scratch_memory};
+    usages.resize(graph.resources.size());
+    std::pmr::vector<uint32_t> accessed_resources{&scratch_memory};
     for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         const auto& pass = graph.passes[pass_index];
         for (const auto dependency : pass.explicit_dependencies) {
@@ -1393,13 +1399,15 @@ void RenderGraphCompiler::SortEdges() {
 
 bool RenderGraphCompiler::BuildTopologicalOrder() {
     SortEdges();
-    std::vector<uint32_t> indegree(graph.passes.size(), 0);
+    std::pmr::vector<uint32_t> indegree(graph.passes.size(), 0, &scratch_memory);
     for (const auto& edge : graph.compiled_plan.edges) {
         ++indegree[edge.dst.pass_id];
     }
 
     // Preserve the lowest declaration index tie-break without rescanning all passes.
-    std::priority_queue<uint32_t, std::vector<uint32_t>, std::greater<>> ready;
+    std::priority_queue<uint32_t, std::pmr::vector<uint32_t>, std::greater<>> ready{
+        std::greater<>{}, std::pmr::vector<uint32_t>{&scratch_memory}
+    };
     for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         if (indegree[pass_index] == 0) {
             ready.push(pass_index);
@@ -1438,8 +1446,8 @@ bool RenderGraphCompiler::BuildExecutionOrder() {
 }
 
 void RenderGraphCompiler::BuildQueuePlan() {
-    std::vector<uint32_t> pass_to_batch(
-        graph.passes.size(), RenderGraph::InvalidIndex
+    std::pmr::vector<uint32_t> pass_to_batch(
+        graph.passes.size(), RenderGraph::InvalidIndex, &scratch_memory
     );
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
         const auto& pass    = graph.passes[pass_handle.pass_id];
@@ -1620,7 +1628,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
 void RenderGraphCompiler::BuildDependencyLevels() {
     // A pass enters the wave after its deepest predecessor. The validated
     // topological order also covers alias edges added after the initial sort.
-    std::vector<uint32_t> levels(graph.passes.size(), 0);
+    std::pmr::vector<uint32_t> levels(graph.passes.size(), 0, &scratch_memory);
     uint32_t max_level = 0;
     for (const auto pass : graph.compiled_plan.topological_order) {
         for (const auto& edge : OutgoingEdges(graph.compiled_plan.edges, pass.pass_id)) {
@@ -1638,9 +1646,10 @@ void RenderGraphCompiler::BuildDependencyLevels() {
 }
 
 void RenderGraphCompiler::BuildFrontendRecordUnits() {
-    std::vector<uint32_t> pass_to_dependency_level(
+    std::pmr::vector<uint32_t> pass_to_dependency_level(
         graph.passes.size(),
-        RenderGraph::InvalidIndex
+        RenderGraph::InvalidIndex,
+        &scratch_memory
     );
     for (uint32_t level_index = 0;
          level_index < graph.compiled_plan.dependency_levels.size();
@@ -1666,6 +1675,7 @@ void RenderGraphCompiler::BuildFrontendRecordUnits() {
                 .target_queue = graph.queue_topology.Resolve(pass.domain.queue),
                 .pass         = pass_handle,
                 .record_policy = pass.record_policy,
+                .recording_workload = pass.recording_workload,
                 .native_translate_class = pass.translate_execution_class,
 
                 .dependency_level_index =
@@ -1711,7 +1721,9 @@ void RenderGraphCompiler::BuildFrontendDispatchGroups() {
 }
 
 void RenderGraphCompiler::BuildLifetimes() {
-    std::vector<uint32_t> execution_position(graph.passes.size(), RenderGraph::InvalidIndex);
+    std::pmr::vector<uint32_t> execution_position(
+        graph.passes.size(), RenderGraph::InvalidIndex, &scratch_memory
+    );
     for (uint32_t position = 0; position < graph.compiled_plan.execution_order.size(); ++position) {
         execution_position[graph.compiled_plan.execution_order[position].pass_id] = position;
     }
@@ -1806,17 +1818,19 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
             return false;
         };
 
-    std::vector<uint32_t> execution_position(
+    std::pmr::vector<uint32_t> execution_position(
         graph.passes.size(),
-        RenderGraph::InvalidIndex
+        RenderGraph::InvalidIndex,
+        &scratch_memory
     );
     for (uint32_t position = 0; position < graph.compiled_plan.execution_order.size();
          ++position) {
         execution_position[graph.compiled_plan.execution_order[position].pass_id] = position;
     }
 
-    std::vector<Candidate> candidates{};
+    std::pmr::vector<Candidate> candidates{&scratch_memory};
     candidates.reserve(graph.resources.size());
+    std::pmr::vector<const CompiledAccess*> accesses{&scratch_memory};
     for (uint32_t resource_index = 0; resource_index < graph.resources.size();
          ++resource_index) {
         auto&       compiled_resource = graph.compiled_plan.resources[resource_index];
@@ -1831,7 +1845,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
         }
 
         Candidate candidate{.resource_index = resource_index};
-        std::vector<const CompiledAccess*> accesses{};
+        accesses.clear();
         for (const auto& access : graph.compiled_plan.accesses) {
             if (access.resource.resource_id == resource_index) {
                 accesses.push_back(&access);
@@ -1897,7 +1911,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
     );
 
     uint32_t               next_slot = 0;
-    std::vector<AliasSlot> reusable_slots{};
+    std::pmr::vector<AliasSlot> reusable_slots{&scratch_memory};
     for (const auto& candidate : candidates) {
         auto& compiled_resource =
             graph.compiled_plan.resources[candidate.resource_index];
@@ -2071,13 +2085,15 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         return Fail("transient alias plan has an incomplete resource table");
     }
 
-    std::vector<uint32_t> execution_position(
+    std::pmr::vector<uint32_t> execution_position(
         graph.passes.size(),
-        RenderGraph::InvalidIndex
+        RenderGraph::InvalidIndex,
+        &scratch_memory
     );
-    std::vector<uint32_t> topological_position(
+    std::pmr::vector<uint32_t> topological_position(
         graph.passes.size(),
-        RenderGraph::InvalidIndex
+        RenderGraph::InvalidIndex,
+        &scratch_memory
     );
     for (uint32_t position = 0; position < plan.execution_order.size(); ++position) {
         execution_position[plan.execution_order[position].pass_id] = position;
@@ -2143,7 +2159,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         }
     }
 
-    std::vector<uint32_t> alias_barrier_owners(plan.barriers.size(), 0);
+    std::pmr::vector<uint32_t> alias_barrier_owners(plan.barriers.size(), 0, &scratch_memory);
     for (const auto& alias : plan.alias_boundaries) {
         if (!graph.IsValidResource(alias.predecessor_resource) ||
             !graph.IsValidResource(alias.successor_resource) ||
@@ -2237,8 +2253,9 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
             has_slot = true;
         }
     }
+    std::pmr::vector<uint32_t> occupants{&scratch_memory};
     for (uint32_t slot = 0; has_slot && slot <= max_slot; ++slot) {
-        std::vector<uint32_t> occupants{};
+        occupants.clear();
         for (uint32_t resource_index = 0; resource_index < plan.resources.size();
              ++resource_index) {
             if (plan.resources[resource_index].transient_slot == slot) {

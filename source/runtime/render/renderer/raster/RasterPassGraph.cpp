@@ -192,6 +192,7 @@ RenderGraph::PassHandle ProbeUpdatePass::AddToGraph(
         "ProbeUpdate.Upload",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .RecordWorkload(std::max(1u, static_cast<uint32_t>(uploads.size())))
                 .Write(resources.probe_volume)
                 .SideEffect();
             for (auto buffer : uploads) {

@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHIImpl.h"
 #include "rhi/RHIResource.h"
 
@@ -71,8 +72,15 @@ private:
 
 class FakeTexture final : public Texture {
 public:
-    FakeTexture(uint8_t mips, uint16_t layers, ETextureAspectFlags aspects) :
-        Texture(MakeInfo(mips, layers, aspects)) {}
+    FakeTexture(
+        uint8_t mips, uint16_t layers, ETextureAspectFlags aspects,
+        std::shared_ptr<bool> destroyed = {},
+        ETextureUsageFlags extra_usage = ETextureUsageFlags::UNDEFINED
+    ) : Texture(MakeInfo(mips, layers, aspects, extra_usage)), destroyed(std::move(destroyed)) {}
+
+    ~FakeTexture() override {
+        if (destroyed) { *destroyed = true; }
+    }
 
     Moer::uint GetMipByteSize(Moer::uint) const override {
         return 4;
@@ -82,19 +90,21 @@ public:
 
 private:
     static TextureInfo
-    MakeInfo(uint8_t mips, uint16_t layers, ETextureAspectFlags aspects) {
+    MakeInfo(uint8_t mips, uint16_t layers, ETextureAspectFlags aspects, ETextureUsageFlags extra_usage) {
         TextureInfo info{};
         info.usage = ETextureUsageFlags::SAMPLED |
                      ETextureUsageFlags::UNORDERED_ACCESS |
                      ETextureUsageFlags::COLOR_ATTACHMENT |
                      ETextureUsageFlags::TRANSFER_SRC |
-                     ETextureUsageFlags::TRANSFER_DST;
+                     ETextureUsageFlags::TRANSFER_DST | extra_usage;
         info.extent       = {64, 64};
         info.num_mips     = mips;
         info.array_size   = layers;
         info.aspect_flags = aspects;
         return info;
     }
+
+    std::shared_ptr<bool> destroyed;
 };
 
 class FakeBuffer final : public Buffer {
@@ -316,94 +326,178 @@ void TestRecordPassMaterializesExplicitBeforeBodyAfter(TestSuite& suite, bool me
     }
 }
 
-void TestSameStateSecondReadNeedsNoBarrier(TestSuite& suite) {
-    constexpr std::string_view test_name =
-        "same-state second read needs no synthetic barrier";
-
-    BufferRef buffer = MoerNew(FakeBuffer)(256);
-    RenderGraph graph("ActiveReadSeed");
-    const auto  data = graph.ImportBuffer(
-        "Data",
-        buffer,
-        RenderGraph::BufferDesc{.byte_size = 256}
-    );
-    graph.SetInitialState(
-        data,
-        RenderGraph::BufferAccessType::ShaderRead,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-    for (int marker : {1, 2}) {
-        graph.AddRecordPass(
-            marker == 1 ? "FirstRead" : "SecondRead",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.Read(data, RenderGraph::BufferAccessType::ShaderRead).SideEffect();
-            },
-            [marker](CommandList& commands) {
-                commands.AddCustomCommand(
-                    MakeUnique<ProbeCommand>(marker),
-                    marker == 1 ? "FirstReadBody" : "SecondReadBody"
-                );
-            },
-            RenderGraph::PassRecordPolicy::Serial
-        );
-    }
-    graph.Export(
-        data,
-        RenderGraph::BufferAccessType::ShaderRead,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    Moer::Array<RHIRecordingSource> published{};
-    const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
-        false,
-        [&](Moer::Array<RHIRecordingSource>&& sources) {
-            for (auto& source : sources) {
-                published.emplace_back(std::move(source));
-            }
-        },
-        RenderGraph::ActiveRecordingOptions{.enabled = true}
-    );
-    suite.Check(executed, test_name, graph.GetCompileError());
-    suite.Check(
-        published.size() == 2 &&
-            std::all_of(
-                published.begin(),
-                published.end(),
-                [](const RHIRecordingSource& source) {
-                    return source.completion.Status() ==
-                           ERHIRecordingStatus::Succeeded;
-                }
-            ),
-        test_name,
-        "both independent read sources must complete"
-    );
-    if (published.size() != 2) {
-        return;
-    }
-
-    CmdSubmit second_submit = published[1].command_list->Submit();
-    suite.Check(
-        second_submit.HasExplicitResourceStateOwnership(),
-        test_name,
-        "barrier-free read submit must retain compiled ownership"
-    );
-    const auto body = std::find_if(
-        second_submit.cmds.begin(),
-        second_submit.cmds.end(),
-        [](const auto& command) {
-            const auto* probe = AsProbe(command);
-            return probe != nullptr && probe->Marker() == 2;
+void TestReadOnlyBoundariesNeedNoCommands(TestSuite& suite, bool merge, bool partial) {
+    const std::string test_name = std::string("read-only boundaries: ") +
+        (merge ? "merged " : "active ") + (partial ? "partial ranges" : "whole resources");
+    auto buffer_destroyed = std::make_shared<bool>(false);
+    auto texture_destroyed = std::make_shared<bool>(false);
+    Moer::Array<RHIRecordingSource> published;
+    CommandList merged;
+    merged.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    {
+        BufferRef buffer = MoerNew(LifetimeProbeBuffer)(buffer_destroyed);
+        TextureRef texture = MoerNew(FakeTexture)(2, 2, ETextureAspectFlags::COLOR, texture_destroyed);
+        RenderGraph graph(test_name);
+        const auto data = graph.ImportBuffer("Data", buffer, {.byte_size = 64});
+        const auto image = graph.ImportTexture("Image", texture, {.mip_count = 2, .layer_count = 2});
+        const auto bytes = partial ? RenderGraph::BufferRange{.offset = 16, .size = 32} :
+                                     RenderGraph::BufferRange::Whole();
+        const auto slice = partial ? RenderGraph::TextureRange{
+            .aspects = RenderGraph::TextureAspect::Color, .mip_first = 1, .mip_count = 1,
+            .layer_first = 1, .layer_count = 1} : RenderGraph::TextureRange::Whole();
+        graph.SetInitialState(data, RenderGraph::BufferAccessType::ShaderRead,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read, bytes);
+        graph.SetInitialState(image, RenderGraph::TextureAccessType::Sampled,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read, slice);
+        for (int marker : {1, 2}) {
+            graph.AddRecordPass(
+                marker == 1 ? "FirstRead" : "SecondRead",
+                [=](RenderGraph::PassBuilder& pass) {
+                    pass.Read(data, RenderGraph::BufferAccessType::ShaderRead, bytes)
+                        .Read(image, RenderGraph::TextureAccessType::Sampled, slice).SideEffect();
+                },
+                [marker](CommandList& commands) {
+                    // No resource reference in the command or callback: RDG must retain both resources.
+                    commands.AddCustomCommand(MakeUnique<ProbeCommand>(marker), "ReadBody");
+                }, RenderGraph::PassRecordPolicy::Serial);
         }
-    );
-    suite.Check(body != second_submit.cmds.end(), test_name, "second read body was not recorded");
-    suite.Check(std::none_of(second_submit.cmds.begin(), body,
-                            [](const auto& command) { return AsBarrier(command) != nullptr; }),
-                test_name, "read-after-read emitted an unnecessary state-registration barrier");
+        graph.Export(data, RenderGraph::BufferAccessType::ShaderRead,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read, bytes);
+        graph.Export(image, RenderGraph::TextureAccessType::Sampled,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read, slice);
+        if (!graph.Compile()) {
+            suite.Check(false, test_name, graph.GetCompileError());
+            return;
+        }
+        const auto& plan = graph.GetCompiledPlan();
+        suite.Check(plan.prologue_barriers.size() == 2 && plan.epilogue_barriers.size() == 2,
+            test_name, "compiled import/export evidence must remain intact");
+        const bool executed = merge ? graph.RecordAndMergeFrontendCommands(merged, false) :
+            graph.ExecuteFrontendRecordingPlan({}, false,
+                [&](Moer::Array<RHIRecordingSource>&& sources) {
+                    for (auto& source : sources) { published.emplace_back(std::move(source)); }
+                }, {.enabled = true});
+        suite.Check(executed, test_name, graph.GetCompileError());
+        if (!executed) { return; }
+    }
+    suite.Check(!*buffer_destroyed && !*texture_destroyed, test_name,
+        "barrier-free resources must survive graph destruction");
+    std::vector<CmdSubmit> submits;
+    if (merge) {
+        submits.emplace_back(merged.Submit());
+    } else {
+        suite.Check(published.size() == 1, test_name, "serial read passes must share one published stream");
+        for (auto& source : published) {
+            suite.Check(source.completion.Status() == ERHIRecordingStatus::Succeeded,
+                test_name, "read source must complete");
+            submits.emplace_back(source.command_list->Submit());
+        }
+    }
+    published.clear();
+    std::vector<int> markers;
+    for (const auto& submit : submits) {
+        suite.Check(submit.HasExplicitResourceStateOwnership(), test_name,
+            "barrier-free submission must retain compiled ownership");
+        for (const auto& command : submit.cmds) {
+            suite.Check(AsBarrier(command) == nullptr, test_name,
+                "unchanged read-only import/export emitted a GPU barrier");
+            if (const auto* probe = AsProbe(command)) { markers.push_back(probe->Marker()); }
+        }
+    }
+    suite.Check(markers == std::vector<int>{1, 2}, test_name, "read bodies must retain compiled order");
+    suite.Check(!*buffer_destroyed && !*texture_destroyed, test_name,
+        "submission must retain resources after recording sources are released");
+    submits.clear();
+    suite.Check(*buffer_destroyed && *texture_destroyed, test_name,
+        "resources must be reclaimed after the last submission owner is released");
+}
 
+void TestSameStateWriteBoundaryNeedsBarrier(TestSuite& suite, bool write_pass) {
+    const std::string test_name = write_pass ? "same-state write boundaries remain barriers" :
+                                               "same-state import write remains visible to a reader";
+    BufferRef buffer = MoerNew(FakeBuffer)(64);
+    RenderGraph graph(test_name);
+    const auto data = graph.ImportBuffer("Data", buffer, {.byte_size = 64});
+    graph.SetInitialState(data, RenderGraph::BufferAccessType::Storage,
+        RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Write);
+    graph.AddRecordPass("UseStorage", [=](RenderGraph::PassBuilder& pass) {
+        if (write_pass) { pass.Write(data, RenderGraph::BufferAccessType::Storage); }
+        else { pass.Read(data, RenderGraph::BufferAccessType::Storage); }
+        pass.SideEffect();
+    }, [](CommandList&) {}, RenderGraph::PassRecordPolicy::Serial);
+    graph.Export(data, RenderGraph::BufferAccessType::Storage,
+        RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    CommandList commands;
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const bool recorded = graph.Compile() && graph.RecordAndMergeFrontendCommands(commands, false);
+    suite.Check(recorded, test_name, graph.GetCompileError());
+    if (!recorded) { return; }
+    auto submit = commands.Submit();
+    size_t count = 0;
+    for (const auto& command : submit.cmds) {
+        if (const auto* barrier = AsBarrier(command)) {
+            count += barrier->ExplicitBuffers().size();
+        }
+    }
+    suite.Check(count == (write_pass ? 2u : 1u), test_name,
+        "equal storage states must not remove a write memory dependency");
+}
+
+void TestPresentationPublicationSurvivesNoOpFiltering(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name = "unchanged presentation boundary still publishes its state";
+    for (const bool present_usage : {false, true}) {
+        TextureRef texture = MoerNew(FakeTexture)(1, 1, ETextureAspectFlags::COLOR, nullptr,
+            present_usage ? ETextureUsageFlags::PRESENTATION_SOURCE : ETextureUsageFlags::UNDEFINED);
+        // A presentation texture or a Present export must still publish its state.
+        RenderGraphLowering::LoweredInstruction instruction{};
+        instruction.resource_kind = RenderGraph::ResourceKind::Texture;
+        instruction.physical.texture = texture;
+        instruction.range = RenderGraph::TextureRange{
+            .aspects = RenderGraph::TextureAspect::Color, .mip_count = 1, .layer_count = 1};
+        instruction.texture_aspects = ETextureAspectFlags::COLOR;
+        instruction.before_state = present_usage ?
+            RenderGraph::ResourceState{RenderGraph::TextureAccessType::Sampled} :
+            RenderGraph::ResourceState{RenderGraph::TextureBoundary::PresentationSource};
+        instruction.after_state = instruction.before_state;
+        instruction.before_access = instruction.after_access = RenderGraph::AccessMode::Read;
+        instruction.export_boundary = true;
+        instruction.source = instruction.destination = {
+            .stages = ERHIPipelineStageFlags::PS_TRANSFER,
+            .access = ERHIAccessFlags::TRANSFER_READ,
+            .layout = ETextureLayout::TEXTURE_LAYOUT_COMMON,
+            .has_texture_layout = true};
+        std::optional<BarrierCreateInfo> barrier;
+        std::string error;
+        suite.Check(RenderGraphLowering::MaterializeInstruction(instruction, barrier, error), test_name, error);
+        suite.Check(barrier && barrier->publish_external_state, test_name,
+            "Present readiness must still be published when no transition is needed");
+    }
+}
+
+void TestUnrepresentableReadOnlyRangeFails(TestSuite& suite, bool merge) {
+    constexpr std::string_view test_name = "read-only filtering must not bypass RHI view range validation";
+    TextureRef texture = MoerNew(FakeTexture)(1, 256, ETextureAspectFlags::COLOR);
+    RenderGraph graph(test_name);
+    const auto image = graph.ImportTexture("Image", texture, {.mip_count = 1, .layer_count = 256});
+    graph.SetInitialState(image, RenderGraph::TextureAccessType::Sampled,
+        RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.Export(image, RenderGraph::TextureAccessType::Sampled,
+        RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    int callbacks = 0, publications = 0;
+    graph.AddRecordPass("Read", [=](RenderGraph::PassBuilder& pass) {
+        pass.Read(image, RenderGraph::TextureAccessType::Sampled).SideEffect();
+    }, [&](CommandList&) { ++callbacks; }, RenderGraph::PassRecordPolicy::Serial);
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    CommandList commands;
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const bool executed = merge ? graph.RecordAndMergeFrontendCommands(commands, false) :
+        graph.ExecuteFrontendRecordingPlan({}, false,
+            [&](Moer::Array<RHIRecordingSource>&&) { ++publications; }, {.enabled = true});
+    suite.Check(!executed && Contains(graph.GetCompileError(), "cannot be represented"),
+        test_name, graph.GetCompileError());
+    suite.Check(callbacks == 0 && publications == 0 && commands.IsEmpty(), test_name,
+        "invalid range must fail before callbacks, publication or destination mutation");
 }
 
 void TestPartialPhysicalRangesMaterialize(TestSuite& suite) {
@@ -471,7 +565,7 @@ void ExpectActiveFailClosed(
 ) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource&) {
+        [&](std::span<const RenderGraph::ExecutedPassInfo>, RHIRecordingSource&) {
             ++configure_calls;
         },
         false,
@@ -626,7 +720,7 @@ void TestUnsupportedInputsFailBeforeCallbacksOrPublish(TestSuite& suite) {
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource& source) {
+            [&](std::span<const RenderGraph::ExecutedPassInfo>, RHIRecordingSource& source) {
                 ++configure_calls;
                 source.command_list->AddCustomCommand(
                     MakeUnique<ProbeCommand>(404),
@@ -696,7 +790,7 @@ void TestRecordingSourceSetupCannotCompleteProducerGate(TestSuite& suite) {
 
             suite.Check(graph.Compile(), test_name, graph.GetCompileError());
             const bool executed = graph.ExecuteFrontendRecordingPlan(
-                [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource& source) {
+                [&](std::span<const RenderGraph::ExecutedPassInfo>, RHIRecordingSource& source) {
                     ++configure_calls;
                     auto replacement = RHIRecordingGate::Create();
                     if (signal) {
@@ -1108,7 +1202,7 @@ void TestRecordingConfigurationRejectsBlockingSync(TestSuite& suite) {
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource&) {
+        [&](std::span<const RenderGraph::ExecutedPassInfo>, RHIRecordingSource&) {
             ++configure_calls;
             RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         },
@@ -1215,9 +1309,9 @@ void TestRecordingPublisherCannotMutatePendingSource(TestSuite& suite) {
     }
 }
 
-void TestActiveRecordingGroupsCommitAtomically(TestSuite& suite) {
-    constexpr std::string_view test_name =
-        "active recording groups commit atomically";
+void TestActiveRecordingGroupsCommitAtomically(TestSuite& suite, bool split_stream) {
+    const std::string test_name = split_stream ? "active recording groups commit atomically" :
+                                                "shared active stream fails atomically";
     BufferRef buffer = MoerNew(FakeBuffer)(64);
     RenderGraph graph("ActiveRecordingTransaction");
     const auto data = graph.ImportBuffer(
@@ -1249,6 +1343,7 @@ void TestActiveRecordingGroupsCommitAtomically(TestSuite& suite) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(data, RenderGraph::BufferAccessType::ShaderRead)
                 .SideEffect();
+            if (split_stream) { builder.TranslateSerialControl(); }
         },
         [&](CommandList&) {
             ++second_record_calls;
@@ -1263,13 +1358,13 @@ void TestActiveRecordingGroupsCommitAtomically(TestSuite& suite) {
         RenderGraph::AccessMode::Read
     );
 
-    Moer::Array<Moer::Array<RHIRecordingSource>> published_groups{};
+    Moer::Array<RHIRecordingSource> published{};
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
-            published_groups.emplace_back(std::move(sources));
+            for (auto& source : sources) { published.emplace_back(std::move(source)); }
         },
         RenderGraph::ActiveRecordingOptions{.enabled = true}
     );
@@ -1281,38 +1376,80 @@ void TestActiveRecordingGroupsCommitAtomically(TestSuite& suite) {
     );
     suite.Check(
         first_record_calls == 1 && second_record_calls == 1 &&
-            published_groups.size() == 2,
+            published.size() == (split_stream ? 2u : 1u),
         test_name,
-        "both recording groups were not admitted and joined"
+        "the expected recording streams were not admitted and joined"
     );
 
     RHIRecordingGateView shared_commit{};
-    for (auto& group : published_groups) {
+    for (size_t index = 0; index < published.size(); ++index) {
+        auto& source = published[index];
         suite.Check(
-            group.size() == 1 && group.front().commit,
+            static_cast<bool>(source.commit),
             test_name,
             "published source is missing its graph commit gate"
         );
-        if (group.empty() || !group.front().commit) {
+        if (!source.commit) {
             continue;
         }
         if (!shared_commit) {
-            shared_commit = group.front().commit;
+            shared_commit = source.commit;
         }
         suite.Check(
-            group.front().commit == shared_commit &&
-            group.front().commit.Status() ==
+            source.commit == shared_commit &&
+            source.commit.Status() ==
                     ERHIRecordingStatus::Failed,
             test_name,
             "recording groups did not share one failed transaction"
         );
+        suite.Check(source.completion.Status() ==
+            (split_stream && index == 0 ? ERHIRecordingStatus::Succeeded : ERHIRecordingStatus::Failed),
+            test_name, "each producer gate must describe its own completed recording outcome");
         auto cleanup =
-            group.front().command_list->DrainOrdinaryCallbacksForRejection();
+            source.command_list->DrainOrdinaryCallbacksForRejection();
         for (auto& callback : cleanup) {
             if (callback) {
                 callback();
             }
         }
+    }
+}
+
+void TestSerialFailureStopsLaterRecordingStreams(TestSuite& suite) {
+    constexpr std::string_view test_name = "serial failure abandons later recording streams";
+    RenderGraph graph("SerialFailureStopsLaterStreams");
+    int first_calls = 0, later_calls = 0;
+    graph.AddRecordPass("FirstFails", [](RenderGraph::PassBuilder& pass) {
+        pass.SideEffect().TranslateSerialControl();
+    }, [&](CommandList&) {
+        ++first_calls;
+        throw std::runtime_error("injected first-stream failure");
+    }, RenderGraph::PassRecordPolicy::Serial);
+    for (const auto name : {"LaterFirst", "LaterSecond"}) {
+        graph.AddRecordPass(name, [](RenderGraph::PassBuilder& pass) { pass.SideEffect(); },
+            [&](CommandList&) { ++later_calls; }, RenderGraph::PassRecordPolicy::Serial);
+    }
+    Moer::Array<RHIRecordingSource> published;
+    bool all_published_pending = true;
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const bool executed = graph.ExecuteFrontendRecordingPlan({}, false,
+        [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (auto& source : sources) {
+                all_published_pending &= source.completion.Status() == ERHIRecordingStatus::Pending &&
+                    source.commit && source.commit.Status() == ERHIRecordingStatus::Pending;
+                published.emplace_back(std::move(source));
+            }
+        }, {.enabled = true});
+    suite.Check(!executed && Contains(graph.GetCompileError(), "injected first-stream failure"),
+        test_name, graph.GetCompileError());
+    suite.Check(first_calls == 1 && later_calls == 0, test_name,
+        "a failing serial stream must prevent callbacks in all later streams");
+    suite.Check(published.size() == 2 && all_published_pending, test_name,
+        "both pending streams must be admitted before their producer outcomes are known");
+    for (const auto& source : published) {
+        suite.Check(source.completion.Status() == ERHIRecordingStatus::Failed && source.commit &&
+            source.commit == published.front().commit && source.commit.Status() == ERHIRecordingStatus::Failed,
+            test_name, "failed and abandoned producers must all terminate under one failed graph commit");
     }
 }
 
@@ -1480,7 +1617,15 @@ int main() {
     TestCompiledChildGraphPreservesParentLeaseAndScope(suite);
     TestRecordPassMaterializesExplicitBeforeBodyAfter(suite);
     TestRecordPassMaterializesExplicitBeforeBodyAfter(suite, true);
-    TestSameStateSecondReadNeedsNoBarrier(suite);
+    for (const bool merge : {false, true}) {
+        for (const bool partial : {false, true}) {
+            TestReadOnlyBoundariesNeedNoCommands(suite, merge, partial);
+        }
+        TestUnrepresentableReadOnlyRangeFails(suite, merge);
+    }
+    TestSameStateWriteBoundaryNeedsBarrier(suite, false);
+    TestSameStateWriteBoundaryNeedsBarrier(suite, true);
+    TestPresentationPublicationSurvivesNoOpFiltering(suite);
     TestPartialPhysicalRangesMaterialize(suite);
     TestUnsupportedInputsFailBeforeCallbacksOrPublish(suite);
     TestRecordingSourceSetupCannotCompleteProducerGate(suite);
@@ -1492,7 +1637,9 @@ int main() {
     TestRecordingPublisherRejectsBlockingSync(suite);
     TestRecordingConfigurationRejectsBlockingSync(suite);
     TestRecordingPublisherCannotMutatePendingSource(suite);
-    TestActiveRecordingGroupsCommitAtomically(suite);
+    TestActiveRecordingGroupsCommitAtomically(suite, false);
+    TestActiveRecordingGroupsCommitAtomically(suite, true);
+    TestSerialFailureStopsLaterRecordingStreams(suite);
 
     TestActiveRecordingLifetimeOutlivesUserCallbacks(suite);
 

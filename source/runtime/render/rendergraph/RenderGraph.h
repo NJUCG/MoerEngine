@@ -482,14 +482,15 @@ public:
     };
 
     /**
-     * One stable frontend recording source. Native translation batching is a
-     * separate backend concern and must not change this pass identity.
+     * One stable pass identity in compiled order. Execution may place multiple
+     * units in one frontend stream; native translation batching remains separate.
      */
     struct CompiledFrontendRecordUnit {
         uint32_t                source_index = 0;
         QueueBinding            target_queue{};
         PassHandle              pass{};
         PassRecordPolicy        record_policy = PassRecordPolicy::Serial;
+        uint32_t                recording_workload = 1;
         ERHITranslateExecutionClass native_translate_class{
             ERHITranslateExecutionClass::Parallel
         };
@@ -501,9 +502,8 @@ public:
      * Contiguous frontend recording units that may be dispatched together.
      * GPU resource hazards do not split a group because immutable frontend
      * command streams can be recorded concurrently and assembled later in
-     * compiled order. Explicit and token edges still split groups only as a
-     * legacy compatibility rule; new strict Prepare/Record passes must not use
-     * graph edges to communicate CPU recording dependencies.
+     * compiled order. CPU preparation must use Prepare/Record contracts, not
+     * GPU graph edges to communicate between recording callbacks.
      */
     struct CompiledFrontendDispatchGroup {
         uint32_t           first_unit = 0;
@@ -740,6 +740,8 @@ public:
         PassBuilder& DependsOn(PassHandle dependency);
         PassBuilder& SideEffect();
         PassBuilder& ExecuteOn(QueueRole queue, GpuWorkType work);
+        /** Relative CPU recording work (default 1), typically draw/dispatch count; must be positive. */
+        PassBuilder& RecordWorkload(uint32_t units);
         /**
          * Makes backend translation of this recorded source a stable CPU
          * frontier. The callback still owns an ordinary graph CommandList;
@@ -773,11 +775,13 @@ public:
     using RecordCallback        = std::function<void(CommandList&)>;
 
     /**
+     * Called once for each actual stream, with all its passes in compiled order.
      * May attach submit metadata; CommandList, producer gate and transaction
-     * gate ownership are immutable. It must not wait on RHI work.
+     * gate ownership are immutable. It must not wait on RHI work. Signals cover
+     * the complete stream; a pass-specific receipt belongs to its containing stream.
      */
     using RecordingSourceSetupCallback =
-        std::function<void(const ExecutedPassInfo&, RHIRecordingSource&)>;
+        std::function<void(std::span<const ExecutedPassInfo>, RHIRecordingSource&)>;
     /**
      * Admission-only callback invoked before the corresponding producers
      * start. It may move the immutable pending sources into a nonblocking
@@ -808,8 +812,9 @@ public:
     /**
      * Optional modern GPU profiling seam for ExecuteFrontendRecordingPlan.
      *
-     * The graph assigns source_order from the immutable compiled execution
-     * schedule before any managed producer is dispatched. A false callback
+     * Binds once per actual stream, using its first pass's info and compiled
+     * source_order. Every pass still gets its own marker in that stream.
+     * The graph assigns source_order before any producer is dispatched. A false callback
      * result is a bounded profiling drop: it suppresses legacy timing for that
      * CommandList generation and does not fail graph execution.
      * Throwing, changing CommandList recording state, or returning a value that
@@ -1012,8 +1017,8 @@ public:
     bool Compile();
 
     /**
-     * Records each pass into its own CommandList and publishes sources in compiled
-     * order. GPU hazards do not order CPU recording; Serial policy joins the
+     * Records compatible consecutive passes into shared private streams and
+     * publishes sources in compiled order. GPU hazards do not order CPU recording; Serial policy joins the
      * previous group before executing on the caller. Every producer is joined
      * before returning, including failures.
      */
@@ -1026,8 +1031,8 @@ public:
     );
 
     /**
-     * Records every eligible pass into its own frontend CommandList (and may
-     * do so concurrently), joins all producers, then appends those frontend
+     * Records serial regions into shared private CommandLists, partitions
+     * parallel regions by recording workload, joins all producers, then appends those frontend
      * streams to one caller-owned Graphics CommandList in compiled order.
      * The destination's later Submit() is the only native submission boundary.
      * A Compiled destination consumes the full lowered barrier plan, including
@@ -1135,6 +1140,7 @@ private:
         ExecutionDomain               domain{};
         bool                           side_effect = false;
         PassRecordPolicy               record_policy = PassRecordPolicy::Serial;
+        uint32_t                       recording_workload = 1;
         ERHITranslateExecutionClass     translate_execution_class{
             ERHITranslateExecutionClass::Parallel
         };

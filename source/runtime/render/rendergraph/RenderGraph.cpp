@@ -4,6 +4,7 @@
 #include "profile/ProfileScope.h"
 #include "rendergraph/RenderGraphCompiler.h"
 #include "rendergraph/RenderGraphLowering.h"
+#include "rendergraph/RenderGraphRecordingPlan.h"
 #include "rhi/RHI.h"
 #include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIThreadOwnership.h"
@@ -1067,15 +1068,28 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
 
 bool RenderGraphLowering::MaterializeInstruction(
     const RenderGraphLowering::LoweredInstruction& instruction,
-    BarrierCreateInfo&                             output,
+    std::optional<BarrierCreateInfo>&              output,
     std::string&                                   error
 ) {
+    output.reset();
+    // Keep validation and boundary evidence even when no GPU synchronization
+    // is necessary. In particular, equal states do not eliminate write hazards.
+    const bool read_only_boundary =
+        instruction.instruction_kind == InstructionKind::Barrier &&
+        (instruction.import_boundary || instruction.export_boundary) &&
+        instruction.before_access == RenderGraph::AccessMode::Read &&
+        instruction.after_access == RenderGraph::AccessMode::Read &&
+        instruction.before_state == instruction.after_state &&
+        !instruction.state_transition && !instruction.memory_dependency &&
+        !instruction.execution_dependency && !instruction.discard_previous_contents &&
+        !instruction.transient_alias && !instruction.queue_acquire;
+    BarrierCreateInfo barrier{};
     auto materialize_transfer = [&]() {
         if (instruction.instruction_kind !=
                 RenderGraphLowering::InstructionKind::QueueRelease &&
             instruction.instruction_kind !=
                 RenderGraphLowering::InstructionKind::QueueAcquire) {
-            output.queue_transfer = {};
+            barrier.queue_transfer = {};
             return true;
         }
         const auto src_queue = ToRHIQueue(instruction.transfer_source.role);
@@ -1094,7 +1108,7 @@ bool RenderGraphLowering::MaterializeInstruction(
                 "queue ownership instruction has invalid logical or family endpoints";
             return false;
         }
-        output.queue_transfer =
+        barrier.queue_transfer =
             instruction.instruction_kind ==
                     RenderGraphLowering::InstructionKind::QueueRelease ?
                 BarrierQueueTransfer::Release(src_queue, dst_queue) :
@@ -1119,19 +1133,28 @@ bool RenderGraphLowering::MaterializeInstruction(
             return false;
         }
 
+        const bool publishes_presentation = instruction.export_boundary &&
+            (RenderGraph::IsPresentationSource(instruction.after_state) ||
+             (binding->GetUsage() & ETextureUsageFlags::PRESENTATION_SOURCE) ==
+                 ETextureUsageFlags::PRESENTATION_SOURCE);
+        if (read_only_boundary && !publishes_presentation) {
+            return true;
+        }
         TextureView view(binding);
         view.mip_level   = static_cast<uint8>(range.mip_first);
         view.num_mips    = static_cast<uint8>(range.mip_count);
         view.array_layer = static_cast<uint8>(range.layer_first);
         view.num_array   = static_cast<uint8>(range.layer_count);
-        output = BarrierCreateInfo::Transition(
+        barrier = BarrierCreateInfo::Transition(
             view,
             ToBarrierState(instruction.source, true),
             ToBarrierState(instruction.destination, true),
             instruction.texture_aspects
         );
-        output.publish_external_state = instruction.export_boundary;
-        return materialize_transfer();
+        barrier.publish_external_state = instruction.export_boundary;
+        if (!materialize_transfer()) { return false; }
+        output = std::move(barrier);
+        return true;
     }
 
     if (instruction.resource_kind == RenderGraph::ResourceKind::Buffer) {
@@ -1142,16 +1165,31 @@ bool RenderGraphLowering::MaterializeInstruction(
             error = "buffer instruction has no physical binding or has an invalid range";
             return false;
         }
-        output = BarrierCreateInfo::Transition(
+        if (read_only_boundary) {
+            return true;
+        }
+        barrier = BarrierCreateInfo::Transition(
             BufferView(binding.Get(), range.offset, range.size, 1),
             ToBarrierState(instruction.source, false),
             ToBarrierState(instruction.destination, false)
         );
-        return materialize_transfer();
+        if (!materialize_transfer()) { return false; }
+        output = std::move(barrier);
+        return true;
     }
 
     error = "token instruction cannot be materialized as an RHI barrier";
     return false;
+}
+
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::RecordWorkload(uint32_t units) {
+    if (!graph.InvalidateCompile()) { return *this; }
+    if (pass_index >= graph.passes.size() || units == 0) {
+        graph.declaration_errors.emplace_back("recording workload requires a valid pass and positive units");
+        return *this;
+    }
+    graph.passes[pass_index].recording_workload = units;
+    return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::TranslateSerialControl() {
@@ -1799,7 +1837,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             [&](const RenderGraphLowering::LoweredInstruction& instruction,
                 std::vector<BarrierCreateInfo>&                 destination,
                 std::string_view                                placement) {
-                BarrierCreateInfo barrier{};
+                std::optional<BarrierCreateInfo> barrier;
                 std::string       materialization_error{};
                 if (!RenderGraphLowering::MaterializeInstruction(instruction, barrier, materialization_error)) {
                     compile_error =
@@ -1808,7 +1846,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                         " failed: " + materialization_error;
                     return false;
                 }
-                destination.emplace_back(std::move(barrier));
+                if (barrier) { destination.emplace_back(std::move(*barrier)); }
                 return true;
             };
 
@@ -1892,10 +1930,16 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         }
     }
 
-    struct RecordingJob {
+    struct RecordingPass {
         PassHandle          pass{};
         std::string         pass_name{};
         RecordCallback      record{};
+        std::vector<BarrierCreateInfo>                    before{};
+        std::vector<BarrierCreateInfo>                    after{};
+        std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
+    };
+    struct RecordingJob {
+        Array<RecordingPass> passes{};
         SharedPtr<CommandList> command_list{};
         RHIRecordingGateRef completion{};
         RHIQueueBinding     gpu_profile_queue_binding{};
@@ -1905,9 +1949,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         ERHITranslateExecutionClass translate_execution_class{
             ERHITranslateExecutionClass::Parallel
         };
-        std::vector<BarrierCreateInfo>                    before{};
-        std::vector<BarrierCreateInfo>                    after{};
-        std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
     };
     struct RecordingError {
         std::mutex  mutex{};
@@ -1915,7 +1956,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
     };
     struct RecordingLifetime {
         std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
-        RecordCallback                                    record{};
+        Array<RecordCallback>                            records{};
     };
     struct PendingGateGuard {
         const Array<RHIRecordingGateRef>* gates{nullptr};
@@ -2030,66 +2071,64 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             error->message = std::move(message);
         }
     };
-    auto attach_recording_lifetime =
-        [](CommandList&                                      command_list,
-           std::vector<RenderGraphLowering::PhysicalBinding> keepalive,
-           RecordCallback                                   record) {
-            auto lifetime = std::make_shared<RecordingLifetime>(
-                RecordingLifetime{
-                    .keepalive = std::move(keepalive),
-                    .record    = std::move(record),
-                }
-            );
-            command_list.KeepAlive(std::move(lifetime));
-        };
+    auto attach_recording_lifetime = [](RecordingJob& job) {
+        auto lifetime = std::make_shared<RecordingLifetime>();
+        size_t resource_count = 0;
+        for (const auto& pass : job.passes) {
+            resource_count += pass.keepalive.size();
+        }
+        lifetime->keepalive.reserve(resource_count);
+        lifetime->records.reserve(job.passes.size());
+        for (auto& pass : job.passes) {
+            for (auto& resource : pass.keepalive) {
+                lifetime->keepalive.emplace_back(std::move(resource));
+            }
+            lifetime->records.emplace_back(std::move(pass.record));
+        }
+        job.command_list->KeepAlive(std::move(lifetime));
+    };
 
-    // Consume the compiler-built frontend dispatch groups in stable graph order.
-    size_t record_unit_index = 0;
-    size_t dispatch_group_index = 0;
-    while (record_unit_index < compiled_plan.frontend_record_units.size()) {
-        assert(
-            dispatch_group_index <
-            compiled_plan.frontend_dispatch_groups.size()
-        );
-        const auto& dispatch_group =
-            compiled_plan.frontend_dispatch_groups[dispatch_group_index];
-        assert(dispatch_group.first_unit == record_unit_index);
-        assert(dispatch_group.unit_count != 0);
-        const size_t unit_end =
-            record_unit_index + dispatch_group.unit_count;
-        assert(unit_end <= compiled_plan.frontend_record_units.size());
-
-        const auto& first_unit =
-            compiled_plan.frontend_record_units[record_unit_index];
-        if (!IsValidPass(first_unit.pass)) {
-            compile_error =
-                "frontend recording found an invalid compiled record unit";
+    const auto& units = compiled_plan.frontend_record_units;
+    std::vector<uint8_t> split_before(units.size(), 0);
+    for (size_t index = 0; index < units.size(); ++index) {
+        if (!IsValidPass(units[index].pass)) {
+            compile_error = "frontend recording found an invalid compiled record unit";
             return false;
         }
+        if (active_recording.enabled) {
+            const auto& state = active_pass_states[units[index].pass.pass_id];
+            if (!state.wait_fences.empty()) { split_before[index] = 1; }
+            if (!state.signal_fences.empty() && index + 1 < units.size()) {
+                split_before[index + 1] = 1;
+            }
+        }
+    }
+    const auto dispatches = Detail::BuildRecordingDispatches(compiled_plan, parallel_recording_enabled);
+    const uint32_t worker_count = TaskGraph::IsInitialized() ?
+        TaskGraph::GetInterface().GetWorkerThreadCount() : 1;
+    // Keep CPU dispatch boundaries, but allocate one exclusively owned stream
+    // per serial region or weighted parallel range, not one per pass.
+    for (const auto& dispatch_group : dispatches) {
+        const auto ranges = Detail::PartitionRecordingRange(units, dispatch_group, worker_count, split_before);
 
-        // Managed passes receive independent frontend streams and producer gates.
         Array<RecordingJob>        jobs{};
         Array<RHIRecordingSource>  frontend_sources{};
         Array<RHIRecordingGateRef> producer_gates{};
-        jobs.reserve(unit_end - record_unit_index);
-        frontend_sources.reserve(unit_end - record_unit_index);
-        producer_gates.reserve(unit_end - record_unit_index);
+        jobs.reserve(ranges.size());
+        frontend_sources.reserve(ranges.size());
+        producer_gates.reserve(ranges.size());
 
-        for (size_t index = record_unit_index; index < unit_end; ++index) {
-            const auto& unit = compiled_plan.frontend_record_units[index];
+        for (const auto& range : ranges) {
+            const auto& unit = units[range.first_unit];
             const auto  handle = unit.pass;
             auto&       pass   = passes[handle.pass_id];
             const auto  queue  = ToRHIQueue(unit.target_queue.role);
             if (!pass.record || queue == EQueueType::Ignore) {
-                compile_error = "compiled recording pass has an invalid callback or queue: " +
-                                pass.name;
+                compile_error = "compiled recording pass has an invalid callback or queue: " + pass.name;
                 return false;
             }
 
             RecordingJob job{
-                .pass         = handle,
-                .pass_name    = pass.name,
-                .record       = pass.record,
                 .command_list = MakeShared<CommandList>(queue),
                 .completion   = RHIRecordingGate::Create(),
                 .gpu_profile_queue_binding =
@@ -2107,11 +2146,31 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             job.command_list->SetTranslateExecutionClass(
                 job.translate_execution_class
             );
-            if (active_recording.enabled) {
-                const auto& pass_state = active_pass_states[handle.pass_id];
-                job.before             = pass_state.before;
-                job.after              = pass_state.after;
-                job.keepalive          = pass_state.keepalive;
+            job.passes.reserve(range.unit_count);
+            Array<ExecutedPassInfo> source_passes;
+            if (configure_recording_source) { source_passes.reserve(range.unit_count); }
+            for (uint32_t offset = 0; offset < range.unit_count; ++offset) {
+                const auto& member_unit = units[range.first_unit + offset];
+                auto& member = passes[member_unit.pass.pass_id];
+                if (!member.record || ToRHIQueue(member_unit.target_queue.role) == EQueueType::Ignore) {
+                    compile_error = "compiled recording pass has an invalid callback or queue: " + member.name;
+                    return false;
+                }
+                RecordingPass recording_pass{
+                    .pass = member_unit.pass,
+                    .pass_name = member.name,
+                    .record = member.record,
+                };
+                if (active_recording.enabled) {
+                    auto& pass_state = active_pass_states[member_unit.pass.pass_id];
+                    recording_pass.before = std::move(pass_state.before);
+                    recording_pass.after = std::move(pass_state.after);
+                    recording_pass.keepalive = std::move(pass_state.keepalive);
+                }
+                job.passes.emplace_back(std::move(recording_pass));
+                if (configure_recording_source) {
+                    source_passes.emplace_back(MakeExecutedPassInfo(member_unit.pass));
+                }
             }
             RHIRecordingSource source{
                 .command_list = job.command_list,
@@ -2124,13 +2183,15 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     unit.native_translate_class;
             }
             if (active_recording.enabled) {
-                const auto& pass_state = active_pass_states[handle.pass_id];
+                const auto& first_state = active_pass_states[handle.pass_id];
+                const auto& last_state = active_pass_states[
+                    units[range.first_unit + range.unit_count - 1].pass.pass_id];
                 source.submit_metadata.wait_fences =
-                    pass_state.wait_fences;
+                    first_state.wait_fences;
                 source.submit_metadata.signal_fences =
-                    pass_state.signal_fences;
+                    last_state.signal_fences;
                 source.submit_metadata.async_queue_scope =
-                    pass_state.async_queue_scope;
+                    first_state.async_queue_scope;
             }
             if (active_recording.enabled) {
                 try {
@@ -2163,7 +2224,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     RHIThreadRoleScope configuration_owner(
                         ERHIThreadRole::RecordWorker
                     );
-                    configure_recording_source(MakeExecutedPassInfo(handle), source);
+                    configure_recording_source(source_passes, source);
                 } catch (const std::exception& exception) {
                     compile_error = "recording source configuration failed for pass '" + pass.name +
                                     "': " + exception.what();
@@ -2228,7 +2289,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 const GpuProfileBindOutcome bind_outcome =
                     BindGpuProfileSource(
                         gpu_profiling,
-                        MakeExecutedPassInfo(job.pass),
+                        MakeExecutedPassInfo(job.passes.front().pass),
                         *job.command_list,
                         job.gpu_profile_queue_binding,
                         job.gpu_profile_source_order
@@ -2249,25 +2310,21 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
              owns_explicit_state = active_recording.enabled,
              state_ownership = active_recording.state_ownership](RecordingJob job) mutable {
             RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
-            ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Record", job.pass_name);
             ProducerGateGuard producer_gate_guard{.gate = job.completion};
+            std::string_view pass_name = job.passes.front().pass_name;
             bool lifetime_attached = false;
             auto attach_lifetime = [&] {
                 if (lifetime_attached) {
                     return;
                 }
-                attach_recording_lifetime(
-                    *job.command_list,
-                    std::move(job.keepalive),
-                    std::move(job.record)
-                );
+                attach_recording_lifetime(job);
                 lifetime_attached = true;
             };
             auto fail_job =
                 [&](std::string_view detail, bool has_detail) noexcept {
                     try {
                         std::string message =
-                            "record pass '" + job.pass_name + "' failed";
+                            "record pass '" + std::string(pass_name) + "' failed";
                         if (has_detail) {
                             message += ": ";
                             message += detail;
@@ -2281,7 +2338,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                         try {
                             store_error(
                                 error,
-                                "record pass '" + job.pass_name +
+                                "record pass '" + std::string(pass_name) +
                                     "' failed while retaining its recording "
                                     "lifetime"
                             );
@@ -2292,56 +2349,38 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     producer_gate_guard.Disarm();
                 };
             try {
-                if (owns_explicit_state || !job.before.empty() || !job.after.empty()) {
+                if (owns_explicit_state) {
                     job.command_list->SetResourceStateOwnership(
                         state_ownership
                     );
                 }
-                if (!job.before.empty()) {
-                    job.command_list->Barriers(
-                        std::span<const BarrierCreateInfo>(
-                            job.before.data(), job.before.size()
-                        )
-                    );
-                }
-                const uint64 seal_generation =
-                    job.command_list->GetSealGeneration();
-                if (job.gpu_profile_requested) {
-                    ScopedGpuMarker pass_marker(
-                        *job.command_list,
-                        job.pass_name,
-                        GpuMarkerPalette::Pass(),
-                        job.gpu_profile_bound ?
-                            EGpuMarkerMode::Timestamp :
-                            EGpuMarkerMode::Label
-                    );
-                    job.record(*job.command_list);
-                } else {
-                    job.record(*job.command_list);
-                }
-                if (job.command_list->GetSealGeneration() != seal_generation) {
-                    throw std::logic_error(
-                        "record callback sealed its managed CommandList"
-                    );
-                }
-                if (owns_explicit_state &&
-                    job.command_list->GetResourceStateOwnership() != state_ownership) {
-                    throw std::logic_error(
-                        "record callback changed explicit state ownership"
-                    );
-                }
-                if (job.command_list->GetTranslateExecutionClass() !=
-                    job.translate_execution_class) {
-                    throw std::logic_error(
-                        "record callback changed its managed translation class"
-                    );
-                }
-                if (!job.after.empty()) {
-                    job.command_list->Barriers(
-                        std::span<const BarrierCreateInfo>(
-                            job.after.data(), job.after.size()
-                        )
-                    );
+                for (auto& pass : job.passes) {
+                    pass_name = pass.pass_name;
+                    ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Record", pass.pass_name);
+                    if (!pass.before.empty()) { job.command_list->Barriers(pass.before); }
+                    const uint64 seal_generation = job.command_list->GetSealGeneration();
+                    if (job.gpu_profile_requested) {
+                        ScopedGpuMarker pass_marker(
+                            *job.command_list,
+                            pass.pass_name,
+                            GpuMarkerPalette::Pass(),
+                            job.gpu_profile_bound ? EGpuMarkerMode::Timestamp : EGpuMarkerMode::Label
+                        );
+                        pass.record(*job.command_list);
+                    } else {
+                        pass.record(*job.command_list);
+                    }
+                    if (job.command_list->GetSealGeneration() != seal_generation) {
+                        throw std::logic_error("record callback sealed its managed CommandList");
+                    }
+                    if (owns_explicit_state &&
+                        job.command_list->GetResourceStateOwnership() != state_ownership) {
+                        throw std::logic_error("record callback changed explicit state ownership");
+                    }
+                    if (job.command_list->GetTranslateExecutionClass() != job.translate_execution_class) {
+                        throw std::logic_error("record callback changed its managed translation class");
+                    }
+                    if (!pass.after.empty()) { job.command_list->Barriers(pass.after); }
                 }
                 attach_lifetime();
                 if (!job.completion->Signal()) {
@@ -2416,23 +2455,25 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                      ERHIRecordingStatus::Pending)) {
                 compile_error =
                     "frontend source publisher mutated pending source state for pass '" +
-                    job.pass_name + "'";
+                    job.passes.front().pass_name + "'";
                 return false;
             }
         }
 
         // Dispatch only inside the compiler-approved group; serial modes use
         // the same recording body inline.
-        const bool task_graph_available = TaskGraph::IsInitialized();
         const bool can_dispatch_parallel =
-            first_unit.record_policy ==
-                PassRecordPolicy::ParallelAllowed &&
-            parallel_recording_enabled && task_graph_available;
-        if (first_unit.record_policy ==
-                PassRecordPolicy::Serial ||
-            !parallel_recording_enabled || !task_graph_available) {
-            for (auto& job : jobs) {
-                run_job(std::move(job));
+            dispatch_group.parallel && jobs.size() > 1;
+        std::exception_ptr dispatch_error;
+        if (!can_dispatch_parallel) {
+            for (size_t index = 0; index < jobs.size(); ++index) {
+                run_job(std::move(jobs[index]));
+                if (producer_gates[index]->Status() != ERHIRecordingStatus::Succeeded) {
+                    for (size_t pending = index + 1; pending < jobs.size(); ++pending) {
+                        producer_gates[pending]->Fail();
+                    }
+                    break;
+                }
             }
         } else {
             GraphEventArray record_task_events{};
@@ -2446,13 +2487,10 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                         }
                     ));
                 }
-            } catch (const std::exception& exception) {
-                store_error(error, std::string("failed to dispatch recording task: ") + exception.what());
-                for (size_t index = dispatched_count; index < jobs.size(); ++index) {
-                    producer_gates[index]->Fail();
-                }
             } catch (...) {
-                store_error(error, "failed to dispatch recording task");
+                // Allocation failure must not bypass the join or release leases
+                // while already dispatched producers are still writing.
+                dispatch_error = std::current_exception();
                 for (size_t index = dispatched_count; index < jobs.size(); ++index) {
                     producer_gates[index]->Fail();
                 }
@@ -2477,6 +2515,16 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             group_succeeded =
                 gate->Wait() == ERHIRecordingStatus::Succeeded && group_succeeded;
         }
+        if (dispatch_error) {
+            try {
+                std::rethrow_exception(dispatch_error);
+            } catch (const std::exception& exception) {
+                compile_error = std::string("failed to dispatch recording task: ") + exception.what();
+            } catch (...) {
+                compile_error = "failed to dispatch recording task";
+            }
+            return false;
+        }
         if (!group_succeeded) {
             std::lock_guard lock(error->mutex);
             compile_error =
@@ -2485,10 +2533,11 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     error->message;
             return false;
         }
-        if (can_dispatch_parallel && unit_end - record_unit_index > 1) {
+        if (can_dispatch_parallel) {
             std::ostringstream pass_list;
-            for (size_t index = record_unit_index; index < unit_end; ++index) {
-                if (index != record_unit_index) {
+            for (size_t index = dispatch_group.first_unit;
+                 index < dispatch_group.first_unit + dispatch_group.unit_count; ++index) {
+                if (index != dispatch_group.first_unit) {
                     pass_list << ',';
                 }
                 const auto pass_handle =
@@ -2511,18 +2560,12 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     "dispatch=task-graph worker_jobs={} completed=true",
                     name,
                     pass_names,
-                    unit_end - record_unit_index
+                    jobs.size()
                 );
             }
         }
         pending_gate_guard.Disarm();
-        record_unit_index = unit_end;
-        ++dispatch_group_index;
     }
-    assert(
-        dispatch_group_index ==
-        compiled_plan.frontend_dispatch_groups.size()
-    );
     // Make the already-published active graph consumable only after every
     // producer has succeeded.
     if (!active_transaction_guard.Commit()) {
@@ -2905,7 +2948,8 @@ std::string RenderGraph::Dump() const {
         } else {
             stream << unit.dependency_level_index;
         }
-        stream << " pass=" << passes[unit.pass.pass_id].name << '\n';
+        stream << " pass=" << passes[unit.pass.pass_id].name
+               << " record_workload=" << unit.recording_workload << '\n';
     }
     return stream.str();
 }

@@ -4,6 +4,7 @@
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommon.h"
 
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -140,9 +141,10 @@ public:
         [[nodiscard]] std::string Dump() const;
     };
 
-    /** Converts a compiler instruction to the backend-independent explicit RHI contract. */
+    /** Validates and materializes an instruction. Success with no output means
+     *  a read-only boundary needs no GPU command; its proof remains in the plan. */
     [[nodiscard]] static bool MaterializeInstruction(
-        const LoweredInstruction& instruction, BarrierCreateInfo& output, std::string& error);
+        const LoweredInstruction& instruction, std::optional<BarrierCreateInfo>& output, std::string& error);
 
     /**
      * Produces a complete plan or no plan. On failure output is cleared and

@@ -532,6 +532,7 @@ void TestMoveOnlyParameterLifetimeAndParallelRecord(TestSuite& suite) {
     std::atomic<const void*> declared_address{nullptr};
     std::atomic<const void*> recorded_address{nullptr};
     std::atomic<int>         record_count{0};
+    std::atomic<int>         companion_record_count{0};
     std::atomic<bool>        recorded_on_worker{false};
     const std::thread::id    caller_thread = std::this_thread::get_id();
 
@@ -548,7 +549,7 @@ void TestMoveOnlyParameterLifetimeAndParallelRecord(TestSuite& suite) {
             "Record",
             std::move(parameters),
             [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect();
+                builder.SideEffect().RecordWorkload(8);
             },
             [&](CommandList&, const MoveOnlyParameters& immutable_parameters) {
                 recorded_on_worker.store(
@@ -564,6 +565,14 @@ void TestMoveOnlyParameterLifetimeAndParallelRecord(TestSuite& suite) {
                     record_count.fetch_add(1, std::memory_order_relaxed);
                 }
             },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        // Two substantial ranges exercise the worker path; a lone small range
+        // is intentionally recorded inline by the execution scheduler.
+        graph.AddRecordPass(
+            "Companion",
+            [](RenderGraph::PassBuilder& builder) { builder.SideEffect().RecordWorkload(8); },
+            [&](CommandList&) { companion_record_count.fetch_add(1, std::memory_order_relaxed); },
             RenderGraph::PassRecordPolicy::ParallelAllowed
         );
 
@@ -582,14 +591,15 @@ void TestMoveOnlyParameterLifetimeAndParallelRecord(TestSuite& suite) {
         suite.Check(executed, test_name, graph.GetCompileError());
         suite.Check(
             record_count.load(std::memory_order_relaxed) == 1 &&
-                published_source_count == 1,
+                companion_record_count.load(std::memory_order_relaxed) == 1 &&
+                published_source_count == 2,
             test_name,
             "the graph-owned parameters must reach the managed record callback exactly once"
         );
         suite.Check(
             recorded_on_worker.load(std::memory_order_acquire),
             test_name,
-            "ParallelRecordEligible parameters must be consumed on a task worker"
+            "parameters in a dispatched parallel range must be consumed on a task worker"
         );
         suite.Check(
             declared_address.load(std::memory_order_acquire) ==

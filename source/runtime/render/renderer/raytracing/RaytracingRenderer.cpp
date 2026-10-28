@@ -1319,10 +1319,13 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 bool       graph_recording_profiling_started = split_graph_profiling_frame;
                 graph_submission_fence    = device.CreateFence();
                 ui_graph_submission_fence = device.CreateFence();
-                const auto configure_recording_source        = [&](const RenderGraph::ExecutedPassInfo& pass,
-                                                            RHIRecordingSource&                  source) {
+                const auto configure_recording_source = [&](std::span<const RenderGraph::ExecutedPassInfo> recorded_passes,
+                                                            RHIRecordingSource& source) {
                     source.submit_metadata.debug_label =
-                        std::format("Raytracing Frame {}/{}", frame_packet.frame_id, pass.name);
+                        recorded_passes.size() == 1 ?
+                            std::format("Raytracing Frame {}/{}", frame_packet.frame_id, recorded_passes.front().name) :
+                            std::format("Raytracing Frame {}/{} .. {} ({} passes)", frame_packet.frame_id,
+                                recorded_passes.front().name, recorded_passes.back().name, recorded_passes.size());
                     source.submit_metadata.debug_label_color = GpuMarkerPalette::Pass();
                     source.submit_metadata.profiling_phase   = graph_recording_profiling_started ?
                                                                           ERHIProfilingPhase::Continue :
@@ -1334,7 +1337,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                             .value = ++graph_submission_value_count,
                         }
                     );
-                    if (pass.handle == ui_graph_passes.draw) {
+                    if (std::any_of(recorded_passes.begin(), recorded_passes.end(), [&](const auto& pass) {
+                            return pass.handle == ui_graph_passes.draw;
+                        })) {
                         source.submit_metadata.signal_fences.emplace_back(
                             RHIRecordingFencePoint{
                                 .fence = ui_graph_submission_fence,

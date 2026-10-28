@@ -459,7 +459,8 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
                        second,
                        RenderGraph::BufferAccessType::TransferDestination
             )
-                .SideEffect();
+                // This fixture requires two independent completion owners.
+                .SideEffect().TranslateSerialControl();
         },
         [&](CommandList&) {
             second_identity = graph.GetPhysicalBuffer(second).Get();

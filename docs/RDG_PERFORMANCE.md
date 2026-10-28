@@ -208,3 +208,243 @@ Raytracing 最终版本也完成了 110 秒运行并正常退出，日志没有�
 本轮优化了编译器的重复查找、排序、遍历和临时存储，没有解决全部帧时间回退。当前 Compile 只占 RenderFrame 的一部分，继续只压缩编译器不足以消除剩余差距。后续应继续测量录制、lowering、合并及非 RDG 的场景准备开销。
 
 如果进一步优化需要改变逐 Pass 命令流、资源声明契约、图边界或数据所有权，应先给出责任转移与失败/生命周期处理方案，取得用户同意后再实施。这些架构调整不包含在本次代码中。
+
+## 6. 第三轮：省去无同步作用的只读边界屏障
+
+### 6.1 约束与实施计划
+
+本轮只处理用户选定的第一项：边界状态证明不必一律转换成 GPU 屏障。起点为 `29340ec4`，保留 RDG 对依赖和屏障的所有权、现有录制路径和资源生命周期。
+
+参考本机 UE 5.7.1（`684b4c133ed8`）的 `FRDGSubresourceState::IsTransitionRequired`：相同状态并不总需要 transition，但 UAV、管线变化等仍可能要求同步。此处不直接移植 UE 的状态规则，而从本项目已有编译标志推导可省略条件。
+
+实施顺序：
+
+1. 固定当前配置、构建并保存基线，检查编译边界、lowering、物化和 Present 发布之间的契约。
+2. 在 RDG 输出实际屏障的位置过滤已证明无同步作用的只读边界；保留完整边界验证以及物理资源、范围合法性检查。
+3. 保留写入可见性、执行依赖、布局或访问状态变化、跨队列与所有权同步、alias 和 Present 状态发布；保活集合仍从资源访问产生。
+4. 增加只读 buffer/texture 的正向测试，以及写入、跨队列、Present、非法边界等反向验证，覆盖合并录制和 active recording。
+5. 完成 Debug 构建、相关测试与 Raster/RT 运行；使用一致配置比较实际录制屏障数量和帧时间。记录未验证事项，不把屏障减少比例当作 FPS 提升比例。
+
+### 6.2 输出规则与责任归属
+
+`CompiledPlan` 和 `LoweredPlan` 保留原来的边界、依赖、来源和诊断数据，`Lower` 的完整性验证不变。过滤放在 `MaterializeInstruction`：成功时输出 `std::optional<BarrierCreateInfo>`，有值表示实际 RHI 屏障，无值表示边界已经验证但无需 GPU 命令；失败仍返回 false 并给出错误。每次进入先清空输出，避免复用旧结果。
+
+只有普通 Barrier 类型的 import/export 边界，且前后都是 Read、资源状态相等，才进入省略判断；存在 state transition、memory dependency、execution dependency、queue acquire、discard 或 transient alias 中任意一项时都保留。QueueRelease/QueueAcquire 不属于普通 Barrier，因此不会被省略。前后 shader stage 不要求相等：同队列、同状态的纯读取不会仅因着色阶段不同而产生 hazard。
+
+纹理物理绑定、aspect、范围和 uint8 TextureView 可表示性，以及 buffer 绑定与字节范围仍先检查。只读快速路径不会接受此前因为非法范围而被拒绝的指令。
+
+Present 导出仍保留实际屏障与 `publish_external_state`。除显式 PresentationSource 状态外，对带 PRESENTATION_SOURCE usage 的纹理导出也保守保留，因为 Vulkan 的提交检查需要这条记录发布呈现就绪状态。
+
+合并录制和 active recording 两处都只追加有值输出；保活集合继续由访问声明生成，不能依赖屏障是否存在。没有把屏障决策移回 Vulkan，没有更改逐 Pass 命令流、图边界或外部资源访问契约。本轮减少的是屏障物化、复制、录制和后端处理；编译与 lowering 的诊断记录成本仍然存在。
+
+### 6.3 契约验证
+
+完整 Debug 构建通过。本机现有 build 使用 VS2022/MSVC，使用 `cmake --build build --config Debug --parallel 30`，未把本轮结果当作 Clang 或 Release 的测量。
+
+相关 8 项 CTest 全部通过：RenderGraph、ParameterAccess、AsyncSetup、Lowering、ActiveLowering、ResourcePool、PresentationSurface 和 RHIExplicitBarrier。新增测试编译后单独重跑 ActiveLoweringContract 也通过。
+
+新增用例检查：
+
+- 两个只读 Pass 同时读取 buffer 和 texture，覆盖完整/局部范围及合并/active 两条录制路径。编译计划仍有 2 条 import 和 2 条 export 边界证据，实际提交没有屏障命令，两个 Pass 的正文顺序不变。这里的 4→0 是测试图的结果，不代表 Sponza 全帧的屏障数量。
+- 回调和正文不持有资源引用；图与外部引用销毁后，资源由录制结果和 submit 保活，最后一个 submit 释放后销毁。省掉屏障不会使资源提前释放。
+- 同 Storage 状态的初始 Write→Read 仍有 1 条屏障；初始 Write→Pass Write→导出 Read 仍有 2 条屏障。
+- 显式 PresentationSource 导出，以及带 PRESENTATION_SOURCE usage 的纹理导出，都保留 `publish_external_state`。
+- 256 层纹理不能由当前 uint8 TextureView 表示；即使全程同状态只读，两条录制路径仍在调用正文或发布结果之前拒绝它。
+
+已有 Lowering 与 RHI 契约测试继续覆盖同原生队列、同 family 不同队列、跨 family ownership transfer、缺失跨队列同步和显式屏障提交。测试不能替代真实 GPU 验证，运行记录另列如下。
+
+### 6.4 编辑器对照与收益边界
+
+在同一 Sponza 场景、1920×1080 窗口、关闭 VSync/锁帧及 Raster 并行录制的配置下，依次运行优化前、优化后、优化前、优化后。每次运行 110 秒，剔除启动和关闭附近样本后取 30 秒统计。使用相同编辑器和固定的两份 Render DLL，运行前确认没有其他编辑器；切换 DLL 时所有测试进程均已退出。
+
+| Raster 运行 | FPS | RenderFrame p50 ms | 每帧 Compile 合计 p50 ms | 每帧录制/合并合计 p50 ms |
+| --- | ---: | ---: | ---: | ---: |
+| 优化前 1 | 40.90 | 23.2052 | 3.1963 | 6.4171 |
+| 优化后 1 | 46.72 | 20.6080 | 2.9333 | 5.6377 |
+| 优化前 2 | 45.16 | 21.2496 | 2.8590 | 5.9482 |
+| 优化后 2 | 46.39 | 20.6681 | 2.9230 | 5.8214 |
+
+“每帧合计”将包含于同一 RenderFrame 的各图 scope 先求和，再计算中位数；录制/合并对应 `RenderGraph.RecordAndMergeFrontendCommands`，包含任务创建、回调录制和命令合并等工作，不是单独的屏障耗时。该 scope 在 `Validate()` 之后开始，不包含其中的 lowering 和屏障物化。FPS 由帧起始间隔计算。
+
+第一组未修改的 Compile 也变快，且两次基线 FPS 差异较大，说明存在运行波动。第二组 Compile 接近，录制/合并 p50 减少约 **0.127 ms（2.1%）**，FPS 从 45.16 到 46.39。可以确认测试图的冗余边界屏障已去除，两组运行也都观察到录制/合并耗时下降；但这些样本不足以确定稳定的整体加速比例，更不能报告已恢复原先约 90 FPS。
+
+本轮没有测量 Sponza 全帧的实际屏障条数，也没有给编译或 lowering 增加新的计时探针。保留边界证据及其遍历成本是本次小范围优化的明确取舍；若后续要消除这部分成本，应单独讨论边界证明的表示方式，不能直接删除目前依赖它的验证。
+
+四次 Raster 均正常退出，日志未发现 error、critical、VUID 或 Validation Error。原始配置、进程信息、capture 和 `per-frame-summary.json` 在 `build/rdg-bisect-results/` 的以下目录：`boundary-before-raster`、`boundary-after-raster`、`boundary-before-repeat-raster`、`boundary-after-repeat-raster`。解析脚本为 `build/analyze_rdg_boundary.py`，沿用既有 ProfileDump 格式和时间窗口规则。
+
+DLL SHA-256：
+
+- 优化前：`04F32FF087DCC43893C608911B4DC5626F5AC1493090DE7178C122D6F6463437`
+- 优化后：`11B375BB8FEE3DE356A3B657FC258DDBA3903764883F230989D517883BC7DB0F`
+
+Raytracing 最终版本也完成 110 秒运行并正常退出，日志未发现 error、critical、VUID 或 Validation Error。记录为 24.38 FPS、RenderFrame p50 22.1827 ms、每帧 Compile 合计 p50 2.2204 ms、active recording 合计 p50 4.9032 ms，原始记录为 `boundary-after-ray`。本轮没有 RT 优化前对照，因此只作为 active recording 路径的运行验证，不据此报告 RT 性能提升。
+
+结束时所有测试编辑器已关闭，正式 Render DLL 为上述优化后版本。运行使用独立配置覆盖文件，仓库默认 Raster 配置未改动。本轮只实施只读边界的屏障物化过滤；共享命令流、外部只读资源模式和边界数据结构重组均未实施。
+
+## 7. 第四轮：串行共享暂存流，并行按工作量分组
+
+### 7.1 约束、授权范围与计划
+
+用户在第三轮之后明确授权第二步：串行区域共用暂存命令流，并行区域按工作量分组。本轮基线包含第三轮尚未提交的只读屏障过滤，Render DLL SHA-256 为 `11B375BB8FEE3DE356A3B657FC258DDBA3903764883F230989D517883BC7DB0F`，不能拿第二轮或第一轮的旧二进制作为本轮基线。
+
+逐 Pass 独占 CommandList 并非 GPU API 的强制要求。真正需要保留的是：并发写入时各任务独占自己的流；跨队列 wait/signal 和 SerialControl 保持原来的提交边界；每个 Pass 的 before/body/after、性能标记与资源生命周期准确；任一录制失败时不提交半张图。串行 Pass 可以按编译顺序写入同一条私有流。
+
+实施顺序：
+
+1. 保留编译计划中的逐 Pass 身份和 CPU 调度约束，在执行时派生实际录制区域及流范围。
+2. 合并路径让串行区域共享暂存流，并行区域每块一条流、一个任务；全部成功后再合并到调用方目标。
+3. active 路径让每条实际流共用 producer gate、managed lease 和生命周期包；保留全图 commit gate，内部队列 wait/signal 拆分流。
+4. 将 source 配置回调统一为流级回调，提供该流内全部 Pass；迁移 RT 的 graph/NRD/UI 提交回执，保留逐流失败检查和 UI 独立判断。
+5. 更新原来假设“一 Pass 一 source”的测试，验证共享流、工作量分组、顺序、失败原子性、生命周期和 profiling；完成 Debug 构建、契约测试、Raster/RT 和并行录制验证，再记录同配置性能对照。
+
+### 7.2 分组方法与责任边界
+
+`CompiledFrontendRecordUnit` 仍表示一个 Pass。执行时，关闭并行或没有足够 TaskGraph worker 的相邻 CPU 组可以合并为一个串行区域；开启并行时，串行区域和并行区域分开，按原有 CPU 边界等待已启动任务。GPU 资源依赖本身不阻止 CPU 并行录制，最终命令顺序和屏障仍来自 RDG。
+
+`PassBuilder::RecordWorkload(units)` 声明相对 CPU 录制工作量，默认 1，必须大于 0。一次普通 draw/dispatch 可使用默认值；循环产生大量命令的回调可以用操作数量估计。它不是 GPU 耗时，也不通过资源访问数猜测 CPU 工作。参考 UE 5.7.1 的 `FRDGPass::Workload` 与 `SetupParallelExecute`，采用显式估计，未引入跨帧历史缓存及其身份/失效管理。
+
+并行区域目标块工作量取 `max(8, ceil(区域总工作量 / worker 数))`，按编译顺序累积切块；单个重 Pass 不拆开。8 是初始任务粒度策略，不是正确性约束。串行区域不按工作量拆块。所有区域遇到队列变化或 SerialControl 两侧都拆流；active 路径还在后一 Pass 的 wait、前一 Pass 的 signal 处拆开，保证 wait 位于流开头、signal 位于流末尾。
+
+GPU profiling 每条实际流只绑定一次，使用首 Pass 的编译位置作为 source order，允许编号有空洞；流内仍逐 Pass 记录名称和 marker。配置回调接收 `span<const ExecutedPassInfo>`，从而能够将某 Pass 的提交回执挂到包含它的实际流。RT 每流登记 graph/NRD 回执；包含 UI draw 的流登记 UI 专属回执，后续仍单独检查 UI 是否被原生队列接受，不能用整图成功代替 UI 生命周期判断。
+
+配置回调中的 span 及 Pass 名称是借用视图，只在回调期间有效。当前多次复制的 `ProbeUpdate.Upload` 按实际非空上传项数声明工作量，其余单 draw/dispatch Pass 使用默认值；后续可以根据录制测量完善重 Pass 的估计，不把 GPU 工作规模直接当作 CPU 录制成本。
+
+合并路径仍先录私有暂存流，整图成功后才写目标；active 路径仍有全图 commit gate，每流 gate 只在整条流停止写入后终结。资源引用和回调捕获统一由流的生命周期包保活。将分配、回收和 producer 同步移到更粗的流边界，不改变 RDG 对 GPU 依赖、资源状态和跨队列同步的所有权。
+
+### 7.3 契约检查
+
+完整 Debug 构建通过，仍使用本机现有 MSVC 构建目录。9 项相关 CTest 全部通过：上一轮的 8 项加 RHIGpuScopeContract。
+
+新增或调整测试验证实际责任，而非原来的“一 Pass 一 source”实现假设：串行 Pass 共享私有流但不直接修改调用方目标；工作量 `{1,1,6}` 与 `{1,7}` 形成两组，组间逆序完成仍按编译顺序输出；跨 queue 或 SerialControl 不合流；一条流配置时可见其中全部 Pass，profiling 只绑定一次但每 Pass 保留 scope；回调和资源仍活到最后的 submit/completion owner 释放。需要验证真实并发的测试显式声明工作量，单个小任务允许在调用方执行。
+
+串行第一段失败后，后续未启动段不再调用正文，其 producer gates 全部终结为 Failed；整图 commit 也失败。任务派发发生异常时，先保存 `exception_ptr`、终结未派发槽并等待所有已启动 worker，再格式化错误，防止错误处理再次分配失败而绕过 join。该处理保护共享 executor/lease 的生命周期，不依赖新的同步层。
+
+`TestRHIParallelRecordVulkan.exe --parallel` 完整默认集成测试通过，启用了 Vulkan validation，日志未发现 VUID 或 Validation Error。覆盖实际显式屏障读回、Graphics/Compute 所有权转移、Graphics/Copy 往返、buffer/texture transient alias、array subrange，以及拒绝和资源回收路径。记录位于 `build/rdg-stream-vulkan-parallel.log`；CPU 契约记录为 `build/rdg-stream-contracts-final.log`。
+
+### 7.4 实际运行对照
+
+使用同一 Sponza、1920×1080 窗口、关闭 VSync/锁帧的 Debug 配置。每次运行 110 秒，沿用原有 ProfileDump，在排除启动和关闭附近样本后取 30 秒。逐帧先汇总各图 scope，再计算 p50；FPS 来自帧起始间隔。串行与并行配置分别比较，不把开关变化计作代码收益。
+
+固定二进制 SHA-256：
+
+- 本轮优化前：`11B375BB8FEE3DE356A3B657FC258DDBA3903764883F230989D517883BC7DB0F`
+- 本轮优化后：`41477C3B113D03811F1CF5CD125D38E4783FA9935A92DEED5CDD667E4F9D295E`
+
+| 配置与运行 | FPS | RenderFrame p50 ms | 每帧 Compile 合计 p50 ms | 每帧录制/合并合计 p50 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Raster 串行，前 1 | 49.47 | 19.3224 | 2.6353 | 5.5509 |
+| Raster 串行，后 1 | 59.45 | 16.0586 | 2.6199 | 3.1607 |
+| Raster 串行，前 2 | 49.65 | 19.2900 | 2.6425 | 5.5210 |
+| Raster 串行，后 2 | 59.30 | 16.0604 | 2.6301 | 3.1557 |
+| Raster 并行，前 | 51.01 | 18.8359 | 2.6324 | 5.0147 |
+| Raster 并行，后 | 60.21 | 15.8440 | 2.6435 | 2.7524 |
+
+两组串行对照的 Compile 接近，录制/合并 p50 均减少约 **43%**，FPS 提升约 **19–20%**。并行对照的录制/合并 p50 减少约 **45%**，FPS 提升约 **18%**。首组新版本运行期间曾并发解析旧 capture，因此另做了稳定测量窗口内不运行分析进程的串行复测，结果一致。并行和 RT 各只有一组前后对照，不把单场景 Debug 数字外推为其他场景或 Release 的固定收益。
+
+Raster 的录制/合并 scope 不包含 Validate 内的 lowering；RT 的 active recording scope 包含 lowering，两者不能当作相同计时口径比较。
+
+| RT 串行 | FPS | RenderFrame p50 ms | PrepareFrame p50 ms | 每帧 Compile 合计 p50 ms | active recording p50 ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 优化前 | 25.27 | 21.4459 | 17.5575 | 2.1683 | 4.7266 |
+| 优化后 | 33.73 | 11.7182 | 17.5213 | 2.1345 | 3.8336 |
+
+RT 的 PrepareFrame 基本不变。active recording 约减少 0.893 ms，RenderFrame 则约减少 9.728 ms，说明收益不只发生在前端录制函数内。更少 source 同时改变了下游翻译、提交、profiling 和回执处理的工作量，本轮没有逐项计时，不能将全部差额都归入某一项。
+
+从 GPU scope 事件按帧聚合 `(logical_queue, source_order)`，Raster 串行的 profiling source 数为 51→2，并行为 51→11；RT 串行为 32→3。这是实际 profiler source 数，不等同于 `vkQueueSubmit` 次数。稳定完整帧中，Raster 前后均保留 53 个同名 GPU scope，RT 均保留 37 个；没有通过删除逐 Pass 标记降低开销。流级保活可能把个别资源的释放延后至整个流完成，但原有编译生命周期、alias 屏障和 completion 约束仍然成立。
+
+八次编辑器运行均完成 110 秒并正常退出，日志未发现 error、critical、VUID 或 Validation Error。RT 编辑器对照使用串行录制；active 并行由契约测试和真实 Vulkan 集成测试覆盖。
+
+原始记录位于 `build/rdg-bisect-results/`，各目录保存实际配置、DLL 哈希、进程信息、capture 与 `per-frame-summary.json`：
+
+- 串行 Raster：`stream-before-raster`、`stream-after-raster`、`stream-before-repeat-raster`、`stream-after-repeat-raster`。
+- 并行 Raster：`stream-before-parallel-raster`、`stream-after-parallel-raster`。
+- 串行 RT：`stream-before-ray`、`stream-after-ray`。
+
+沿用 `build/run_rdg_bisect.ps1`，并行 Raster 使用 `-Parallel`，分析使用 `build/analyze_rdg_boundary.py`。结束时所有测试编辑器已关闭，正式 DLL 恢复为本轮优化后版本；根目录和可执行目录默认配置仍为 Raster、关闭并行录制，未修改用户配置。
+
+## 8. 第五轮：编译器独占的 CPU 暂存 arena
+
+### 8.1 真实约束、范围与实施计划
+
+用户同意先为编译器临时数据引入独立分配器。本轮基线包含第四轮共享录制流，Render DLL SHA-256 为 `41477C3B113D03811F1CF5CD125D38E4783FA9935A92DEED5CDD667E4F9D295E`。这是 CPU 编译暂存内存优化，不涉及 GPU 资源池、显存 alias 策略或 RDG 调度架构。
+
+编译内部的规范化访问、原子区间、依赖边索引和临时排序数组，只需存活到本次编译返回。`RenderGraph::Compile()` 等待 setup 完成后，在调用线程构造临时 `RenderGraphCompiler`，返回时销毁。可以直接在这个所有权边界统一回收，无需全局分配器、TLS、锁或跨帧缓存。
+
+实施顺序：
+
+1. 在 `RenderGraphCompiler` 内置 `std::pmr::monotonic_buffer_resource`，先构造资源、再构造使用它的容器，析构顺序相反。
+2. 迁移内部成员表及不逃逸的局部数组；嵌套 PMR 容器通过标准 allocator 传播使用同一资源。循环内重复使用的数组保留容量并复用，避免每轮循环扩容都占据 arena 到编译结束。
+3. 保留 `CompiledPlan`、`LoweredPlan`、进入输出的 barrier sources/frontier，以及录制回调、KeepAlive、GPU completion 数据的原有所有权。`AtomicCell::readers` 本轮也保留普通 vector，不为一个嵌套成员增加自定义 allocator 传播协议。
+4. 验证重复编译、声明修改后的重编译、失败后恢复，以及编译器销毁后输出仍可 lowering/录制。构建、运行相关契约测试与 Vulkan 集成测试。
+5. 使用独立固定图基准分开测量编译耗时和分配；随后用相同场景与配置对比编辑器运行。报告实际收益、保留内存成本和样本限制。
+
+### 8.2 分配与回收模型
+
+arena 按块向上游堆分配器申请内存，容器分配在块内按对齐推进；单次 `deallocate` 不归还空间。编译器退出时，先正常析构全部容器及其元素，再由 arena 一次归还持有的内存块。失败提前返回使用同一条 RAII 析构路径。每次公共 `Compile()` 都创建独立编译器，因此不会遗留上一张图的 arena 容量。
+
+代价是旧 vector 容量和 hash rehash 前的内存都保留到编译结束，峰值占用可能高于逐次释放。它减少的是堆分配/释放工作，不保证申请字节数更少，也不消除容器元素的析构、算法遍历或输出分配。本轮不预置大块栈缓冲，不引入跨帧保留策略；先测实际 chunk 数与峰值，再判断是否有必要调整。
+
+不能对仍然存活的容器直接调用 arena `release()`：`clear()` 只析构元素，vector 仍可能持有指向已释放内存的 capacity。本实现只依赖成员析构顺序释放 arena，不在 `InvalidateCompile()` 或 `CompiledPlan::Clear()` 中插入 release。
+
+### 8.3 验证与测量口径
+
+固定图基准在编译计时之外构图；计时覆盖公共 `Compile()` 调用，也包含临时 Compiler 和 arena 的析构，但不包含 Graph/CompiledPlan 的最终析构。使用相同头文件构建的基准程序分别加载本轮前后 Render DLL，避免复用旧轮次程序引入布局差异。
+
+分配计数单独运行，不混入计时样本。独立单线程进程临时设置 PMR 默认资源并在作用域退出时恢复，记录分配次数、申请字节、峰值和返回时未归还字节。这些数字代表 Compile 期间对被替换 PMR 默认资源的请求，本次主要来自 arena 上游，也可能包含标准库代理；不等同于全部 RDG 分配，也不能仅靠它证明每个嵌套成员均已迁移。Windows/MSVC Debug 下另记录完整 Compile 的 CRT 分配事件，包含输出容器等仍走普通堆的分配；过滤 `_CRT_BLOCK`，不覆盖绕过 CRT 的分配器。产品代码不增加统计接口或全局 allocator 切换。
+
+完整 MSVC Debug 构建通过。9 项相关契约最终均通过；其中新增 UI lowering 回归首次运行暴露了测试 fixture 缺少 imported `SceneColor` final state，补齐声明后重跑 `RenderGraphContract` 通过，其余 8 项在同一产品二进制下已通过。新增断言先执行操作、再读取错误字符串，避免参数求值顺序造成悬空 `string_view`。
+
+`TestRHIParallelRecordVulkan.exe --parallel` 完整默认集成测试通过，启用了 Vulkan validation，未发现 VUID 或 Validation Error。日志中的预期拒绝错误对应负向测试，相关用例均 PASS。覆盖真实跨队列读回、texture array subrange、transient alias、并行录制与 completion 回收。记录为 `build/rdg-arena-build-final.log`、`build/rdg-arena-contracts.log`、`build/rdg-arena-contract-final.log` 和 `build/rdg-arena-vulkan.log`。
+
+### 8.4 固定图的分配与编译对照
+
+新增可复用的手动目标 `TestRenderGraphCompilerBenchmark`，不加入 CTest。用 `cmake --build build --config Debug --target TestRenderGraphCompilerBenchmark` 构建。默认 64 个 Pass、64 个 texture 和 64 个 buffer，每 Pass 访问每类资源中的 16 个，5 次预热、80 次测量。每四个 Pass 中一个写，其余读；texture 有 4 mip、2 layer，buffer 为 4096 bytes。测试使用强绑定的虚拟 CPU 资源，计时外可执行真实 Lowering，无需 GPU。
+
+可用 `--passes`、`--resources`、`--accesses`、`--warmup`、`--samples` 调整输入，例如小图为 `--passes 16 --resources 16 --accesses 4`。每个版本、每种规模均执行三次独立进程，顺序为前/后、后/前、前/后；每次仍包含 80 个计时样本。以下统计未使用分配 hook 进行计时。
+
+固定 Render DLL：前为本节开头的 `41477C3B...`，后为 `DDCE23C29E4A3BA9131DE97ED842116688A68E6C07376F15BC51F87395B7C564`。两侧使用完全相同的新 benchmark EXE，仅更换同目录的 Render DLL。
+
+| 图规模（Pass / 每类资源 / 每 Pass 每类访问） | CRT 分配请求，前→后 | CRT 申请总字节，前→后 | 新版 PMR 上游请求 | 新版 PMR 峰值保留字节 |
+| --- | ---: | ---: | ---: | ---: |
+| 16 / 16 / 4 | 2196 → 1662 | 195489 → 215237 | 13 | 50616 |
+| 64 / 64 / 16 | 22272 → 19671 | 3421478 → 3583302 | 15 | 443184 |
+| 128 / 128 / 16 | 44455 → 39135 | 6563177 → 6870323 | 15 | 880960 |
+
+三次计数结果一致。CRT 分配请求分别减少 **24.3%、11.7%、12.0%**；申请总字节增加 **10.1%、4.7%、4.7%**，包含对齐/块容量等开销，不能把它解释为峰值堆内存。PMR 的全部上游请求在 Compile 返回前均对应释放，`live_bytes_after_compile=0`。旧版 PMR 请求数为 0，表示当时未走这个资源，不表示没有内存分配。
+
+当前 MSVC PMR 实现的上游块在 arena 析构时统一释放，因此本次 `peak_live_bytes` 等于 PMR 申请总字节。它只衡量这个暂存资源，不包含 `CompiledPlan` 等普通堆内存。工具输出字段明确命名为 `pmr_default_resource`：如以后标准库代理或其他 PMR 容器访问默认资源，也会被计入；不能把统计值无条件当成任意平台的纯 arena chunk 数。
+
+本轮没有测量前后版本 Compile 的完整堆峰值，不能用 CRT 累计申请字节或新版 PMR 峰值推导总内存峰值的增减。
+
+| 图规模 | 前三次 Compile p50，ms | 后三次 Compile p50，ms | 三次 p50 的中位数，前→后 |
+| --- | --- | --- | --- |
+| 小 | 0.8504 / 1.0720 / 1.2484 | 1.1772 / 0.8022 / 1.1355 | 1.0720 → 1.1355 |
+| 中 | 16.0252 / 14.7650 / 15.3416 | 15.5164 / 14.9097 / 13.2781 | 15.3416 → 14.9097 |
+| 大 | 29.5226 / 33.1323 / 31.7132 | 28.2415 / 30.6284 / 27.7784 | 31.7132 → 28.2415 |
+
+大图三次均变快，中位数约下降 **10.9%**；中图中位数约下降 **2.8%**，但有一次略慢；小图中位数增加 **5.9%**，且前后范围重叠、波动较大，不能报告小图稳定加速或据此精确估计回退幅度。分配数量的确定性改善没有变成所有规模上的确定性耗时改善。
+
+前后编译 Dump、LoweredPlan Dump 的 FNV-1a 均一致。分配 probe 在 Compiler 和 arena 已销毁后继续 Dump/Lower，验证输出没有依赖暂存内存。固定输入分别产生 128/2048/4096 条 compiled access。原始 JSON 及各自 DLL/EXE 保存于 `build/rdg-arena-variants/`，执行脚本为 `build/run_rdg_arena_benchmark.ps1`；产品实现未加入计数器、测试注入参数或默认 allocator 的全局修改。本轮尚未测量 Release，不将 Debug 结果外推到 Release。
+
+### 8.5 编辑器运行对照与结论
+
+同一 Sponza、1920×1080 窗口、关闭 VSync/锁帧，Raster/RT 均为串行录制，使用独立配置覆盖文件。沿用 ProfileDump 的启动/关闭排除规则，逐帧汇总 Compile 和录制 scope 后取 p50。运行期间未并发构建、基准或大型 capture 解析。
+
+| 配置与运行 | 可用采样秒数 | FPS | RenderFrame p50 ms | 每帧 Compile 合计 p50 ms | 每帧录制 scope 合计 p50 ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Raster 前 1 | 30.00 | 37.95 | 24.7620 | 4.1285 | 5.1353 |
+| Raster 后 1 | 20.77 | 35.79 | 26.3138 | 4.1898 | 5.4253 |
+| Raster 前 2 | 30.00 | 40.94 | 22.9859 | 3.8855 | 4.5925 |
+| Raster 后 2 | 30.00 | 39.48 | 23.6412 | 3.6393 | 4.9418 |
+| RT 前 | 30.00 | 24.13 | 16.6206 | 2.8874 | 5.2058 |
+| RT 后 | 30.00 | 23.90 | 17.5018 | 2.7199 | 5.6508 |
+
+Raster 录制 scope 是 `RecordAndMergeFrontendCommands`，RT 是包含 lowering 的 `ExecuteFrontendRecordingPlan`，两列同版本内可比较，跨 renderer 不当作相同口径。第一组各运行 110 秒，但新版 Raster 启动较慢，只留下 20.77 秒可用样本；保留原始结果，不将这组作为完整 30 秒的正式比较。随后 Raster 前后均延长到 140 秒；RT 前 110 秒、后 140 秒，二者均得到完整 30 秒稳定窗口。
+
+Raster 复测的 Compile p50 减少 **0.2462 ms（6.3%）**；RT 减少 **0.1675 ms（5.8%）**。两者 FPS 均没有提高，Raster 复测反而下降约 3.6%，RT 下降约 0.9%。两次旧版 Raster 的 FPS 自身相差约 7.9%，其他未修改 scope 也有明显变动，因此这些样本不足以确定整帧性能变化的归因或稳定幅度。不能把局部编译耗时下降表述为恢复帧率，更不能将上一轮不同时间测得的约 59 FPS 当作本轮对照。
+
+本轮可以确认：编译暂存改为按生命周期统一分配和回收，完整 Compile 的 CRT 分配请求减少，较大固定图和本轮完整窗口中的 Compile 耗时下降；代价是累计申请字节增加，小图没有稳定加速，**尚未证明编辑器整帧收益**。保持该实现的理由是它用少量标准库代码表达真实暂存生命周期，并有可复现的分配及局部耗时收益；它不是当前 RDG 开销问题的完整答案。若继续优化，应继续根据阶段耗时和分配来源选择目标，不能仅为扩大 arena 覆盖率而迁移生命周期不同的输出、回调或提交数据。
+
+六次编辑器运行均正常退出，日志未发现 error、critical、VUID 或 Validation Error。profiling source 数仍为 Raster 2、RT 3。原始配置、二进制哈希、进程信息、capture、`timings.txt` 和 `per-frame-summary.json` 在 `build/rdg-bisect-results/`：`arena-before-raster`、`arena-after-raster`、`arena-before-repeat-raster`、`arena-after-repeat-raster`、`arena-before-ray`、`arena-after-ray`。
+
+结束时所有测试编辑器已关闭，正式 Render DLL 为上述 `DDCE23C2...` 新版。根目录及可执行目录默认配置仍为 Raster、关闭并行录制；本轮没有修改用户配置。

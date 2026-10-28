@@ -2,6 +2,7 @@
 
 #include "rendergraph/RenderGraph.h"
 
+#include <memory_resource>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -116,14 +117,18 @@ private:
     [[nodiscard]] static bool
     RangesOverlap(const RenderGraph::ResourceRange& lhs, const RenderGraph::ResourceRange& rhs);
 
-    RenderGraph&                               graph;
-    std::unordered_map<uint64_t, size_t>        edge_indices{};
-    std::vector<std::vector<NormalizedAccess>> normalized_accesses{};
-    std::vector<std::vector<NormalizedStateDeclaration>> normalized_initial_states{};
-    std::vector<std::vector<NormalizedStateDeclaration>> normalized_final_states{};
-    std::vector<std::vector<AtomicCell>>       resource_cells{};
-    std::vector<uint32_t>                      resource_version_counts{};
-    std::vector<bool>                          resource_ever_written{};
+    RenderGraph& graph;
+    // Compiler-only storage dies after Compile; CompiledPlan owns its allocations separately.
+    // Declared first so all scratch containers are destroyed before their memory resource.
+    std::pmr::monotonic_buffer_resource scratch_memory;
+    std::pmr::unordered_map<uint64_t, size_t> edge_indices{&scratch_memory};
+    // polymorphic_allocator propagates this resource to the nested PMR vectors.
+    std::pmr::vector<std::pmr::vector<NormalizedAccess>> normalized_accesses{&scratch_memory};
+    std::pmr::vector<std::pmr::vector<NormalizedStateDeclaration>> normalized_initial_states{&scratch_memory};
+    std::pmr::vector<std::pmr::vector<NormalizedStateDeclaration>> normalized_final_states{&scratch_memory};
+    std::pmr::vector<std::pmr::vector<AtomicCell>> resource_cells{&scratch_memory};
+    std::pmr::vector<uint32_t> resource_version_counts{&scratch_memory};
+    std::pmr::vector<bool> resource_ever_written{std::pmr::polymorphic_allocator<bool>{&scratch_memory}};
 };
 
 } // namespace Moer::Render

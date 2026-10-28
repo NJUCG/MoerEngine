@@ -976,7 +976,7 @@ void TestParallelRecordingReadsOnePreparedValue(TestSuite& suite) {
             graph.AddRecordPass(
                 name,
                 std::move(parameters),
-                [](RenderGraph::PassBuilder& builder) { builder.SideEffect(); },
+                [](RenderGraph::PassBuilder& builder) { builder.SideEffect().RecordWorkload(8); },
                 [&](CommandList&, const ConsumerParameters& immutable_parameters) {
                     const auto& payload = immutable_parameters.prepared.Get();
                     const void* expected = nullptr;

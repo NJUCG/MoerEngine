@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraphLowering.h"
 #include "renderer/common/UiFrameGraphPass.h"
 #include "rhi/RHIGpuScope.h"
 #include "rhi/RHIImpl.h"
@@ -270,11 +271,11 @@ void TestStableSerialCallbackOrder(TestSuite& suite) {
     );
 }
 
-void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
+void TestMergedRecordingSharesStagingStreamAndPreservesSubmitOrder(
     TestSuite& suite
 ) {
     constexpr std::string_view test_name =
-        "merged recording preserves frontend sources and submit order";
+        "merged serial recording shares a staging stream and preserves submit order";
     RenderGraph                 graph("MergedRecording");
     std::vector<int>            callback_order;
     std::array<Moer::Render::CommandList*, 2> observed_command_lists{};
@@ -290,7 +291,7 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
                 [&callback_order] { callback_order.push_back(1); }
             );
         },
-        RenderGraph::PassRecordPolicy::ParallelAllowed
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.AddRecordPass(
         "Second",
@@ -303,7 +304,7 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
                 [&callback_order] { callback_order.push_back(2); }
             );
         },
-        RenderGraph::PassRecordPolicy::ParallelAllowed
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     const bool compiled = graph.Compile();
@@ -317,11 +318,11 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
     suite.Check(
         observed_command_lists[0] != nullptr &&
             observed_command_lists[1] != nullptr &&
-            observed_command_lists[0] != observed_command_lists[1] &&
+            observed_command_lists[0] == observed_command_lists[1] &&
             observed_command_lists[0] != &command_list &&
             observed_command_lists[1] != &command_list,
         test_name,
-        "record callbacks must use independent frontend CommandLists"
+        "serial callbacks must share a staging CommandList distinct from the destination"
     );
     suite.Check(
         !command_list.IsEmpty(),
@@ -387,23 +388,30 @@ void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite, bool
     if (compiled_ownership) {
         destination.SetResourceStateOwnership(Moer::Render::ERHIResourceStateOwnership::Compiled);
     }
+    int preserved_callbacks = 0;
+    destination.AddCallback([&] { ++preserved_callbacks; });
     const bool executed =
-        compiled && graph.RecordAndMergeFrontendCommands(destination);
+        compiled && graph.RecordAndMergeFrontendCommands(destination, false);
     suite.Check(
         !executed,
         test_name,
         "a failed record callback must fail the whole frontend dispatch group"
     );
     suite.Check(
-        destination.IsEmpty(),
+        !destination.IsEmpty(),
         test_name,
-        "a failed graph must not merge an already-recorded prefix"
+        "a failed graph must not clear pre-existing destination commands"
     );
     suite.Check(
         graph.GetCompileError().find("FailingPass") != std::string::npos,
         test_name,
         "the failing pass name must be preserved in the diagnostic"
     );
+    auto submit = destination.Submit();
+    suite.Check(submit.callbacks.size() == 1, test_name,
+                "a failed shared stream must not append its recorded prefix");
+    for (auto& callback : submit.callbacks) { callback(); }
+    suite.Check(preserved_callbacks == 1, test_name, "destination callback was lost or duplicated");
 }
 
 void TestFrontendCommandListMergeRebasesCachedArguments(TestSuite& suite) {
@@ -716,27 +724,66 @@ void TestCrossGraphHandlesAreRejected(TestSuite& suite) {
     suite.Check(pass_callback_count == 0, pass_test_name, "foreign pass graph must run zero callbacks");
 }
 
-void TestCompileAndExecuteAreOneShot(TestSuite& suite) {
-    constexpr std::string_view test_name = "Compile and Execute one-shot";
+void TestRecompileBeforeOneShotExecution(TestSuite& suite) {
+    constexpr std::string_view test_name = "recompile before one-shot execution";
     RenderGraph                graph("OneShot");
     int                        callback_count = 0;
-    graph.AddRecordPass(
-        "OnlyPass",
-        {},
+    const auto                 token = graph.CreateTransientToken("Ready");
+    const auto producer = graph.AddRecordPass(
+        "Producer",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(token);
+        },
         [&](Moer::Render::CommandList&) {
-        ++callback_count;
-    },
+            ++callback_count;
+        },
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    bool compiled = graph.Compile();
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    const std::string first_dump = graph.Dump();
+    compiled = graph.Compile();
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    suite.Check(
+        graph.Dump() == first_dump && callback_count == 0,
+        test_name,
+        "repeated compilation must rebuild an identical plan without recording callbacks"
+    );
+
+    const auto consumer = graph.AddRecordPass(
+        "Consumer",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(token);
+        },
+        [&](Moer::Render::CommandList&) {
+            ++callback_count;
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    suite.Check(
+        !graph.IsCompiled() && graph.GetCompiledPlan().execution_order.empty(),
+        test_name,
+        "adding a declaration must invalidate and clear the previous compiled plan"
+    );
+    compiled = graph.Compile();
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    suite.Check(
+        graph.GetCompiledPlan().execution_order.size() == 2 &&
+            HasEdgeReason(
+                graph.GetCompiledPlan(), producer, consumer,
+                RenderGraph::EdgeReasonKind::ReadAfterWrite, token.Untyped()
+            ) && Contains(graph.Dump(), "Producer -> Consumer reasons=[RAW:Ready@"),
+        test_name,
+        "recompilation must retain declarations and publish the added dependency"
+    );
     const size_t compiled_pass_count = graph.GetCompiledPlan().execution_order.size();
     suite.Check(RecordGraphForTest(graph), test_name, graph.GetCompileError());
-    suite.Check(callback_count == 1, test_name, "the first Execute must run the callback once");
+    suite.Check(callback_count == 2, test_name, "the first Execute must run each callback once");
     suite.Check(!RecordGraphForTest(graph), test_name, "a second Execute must be rejected");
-    suite.Check(callback_count == 1, test_name, "a rejected second Execute must not repeat the callback");
+    suite.Check(callback_count == 2, test_name, "a rejected second Execute must not repeat callbacks");
     suite.Check(!graph.Compile(), test_name, "Compile after execution must be rejected");
-    suite.Check(callback_count == 1, test_name, "a rejected second Compile must not repeat the callback");
+    suite.Check(callback_count == 2, test_name, "a rejected post-execution Compile must not repeat callbacks");
     suite.Check(
         graph.IsCompiled() && graph.GetCompiledPlan().execution_order.size() == compiled_pass_count,
         test_name,
@@ -1073,6 +1120,31 @@ void TestExportedTransientRequiresWholeResourceInitialization(TestSuite& suite) 
     );
     suite.Check(
         partial_callback_count == 0, test_name, "an invalid transient export must execute zero callbacks"
+    );
+
+    partial_graph.AddRecordPass(
+        "WriteMip1",
+        [partial_texture](RenderGraph::PassBuilder& builder) {
+            builder.Write(partial_texture, RenderGraph::TextureRange::Mips(1, 1));
+        },
+        [&](Moer::Render::CommandList&) {
+            ++partial_callback_count;
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    const bool recovered = partial_graph.Compile();
+    suite.Check(recovered, test_name, partial_graph.GetCompileError());
+    suite.Check(
+        partial_graph.GetCompileError().empty() &&
+            partial_graph.GetCompiledPlan().execution_order.size() == 2,
+        test_name,
+        "repairing the missing producer must replace the failed compile's diagnostic and partial plan"
+    );
+    const bool recovered_recording = RecordGraphForTest(partial_graph);
+    suite.Check(recovered_recording, test_name, partial_graph.GetCompileError());
+    suite.Check(
+        partial_callback_count == 2, test_name,
+        "the recovered graph must record both original and newly added producers once"
     );
 
     RenderGraph complete_graph("CompleteTransientExport");
@@ -4051,6 +4123,16 @@ void TestInvalidRecordingPolicyFails(TestSuite& suite) {
                 "invalid recording policy", "an invalid policy must fail before scheduling");
 }
 
+void TestZeroRecordingWorkloadFails(TestSuite& suite) {
+    RenderGraph graph("ZeroRecordingWorkload");
+    int record_calls = 0;
+    graph.AddRecordPass("Invalid", [](RenderGraph::PassBuilder& pass) {
+        pass.SideEffect().RecordWorkload(0);
+    }, [&](Moer::Render::CommandList&) { ++record_calls; }, RenderGraph::PassRecordPolicy::ParallelAllowed);
+    suite.Check(!graph.Compile() && Contains(graph.GetCompileError(), "positive units") && record_calls == 0,
+        "zero recording workload", "zero workload must fail declaration before scheduling callbacks");
+}
+
 void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
     constexpr std::string_view test_name =
         "frontend record plan and classification";
@@ -4906,6 +4988,13 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
+    // Active lowering requires the final boundary of every imported resource.
+    graph.Export(
+        scene,
+        RenderGraph::TextureAccessType::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
     const auto presentation_ready =
         graph.CreateTransientToken("PresentationReady");
     const auto producer = graph.AddRecordPass(
@@ -5065,11 +5154,34 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         "UI tail dump lost nodes/frontier or regained legacy fake dependencies"
     );
 
+    // Compile's temporary compiler is already destroyed. Both lowering and
+    // recompilation must consume graph-owned output, including nested frontiers.
+    RenderGraphLowering::LoweredPlan lowered;
+    std::string                     lowering_error;
+    const bool lowering_succeeded = RenderGraphLowering::Lower(graph, lowered, lowering_error);
+    suite.Check(lowering_succeeded, test_name, lowering_error);
+    const std::string lowered_dump = lowered.Dump();
+    const bool recompiled = graph.Compile();
+    suite.Check(recompiled, test_name, graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan rebuilt_lowered;
+    const bool rebuilt_lowering_succeeded =
+        RenderGraphLowering::Lower(graph, rebuilt_lowered, lowering_error);
+    suite.Check(rebuilt_lowering_succeeded, test_name, lowering_error);
+    if (lowering_succeeded && rebuilt_lowering_succeeded) {
+        suite.Check(
+            graph.Dump() == dump && lowered.Dump() == lowered_dump &&
+                rebuilt_lowered.Dump() == lowered_dump &&
+                rebuilt_lowered.passes.size() == plan.execution_order.size(),
+            test_name,
+            "compiler teardown and recompilation must preserve independently owned compiled and lowered plans"
+        );
+    }
+
     bool draw_source_kept_serial_control = false;
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        [&](const RenderGraph::ExecutedPassInfo& pass,
+        [&](std::span<const RenderGraph::ExecutedPassInfo> passes,
             RHIRecordingSource& source) {
-            if (pass.handle == ui_passes.draw) {
+            if (std::ranges::any_of(passes, [&](const auto& pass) { return pass.handle == ui_passes.draw; })) {
                 draw_source_kept_serial_control =
                     source.command_list->GetTranslateExecutionClass() ==
                         ERHITranslateExecutionClass::SerialControl &&
@@ -5254,7 +5366,7 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     suite.Check(weakened.Compile(), test_name, weakened.GetCompileError());
     bool weakened_published = false;
     const bool weakened_executed = weakened.ExecuteFrontendRecordingPlan(
-        [](const RenderGraph::ExecutedPassInfo&,
+        [](std::span<const RenderGraph::ExecutedPassInfo>,
            Moer::Render::RHIRecordingSource& source) {
             source.submit_metadata.translate_execution_class.reset();
         },
@@ -5310,6 +5422,177 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     );
 }
 
+void TestSharedRecordingRespectsSourceBoundaries(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name = "shared streams respect queue and SerialControl boundaries";
+    RenderGraph graph("SharedStreamBoundaries", RenderGraph::QueueTopology::DedicatedQueues());
+    std::array<CommandList*, 7> streams{};
+    for (size_t i = 0; i < streams.size(); ++i) {
+        graph.AddRecordPass(std::string("Pass") + std::to_string(i),
+            [i](RenderGraph::PassBuilder& pass) {
+                pass.SideEffect();
+                if (i == 2) { pass.TranslateSerialControl(); }
+                if (i >= 5) {
+                    pass.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+                }
+            },
+            [&, i](CommandList& commands) { streams[i] = &commands; },
+            RenderGraph::PassRecordPolicy::Serial);
+    }
+    Moer::Array<RHIRecordingSource> published;
+    const bool recorded = graph.Compile() && graph.ExecuteFrontendRecordingPlan({}, false,
+        [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (auto& source : sources) { published.emplace_back(std::move(source)); }
+        });
+    suite.Check(recorded, test_name, graph.GetCompileError());
+    suite.Check(published.size() == 4 && streams[0] && streams[0] == streams[1] &&
+        streams[2] != streams[1] && streams[2] != streams[3] && streams[3] == streams[4] &&
+        streams[4] != streams[5] && streams[5] == streams[6], test_name,
+        "queue changes and both sides of SerialControl must split shared streams");
+}
+
+void TestConfiguredRecordingSourceReceivesAllPasses(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name = "configured shared source receives all pass identities";
+    RenderGraph graph("ConfiguredSources");
+    std::array<CommandList*, 3> streams{};
+    for (size_t i = 0; i < streams.size(); ++i) {
+        graph.AddRecordPass(std::string("Pass") + std::to_string(i),
+            [](RenderGraph::PassBuilder& pass) { pass.SideEffect(); },
+            [&, i](CommandList& commands) { streams[i] = &commands; },
+            RenderGraph::PassRecordPolicy::Serial);
+    }
+    std::vector<std::string> configured_names, published_labels;
+    int configure_calls = 0;
+    const bool recorded = graph.Compile() && graph.ExecuteFrontendRecordingPlan(
+        [&](std::span<const RenderGraph::ExecutedPassInfo> passes, RHIRecordingSource& source) {
+            ++configure_calls;
+            for (const auto& pass : passes) { configured_names.emplace_back(pass.name); }
+            const bool contains_target = std::ranges::any_of(passes,
+                [](const auto& pass) { return pass.name == "Pass1"; });
+            source.submit_metadata.debug_label = contains_target ? "ContainsTarget" : "MissingTarget";
+        }, false, [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (const auto& source : sources) {
+                published_labels.push_back(source.submit_metadata.debug_label.value_or("<missing>"));
+            }
+        });
+    suite.Check(recorded, test_name, graph.GetCompileError());
+    suite.Check(configured_names == std::vector<std::string>{"Pass0", "Pass1", "Pass2"} &&
+        configure_calls == 1 && published_labels == std::vector<std::string>{"ContainsTarget"} &&
+        streams[0] && streams[0] == streams[1] && streams[1] == streams[2], test_name,
+        "one metadata callback must see every pass in its shared source, including an interior target");
+}
+
+void TestWeightedParallelRecordingSharesStreams(TestSuite& suite, bool merge) {
+    using namespace std::chrono_literals;
+    using namespace Moer::Render;
+    const std::string test_name = std::string("weighted parallel recording: ") + (merge ? "merged" : "active");
+    RenderGraph graph(test_name);
+    constexpr std::array<uint32_t, 5> workloads{1, 1, 6, 1, 7};
+    std::array<CommandList*, 5> streams{};
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool second_group_finished = false, timed_out = false;
+    std::vector<int> completed_groups, callback_order;
+    for (size_t i = 0; i < workloads.size(); ++i) {
+        graph.AddRecordPass(std::string("Pass") + std::to_string(i),
+            [workload = workloads[i]](RenderGraph::PassBuilder& pass) {
+                pass.SideEffect().RecordWorkload(workload);
+            },
+            [&, i](CommandList& commands) {
+                streams[i] = &commands;
+                if (i == 0) {
+                    std::unique_lock lock(mutex);
+                    timed_out = !cv.wait_for(lock, 2s, [&] { return second_group_finished; });
+                }
+                commands.AddCallback([&, i] { callback_order.push_back(static_cast<int>(i)); });
+                if (i == 2 || i == 4) {
+                    std::lock_guard lock(mutex);
+                    completed_groups.push_back(static_cast<int>(i));
+                    if (i == 4) { second_group_finished = true; cv.notify_all(); }
+                }
+            }, RenderGraph::PassRecordPolicy::ParallelAllowed);
+    }
+    CommandList destination;
+    Moer::Array<RHIRecordingSource> published;
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    Moer::TaskSystem::Init();
+    const bool recorded = merge ? graph.RecordAndMergeFrontendCommands(destination, true) :
+        graph.ExecuteFrontendRecordingPlan({}, true, [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (auto& source : sources) { published.emplace_back(std::move(source)); }
+        });
+    Moer::TaskSystem::ShutDown();
+    suite.Check(recorded, test_name, graph.GetCompileError());
+    suite.Check(streams[0] && streams[0] == streams[1] && streams[1] == streams[2] &&
+        streams[2] != streams[3] && streams[3] == streams[4], test_name,
+        "workloads 1+1+6 and 1+7 must form two exclusive recording streams");
+    suite.Check(!timed_out && completed_groups == std::vector<int>{4, 2}, test_name,
+        "the two weighted jobs must overlap and complete in reverse order");
+    if (!recorded) { return; }
+    Moer::Array<CmdSubmit> submits;
+    if (merge) { submits.emplace_back(destination.Submit()); }
+    else {
+        suite.Check(published.size() == 2, test_name, "one source per weighted stream must be published");
+        for (auto& source : published) { submits.emplace_back(source.command_list->Submit()); }
+    }
+    for (auto& submit : submits) {
+        for (auto& callback : submit.callbacks) { callback(); }
+        submit.callbacks.clear();
+    }
+    suite.Check(callback_order == std::vector<int>{0, 1, 2, 3, 4}, test_name,
+        "stream completion order must not change compiled command/callback order");
+}
+
+void TestSharedStreamGpuProfilingKeepsPassScopes(TestSuite& suite, bool merge) {
+    using namespace Moer::Render;
+    const std::string test_name = std::string("shared stream profiling: ") + (merge ? "merged" : "active");
+    GpuScopeStream scope_stream(RenderGraphGpuScopeConfig());
+    auto frame = scope_stream.BeginFrame(9110 + static_cast<uint64_t>(merge));
+    RenderGraph graph(test_name);
+    for (const auto name : {"First", "Second"}) {
+        graph.AddRecordPass(name, [](RenderGraph::PassBuilder& pass) { pass.SideEffect(); },
+            [](CommandList&) {}, RenderGraph::PassRecordPolicy::Serial);
+    }
+    int bind_calls = 0;
+    const RenderGraph::GpuProfilingOptions profiling{
+        .try_bind_source = [&](const RenderGraph::ExecutedPassInfo& pass, CommandList& commands,
+                               RHIQueueBinding queue, uint64_t order) {
+            ++bind_calls;
+            suite.Check(pass.name == "First" && order == 23 && commands.IsEmpty(), test_name,
+                        "binding must use the stream's first compiled pass before recording");
+            auto recorder = frame.CreateRecorder(queue, order);
+            if (!recorder.Valid()) { return false; }
+            commands.SetGpuScopeRecorder(std::move(recorder));
+            return true;
+        }, .source_order_base = 23};
+    CommandList destination;
+    Moer::Array<RHIRecordingSource> published;
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const bool recorded = merge ? graph.RecordAndMergeFrontendCommands(destination, false, profiling) :
+        graph.ExecuteFrontendRecordingPlan({}, false, [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (auto& source : sources) { published.emplace_back(std::move(source)); }
+        }, {}, profiling);
+    suite.Check(recorded && bind_calls == 1, test_name, graph.GetCompileError());
+    if (!recorded || (!merge && published.size() != 1)) {
+        suite.Check(false, test_name, "two serial passes must produce one profiled source");
+        return;
+    }
+    auto submit = merge ? destination.Submit() : published.front().command_list->Submit();
+    suite.Check(submit.query_tokens.size() == 2, test_name, "one timestamp scope per pass must remain");
+    suite.Check(scope_stream.SealFrame(frame), test_name, "profiling frame failed to seal");
+    for (size_t i = 0; i < submit.query_tokens.size(); ++i) {
+        suite.Check(QueryBackendAccess::ResolveTimestamp(submit.query_tokens[i],
+            RenderGraphTimestamp(100 + i * 20, 110 + i * 20)), test_name, "timestamp resolution failed");
+    }
+    ResolvedGpuScopeFrame resolved;
+    const bool popped = scope_stream.TryPopFrame(resolved);
+    suite.Check(popped && resolved.valid && resolved.queue_roots[0].size() == 2 &&
+        resolved.queue_roots[0][0].name == "First" && resolved.queue_roots[0][1].name == "Second" &&
+        resolved.queue_roots[0][0].source_order == 23 && resolved.queue_roots[0][1].source_order == 23,
+        test_name, "sharing a recorder must preserve both pass roots in compiled order");
+    ReleaseRenderGraphSubmit(submit);
+}
+
 void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
     constexpr std::string_view test_name = "parallel recording without task graph";
     suite.Check(
@@ -5361,7 +5644,7 @@ void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
         "parallel-eligible work must use the stable serial path when TaskGraph is unavailable"
     );
     suite.Check(
-        published_gates.size() == 2 &&
+        published_gates.size() == 1 &&
             std::all_of(published_gates.begin(), published_gates.end(), [](const auto& gate) {
                 return gate.Status() == Moer::Render::ERHIRecordingStatus::Succeeded;
             }),
@@ -5439,7 +5722,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     const auto  first = graph.AddRecordPass(
         "FirstRecord",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(gpu_dependency).SideEffect();
+            builder.Write(gpu_dependency).SideEffect().RecordWorkload(8);
         },
         make_record(1),
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -5447,7 +5730,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     const auto second = graph.AddRecordPass(
         "SecondRecord",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(gpu_dependency).Write(second_token).SideEffect();
+            builder.Read(gpu_dependency).Write(second_token).SideEffect().RecordWorkload(8);
         },
         make_record(2),
         RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -5718,7 +6001,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            [&](const RenderGraph::ExecutedPassInfo&,
+            [&](std::span<const RenderGraph::ExecutedPassInfo>,
                 RHIRecordingSource& source) {
                 source.command_list->SetGpuScopeRecorder(
                     frame.CreateRecorder(
@@ -6057,9 +6340,9 @@ void TestGpuDependenciesDoNotSplitFrontendGroups(TestSuite& suite) {
 
     suite.Check(executed, test_name, graph.GetCompileError());
     suite.Check(
-        published_group_sizes == std::vector<size_t>{3},
+        published_group_sizes == std::vector<size_t>{1},
         test_name,
-        "all adjacent parallel-record callbacks must publish as one frontend group"
+        "small adjacent parallel callbacks must share one source within their frontend group"
     );
     std::ranges::sort(record_order);
     suite.Check(
@@ -6116,7 +6399,7 @@ void TestRecordingPublicationFailureTerminatesGates(TestSuite& suite) {
     suite.Check(ownership_graph.Compile(), test_name, ownership_graph.GetCompileError());
     bool publisher_called = false;
     const bool ownership_executed = ownership_graph.ExecuteFrontendRecordingPlan(
-        [](const RenderGraph::ExecutedPassInfo&, Moer::Render::RHIRecordingSource& source) {
+        [](std::span<const RenderGraph::ExecutedPassInfo>, Moer::Render::RHIRecordingSource& source) {
             source.completion = Moer::Render::RHIRecordingGate::Create();
         },
         false,
@@ -6707,7 +6990,7 @@ void TestNrdDenoiserFamiliesAreExplicit(TestSuite& suite) {
 int main() {
     TestSuite suite;
     TestStableSerialCallbackOrder(suite);
-    TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(suite);
+    TestMergedRecordingSharesStagingStreamAndPreservesSubmitOrder(suite);
     TestMergedRecordingFailureLeavesDestinationUntouched(suite);
     TestMergedRecordingFailureLeavesDestinationUntouched(suite, true);
     TestFrontendCommandListMergeRebasesCachedArguments(suite);
@@ -6723,7 +7006,7 @@ int main() {
     TestHazardsAndDeterministicDump(suite);
     TestTransientReadBeforeProducerFailsWithoutCallbacks(suite);
     TestCrossGraphHandlesAreRejected(suite);
-    TestCompileAndExecuteAreOneShot(suite);
+    TestRecompileBeforeOneShotExecution(suite);
     TestLifetimeAndExportDump(suite);
     TestUntouchedImportedResourceCanBeExported(suite);
     TestTypedTextureSubresourceHazards(suite);
@@ -6767,12 +7050,19 @@ int main() {
     TestUnknownExportMakesStatePlanIncomplete(suite);
     TestMergedAccessStateDeterminesPlanCompleteness(suite);
     TestInvalidRecordingPolicyFails(suite);
+    TestZeroRecordingWorkloadFails(suite);
     TestRecordingBatchPlanAndClassification(suite);
 
     TestSerialControlTranslationIsADeclaredRecordingPolicy(suite);
 
     TestParallelRecordingFallsBackWithoutTaskGraph(suite);
     TestParallelRecordingDispatchAndJoin(suite);
+    TestSharedRecordingRespectsSourceBoundaries(suite);
+    TestConfiguredRecordingSourceReceivesAllPasses(suite);
+    for (bool merge : {false, true}) {
+        TestWeightedParallelRecordingSharesStreams(suite, merge);
+        TestSharedStreamGpuProfilingKeepsPassScopes(suite, merge);
+    }
 
     TestGpuProfilingBindingFailureContracts(suite);
     TestGpuDependenciesDoNotSplitFrontendGroups(suite);

@@ -1,0 +1,384 @@
+#include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraphLowering.h"
+#include "rhi/RHIResource.h"
+
+#include <algorithm>
+#include <charconv>
+#include <chrono>
+#include <cstdint>
+#include <iomanip>
+#include <iostream>
+#include <memory_resource>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
+
+namespace {
+
+using Moer::Render::RenderGraph;
+using Moer::Render::RenderGraphLowering;
+
+struct Options {
+    uint32_t passes = 64;
+    uint32_t resources = 64;
+    uint32_t accesses = 16;
+    uint32_t warmup = 5;
+    uint32_t samples = 80;
+};
+
+Options ParseOptions(int argc, char** argv) {
+    Options options;
+    for (int index = 1; index < argc; index += 2) {
+        const std::string_view option = argv[index];
+        if (index + 1 == argc) {
+            throw std::runtime_error("each option requires an unsigned integer value");
+        }
+        const std::string_view text = argv[index + 1];
+        uint32_t value = 0;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (error != std::errc{} || end != text.data() + text.size()) {
+            throw std::runtime_error("invalid unsigned integer: " + std::string(text));
+        }
+        if (option == "--passes") {
+            options.passes = value;
+        } else if (option == "--resources") {
+            options.resources = value;
+        } else if (option == "--accesses") {
+            options.accesses = value;
+        } else if (option == "--warmup") {
+            options.warmup = value;
+        } else if (option == "--samples") {
+            options.samples = value;
+        } else {
+            throw std::runtime_error("unknown option: " + std::string(option));
+        }
+    }
+    if (options.passes == 0 || options.resources == 0 || options.accesses == 0 ||
+        options.accesses > options.resources || options.samples == 0) {
+        throw std::runtime_error("passes, resources, accesses and samples must be positive; accesses <= resources");
+    }
+    return options;
+}
+
+class BenchmarkTexture final : public Moer::Render::Texture {
+public:
+    BenchmarkTexture() : Texture(MakeInfo()) {}
+
+    Moer::uint GetMipByteSize(Moer::uint) const override { return 4; }
+    void SetName(std::string_view) override {}
+
+private:
+    static Moer::Render::TextureInfo MakeInfo() {
+        Moer::Render::TextureInfo info{};
+        info.usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS;
+        info.extent = {64, 64};
+        info.num_mips = 4;
+        info.array_size = 2;
+        info.aspect_flags = ETextureAspectFlags::COLOR;
+        return info;
+    }
+};
+
+class BenchmarkBuffer final : public Moer::Render::Buffer {
+public:
+    BenchmarkBuffer() : Buffer(Moer::Render::BufferInfo{4096, 1, EBufferUsageFlags::UNORDERED_ACCESS}) {}
+    void SetName(std::string_view) override {}
+};
+
+struct PhysicalResources {
+    std::vector<Moer::Render::TextureRef> textures;
+    std::vector<Moer::Render::BufferRef> buffers;
+
+    explicit PhysicalResources(uint32_t count) {
+        textures.reserve(count);
+        buffers.reserve(count);
+        for (uint32_t index = 0; index < count; ++index) {
+            textures.emplace_back(MoerNew(BenchmarkTexture)());
+            buffers.emplace_back(MoerNew(BenchmarkBuffer)());
+        }
+    }
+};
+
+void BuildGraph(RenderGraph& graph, const Options& options, const PhysicalResources& physical) {
+    std::vector<RenderGraph::TextureHandle> textures(options.resources);
+    std::vector<RenderGraph::BufferHandle> buffers(options.resources);
+    for (uint32_t index = 0; index < options.resources; ++index) {
+        textures[index] = graph.ImportTexture(
+            "Texture" + std::to_string(index), physical.textures[index], {.mip_count = 4, .layer_count = 2});
+        graph.SetInitialState(textures[index], RenderGraph::TextureAccessType::Sampled,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        graph.Export(textures[index], RenderGraph::TextureAccessType::Sampled,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        buffers[index] = graph.ImportBuffer(
+            "Buffer" + std::to_string(index), physical.buffers[index], {.byte_size = 4096});
+        graph.SetInitialState(buffers[index], RenderGraph::BufferAccessType::Storage,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        graph.Export(buffers[index], RenderGraph::BufferAccessType::Storage,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    }
+    for (uint32_t pass = 0; pass < options.passes; ++pass) {
+        graph.AddRecordPass("Pass" + std::to_string(pass), [&](RenderGraph::PassBuilder& builder) {
+            for (uint32_t access = 0; access < options.accesses; ++access) {
+                const auto index = (uint64_t{pass} * 3 + access) % options.resources;
+                if (pass % 4 == 0) {
+                    builder.Write(textures[index], RenderGraph::TextureAccessType::Storage);
+                    builder.Write(buffers[index], RenderGraph::BufferAccessType::Storage);
+                } else {
+                    builder.Read(textures[index], RenderGraph::TextureAccessType::Sampled);
+                    builder.Read(buffers[index], RenderGraph::BufferAccessType::Storage);
+                }
+            }
+        }, [](Moer::Render::CommandList&) {}, RenderGraph::PassRecordPolicy::ParallelAllowed);
+    }
+}
+
+uint64_t Digest(std::string_view text) {
+    uint64_t digest = 14695981039346656037ull;
+    for (unsigned char value : text) {
+        digest = (digest ^ value) * 1099511628211ull;
+    }
+    return digest;
+}
+
+struct MemoryCounts {
+    uint64_t allocations = 0;
+    uint64_t deallocations = 0;
+    uint64_t total_bytes = 0;
+    uint64_t live_bytes = 0;
+    uint64_t peak_bytes = 0;
+};
+
+class CountingResource final : public std::pmr::memory_resource {
+public:
+    MemoryCounts counts;
+
+private:
+    void* do_allocate(size_t bytes, size_t alignment) override {
+        void* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        ++counts.allocations;
+        counts.total_bytes += bytes;
+        counts.live_bytes += bytes;
+        counts.peak_bytes = std::max(counts.peak_bytes, counts.live_bytes);
+        return result;
+    }
+
+    void do_deallocate(void* memory, size_t bytes, size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(memory, bytes, alignment);
+        ++counts.deallocations;
+        counts.live_bytes -= bytes;
+    }
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
+
+class ScopedDefaultResource {
+public:
+    explicit ScopedDefaultResource(std::pmr::memory_resource& resource) :
+        previous(std::pmr::set_default_resource(&resource)) {}
+    ~ScopedDefaultResource() { std::pmr::set_default_resource(previous); }
+    ScopedDefaultResource(const ScopedDefaultResource&) = delete;
+    ScopedDefaultResource& operator=(const ScopedDefaultResource&) = delete;
+
+private:
+    std::pmr::memory_resource* previous;
+};
+
+struct CrtCounts {
+    uint64_t allocation_requests = 0;
+    uint64_t free_requests = 0;
+    uint64_t reallocation_requests = 0;
+    uint64_t allocation_requested_bytes = 0;
+    uint64_t reallocation_requested_bytes = 0;
+};
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// The benchmark creates no TaskGraph or worker threads. The hook must not allocate,
+// print or inspect heap blocks; it counts requests, including CompiledPlan storage.
+class ScopedCrtAllocHook {
+public:
+    explicit ScopedCrtAllocHook(CrtCounts& counts) {
+        active_counts = &counts;
+        previous_hook = _CrtSetAllocHook(CountAllocation);
+    }
+    ~ScopedCrtAllocHook() {
+        _CrtSetAllocHook(previous_hook);
+        active_counts = nullptr;
+        previous_hook = nullptr;
+    }
+    ScopedCrtAllocHook(const ScopedCrtAllocHook&) = delete;
+    ScopedCrtAllocHook& operator=(const ScopedCrtAllocHook&) = delete;
+
+private:
+    static int __cdecl CountAllocation(
+        int type, void* data, size_t size, int block_type, long request,
+        const unsigned char* file, int line
+    ) {
+        if (active_counts && _BLOCK_TYPE(block_type) != _CRT_BLOCK) {
+            switch (type) {
+                case _HOOK_ALLOC:
+                    ++active_counts->allocation_requests;
+                    active_counts->allocation_requested_bytes += size;
+                    break;
+                case _HOOK_FREE:
+                    ++active_counts->free_requests;
+                    break;
+                case _HOOK_REALLOC:
+                    ++active_counts->reallocation_requests;
+                    active_counts->reallocation_requested_bytes += size;
+                    break;
+            }
+        }
+        return previous_hook ? previous_hook(type, data, size, block_type, request, file, line) : 1;
+    }
+
+    static inline CrtCounts* active_counts = nullptr;
+    static inline _CRT_ALLOC_HOOK previous_hook = nullptr;
+};
+#endif
+
+struct TimingResult {
+    double p50_ms;
+    double p95_ms;
+    uint64_t dump_digest;
+};
+
+TimingResult MeasureCompile(const Options& options, const PhysicalResources& physical) {
+    using Clock = std::chrono::steady_clock;
+    std::vector<double> samples;
+    samples.reserve(options.samples);
+    uint64_t digest = 0;
+    const uint64_t iterations = uint64_t{options.warmup} + options.samples;
+    for (uint64_t iteration = 0; iteration < iterations; ++iteration) {
+        // A fresh graph per iteration matches a frame, without timing graph setup.
+        RenderGraph graph("CompilerBenchmark");
+        BuildGraph(graph, options, physical);
+        const auto begin = Clock::now();
+        const bool compiled = graph.Compile();
+        const auto end = Clock::now();
+        // Public Compile returns after the temporary compiler and its arena die.
+        if (!compiled) {
+            throw std::runtime_error(graph.GetCompileError());
+        }
+        if (iteration >= options.warmup) {
+            samples.push_back(std::chrono::duration<double, std::milli>(end - begin).count());
+        }
+        if (iteration + 1 == iterations) {
+            digest = Digest(graph.Dump());
+        }
+    }
+    std::sort(samples.begin(), samples.end());
+    // Same order-statistic convention as the earlier 80-sample benchmark.
+    return {samples[samples.size() / 2], samples[samples.size() * 95 / 100], digest};
+}
+
+struct AllocationResult {
+    MemoryCounts pmr;
+    CrtCounts crt;
+    size_t accesses;
+    size_t edges;
+    size_t barriers;
+    uint64_t lowered_digest;
+};
+
+AllocationResult MeasureAllocations(
+    const Options& options, const PhysicalResources& physical, uint64_t expected_digest
+) {
+    CountingResource memory;
+    CrtCounts crt;
+    RenderGraph graph("CompilerBenchmark");
+    BuildGraph(graph, options, physical);
+    bool compiled = false;
+    {
+        ScopedDefaultResource resource_scope(memory);
+#if defined(_MSC_VER) && defined(_DEBUG)
+        ScopedCrtAllocHook crt_scope(crt);
+#endif
+        compiled = graph.Compile();
+    }
+    if (!compiled) {
+        throw std::runtime_error(graph.GetCompileError());
+    }
+    if (memory.counts.live_bytes != 0 || memory.counts.allocations != memory.counts.deallocations) {
+        throw std::runtime_error("Compile retained storage from the temporary PMR resource");
+    }
+    const auto dump = graph.Dump();
+    if (Digest(dump) != expected_digest) {
+        throw std::runtime_error("allocation instrumentation changed the compiled plan");
+    }
+    RenderGraphLowering::LoweredPlan lowered;
+    std::string error;
+    if (!RenderGraphLowering::Lower(graph, lowered, error)) {
+        throw std::runtime_error(error);
+    }
+    const auto lowered_dump = lowered.Dump();
+    if (lowered_dump.empty() || graph.Dump() != dump) {
+        throw std::runtime_error("compiled output is not stable after scratch destruction and lowering");
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    return {memory.counts, crt, plan.accesses.size(), plan.edges.size(), plan.barriers.size(), Digest(lowered_dump)};
+}
+
+void PrintResult(const Options& options, const TimingResult& timing, const AllocationResult& memory) {
+#if defined(_MSC_VER) && defined(_DEBUG)
+    constexpr bool crt_available = true;
+#else
+    constexpr bool crt_available = false;
+#endif
+    std::cout << std::setprecision(9) << std::boolalpha
+        << "{\"passes\":" << options.passes
+        << ",\"textures\":" << options.resources << ",\"buffers\":" << options.resources
+        << ",\"accesses_per_kind_per_pass\":" << options.accesses
+        << ",\"warmup\":" << options.warmup << ",\"samples\":" << options.samples
+        << ",\"compile_p50_ms\":" << timing.p50_ms << ",\"compile_p95_ms\":" << timing.p95_ms
+        << ",\"dump_fnv1a\":\"" << timing.dump_digest << "\",\"lowered_dump_fnv1a\":\"" << memory.lowered_digest
+        << "\",\"plan_accesses\":" << memory.accesses << ",\"plan_edges\":" << memory.edges
+        << ",\"plan_barriers\":" << memory.barriers
+        << ",\"pmr_default_resource\":{\"allocations\":" << memory.pmr.allocations
+        << ",\"deallocations\":" << memory.pmr.deallocations << ",\"total_bytes\":" << memory.pmr.total_bytes
+        << ",\"peak_live_bytes\":" << memory.pmr.peak_bytes << ",\"live_bytes_after_compile\":" << memory.pmr.live_bytes
+        << "},\"crt\":{\"available\":" << crt_available
+        << ",\"allocation_requests\":" << memory.crt.allocation_requests
+        << ",\"free_requests\":" << memory.crt.free_requests
+        << ",\"reallocation_requests\":" << memory.crt.reallocation_requests
+        << ",\"allocation_requested_bytes\":" << memory.crt.allocation_requested_bytes
+        << ",\"reallocation_requested_bytes\":" << memory.crt.reallocation_requested_bytes << "}}\n";
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+#if defined(_MSC_VER) && defined(_DEBUG)
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#endif
+    if (argc == 2 && std::string_view(argv[1]) == "--help") {
+        std::cout << "Usage: TestRenderGraphCompilerBenchmark [--passes 64] [--resources 64] "
+                     "[--accesses 16] [--warmup 5] [--samples 80]\n"
+                     "Outputs JSON. Rebuilds the graph for every Compile; excludes build, Dump, Lower and graph destruction.\n"
+                     "Timing includes compiler/arena destruction and has no allocation hooks.\n"
+                     "A separate Compile counts PMR default-resource requests (including any library proxies),\n"
+                     "and MSVC Debug CRT requests excluding CRT internal blocks. CRT counts include CompiledPlan,\n"
+                     "exclude allocators bypassing the CRT, and do not measure live/peak heap bytes.\n";
+        return 0;
+    }
+    try {
+        const auto options = ParseOptions(argc, argv);
+        const PhysicalResources physical(options.resources);
+        const auto timing = MeasureCompile(options, physical);
+        const auto memory = MeasureAllocations(options, physical, timing.dump_digest);
+        PrintResult(options, timing, memory);
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "TestRenderGraphCompilerBenchmark: " << error.what() << '\n';
+        return 1;
+    }
+}
