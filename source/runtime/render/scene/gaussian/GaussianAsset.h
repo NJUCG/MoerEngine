@@ -34,6 +34,8 @@ struct GaussianInstanceSettings {
     float3 color_multiplier   = float3(1.f);
     float  opacity_multiplier = 1.f;
     bool   is_enabled         = true;
+    bool   cast_shadows       = false;
+    bool   receive_shadows    = false;
 };
 
 struct GaussianInstanceSnapshot {

@@ -12,9 +12,11 @@ struct GGaussianCamera {
 #ifdef __cplusplus
     float4x4 world_to_view;
     float4x4 view_to_clip;
+    float4x4 clip_to_view;
 #else
     row_major float4x4 world_to_view;
     row_major float4x4 view_to_clip;
+    row_major float4x4 clip_to_view;
 #endif
     float4 position;
     uint4  viewport; // width, height, tile columns, tile rows
@@ -25,7 +27,7 @@ struct GGaussianCamera {
 struct GProjectedGaussian {
     float4 center_depth;  // pixel center xy, positive view depth, conservative log-alpha cutoff
     float4 conic_opacity; // inverse covariance xx/xy/yy, activated opacity
-    float4 color;
+    float4 color;         // display RGB and Mesh shadow visibility (1 when disabled)
     uint4  tile_rect; // inclusive min xy, exclusive max xy
 };
 
@@ -35,8 +37,17 @@ struct GaussianDispatchParams {
     uint4 job;  // kernel-specific indices/counts; never CPU pointers
 };
 
+// The accumulated layer remains in the source display RGB domain until compositing.
+struct GaussianCompositeParams {
+    uint4 viewport; // width, height, tile columns, debug view
+    float brightness_gain;
+    uint  is_visibility_debug;
+    uint2 reserved;
+};
+
 #ifdef __cplusplus
-static_assert(sizeof(GGaussianCamera) == 192);
+static_assert(sizeof(GaussianCompositeParams) == 32);
+static_assert(sizeof(GGaussianCamera) == 256);
 static_assert(sizeof(GProjectedGaussian) == 64);
 static_assert(sizeof(GaussianDispatchParams) == 32);
 #endif

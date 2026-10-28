@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // 对几何缓冲和方向光阴影遮罩应用延迟 PBR 光照。
 #include "shader/ShaderPipeline.h"
@@ -33,6 +33,8 @@ public:
         RenderGraph::TokenHandle   probe_volume{};
         RenderGraph::TextureHandle lighting_output{};
         RenderGraph::BufferHandle  scene_lights{};
+        Array<TextureRef>          gaussian_shadow_textures{};
+        BufferRef                  gaussian_shadow_data{};
     };
 
     /**

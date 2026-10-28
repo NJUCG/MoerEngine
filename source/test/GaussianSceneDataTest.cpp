@@ -68,7 +68,7 @@ void CheckMoca(Scene& scene, const std::filesystem::path& directory) {
     Check(SceneCache::BuildSourceIdentity(scene.GetSourceFilePath(), identity), "cache source identity");
     const auto path = SceneCache::GetCachePath(identity, ESceneCacheKind::State);
     ecs::LogicalScene restored;
-    Check(SceneCacheSerializer::LoadLogicalScene(path, restored), "v6 cache loads");
+    Check(SceneCacheSerializer::LoadLogicalScene(path, restored), "v7 cache loads");
     const auto instances = restored.r().view<ecs::CGaussianInstance>();
     Check(instances.size() == 2, "cache retains all Gaussian instances");
     GaussianAssetRef shared_asset;
@@ -88,11 +88,14 @@ void CheckMoca(Scene& scene, const std::filesystem::path& directory) {
     reopened.PrepareUpdateBatch(false, false);
     Check(reopened.WasLoadedFromStateCache(), "PLY reload uses state cache instead of parser");
     Check(Near(reopened.GetGaussianViewSettings().background.x, .15f) &&
-        Near(reopened.GetGaussianViewSettings().exposure_ev, 1.25f), "cache restores view settings");
+        Near(reopened.GetGaussianViewSettings().exposure_ev, 1.25f) &&
+        Near(reopened.GetGaussianViewSettings().shadow_alpha_cutoff, .3f) &&
+        Near(reopened.GetGaussianViewSettings().shadow_receive_strength, .75f) &&
+        Near(reopened.GetGaussianViewSettings().shadow_world_bias, .01f), "cache restores view settings");
     const auto* hidden = reopened.GetGaussianSnapshot().get();
     Check(hidden && hidden->instances.size() == 2 &&
         std::count_if(hidden->instances.begin(), hidden->instances.end(), [](const auto& instance) {
-            return !instance.is_visible_in_game && Near(instance.settings.opacity_multiplier, .25f) &&
+            return !instance.is_visible_in_game && instance.settings.cast_shadows && instance.settings.receive_shadows && Near(instance.settings.opacity_multiplier, .25f) &&
                    Near(instance.world_transform.GetColumn(3).x, 4);
         }) == 1, "cache restores visibility, opacity and transform");
 
@@ -103,10 +106,13 @@ void CheckMoca(Scene& scene, const std::filesystem::path& directory) {
     const auto mixed_path = directory / "mixed.moca";
     Check(SceneCacheSerializer::SaveLogicalScene(mixed_path, {}, restored), "mixed registry saves");
     ecs::LogicalScene mixed;
-    Check(SceneCacheSerializer::LoadLogicalScene(mixed_path, mixed) &&
-        mixed.r().view<ecs::CGaussianInstance>().size() == 2 && mixed.r().view<ecs::CMesh>().size() == 1 &&
-        mixed.r().ctx().get<ecs::CtxMegaBuffers>().position.size() == 1,
-        "v6 keeps Mesh resources and Gaussian assets together");
+    Check(
+        SceneCacheSerializer::LoadLogicalScene(mixed_path, mixed) &&
+            mixed.r().view<ecs::CGaussianInstance>().size() == 2 &&
+            mixed.r().view<ecs::CMesh>().size() == 1 &&
+            mixed.r().ctx().get<ecs::CtxMegaBuffers>().position.size() == 1,
+        "v7 keeps Mesh resources and Gaussian assets together"
+    );
 
     // Failure must not replace the caller's existing registry with a partial scene.
     const auto corrupt_path = directory / "truncated.moca";
@@ -118,11 +124,11 @@ void CheckMoca(Scene& scene, const std::filesystem::path& directory) {
     {
         std::fstream corrupt(corrupt_path, std::ios::binary | std::ios::in | std::ios::out);
         corrupt.seekp(-4, std::ios::end);
-        const uint32 invalid_capacity = 0;
+        const uint32 invalid_capacity = 0x7fc00000u; // nonfinite shadow world bias
         corrupt.write(reinterpret_cast<const char*>(&invalid_capacity), sizeof(invalid_capacity));
     }
     Check(!SceneCacheSerializer::LoadLogicalScene(corrupt_path, mixed) &&
-        mixed.r().view<ecs::CGaussianInstance>().size() == 2, "invalid v6 tail preserves active registry");
+        mixed.r().view<ecs::CGaussianInstance>().size() == 2, "invalid v7 tail preserves active registry");
 
     // An independent, fixed v5 layout: root node plus an empty Mesh resource.
     // This deliberately does not use the production scene serializer to create the legacy fixture.
@@ -151,6 +157,29 @@ void CheckMoca(Scene& scene, const std::filesystem::path& directory) {
     Check(SceneCacheSerializer::LoadLogicalScene(legacy_path, legacy) &&
         legacy.r().view<ecs::CNode>().size() == 1 && legacy.r().view<ecs::CMesh>().size() == 1 &&
         legacy.r().view<ecs::CGaussianInstance>().empty(), "pre-extension v5 Mesh cache remains readable");
+    const auto legacy_gaussian_path = directory / "legacy-v6.moca";
+    std::filesystem::copy_file(legacy_path, legacy_gaussian_path);
+    {
+        std::fstream file(legacy_gaussian_path, std::ios::binary | std::ios::in | std::ios::out);
+        SceneCacheHeader header;
+        file.read(reinterpret_cast<char*>(&header), sizeof(header));
+        file.seekp(sizeof(header)); const uint32 v6 = 6;
+        file.write(reinterpret_cast<const char*>(&v6), sizeof(v6));
+        file.seekp(0,std::ios::end);
+        const uint64 empty = 0;
+        for (int i=0;i<3;++i) file.write(reinterpret_cast<const char*>(&empty),sizeof(empty));
+        const float view_values[4] = {.1f,.2f,.3f,0.f};
+        file.write(reinterpret_cast<const char*>(view_values),sizeof(view_values));
+        const uint32 view_modes[3] = {0,0,4194304};
+        file.write(reinterpret_cast<const char*>(view_modes),sizeof(view_modes));
+        header.payload_size += 52;
+        file.seekp(0); file.write(reinterpret_cast<const char*>(&header),sizeof(header));
+    }
+    ecs::LogicalScene legacy_gaussian;
+    Check(SceneCacheSerializer::LoadLogicalScene(legacy_gaussian_path, legacy_gaussian), "independent legacy v6 payload loads");
+    const auto* legacy_view = legacy_gaussian.r().ctx().find<ecs::CtxGaussianViewSettings>();
+    Check(legacy_view && Near(legacy_view->value.shadow_alpha_cutoff,.4f) &&
+        Near(legacy_view->value.shadow_receive_strength,.5f), "v6 uses shadow defaults");
     const auto mesh_path = directory / "mesh-v5.moca";
     Check(SceneCacheSerializer::SaveLogicalScene(mesh_path, {}, legacy), "Mesh-only cache still saves");
     SceneCacheBinaryReader mesh_reader(mesh_path);
@@ -287,9 +316,14 @@ int main(int argc, char** argv) {
         settings.opacity_multiplier = std::numeric_limits<float>::infinity();
         Check(!scene.SetGaussianInstanceSettings(entity, settings), "invalid instance edit rejected");
         settings.opacity_multiplier = 0.25f;
+        settings.cast_shadows = true;
+        settings.receive_shadows = true;
         Check(scene.SetGaussianInstanceSettings(entity, settings), "valid appearance edit");
         Check(scene.SetNodeVisibleInGame(entity, false), "Gaussian visibility edit");
         auto hidden = scene.PrepareUpdateBatch(false, false);
+        const auto shadow_upload = Render::BuildGaussianGpuUpload(*scene.GetGaussianSnapshot());
+        Check(std::count_if(shadow_upload.instances.begin(),shadow_upload.instances.end(),[](const auto& value) { return (value.range.w & 12u)==12u; })==1,
+            "shadow flags reach the GPU instance without changing visibility bits");
         Check(
             hidden.update_gpu_update && !hidden.update_gpu_update->HasMeshWork(),
             "Gaussian visibility does not rebuild Mesh"
@@ -313,6 +347,9 @@ int main(int argc, char** argv) {
         view_settings.background = float3(.15f,.2f,.25f);
         view_settings.display_mode = EGaussianDisplayMode::Engine;
         view_settings.exposure_ev = 1.25f;
+        view_settings.shadow_alpha_cutoff = .3f;
+        view_settings.shadow_receive_strength = .75f;
+        view_settings.shadow_world_bias = .01f;
         Check(scene.SetGaussianViewSettings(view_settings), "Gaussian display settings accepted");
         auto invalid_view_settings = view_settings;
         invalid_view_settings.tile_pair_capacity = 0;
@@ -320,6 +357,32 @@ int main(int argc, char** argv) {
         invalid_view_settings = view_settings; invalid_view_settings.background.x = std::numeric_limits<float>::infinity();
         Check(!scene.SetGaussianViewSettings(invalid_view_settings), "nonfinite background rejected");
         CheckMoca(scene, directory);
+        const auto first_point =
+            scene.CreatePointLight({.position = float3(-1, -2, -3), .name = "first shadow light"});
+        const auto selected_point = scene.CreatePointLight(
+            {.position = float3(1, 2, 3), .name = "selected shadow light", .should_set_main_light = true}
+        );
+        auto selected_light_batch = scene.PrepareUpdateBatch(false, false);
+        Check(
+            selected_light_batch.update_gpu_update &&
+                selected_light_batch.main_point_light_index <
+                    selected_light_batch.update_gpu_update->lights.size(),
+            "selected point light exposes its GPU slot"
+        );
+        if (selected_light_batch.update_gpu_update &&
+            selected_light_batch.main_point_light_index <
+                selected_light_batch.update_gpu_update->lights.size()) {
+            const auto light =
+                selected_light_batch.update_gpu_update->lights[selected_light_batch.main_point_light_index];
+            Check(
+                Near(light.position.x, 1) && Near(light.position.y, 2) && Near(light.position.z, 3),
+                "shadow GPU slot belongs to tagged main light"
+            );
+        }
+        scene.DestroyPointLight(selected_point);
+        scene.DestroyPointLight(first_point);
+        scene.PrepareUpdateBatch(false, false);
+
         const auto document_path = directory / "scene.moergs";
         // Authored legacy fixture, independent of the removed .moergs writer.
         nlohmann::json document = {

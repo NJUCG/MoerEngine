@@ -819,6 +819,15 @@ void ShadowDepthPass::PrepareCSM(
     StaticArray<float, CSM_MAX_CASCADES> shadow_cache_move_in_texels{};
     StaticArray<float, CSM_MAX_CASCADES> shadow_cache_thresholds_in_texels{};
 
+    Array<Box3D> combined_caster_bounds;
+    const auto*  caster_bounds = &m_shadow_caster_bounds;
+    if (!m_gaussian_bounds.empty()) {
+        combined_caster_bounds = m_shadow_caster_bounds;
+        combined_caster_bounds.insert(
+            combined_caster_bounds.end(), m_gaussian_bounds.begin(), m_gaussian_bounds.end()
+        );
+        caster_bounds = &combined_caster_bounds;
+    }
     for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
 
         // World to Shadow Clip Matrix
@@ -832,8 +841,8 @@ void ShadowDepthPass::PrepareCSM(
             ui_config,
             frustum_near_ratio,
             frustum_far_ratio,
-            m_shadow_caster_bounds,
-            m_shadow_caster_bounds_valid
+            *caster_bounds,
+            m_shadow_caster_bounds_valid || !m_gaussian_bounds.empty()
         );
         auto&      shadow_cache_entry = context.csm_data.shadow_cache_entries[cascade_index];
         const bool shadow_cache_eligible =
@@ -925,6 +934,131 @@ void ShadowDepthPass::PrepareCSM(
     // );
 }
 
+void ShadowDepthPass::SetGaussians(
+    RasterContext&          context,
+    const GaussianGpuScene* scene,
+    GaussianViewSettings    settings,
+    bool                    editor_view,
+    const RasterConfig&     config
+) {
+    const bool view_changed = m_gaussian_editor_view != editor_view;
+    m_gaussian_scene = nullptr;
+    m_gaussian_settings = settings;
+    m_gaussian_point_mode   = config.shadow_map_mode == EShadowMapMode::POINT_CUBE;
+    m_gaussian_editor_view = editor_view;
+    Array<Box3D> bounds;
+    bool active = false;
+    if (scene) for (uint i = 0; i < scene->GetInstances().size(); ++i) {
+        const auto& instance = scene->GetInstances()[i];
+        if (!(instance.range.w & (editor_view ? 2u : 1u))) continue;
+        active |= (instance.range.w & 12u) != 0;
+        if ((instance.range.w & 4u) && i < scene->GetBounds().size()) bounds.push_back(scene->GetBounds()[i]);
+    }
+    const auto& updates = context.GetSceneUpdates();
+    const bool  valid_light =
+        (config.shadow_map_mode == EShadowMapMode::POINT_CUBE && updates.main_point_light.has_value()) ||
+        ((config.shadow_map_mode == EShadowMapMode::CSM ||
+          config.shadow_map_mode == EShadowMapMode::CSM_AUTO) &&
+         updates.main_directional_light.has_value());
+    if (!valid_light) {
+        active = false;
+        bounds.clear();
+    }
+    const uint64 revision = active ? scene->GetRevision() : 0;
+    if (revision != m_gaussian_revision || bounds.size() != m_gaussian_bounds.size() ||
+        (view_changed && (active || m_gaussian_revision != 0))) {
+        invalidate_shadow_cache_entries(context.csm_data);
+        m_gaussian_revision = revision;
+    }
+    m_gaussian_bounds = std::move(bounds);
+    context.lighting_data.gaussian_shadow = uint4(0);
+    if (!active && m_gaussian_pass)
+        m_gaussian_pass->ResetFrame();
+    if (active) {
+        if (!m_gaussian_pass) m_gaussian_pass = std::make_unique<GaussianShadowPass>(context);
+        m_gaussian_scene = scene;
+        enabled_cascade_layers = config.shadow_csm_num_of_cascades;
+        if (config.shadow_map_mode == EShadowMapMode::POINT_CUBE)
+            PreparePointShadowResources(context, config);
+        else
+            PrepareCSMResources(context, config);
+        m_gaussian_pass->EnsureResources(context, config, !m_gaussian_bounds.empty());
+    }
+}
+Array<TextureRef> ShadowDepthPass::GetGaussianShadowTextures(RasterContext& context) const {
+    Array<TextureRef> result;
+    if (!m_gaussian_scene || !m_gaussian_pass)
+        return result;
+    for (const auto& map : m_gaussian_pass->GetMaps())
+        if (map)
+            result.push_back(map);
+    if (m_gaussian_point_mode) {
+        if (auto map = context.point_shadow_data.shadow_cubes[0].tex)
+            result.push_back(map);
+    } else
+        for (const auto& map : context.csm_data.shadow_map_textures)
+            if (map.tex)
+                result.push_back(TextureRef(map.tex->GetView().GetTexture()));
+    return result;
+}
+void ShadowDepthPass::DeclareGaussianResources(
+    RenderGraph&              graph,
+    RenderGraph::PassBuilder& builder,
+    RasterContext&            context,
+    bool                      write
+) {
+    if (!m_gaussian_scene || !m_gaussian_pass)
+        return;
+    const std::string prefix = write ? "shadow_write_" : "shadow_debug_read_";
+    auto              data   = m_gaussian_pass->GetDataBuffer();
+    auto data_handle         = graph.ImportBuffer(prefix + "views", data, {.byte_size = data->GetByteSize()});
+    if (write)
+        builder.Write(data_handle);
+    else
+        builder.Read(data_handle);
+    uint input_index = 0;
+    if (write)
+        for (const auto& input :
+             {m_gaussian_scene->GetGaussianBuffer(), m_gaussian_scene->GetInstanceBuffer()})
+            builder.Read(graph.ImportBuffer(
+                prefix + "input_" + std::to_string(input_index++), input, {.byte_size = input->GetByteSize()}
+            ));
+    uint map_index = 0;
+    for (const auto& texture : m_gaussian_pass->GetMaps())
+        if (texture) {
+            auto handle = graph.ImportTexture(
+                prefix + "gaussian_map_" + std::to_string(map_index++),
+                texture,
+                DescribeShadowTexture(texture)
+            );
+            if (write)
+                builder.Write(handle);
+            else
+                builder.Read(handle);
+        }
+    if (m_gaussian_pass && m_gaussian_point_mode) {
+        if (auto texture = context.point_shadow_data.shadow_cubes[0].tex) {
+            auto handle = graph.ImportTexture(prefix + "point", texture, DescribeShadowTexture(texture));
+            if (write)
+                builder.Write(handle);
+            else
+                builder.Read(handle);
+        }
+    } else
+        for (const auto& map : context.csm_data.shadow_map_textures)
+            if (map.tex) {
+                auto handle = graph.ImportTexture(
+                    prefix + "cascade_" + std::to_string(map_index++),
+                    map.tex,
+                    DescribeShadowTexture(TextureRef(map.tex->GetView().GetTexture()))
+                );
+                if (write)
+                    builder.Write(handle);
+                else
+                    builder.Read(handle);
+            }
+}
+
 ShadowDepthPass::RecordParameters ShadowDepthPass::Prepare(
     RasterContext& context,
     const RasterConfig& ui_config,
@@ -964,6 +1098,7 @@ ShadowDepthPass::RecordParameters ShadowDepthPass::Prepare(
             LOG_ERROR("Shadow map mode {} not supported", static_cast<int>(ui_config.shadow_map_mode));
             break;
     }
+    if (m_gaussian_scene) parameters.gaussian = m_gaussian_pass->Prepare(context, ui_config, camera, *m_gaussian_scene, m_gaussian_settings, m_gaussian_editor_view);
     return parameters;
 }
 
@@ -1121,6 +1256,7 @@ void ShadowDepthPass::Record(CommandList& cmd_list, const RecordParameters& para
             RecordShadowDraw(cmd_list, parameters, batch);
         }
     }
+    if (parameters.gaussian) m_gaussian_pass->Record(cmd_list, *parameters.gaussian);
 }
 
 void ShadowDepthPass::RecordPointShadowMultiview(

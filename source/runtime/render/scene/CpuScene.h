@@ -13,6 +13,7 @@
 #include "RenderAPI.h"
 #include "rhi/RHICommandDrawData.h" // 为了准备IndirectDrawCommand
 #include <entt/entt.hpp>
+#include <optional>
 
 namespace Moer {
 namespace Render {
@@ -88,6 +89,7 @@ public:
      * @return Light 数量
      */
     uint GetLightCount() const;
+    std::optional<uint> GetLightIndex(entt::entity entity) const;
 
     Render::GpuSceneUpdate BuildGpuSceneUpdate(
         bool full_rebuild,

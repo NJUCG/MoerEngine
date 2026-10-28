@@ -1,8 +1,10 @@
 #include "GaussianSplatPass.h"
+#include "GaussianShadowPass.h"
 #include "PixelFormat.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <stdexcept>
 
@@ -23,6 +25,17 @@ public:
     DEFINE_SHADER_BUFFER(tile_counts);
     DEFINE_SHADER_BUFFER(status);
     DEFINE_SHADER_ARGS(param, camera, gaussians, instances, projected, tile_counts, status);
+};
+class GaussianReceiveShadowPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(GaussianReceiveShadowPipeline);
+    DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
+    DEFINE_SHADER_BUFFER(projected);
+    DEFINE_SHADER_BUFFER(gaussians);
+    DEFINE_SHADER_BUFFER(instances);
+    DEFINE_SHADER_BUFFER(shadow_views);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(param, projected, gaussians, instances, shadow_views, bdls);
 };
 class GaussianScanBlocksPipeline : public ComputePipeline {
 public:
@@ -107,7 +120,9 @@ public:
     DEFINE_SHADER_BUFFER(status);
     DEFINE_SHADER_TEX(color_output);
     DEFINE_SHADER_TEX(transmittance_output);
-    DEFINE_SHADER_TEX(display_output);
+    DEFINE_SHADER_TEX(opaque_depth);
+    DEFINE_SHADER_TEX(reference_output);
+
     DEFINE_SHADER_ARGS(
         param,
         camera,
@@ -117,13 +132,27 @@ public:
         status,
         color_output,
         transmittance_output,
-        display_output
+        opaque_depth,
+        reference_output
     );
 };
 } // namespace
+class GaussianDisplayPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(GaussianDisplayPipeline);
+    DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
+    DEFINE_SHADER_TEX(color_input);
+    DEFINE_SHADER_TEX(transmittance_input);
+    DEFINE_SHADER_BUFFER(ranges);
+    DEFINE_SHADER_BUFFER(status);
+    DEFINE_SHADER_TEX(display_output);
+    DEFINE_SHADER_BUFFER(camera);
+    DEFINE_SHADER_ARGS(param, color_input, transmittance_input, ranges, status, display_output, camera);
+};
 struct GaussianSplatPass::Impl {
     uint                           m_pair_capacity;
     GaussianProjectPipeline        m_project;
+    GaussianReceiveShadowPipeline  m_receive_shadow;
     GaussianScanBlocksPipeline     m_scanblocks;
     GaussianScanAddPipeline        m_scanadd;
     GaussianFinalizePipeline       m_finalize;
@@ -133,6 +162,8 @@ struct GaussianSplatPass::Impl {
     GaussianRadixScatterPipeline   m_radixscatter;
     GaussianTileRangesPipeline     m_tileranges;
     GaussianSplatPipeline          m_splat;
+    GaussianDisplayPipeline        m_display_pipeline;
+    BufferRef                      m_camera;
     uint2                          m_resolution{};
     uint                           m_work_capacity = 0;
     BufferRef m_projected, m_counts, m_status, m_pairs[2], m_histogram, m_offsets, m_ranges;
@@ -142,14 +173,33 @@ struct GaussianSplatPass::Impl {
         BufferRef sums;
     };
     std::vector<ScanLevel> m_scan;
-    TextureRef             m_color, m_transmittance, m_display;
+    TextureRef             m_color, m_transmittance, m_display, m_reference, m_empty_depth;
+    bool                   m_is_engine_view = false;
     ReadbackFuture         m_status_readback;
     bool                   m_has_reported_overflow = false;
     GaussianRasterStatus   m_telemetry{};
     uint64                 m_readback_revision = 0;
     uint2                  m_readback_resolution{};
     QueryFuture            m_timing_future;
+    QueryFuture            m_stage_timing[3];
+    QueryFuture            m_receive_timing;
     void                   Poll() {
+        if (m_receive_timing.Valid() && m_receive_timing.Status() != QueryStatus::Pending) {
+            auto result = m_receive_timing.Get();
+            if (auto* timing = std::get_if<TimestampQueryResult>(&result.payload))
+                m_telemetry.shadow_receive_gpu_ms = timing->duration_ns / 1000000.;
+            m_receive_timing = {};
+        }
+        double* stages[] = {
+            &m_telemetry.projection_gpu_ms, &m_telemetry.sorting_gpu_ms, &m_telemetry.accumulation_gpu_ms
+        };
+        for (uint i = 0; i < 3; ++i)
+            if (m_stage_timing[i].Valid() && m_stage_timing[i].Status() != QueryStatus::Pending) {
+                const auto result = m_stage_timing[i].Get();
+                if (const auto* timing = std::get_if<TimestampQueryResult>(&result.payload))
+                    *stages[i] = timing->duration_ns / 1000000.0;
+                m_stage_timing[i] = {};
+            }
         if (m_status_readback.Valid() && m_status_readback.Status() != ReadbackStatus::Pending) {
             const auto result = m_status_readback.Get();
             const auto values = result.CopyAs<uint>();
@@ -194,6 +244,7 @@ struct GaussianSplatPass::Impl {
             manager.Compute<GaussianRadixScatterPipeline>("features/gaussian/RadixScatter.comp.hlsl");
         m_tileranges = manager.Compute<GaussianTileRangesPipeline>("features/gaussian/TileRanges.comp.hlsl");
         m_splat      = manager.Compute<GaussianSplatPipeline>("features/gaussian/Splat.comp.hlsl");
+        m_display_pipeline = manager.Compute<GaussianDisplayPipeline>("features/gaussian/Display.comp.hlsl");
     }
     template<class T>
     BufferRef Buffer(const char* name, uint count) {
@@ -205,6 +256,15 @@ struct GaussianSplatPass::Impl {
         );
     }
     void Resize(uint2 resolution, uint work_count) {
+        if (!m_empty_depth) {
+            m_empty_depth = RenderDevice::Get().CreateTexture(
+                "Gaussian empty depth",
+                Extent3D(1, 1, 1),
+                PF_R32_SFLOAT,
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST |
+                    ETextureUsageFlags::UNORDERED_ACCESS
+            );
+        }
         if (!m_status) {
             m_status = Buffer<uint4>("Gaussian status", 1);
             for (auto& pairs : m_pairs)
@@ -221,9 +281,11 @@ struct GaussianSplatPass::Impl {
                 "Gaussian premultiplied RGB and alpha", extent, PF_R32G32B32A32_SFLOAT, usage
             );
             m_transmittance = device.CreateTexture("Gaussian transmittance", extent, PF_R32_SFLOAT, usage);
-            m_display =
-                device.CreateTexture("Gaussian display linear RGB", extent, PF_R32G32B32A32_SFLOAT, usage);
-            m_ranges = Buffer<uint>(
+            m_display       = device.CreateTexture(
+                "Gaussian display linear RGB", Extent3D(1, 1, 1), PF_R32G32B32A32_SFLOAT, usage
+            );
+            m_reference = nullptr;
+            m_ranges    = Buffer<uint>(
                 "Gaussian tile intervals", ((resolution.x + 15) / 16) * ((resolution.y + 15) / 16) * 2
             );
             m_resolution = resolution;
@@ -276,14 +338,19 @@ void GaussianSplatPass::SetPairCapacity(uint capacity) {
 BufferView GaussianSplatPass::GetStatusBuffer() const {
     return m_impl->m_status->GetView();
 }
-TextureRef GaussianSplatPass::Record(
+TextureRef GaussianSplatPass::RecordAccumulation(
     CommandList&            commands,
     const GaussianGpuScene* scene,
     const Camera&           camera,
     uint2                   resolution,
     bool                    is_editor_view,
-    bool                    is_unsupported_mixed,
-    GaussianViewSettings    view_settings
+    bool                    is_invalid_scene,
+    GaussianViewSettings    view_settings,
+    TextureRef              opaque_depth,
+    bool                    is_engine_view,
+    bool                    needs_reference,
+    BufferRef               shadow_data,
+    BindlessArrayRef        shadow_bindless
 ) {
     auto& state = *m_impl;
     if (resolution.x == 0 || resolution.y == 0)
@@ -294,9 +361,9 @@ TextureRef GaussianSplatPass::Record(
         for (const auto& instance : scene->GetInstances())
             if (instance.range.w & visibility_mask)
                 work_count_64 += instance.range.y;
-    const bool is_work_overflow = work_count_64 > k_max_work_count;
+    const bool is_work_overflow         = work_count_64 > k_max_work_count;
     state.m_telemetry.has_work_overflow = is_work_overflow;
-    const uint work_count       = is_work_overflow ? 0u : static_cast<uint>(work_count_64);
+    const uint work_count               = is_work_overflow ? 0u : static_cast<uint>(work_count_64);
     if (!IsValidGaussianViewSettings(view_settings))
         throw std::invalid_argument("Invalid Gaussian view settings");
     const uint64 revision = scene ? scene->GetRevision() : 0;
@@ -310,6 +377,26 @@ TextureRef GaussianSplatPass::Record(
     state.m_telemetry.geometry_bytes = uint64(state.m_telemetry.unique_gaussian_count) * sizeof(GGaussian) +
                                        uint64(state.m_telemetry.instance_count) * sizeof(GGaussianInstance);
     state.Resize(resolution, work_count);
+    state.m_is_engine_view = is_engine_view;
+    if ((!is_engine_view || needs_reference) &&
+        (state.m_display->GetWidth() != resolution.x || state.m_display->GetHeight() != resolution.y))
+        state.m_display = RenderDevice::Get().CreateTexture(
+            "Gaussian reference display",
+            Extent3D(resolution.x, resolution.y, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS |
+                ETextureUsageFlags::TRANSFER_SRC
+        );
+    if (!state.m_reference || (needs_reference && state.m_reference->GetWidth() != resolution.x)) {
+        state.m_reference = RenderDevice::Get().CreateTexture(
+            "Gaussian reference RGB",
+            needs_reference ? Extent3D(resolution.x, resolution.y, 1) : Extent3D(1, 1, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
+        );
+    }
+    if (!opaque_depth)
+        commands.ClearResource(state.m_empty_depth->GetView(), float4(0));
     // Commands retain descriptor resources through translation. Keep owners explicitly until
     // GPU completion too: camera uploads, resize and instance replacement can overlap frames.
     Array<BufferRef> buffer_owners{
@@ -326,7 +413,10 @@ TextureRef GaussianSplatPass::Record(
         buffer_owners.push_back(level.prefix);
         buffer_owners.push_back(level.sums);
     }
-    state.m_telemetry.workspace_bytes = uint64(resolution.x) * resolution.y * 36u;
+    state.m_telemetry.workspace_bytes =
+        uint64(resolution.x) * resolution.y * 20u +
+        state.m_display->GetWidth() * uint64(state.m_display->GetHeight()) * 16u +
+        state.m_reference->GetWidth() * uint64(state.m_reference->GetHeight()) * 16u;
     for (const auto& buffer : buffer_owners)
         if (buffer)
             state.m_telemetry.workspace_bytes += buffer->GetByteSize();
@@ -337,7 +427,10 @@ TextureRef GaussianSplatPass::Record(
     commands.AddCallback([buffer_owners = std::move(buffer_owners),
                           color         = state.m_color,
                           transmittance = state.m_transmittance,
-                          display       = state.m_display]() {});
+                          display       = state.m_display,
+                          reference     = state.m_reference,
+                          depth         = opaque_depth,
+                          empty_depth   = state.m_empty_depth]() {});
     state.Poll();
     QueryToken timing_token;
     if (!state.m_timing_future.Valid()) {
@@ -345,45 +438,10 @@ TextureRef GaussianSplatPass::Record(
         state.m_timing_future = timing_token.GetFuture();
     }
     commands.PushScopeWithTimeScope("Gaussian Raster");
-    if (is_unsupported_mixed || is_work_overflow || work_count == 0) {
-        const bool is_invalid                  = is_unsupported_mixed || is_work_overflow;
-        state.m_telemetry.has_overflow         = is_work_overflow;
-        state.m_telemetry.has_completed_counts = true;
-        state.m_telemetry.tile_pair_count = state.m_telemetry.visible_count = 0;
-        commands.ClearResource(state.m_status->GetView(), is_invalid ? 1u : 0u);
-        const auto decode = [](float value) {
-            return value <= .04045f ? value / 12.92f : std::pow((value + .055f) / 1.055f, 2.4f);
-        };
-        float3 background(
-            decode(view_settings.background.x),
-            decode(view_settings.background.y),
-            decode(view_settings.background.z)
-        );
-        if (view_settings.display_mode == EGaussianDisplayMode::Engine) {
-            const float exposure = std::exp2(view_settings.exposure_ev);
-            for (uint channel_id = 0; channel_id < 3; ++channel_id) {
-                float value            = background[channel_id] * exposure;
-                background[channel_id] = value / (1 + value);
-            }
-        }
-        if (view_settings.debug_view == EGaussianDebugView::Transmittance)
-            background = float3(1);
-        if (view_settings.debug_view == EGaussianDebugView::TileCoverage)
-            background = float3(0, 0, 1);
-        commands.ClearResource(state.m_color->GetView(), is_invalid ? float4(1, 0, 1, 0) : float4(0));
-        commands.ClearResource(state.m_transmittance->GetView(), float4(1));
-        commands.ClearResource(
-            state.m_display->GetView(),
-            is_invalid ? float4(1, 0, 1, 1) : float4(background.x, background.y, background.z, 1)
-        );
-        commands.PopScopeWithTimeScope();
-        if (timing_token.Valid())
-            commands.EndTimestampQuery(timing_token);
-        return state.m_display;
-    }
     auto camera_data           = std::make_shared<GGaussianCamera>();
     camera_data->world_to_view = camera.GetViewMatrix();
     camera_data->view_to_clip  = camera.GetProjectionMatrix();
+    camera_data->clip_to_view  = camera.GetProjectionMatrixInv();
     const auto position        = camera.GetPosition();
     camera_data->position      = float4(position.x, position.y, position.z, 1);
     camera_data->viewport =
@@ -405,9 +463,42 @@ TextureRef GaussianSplatPass::Record(
         camera_buffer->GetView()
     );
     commands.AddCallback([camera_data, camera_buffer]() {});
+    state.m_camera = camera_buffer;
+    if (is_invalid_scene || is_work_overflow || work_count == 0) {
+        const bool is_invalid                  = is_invalid_scene || is_work_overflow;
+        state.m_telemetry.has_overflow         = is_work_overflow;
+        state.m_telemetry.has_completed_counts = true;
+        state.m_telemetry.tile_pair_count = state.m_telemetry.visible_count = 0;
+        commands.ClearResource(state.m_status->GetView(), is_invalid ? 1u : 0u);
+        commands.ClearResource(state.m_color->GetView(), is_invalid ? float4(1, 0, 1, 0) : float4(0));
+        commands.ClearResource(state.m_transmittance->GetView(), float4(1));
+        commands.ClearResource(state.m_ranges->GetView(), 0u);
+        commands.ClearResource(state.m_reference->GetView(), float4(0));
+        commands.PopScopeWithTimeScope();
+        if (timing_token.Valid())
+            commands.EndTimestampQuery(timing_token);
+        return state.m_color;
+    }
     GaussianDispatchParams param{};
     param.info = uint4(work_count, state.m_pair_capacity, camera_data->viewport.z, camera_data->viewport.w);
     commands.ClearResource(state.m_status->GetView(), 0u);
+    QueryToken  stage_tokens[3];
+    const char* stage_names[] = {
+        "Gaussian project and bin", "Gaussian sort and ranges", "Gaussian accumulate"
+    };
+    auto begin_stage = [&](uint stage) {
+        commands.PushScopeWithTimeScope(stage_names[stage]);
+        if (!state.m_stage_timing[stage].Valid()) {
+            stage_tokens[stage]         = commands.BeginTimestampQuery(stage_names[stage]);
+            state.m_stage_timing[stage] = stage_tokens[stage].GetFuture();
+        }
+    };
+    auto end_stage = [&](uint stage) {
+        if (stage_tokens[stage].Valid())
+            commands.EndTimestampQuery(stage_tokens[stage]);
+        commands.PopScopeWithTimeScope();
+    };
+    begin_stage(0);
     uint work_offset = 0;
     for (uint instance_id = 0; instance_id < scene->GetInstances().size(); ++instance_id) {
         const auto& instance = scene->GetInstances()[instance_id];
@@ -428,6 +519,8 @@ TextureRef GaussianSplatPass::Record(
             .Dispatch(uint3(Groups(instance.range.y), 1, 1), "Gaussian project");
         work_offset += instance.range.y;
     }
+    if (shadow_data)
+        commands.AddCallback([shadow_data, shadow_bindless]() {});
     uint   scan_count       = work_count;
     auto   input            = state.m_counts;
     size_t scan_level_count = 0;
@@ -468,6 +561,46 @@ TextureRef GaussianSplatPass::Record(
             state.m_pairs[0]->GetView()
         )
         .Dispatch(uint3(Groups(work_count), 1, 1), "Gaussian emit pairs");
+    end_stage(0);
+    state.m_telemetry.shadow_receive_gpu_ms = shadow_data ? state.m_telemetry.shadow_receive_gpu_ms : 0;
+    QueryToken receive_token;
+    work_offset   = 0;
+    bool received = false;
+    for (uint instance_id = 0; instance_id < scene->GetInstances().size(); ++instance_id) {
+        const auto& instance = scene->GetInstances()[instance_id];
+        if (!(instance.range.w & visibility_mask) || !instance.range.y)
+            continue;
+        param.job = uint4(instance.range.x, instance_id, work_offset, instance.range.y);
+        if (shadow_data && shadow_bindless && (instance.range.w & 8u) && is_engine_view) {
+            received = true;
+            if (!receive_token.Valid() && !state.m_receive_timing.Valid()) {
+                receive_token          = commands.BeginTimestampQuery("Gaussian shadow receiving");
+                state.m_receive_timing = receive_token.GetFuture();
+            }
+            if (!state.m_receive_shadow.handle.IsValid())
+                state.m_receive_shadow = ShaderManager::Get().Compute<GaussianReceiveShadowPipeline>(
+                    "features/gaussian/ReceiveShadow.comp.hlsl"
+                );
+            commands.UpdateBindlessArray(shadow_bindless);
+            commands
+                .Compute(
+                    state.m_receive_shadow,
+                    param,
+                    state.m_projected->GetView(),
+                    scene->GetGaussianBuffer()->GetView(),
+                    scene->GetInstanceBuffer()->GetView(),
+                    shadow_data->GetView(),
+                    shadow_bindless
+                )
+                .Dispatch(uint3(Groups(instance.range.y), 1, 1), "Gaussian receive Mesh shadow");
+        }
+        work_offset += instance.range.y;
+    }
+    if (receive_token.Valid())
+        commands.EndTimestampQuery(receive_token);
+    if (!received)
+        state.m_telemetry.shadow_receive_gpu_ms = 0;
+    begin_stage(1);
     for (uint digit_id = 0; digit_id < 8; ++digit_id) {
         param.job          = uint4(digit_id, 0, 0, 0);
         auto& pairs        = state.m_pairs[digit_id & 1];
@@ -511,8 +644,15 @@ TextureRef GaussianSplatPass::Record(
             state.m_ranges->GetView()
         )
         .Dispatch(uint3(Groups(state.m_pair_capacity), 1, 1), "Gaussian tile ranges");
+    end_stage(1);
+    begin_stage(2);
+    // The sign bit selects visibility debug; the remaining bits store nonnegative strength.
     param.job = uint4(
-        static_cast<uint>(view_settings.display_mode), static_cast<uint>(view_settings.debug_view), 0, 0
+        uint(is_engine_view),
+        uint(needs_reference),
+        uint(bool(opaque_depth)),
+        (std::bit_cast<uint>(view_settings.shadow_receive_strength) & 0x7fffffffu) |
+            (view_settings.debug_view == EGaussianDebugView::ShadowVisibility ? 0x80000000u : 0u)
     );
     commands
         .Compute(
@@ -525,9 +665,11 @@ TextureRef GaussianSplatPass::Record(
             state.m_status->GetView(),
             state.m_color->GetView(),
             state.m_transmittance->GetView(),
-            state.m_display->GetView()
+            opaque_depth ? opaque_depth->GetView() : state.m_empty_depth->GetView(),
+            state.m_reference->GetView()
         )
         .Dispatch(uint3(camera_data->viewport.z, camera_data->viewport.w, 1), "Gaussian splat");
+    end_stage(2);
     if (!state.m_status_readback.Valid()) {
         state.m_status_readback     = commands.Readback(state.m_status->GetView(), "Gaussian pair status");
         state.m_readback_revision   = revision;
@@ -536,6 +678,189 @@ TextureRef GaussianSplatPass::Record(
     commands.PopScopeWithTimeScope();
     if (timing_token.Valid())
         commands.EndTimestampQuery(timing_token);
+    return state.m_color;
+}
+TextureRef GaussianSplatPass::RecordDisplay(CommandList& commands, GaussianViewSettings settings) {
+    auto&                  state = *m_impl;
+    GaussianDispatchParams param{};
+    param.job = uint4(static_cast<uint>(settings.display_mode), static_cast<uint>(settings.debug_view), 0, 0);
+    commands
+        .Compute(
+            state.m_display_pipeline,
+            param,
+            (state.m_is_engine_view ? state.m_reference : state.m_color)->GetView(),
+            state.m_transmittance->GetView(),
+            state.m_ranges->GetView(),
+            state.m_status->GetView(),
+            state.m_display->GetView(),
+            state.m_camera->GetView()
+        )
+        .Dispatch(
+            uint3((state.m_resolution.x + 15) / 16, (state.m_resolution.y + 15) / 16, 1),
+            "Gaussian reference display"
+        );
+    commands.AddCallback([display = state.m_display, camera = state.m_camera]() {});
     return state.m_display;
+}
+TextureRef GaussianSplatPass::Record(
+    CommandList&            commands,
+    const GaussianGpuScene* scene,
+    const Camera&           camera,
+    uint2                   resolution,
+    bool                    is_editor_view,
+    bool                    is_invalid,
+    GaussianViewSettings    settings
+) {
+    RecordAccumulation(commands, scene, camera, resolution, is_editor_view, is_invalid, settings);
+    return RecordDisplay(commands, settings);
+}
+const TextureRef& GaussianSplatPass::GetDisplay() const {
+    return m_impl->m_display;
+}
+const BufferRef& GaussianSplatPass::GetRanges() const {
+    return m_impl->m_ranges;
+}
+GaussianSplatPass::RecordParameters GaussianSplatPass::Prepare(
+    const GaussianGpuScene* scene,
+    const Camera&           camera,
+    uint2                   resolution,
+    bool                    is_editor_view,
+    GaussianViewSettings    settings,
+    TextureRef              opaque_depth,
+    bool                    needs_reference
+) {
+    uint64 work_count = 0;
+    if (scene)
+        for (const auto& instance : scene->GetInstances())
+            if (instance.range.w & (is_editor_view ? 2u : 1u))
+                work_count += instance.range.y;
+    m_impl->Resize(resolution, work_count > k_max_work_count ? 0 : uint(work_count));
+    if (!m_impl->m_reference || (needs_reference && m_impl->m_reference->GetWidth() != resolution.x))
+        m_impl->m_reference = RenderDevice::Get().CreateTexture(
+            "Gaussian reference RGB",
+            needs_reference ? Extent3D(resolution.x, resolution.y, 1) : Extent3D(1, 1, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
+        );
+    if (needs_reference &&
+        (m_impl->m_display->GetWidth() != resolution.x || m_impl->m_display->GetHeight() != resolution.y))
+        m_impl->m_display = RenderDevice::Get().CreateTexture(
+            "Gaussian reference display",
+            Extent3D(resolution.x, resolution.y, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED |
+                ETextureUsageFlags::TRANSFER_SRC
+        );
+    return {
+        scene, camera, resolution, is_editor_view, settings, std::move(opaque_depth), true, needs_reference
+    };
+}
+void GaussianSplatPass::Record(CommandList& commands, const RecordParameters& parameters) {
+    RecordAccumulation(
+        commands,
+        parameters.scene,
+        parameters.camera,
+        parameters.resolution,
+        parameters.is_editor_view,
+        false,
+        parameters.settings,
+        parameters.opaque_depth,
+        parameters.is_engine_view,
+        parameters.needs_reference,
+        parameters.shadow_data,
+        parameters.shadow_bindless
+    );
+    if (parameters.shadow_data)
+        commands.AddCallback([parameters]() {});
+    if (parameters.needs_reference) {
+        auto settings       = parameters.settings;
+        settings.debug_view = EGaussianDebugView::Color;
+        RecordDisplay(commands, settings);
+    }
+}
+GaussianSplatPass::GraphResources GaussianSplatPass::ImportGraphResources(RenderGraph& graph) const {
+    auto& state = *m_impl;
+    return {
+        graph.ImportTexture("gs_color", state.m_color, {}),
+        graph.ImportTexture("gs_transmittance", state.m_transmittance, {}),
+        graph.ImportTexture("gs_reference", state.m_reference, {}),
+        graph.ImportTexture("gs_display", state.m_display, {}),
+        graph.ImportBuffer("gs_status", state.m_status, {.byte_size = state.m_status->GetByteSize()}),
+        graph.ImportBuffer("gs_ranges", state.m_ranges, {.byte_size = state.m_ranges->GetByteSize()})
+    };
+}
+RenderGraph::PassHandle GaussianSplatPass::AddToGraph(
+    RenderGraph&               graph,
+    RecordParameters           parameters,
+    GraphResources             resources,
+    RenderGraph::TextureHandle opaque_depth,
+    RenderGraph::TokenHandle   shadow_maps
+) {
+    Array<RenderGraph::BufferHandle> scratch;
+    auto                             add_buffer = [&](const BufferRef& buffer) {
+        scratch.push_back(graph.ImportBuffer(
+            "gs_workspace_" + std::to_string(scratch.size()), buffer, {.byte_size = buffer->GetByteSize()}
+        ));
+    };
+    auto& state = *m_impl;
+    for (const auto& buffer :
+         {state.m_projected,
+          state.m_counts,
+          state.m_pairs[0],
+          state.m_pairs[1],
+          state.m_histogram,
+          state.m_offsets})
+        add_buffer(buffer);
+    for (const auto& level : state.m_scan) {
+        add_buffer(level.prefix);
+        add_buffer(level.sums);
+    }
+    Array<RenderGraph::BufferHandle> inputs;
+    if (parameters.scene && parameters.scene->GetGaussianBuffer()) {
+        for (const auto& buffer :
+             {parameters.scene->GetGaussianBuffer(), parameters.scene->GetInstanceBuffer()})
+            inputs.push_back(graph.ImportBuffer(
+                "gs_scene_" + std::to_string(inputs.size()), buffer, {.byte_size = buffer->GetByteSize()}
+            ));
+    }
+    Array<RenderGraph::TextureHandle> shadow_textures;
+    for (const auto& map : parameters.shadow_maps)
+        shadow_textures.push_back(graph.ImportTexture(
+            "gaussian_shadow_read_" + std::to_string(shadow_textures.size()), map, DescribeShadowTexture(map)
+        ));
+    RenderGraph::BufferHandle shadow_buffer{};
+    if (parameters.shadow_data)
+        shadow_buffer = graph.ImportBuffer(
+            "gaussian_shadow_views_receiver",
+            parameters.shadow_data,
+            {.byte_size = parameters.shadow_data->GetByteSize()}
+        );
+    return graph.AddRecordPass(
+        "GaussianRaster",
+        [=](RenderGraph::PassBuilder& builder) {
+            for (const auto handle : shadow_textures)
+                builder.Read(handle);
+            if (shadow_maps.IsValid())
+                builder.Read(shadow_maps);
+            if (shadow_buffer.IsValid())
+                builder.Read(shadow_buffer);
+            builder.Read(opaque_depth)
+                .Write(resources.color)
+                .Write(resources.transmittance)
+                .Write(resources.reference)
+                .Write(resources.display)
+                .ReadWrite(resources.status)
+                .ReadWrite(resources.ranges)
+                .SideEffect();
+            for (const auto buffer : scratch)
+                builder.ReadWrite(buffer);
+            for (const auto buffer : inputs)
+                builder.Read(buffer);
+        },
+        [this, parameters](CommandList& commands) {
+            Record(commands, parameters);
+        },
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
 }
 } // namespace Moer::Render::Raster

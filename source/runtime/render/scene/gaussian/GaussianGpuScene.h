@@ -10,6 +10,7 @@ struct GaussianGpuUpload {
     std::vector<GGaussian>         gaussians;
     std::vector<GGaussianInstance> instances;
     std::vector<GaussianAssetRef>  assets;
+    std::vector<Box3D> bounds;
 };
 
 // CPU packing is independent of the device and can be checked without a GPU.
@@ -32,12 +33,14 @@ public:
         return m_instance_count;
     }
     const std::vector<GGaussianInstance>& GetInstances() const { return m_instances; }
+    const std::vector<Box3D>& GetBounds() const { return m_bounds; }
     uint64 GetRevision() const {
         return m_revision;
     }
 
 private:
     std::vector<GGaussianInstance> m_instances;
+    std::vector<Box3D> m_bounds;
     BufferRef                     m_gaussian_buffer;
     BufferRef                     m_instance_buffer;
     std::vector<GaussianAssetRef> m_assets;

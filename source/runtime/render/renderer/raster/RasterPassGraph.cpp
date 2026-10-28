@@ -62,8 +62,9 @@ RenderGraph::PreparedPassHandle ShadowDepthPass::AddToGraph(
 
     auto pass = graph.AddRecordPass(
         "ShadowDepth",
-        [resources](RenderGraph::PassBuilder& builder) {
+        [this, &graph, &context, resources](RenderGraph::PassBuilder& builder) {
             builder.Write(resources.shadow_maps).SideEffect();
+            DeclareGaussianResources(graph, builder, context, true);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "ShadowDepth", [&] {
@@ -278,9 +279,27 @@ RenderGraph::PreparedPassHandle LightingPass::AddToGraph(
         return {};
     }
 
+    Array<RenderGraph::TextureHandle> gaussian_textures;
+    for (const auto& texture : resources.gaussian_shadow_textures)
+        gaussian_textures.push_back(graph.ImportTexture(
+            "gaussian_shadow_lighting_" + std::to_string(gaussian_textures.size()),
+            texture,
+            DescribeShadowTexture(texture)
+        ));
+    RenderGraph::BufferHandle gaussian_data{};
+    if (resources.gaussian_shadow_data)
+        gaussian_data = graph.ImportBuffer(
+            "gaussian_shadow_views_lighting",
+            resources.gaussian_shadow_data,
+            {.byte_size = resources.gaussian_shadow_data->GetByteSize()}
+        );
     auto pass = graph.AddRecordPass(
         "Lighting",
-        [resources](RenderGraph::PassBuilder& builder) {
+        [resources, gaussian_textures, gaussian_data](RenderGraph::PassBuilder& builder) {
+            for (const auto handle : gaussian_textures)
+                builder.Read(handle);
+            if (gaussian_data.IsValid())
+                builder.Read(gaussian_data);
             builder.Read(resources.base_color)
                 .Read(resources.normal)
                 .Read(resources.metal_rough_ao)
@@ -309,13 +328,16 @@ RenderGraph::PreparedPassHandle SkyboxPass::AddToGraph(
     const RasterContext& context,
     const RasterConfig& config,
     const Camera& camera,
-    GraphResources resources
+    GraphResources resources,
+    bool clear_depth
 ) {
     auto prepared = graph.AddSetupPass(
         "Skybox.Prepare",
         uint8_t{0},
-        [this, &context, &config, &camera](const uint8_t&) {
-            return Prepare(context, config, camera);
+        [this, &context, &config, &camera, clear_depth](const uint8_t&) {
+            auto parameters = Prepare(context, config, camera);
+            parameters.clear_depth = clear_depth;
+            return parameters;
         }
     );
     if (!prepared.IsValid()) {
@@ -324,9 +346,10 @@ RenderGraph::PreparedPassHandle SkyboxPass::AddToGraph(
 
     auto pass = graph.AddRecordPass(
         "Skybox",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.depth)
-                .Read(resources.cubemap)
+        [resources, clear_depth](RenderGraph::PassBuilder& builder) {
+            if (clear_depth) builder.Write(resources.depth);
+            else builder.Read(resources.depth);
+            builder.Read(resources.cubemap)
                 .ReadWrite(resources.lighting_output);
         },
         [this, prepared](CommandList& cmd_list) {

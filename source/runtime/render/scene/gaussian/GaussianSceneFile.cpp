@@ -111,8 +111,11 @@ bool LoadGaussianSceneFile(
             };
             settings.display_mode =
                 static_cast<EGaussianDisplayMode>(bounded_integer(value.at("display_mode"), 1));
-            settings.debug_view = static_cast<EGaussianDebugView>(bounded_integer(value.at("debug_view"), 2));
+            settings.debug_view = static_cast<EGaussianDebugView>(bounded_integer(value.at("debug_view"), 4));
             settings.tile_pair_capacity = bounded_integer(value.at("tile_pair_capacity"), 1u << 24);
+            if (value.contains("shadow_alpha_cutoff")) settings.shadow_alpha_cutoff = Number(value.at("shadow_alpha_cutoff"));
+            if (value.contains("shadow_receive_strength")) settings.shadow_receive_strength = Number(value.at("shadow_receive_strength"));
+            if (value.contains("shadow_world_bias")) settings.shadow_world_bias = Number(value.at("shadow_world_bias"));
             if (!IsValidGaussianViewSettings(settings))
                 throw std::runtime_error("Invalid Gaussian view settings");
         }
@@ -162,6 +165,8 @@ bool LoadGaussianSceneFile(
                 GaussianInstanceSettings settings;
                 settings.is_enabled         = gaussian.at("enabled").get<bool>();
                 settings.opacity_multiplier = Number(gaussian.at("opacity"));
+                settings.cast_shadows = gaussian.value("cast_shadows", false);
+                settings.receive_shadows = gaussian.value("receive_shadows", false);
                 settings.color_multiplier   = VectorValue(gaussian.at("color"));
                 if (settings.opacity_multiplier < 0 || settings.color_multiplier.x < 0 ||
                     settings.color_multiplier.y < 0 || settings.color_multiplier.z < 0)

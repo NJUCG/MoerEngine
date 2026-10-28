@@ -1,5 +1,6 @@
 #pragma once
 #include "GeometryPass.h"
+#include "GaussianShadowPass.h"
 #include "RasterConfig.h"
 #include "math/Function.h"
 #include "misc/BoundingBox.h"
@@ -65,9 +66,36 @@ public:
         BufferRef        point_shadow_view_matrices{};
         bool             update_bindless_array = false;
         Array<DrawBatch> draws{};
+        std::optional<GaussianShadowPass::RecordParameters> gaussian{};
     };
 
     ShadowDepthPass(RasterContext& context);
+    void SetGaussians(
+        RasterContext&          context,
+        const GaussianGpuScene* scene,
+        GaussianViewSettings    settings,
+        bool                    editor_view,
+        const RasterConfig&     config
+    );
+    Array<TextureRef> GetGaussianShadowTextures(RasterContext& context) const;
+    void              DeclareGaussianResources(
+        RenderGraph&              graph,
+        RenderGraph::PassBuilder& builder,
+        RasterContext&            context,
+        bool                      write
+    );
+    TextureRef RecordGaussianDepthDebug(CommandList& commands) {
+        return m_gaussian_scene && m_gaussian_pass ? m_gaussian_pass->RecordDepthDebug(commands) :
+                                                     TextureRef{};
+    }
+    double GetGaussianShadowGpuTime() {
+        return m_gaussian_scene && m_gaussian_pass && !m_gaussian_bounds.empty() ?
+                   m_gaussian_pass->GetGpuTime() :
+                   0.;
+    }
+    BufferRef GetGaussianShadowData() const {
+        return m_gaussian_scene && m_gaussian_pass ? m_gaussian_pass->GetDataBuffer() : BufferRef{};
+    }
 
     [[nodiscard]] RecordParameters
     Prepare(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
@@ -116,6 +144,13 @@ private:
     static constexpr uint32_t k_point_shadow_view_count = 6u;
     static constexpr uint32_t k_point_shadow_view_mask  = (1u << k_point_shadow_view_count) - 1u;
 
+    std::unique_ptr<GaussianShadowPass> m_gaussian_pass;
+    const GaussianGpuScene* m_gaussian_scene = nullptr;
+    GaussianViewSettings m_gaussian_settings{};
+    bool m_gaussian_editor_view = false;
+    bool                                m_gaussian_point_mode  = false;
+    uint64 m_gaussian_revision = 0;
+    Array<Box3D> m_gaussian_bounds;
     uint                    enabled_cascade_layers;
     ShadowDepthPassPipeline m_pso;
     PointShadowMultiviewPipeline m_point_shadow_multiview_pso;

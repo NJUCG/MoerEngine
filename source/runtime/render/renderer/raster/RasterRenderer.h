@@ -14,6 +14,7 @@ class RasterContext;
 class HiZBuildPass;
 class GaussianSplatPass;
 class GaussianImageExport;
+class GaussianCompositePass;
 class ShadowDepthPass;
 class GeometryPass;
 class TessellatedSurfacePass;
@@ -79,7 +80,10 @@ private:
     // 按执行顺序排列的 Raster Pass。
     UniquePtr<GaussianSplatPass>           m_gaussian_splat_pass;
     UniquePtr<GaussianImageExport>         m_gaussian_export;
-    bool m_has_warned_mixed = false;
+    UniquePtr<GaussianCompositePass> m_gaussian_composite_pass;
+    bool m_had_visible_gaussians = false;
+    bool m_had_mesh_pipeline_work = true;
+    bool m_has_gaussian_exposure = false;
     UniquePtr<HiZBuildPass>                hiz_build_pass;
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
     UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;

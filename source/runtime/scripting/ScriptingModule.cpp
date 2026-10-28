@@ -565,17 +565,26 @@ void BindGaussianApi(py::module_& module, SceneApiClass& scene_api_class) {
         .def(py::init<>())
         .def_readwrite("color_multiplier", &GaussianInstanceSettings::color_multiplier)
         .def_readwrite("opacity_multiplier", &GaussianInstanceSettings::opacity_multiplier)
-        .def_readwrite("enabled", &GaussianInstanceSettings::is_enabled);
+        .def_readwrite("enabled", &GaussianInstanceSettings::is_enabled)
+        .def_readwrite("cast_shadows", &GaussianInstanceSettings::cast_shadows)
+        .def_readwrite("receive_shadows", &GaussianInstanceSettings::receive_shadows);
     py::enum_<EGaussianDisplayMode>(module,"EGaussianDisplayMode")
         .value("Reference",EGaussianDisplayMode::Reference).value("Engine",EGaussianDisplayMode::Engine);
-    py::enum_<EGaussianDebugView>(module,"EGaussianDebugView")
-        .value("Color",EGaussianDebugView::Color).value("Transmittance",EGaussianDebugView::Transmittance).value("TileCoverage",EGaussianDebugView::TileCoverage);
+    py::enum_<EGaussianDebugView>(module, "EGaussianDebugView")
+        .value("Color", EGaussianDebugView::Color)
+        .value("Transmittance", EGaussianDebugView::Transmittance)
+        .value("TileCoverage", EGaussianDebugView::TileCoverage)
+        .value("ShadowVisibility", EGaussianDebugView::ShadowVisibility)
+        .value("ShadowDepth", EGaussianDebugView::ShadowDepth);
     py::class_<GaussianViewSettings>(module,"GaussianViewSettings")
         .def(py::init<>()).def_readwrite("background",&GaussianViewSettings::background)
         .def_readwrite("exposure_ev",&GaussianViewSettings::exposure_ev)
         .def_readwrite("display_mode",&GaussianViewSettings::display_mode)
         .def_readwrite("debug_view",&GaussianViewSettings::debug_view)
-        .def_readwrite("tile_pair_capacity",&GaussianViewSettings::tile_pair_capacity);
+        .def_readwrite("tile_pair_capacity",&GaussianViewSettings::tile_pair_capacity)
+        .def_readwrite("shadow_alpha_cutoff",&GaussianViewSettings::shadow_alpha_cutoff)
+        .def_readwrite("shadow_receive_strength",&GaussianViewSettings::shadow_receive_strength)
+        .def_readwrite("shadow_world_bias",&GaussianViewSettings::shadow_world_bias);
     py::class_<GaussianExportStatus>(module,"GaussianExportStatus")
         .def_readonly("request_id",&GaussianExportStatus::request_id)
         .def_readonly("is_busy",&GaussianExportStatus::is_busy)
