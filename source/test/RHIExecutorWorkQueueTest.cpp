@@ -2297,6 +2297,37 @@ bool SubmitRecordingRefreshesAStaleCompletionCancellationView() {
     return okay;
 }
 
+bool MissingPrerequisitePreservesCallerOwnership() {
+    RHIExecutorWorkQueue queue{};
+    queue.Start();
+    ResolutionLog   log{};
+    auto            gate = RHIRecordingGate::Create(true);
+    RHIExecutorWork work{
+        .prerequisites = {gate, {}},
+        .callback      = [&log](ERHIExecutorWorkAction action) {
+            log.Push(1, action);
+        },
+    };
+
+    bool rejected = false;
+    try {
+        queue.Enqueue(std::move(work));
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    bool okay = Expect(rejected, "missing prerequisite was admitted") &&
+                Expect(work.prerequisites.size() == 2 && work.callback, "failed admission consumed caller-owned work") &&
+                Expect(log.Snapshot().empty(), "failed admission invoked a callback");
+    if (okay) {
+        work.prerequisites.pop_back();
+        queue.Enqueue(std::move(work));
+        okay &= Expect(log.WaitForSize(1), "corrected work could not be retried");
+    }
+    queue.ShutDown();
+    const auto entries = log.Snapshot();
+    return okay && Expect(entries.size() == 1 && entries[0].second == ERHIExecutorWorkAction::Execute, "corrected work was not executed exactly once");
+}
+
 bool PerSourceGatesPreserveFifo() {
     RHIExecutorWorkQueue queue{};
     queue.Start();
@@ -3292,6 +3323,7 @@ int main() {
         !RecordingPreflightFailureTerminalizesEveryCompletionGeneration() ||
         !SubmitRecordingRefreshesAStaleQueryCancellationView() ||
         !SubmitRecordingRefreshesAStaleCompletionCancellationView() ||
+        !MissingPrerequisitePreservesCallerOwnership() ||
         !PerSourceGatesPreserveFifo() ||
         !ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() ||
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||

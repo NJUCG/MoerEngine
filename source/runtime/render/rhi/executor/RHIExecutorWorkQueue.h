@@ -2,12 +2,14 @@
 
 #include "RenderAPI.h"
 
+#include <cassert>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <stop_token>
 #include <thread>
@@ -49,8 +51,10 @@ private:
             _initially_complete ? ERHIRecordingStatus::Succeeded :
                                   ERHIRecordingStatus::Pending
         ) {}
-    bool                              Complete(ERHIRecordingStatus _status) noexcept;
-    [[nodiscard]] ERHIRecordingStatus Wait(std::stop_token _stop_token) const noexcept;
+    bool Complete(ERHIRecordingStatus _status) noexcept;
+    // Returns Succeeded/Failed, or nullopt if stopped before completion.
+    // Stopping the wait does not change the producer's gate status.
+    [[nodiscard]] std::optional<ERHIRecordingStatus> Wait(std::stop_token _stop_token) const noexcept;
 
     mutable std::mutex                  mutex;
     mutable std::condition_variable_any cv;
@@ -75,8 +79,10 @@ public:
         return gate && gate->IsComplete();
     }
 
+    // Requires a valid view; an absent gate has no recording status.
     [[nodiscard]] ERHIRecordingStatus Status() const noexcept {
-        return gate ? gate->Status() : ERHIRecordingStatus::Pending;
+        assert(gate);
+        return gate->Status();
     }
 
     friend bool operator==(
@@ -105,6 +111,7 @@ enum class ERHIExecutorWorkAction : uint8_t {
 
 // Optional CPU recording prerequisites and one callback for normal processing
 // or rejection/cancellation cleanup. An empty prerequisite list still respects FIFO.
+// Every prerequisite in a non-empty list must refer to a valid gate.
 struct RHIExecutorWork {
     std::vector<RHIRecordingGateRef>            prerequisites{};
     std::function<void(ERHIExecutorWorkAction)> callback{};
@@ -127,7 +134,8 @@ public:
 
     // Accepted work always runs on the Executor worker, even without prerequisites.
     // If stopped, invokes the callback with Cancel on the calling thread.
-    // If insertion throws, ownership stays with the caller for cleanup.
+    // Invalid prerequisites throw before admission. If validation or insertion
+    // throws, ownership stays with the caller and no callback is invoked.
     void Enqueue(RHIExecutorWork&& _work);
 
     void               ShutDown();
@@ -135,6 +143,7 @@ public:
 
 private:
     void Run(std::stop_token _stop_token) noexcept;
+    // False means stopped with no queued work; _work is left unchanged.
     bool WaitAndPopWork(
         RHIExecutorWork&         _work,
         std::stop_token          _stop_token,

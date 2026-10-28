@@ -5,8 +5,10 @@
 #include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/RHIThreadOwnership.h"
 
+#include <algorithm>
 #include <cassert>
 #include <exception>
+#include <stdexcept>
 #include <utility>
 
 namespace Moer::Render {
@@ -55,12 +57,15 @@ ERHIRecordingStatus RHIRecordingGate::Wait() const noexcept {
     return status;
 }
 
-ERHIRecordingStatus RHIRecordingGate::Wait(std::stop_token _stop_token) const noexcept {
+std::optional<ERHIRecordingStatus> RHIRecordingGate::Wait(std::stop_token _stop_token) const noexcept {
     std::unique_lock lock(mutex);
     const bool       completed = cv.wait(lock, _stop_token, [this] {
         return status != ERHIRecordingStatus::Pending;
     });
-    return completed ? status : ERHIRecordingStatus::Pending;
+    if (!completed) {
+        return std::nullopt;
+    }
+    return status;
 }
 
 RHIExecutorWorkQueue::~RHIExecutorWorkQueue() {
@@ -88,6 +93,11 @@ void RHIExecutorWorkQueue::Start() {
 void RHIExecutorWorkQueue::Enqueue(
     RHIExecutorWork&& _work
 ) {
+    if (std::any_of(_work.prerequisites.begin(), _work.prerequisites.end(), [](const RHIRecordingGateRef& gate) {
+            return !gate;
+        })) {
+        throw std::invalid_argument("executor work contains a missing prerequisite gate");
+    }
     bool cancel = false;
     {
         std::lock_guard lock(mutex);
@@ -192,18 +202,16 @@ ERHIExecutorWorkAction RHIExecutorWorkQueue::WaitForPrerequisites(
     ERHIExecutorWorkAction action = ERHIExecutorWorkAction::Execute;
     _heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
     for (const RHIRecordingGateRef& prerequisite : _prerequisites) {
-        if (!prerequisite) {
-            action = ERHIExecutorWorkAction::Reject;
-            continue;
-        }
+        assert(prerequisite);
         ERHIRecordingStatus status = prerequisite->Status();
         if (status == ERHIRecordingStatus::Pending) {
             _heartbeat.Pulse(ERHIHeartbeatStage::WaitForDependency);
-            status = prerequisite->Wait(_stop_token);
+            const std::optional<ERHIRecordingStatus> result = prerequisite->Wait(_stop_token);
             _heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
-        }
-        if (status == ERHIRecordingStatus::Pending) {
-            return ERHIExecutorWorkAction::Cancel;
+            if (!result) {
+                return ERHIExecutorWorkAction::Cancel;
+            }
+            status = *result;
         }
         // A failed producer does not make its siblings safe to inspect.
         // Wait for every producer unless shutdown interrupts the wait.
