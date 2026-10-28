@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <functional>
+#include <queue>
 #include <sstream>
 #include <tuple>
 
@@ -26,6 +28,13 @@ template<typename T>
 void SortUnique(std::vector<T>& values) {
     std::sort(values.begin(), values.end());
     values.erase(std::unique(values.begin(), values.end()), values.end());
+}
+
+[[nodiscard]] auto OutgoingEdges(const std::vector<RenderGraph::CompiledEdge>& edges, uint32_t pass_index) {
+    // Both callers consume the canonical edge order (source, then destination).
+    return std::ranges::equal_range(edges, pass_index, {}, [](const auto& edge) {
+        return edge.src.pass_id;
+    });
 }
 
 [[nodiscard]] auto RangeSortKey(const ResourceRange& range) {
@@ -195,6 +204,7 @@ bool RenderGraphCompiler::Compile() {
     graph.compiled = false;
     graph.compile_error.clear();
     graph.compiled_plan.Clear();
+    edge_indices.clear();
     for (auto& resource : graph.resources) {
         resource.first_use = RenderGraph::InvalidIndex;
         resource.last_use  = RenderGraph::InvalidIndex;
@@ -264,6 +274,7 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
             return false;
         }
         const auto& pass = graph.passes[pass_index];
+        normalized_accesses[pass_index].reserve(pass.accesses.size());
         if (!pass.record) {
             return Fail("pass '" + pass.name + "' has no record callback");
         }
@@ -549,27 +560,41 @@ bool RenderGraphCompiler::BuildAtomicCells() {
         TextureAspect::Color, TextureAspect::Depth, TextureAspect::Stencil
     };
 
+    std::vector<std::vector<const ResourceRange*>> ranges_by_resource(graph.resources.size());
+    for (const auto& accesses : normalized_accesses) {
+        for (const auto& access : accesses) {
+            ranges_by_resource[access.resource.resource_id].push_back(&access.range);
+        }
+    }
+
+    // Endpoints are temporary; reuse their capacity across resources.
+    std::vector<uint32_t> mip_boundaries;
+    std::vector<uint32_t> layer_boundaries;
+    std::vector<uint64_t> boundaries;
     for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         auto&       cells    = resource_cells[resource_index];
 
         if (resource.kind == ResourceKind::Texture) {
-            std::vector<uint32_t> mip_boundaries{0, resource.texture_desc.mip_count};
-            std::vector<uint32_t> layer_boundaries{0, resource.texture_desc.layer_count};
+            mip_boundaries.assign({0, resource.texture_desc.mip_count});
+            layer_boundaries.assign({0, resource.texture_desc.layer_count});
             auto add_texture_boundaries = [&](const ResourceRange& range) {
                 const auto& texture = std::get<RenderGraph::TextureRange>(range);
-                mip_boundaries.push_back(texture.mip_first);
-                mip_boundaries.push_back(texture.mip_first + texture.mip_count);
-                layer_boundaries.push_back(texture.layer_first);
-                layer_boundaries.push_back(texture.layer_first + texture.layer_count);
-            };
-            for (const auto& accesses : normalized_accesses) {
-                for (const auto& access : accesses) {
-                    if (access.resource.resource_id != resource_index) {
-                        continue;
-                    }
-                    add_texture_boundaries(access.range);
+                if (texture.mip_first != 0) {
+                    mip_boundaries.push_back(texture.mip_first);
                 }
+                if (texture.mip_first + texture.mip_count != resource.texture_desc.mip_count) {
+                    mip_boundaries.push_back(texture.mip_first + texture.mip_count);
+                }
+                if (texture.layer_first != 0) {
+                    layer_boundaries.push_back(texture.layer_first);
+                }
+                if (texture.layer_first + texture.layer_count != resource.texture_desc.layer_count) {
+                    layer_boundaries.push_back(texture.layer_first + texture.layer_count);
+                }
+            };
+            for (const auto* range : ranges_by_resource[resource_index]) {
+                add_texture_boundaries(*range);
             }
             for (const auto& state : normalized_initial_states[resource_index]) {
                 add_texture_boundaries(state.range);
@@ -611,19 +636,18 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                 }
             }
         } else if (resource.kind == ResourceKind::Buffer && resource.buffer_desc.byte_size != 0) {
-            std::vector<uint64_t> boundaries{0, resource.buffer_desc.byte_size};
+            boundaries.assign({0, resource.buffer_desc.byte_size});
             auto add_buffer_boundaries = [&](const ResourceRange& range) {
                 const auto& buffer = std::get<RenderGraph::BufferRange>(range);
-                boundaries.push_back(buffer.offset);
-                boundaries.push_back(buffer.offset + buffer.size);
-            };
-            for (const auto& accesses : normalized_accesses) {
-                for (const auto& access : accesses) {
-                    if (access.resource.resource_id != resource_index) {
-                        continue;
-                    }
-                    add_buffer_boundaries(access.range);
+                if (buffer.offset != 0) {
+                    boundaries.push_back(buffer.offset);
                 }
+                if (buffer.offset + buffer.size != resource.buffer_desc.byte_size) {
+                    boundaries.push_back(buffer.offset + buffer.size);
+                }
+            };
+            for (const auto* range : ranges_by_resource[resource_index]) {
+                add_buffer_boundaries(*range);
             }
             for (const auto& state : normalized_initial_states[resource_index]) {
                 add_buffer_boundaries(state.range);
@@ -1047,29 +1071,27 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
 
     for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
-        const bool has_gpu_access = std::any_of(
-            graph.compiled_plan.accesses.begin(),
-            graph.compiled_plan.accesses.end(),
-            [&](const RenderGraph::CompiledAccess& access) {
-                return access.resource.resource_id == resource_index;
+        if (!resource.imported && !resource_ever_written[resource_index]) {
+            const auto& cells = resource_cells[resource_index];
+            const bool has_gpu_access = std::any_of(cells.begin(), cells.end(), [](const AtomicCell& cell) {
+                return cell.last_access != RenderGraph::InvalidIndex;
+            });
+            const bool has_opaque_reference = std::any_of(
+                graph.passes.begin(),
+                graph.passes.end(),
+                [&](const RenderGraph::PassDeclaration& pass) {
+                    return std::any_of(
+                        pass.references.begin(),
+                        pass.references.end(),
+                        [&](RenderGraph::ResourceHandle reference) {
+                            return reference.resource_id == resource_index;
+                        }
+                    );
+                }
+            );
+            if (has_gpu_access || has_opaque_reference) {
+                return Fail("transient resource has no producer: " + resource.name);
             }
-        );
-        const bool has_opaque_reference = std::any_of(
-            graph.passes.begin(),
-            graph.passes.end(),
-            [&](const RenderGraph::PassDeclaration& pass) {
-                return std::any_of(
-                    pass.references.begin(),
-                    pass.references.end(),
-                    [&](RenderGraph::ResourceHandle reference) {
-                        return reference.resource_id == resource_index;
-                    }
-                );
-            }
-        );
-        if (!resource.imported && (has_gpu_access || has_opaque_reference) &&
-            !resource_ever_written[resource_index]) {
-            return Fail("transient resource has no producer: " + resource.name);
         }
         if (resource.exported) {
             const auto& final_states = normalized_final_states[resource_index];
@@ -1335,25 +1357,22 @@ void RenderGraphCompiler::AddEdge(uint32_t src, uint32_t dst, RenderGraph::Compi
 
     const auto src_handle = RenderGraph::PassHandle{src, graph.graph_id};
     const auto dst_handle = RenderGraph::PassHandle{dst, graph.graph_id};
-    auto       edge       = std::find_if(
-        graph.compiled_plan.edges.begin(),
-        graph.compiled_plan.edges.end(),
-        [&](const RenderGraph::CompiledEdge& candidate) {
-            return candidate.src == src_handle && candidate.dst == dst_handle;
-        }
-    );
-    if (edge == graph.compiled_plan.edges.end()) {
+    const uint64_t key = (uint64_t{src} << 32) | dst;
+    const auto found = edge_indices.find(key);
+    if (found == edge_indices.end()) {
+        const size_t index = graph.compiled_plan.edges.size();
         graph.compiled_plan.edges.push_back(
             RenderGraph::CompiledEdge{src_handle, dst_handle, {std::move(reason)}}
         );
+        edge_indices.emplace(key, index);
         return;
     }
-    if (std::find(edge->reasons.begin(), edge->reasons.end(), reason) == edge->reasons.end()) {
-        edge->reasons.push_back(std::move(reason));
-    }
+    auto& reasons = graph.compiled_plan.edges[found->second].reasons;
+    // Consumers only read reasons after SortEdges canonicalizes the plan.
+    reasons.push_back(std::move(reason));
 }
 
-bool RenderGraphCompiler::BuildTopologicalOrder() {
+void RenderGraphCompiler::SortEdges() {
     std::sort(
         graph.compiled_plan.edges.begin(),
         graph.compiled_plan.edges.end(),
@@ -1362,35 +1381,44 @@ bool RenderGraphCompiler::BuildTopologicalOrder() {
                    (lhs.src.pass_id == rhs.src.pass_id && lhs.dst.pass_id < rhs.dst.pass_id);
         }
     );
-    for (auto& edge : graph.compiled_plan.edges) {
+    // Alias planning may add edges after the semantic sort. Keep the lookup
+    // synchronized with the canonical output order at both sort boundaries.
+    for (size_t index = 0; index < graph.compiled_plan.edges.size(); ++index) {
+        auto& edge = graph.compiled_plan.edges[index];
         std::sort(edge.reasons.begin(), edge.reasons.end(), ReasonLess);
+        edge.reasons.erase(std::unique(edge.reasons.begin(), edge.reasons.end()), edge.reasons.end());
+        edge_indices.at((uint64_t{edge.src.pass_id} << 32) | edge.dst.pass_id) = index;
     }
+}
 
+bool RenderGraphCompiler::BuildTopologicalOrder() {
+    SortEdges();
     std::vector<uint32_t> indegree(graph.passes.size(), 0);
     for (const auto& edge : graph.compiled_plan.edges) {
         ++indegree[edge.dst.pass_id];
     }
 
-    std::vector<bool> scheduled(graph.passes.size(), false);
-    while (graph.compiled_plan.topological_order.size() < graph.passes.size()) {
-        uint32_t next = RenderGraph::InvalidIndex;
-        for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
-            if (!scheduled[pass_index] && indegree[pass_index] == 0) {
-                next = pass_index;
-                break;
-            }
+    // Preserve the lowest declaration index tie-break without rescanning all passes.
+    std::priority_queue<uint32_t, std::vector<uint32_t>, std::greater<>> ready;
+    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+        if (indegree[pass_index] == 0) {
+            ready.push(pass_index);
         }
-        if (next == RenderGraph::InvalidIndex) {
-            return Fail("pass dependency cycle detected");
-        }
-        scheduled[next] = true;
+    }
+    graph.compiled_plan.topological_order.reserve(graph.passes.size());
+    while (!ready.empty()) {
+        const uint32_t next = ready.top();
+        ready.pop();
         graph.compiled_plan.topological_order.push_back(RenderGraph::PassHandle{next, graph.graph_id});
-        for (const auto& edge : graph.compiled_plan.edges) {
-            if (edge.src.pass_id == next) {
-                assert(indegree[edge.dst.pass_id] > 0);
-                --indegree[edge.dst.pass_id];
+        for (const auto& edge : OutgoingEdges(graph.compiled_plan.edges, next)) {
+            assert(indegree[edge.dst.pass_id] > 0);
+            if (--indegree[edge.dst.pass_id] == 0) {
+                ready.push(edge.dst.pass_id);
             }
         }
+    }
+    if (graph.compiled_plan.topological_order.size() != graph.passes.size()) {
+        return Fail("pass dependency cycle detected");
     }
     return true;
 }
@@ -1590,34 +1618,22 @@ void RenderGraphCompiler::BuildQueuePlan() {
 }
 
 void RenderGraphCompiler::BuildDependencyLevels() {
-    std::vector<uint32_t> indegree(graph.passes.size(), 0);
-    for (const auto& edge : graph.compiled_plan.edges) {
-        ++indegree[edge.dst.pass_id];
+    // A pass enters the wave after its deepest predecessor. The validated
+    // topological order also covers alias edges added after the initial sort.
+    std::vector<uint32_t> levels(graph.passes.size(), 0);
+    uint32_t max_level = 0;
+    for (const auto pass : graph.compiled_plan.topological_order) {
+        for (const auto& edge : OutgoingEdges(graph.compiled_plan.edges, pass.pass_id)) {
+            auto& destination_level = levels[edge.dst.pass_id];
+            destination_level = std::max(destination_level, levels[pass.pass_id] + 1);
+            max_level = std::max(max_level, destination_level);
+        }
     }
-
-    std::vector<bool> scheduled(graph.passes.size(), false);
-    uint32_t          scheduled_count = 0;
-    while (scheduled_count < graph.passes.size()) {
-        RenderGraph::CompiledDependencyLevel level{};
-        for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
-            if (!scheduled[pass_index] && indegree[pass_index] == 0) {
-                level.passes.push_back(RenderGraph::PassHandle{pass_index, graph.graph_id});
-            }
-        }
-        assert(!level.passes.empty());
-        for (const auto pass : level.passes) {
-            scheduled[pass.pass_id] = true;
-            ++scheduled_count;
-        }
-        for (const auto pass : level.passes) {
-            for (const auto& edge : graph.compiled_plan.edges) {
-                if (edge.src == pass && !scheduled[edge.dst.pass_id]) {
-                    assert(indegree[edge.dst.pass_id] > 0);
-                    --indegree[edge.dst.pass_id];
-                }
-            }
-        }
-        graph.compiled_plan.dependency_levels.push_back(std::move(level));
+    graph.compiled_plan.dependency_levels.resize(max_level + 1);
+    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+        graph.compiled_plan.dependency_levels[levels[pass_index]].passes.push_back(
+            RenderGraph::PassHandle{pass_index, graph.graph_id}
+        );
     }
 }
 
@@ -2044,16 +2060,8 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
     // Alias edges are added after the semantic topological audit. They always
     // point forward in the immutable execution order, so the existing order
     // remains valid; restore canonical edge/reason order for all consumers.
-    std::sort(
-        graph.compiled_plan.edges.begin(),
-        graph.compiled_plan.edges.end(),
-        [](const RenderGraph::CompiledEdge& lhs, const RenderGraph::CompiledEdge& rhs) {
-            return lhs.src.pass_id < rhs.src.pass_id ||
-                   (lhs.src.pass_id == rhs.src.pass_id && lhs.dst.pass_id < rhs.dst.pass_id);
-        }
-    );
-    for (auto& edge : graph.compiled_plan.edges) {
-        std::sort(edge.reasons.begin(), edge.reasons.end(), ReasonLess);
+    if (!graph.compiled_plan.alias_boundaries.empty()) {
+        SortEdges();
     }
 }
 

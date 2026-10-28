@@ -3,6 +3,7 @@
 #include "rendergraph/RenderGraph.h"
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Moer::Render {
@@ -109,12 +110,14 @@ private:
         std::vector<RenderGraph::CompiledBarrierSource> sources
     );
     void AddEdge(uint32_t src, uint32_t dst, RenderGraph::CompiledEdgeReason reason);
+    void SortEdges();
     bool Fail(std::string message);
 
     [[nodiscard]] static bool
     RangesOverlap(const RenderGraph::ResourceRange& lhs, const RenderGraph::ResourceRange& rhs);
 
     RenderGraph&                               graph;
+    std::unordered_map<uint64_t, size_t>        edge_indices{};
     std::vector<std::vector<NormalizedAccess>> normalized_accesses{};
     std::vector<std::vector<NormalizedStateDeclaration>> normalized_initial_states{};
     std::vector<std::vector<NormalizedStateDeclaration>> normalized_final_states{};

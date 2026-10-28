@@ -557,6 +557,50 @@ void TestResourceNameAndIdentityNamespaces(TestSuite& suite) {
     return graph.Dump();
 }
 
+void TestDependencyLevelOrdering(TestSuite& suite) {
+    constexpr std::string_view test_name = "dependency levels preserve fan-in depth and declaration order";
+    RenderGraph graph("DependencyLevels");
+    const auto add_pass = [&](std::string_view name, std::initializer_list<RenderGraph::PassHandle> dependencies) {
+        return graph.AddRecordPass(
+            name,
+            [dependencies](RenderGraph::PassBuilder& builder) {
+                for (const auto dependency : dependencies) {
+                    builder.DependsOn(dependency);
+                }
+            },
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+    };
+    const auto root = add_pass("Root", {});
+    const auto independent = add_pass("Independent", {});
+    const auto chain = add_pass("Chain", {root});
+    const auto fan_in = add_pass("FanIn", {chain, independent});
+    const auto short_branch = add_pass("ShortBranch", {root});
+    const auto join = add_pass("Join", {fan_in, short_branch});
+    const auto late_independent = add_pass("LateIndependent", {});
+    const bool compiled = graph.Compile();
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    if (!compiled) {
+        return;
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    const std::vector<RenderGraph::PassHandle> declaration_order{
+        root, independent, chain, fan_in, short_branch, join, late_independent
+    };
+    suite.Check(plan.topological_order == declaration_order, test_name,
+                "newly ready lower indices must precede older ready higher indices");
+    const std::vector<std::vector<RenderGraph::PassHandle>> expected_levels{
+        {root, independent, late_independent}, {chain, short_branch}, {fan_in}, {join}
+    };
+    suite.Check(plan.dependency_levels.size() == expected_levels.size(), test_name,
+                "fan-in must wait for its deepest predecessor");
+    for (size_t index = 0; index < std::min(plan.dependency_levels.size(), expected_levels.size()); ++index) {
+        suite.Check(plan.dependency_levels[index].passes == expected_levels[index], test_name,
+                    "each dependency wave must preserve declaration order");
+    }
+}
+
 void TestHazardsAndDeterministicDump(TestSuite& suite) {
     constexpr std::string_view test_name   = "hazards and deterministic dump";
     const std::string          first_dump  = BuildHazardDump(suite, test_name);
@@ -6675,6 +6719,7 @@ int main() {
     TestUiFrameGraphRejectsInvalidPhysicalContracts(suite);
     TestImportedAliasIdentityAndDump(suite);
     TestResourceNameAndIdentityNamespaces(suite);
+    TestDependencyLevelOrdering(suite);
     TestHazardsAndDeterministicDump(suite);
     TestTransientReadBeforeProducerFailsWithoutCallbacks(suite);
     TestCrossGraphHandlesAreRejected(suite);

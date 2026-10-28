@@ -78,70 +78,72 @@ RenderGraph::PassHandle ShadowDepthPass::AddToGraph(
             RenderGraph::PassRecordPolicy::Serial
         );
     }
-    const RasterSceneGraphReads scene_reads(graph, context.GetGpuSceneRes());
-    const auto indices = ImportRasterBuffer(graph, "Scene.indices", parameters->index_buffer.GetBuffer());
     std::vector<RenderGraph::PassHandle> draws;
-    for (size_t index = 0; index < parameters->draws.size(); ++index) {
-        const auto& batch = parameters->draws[index];
-        m_culling_pass.AddToGraph(graph, batch.pass_name, batch.culling);
-        RenderGraph::BufferHandle matrices{};
-        if (batch.multiview) {
-            matrices = ImportRasterBuffer(
-                graph, "ShadowDepth.matrices", parameters->point_shadow_view_matrices.Get()
-            );
-            graph.AddRecordPass(
-                batch.pass_name + ".UploadMatrices",
+    if (!parameters->draws.empty()) {
+        const RasterSceneGraphReads scene_reads(graph, context.GetGpuSceneRes());
+        const auto indices = ImportRasterBuffer(graph, "Scene.indices", parameters->index_buffer.GetBuffer());
+        for (size_t index = 0; index < parameters->draws.size(); ++index) {
+            const auto& batch = parameters->draws[index];
+            m_culling_pass.AddToGraph(graph, batch.pass_name, batch.culling);
+            RenderGraph::BufferHandle matrices{};
+            if (batch.multiview) {
+                matrices = ImportRasterBuffer(
+                    graph, "ShadowDepth.matrices", parameters->point_shadow_view_matrices.Get()
+                );
+                graph.AddRecordPass(
+                    batch.pass_name + ".UploadMatrices",
+                    [=](RenderGraph::PassBuilder& builder) {
+                        builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                            .Write(matrices, RenderGraph::BufferAccessType::TransferDestination);
+                    },
+                    [parameters, index](CommandList& commands) {
+                        const auto& data = parameters->draws[index].multiview_matrices;
+                        commands.CopyFrom(
+                            std::span<const byte>(reinterpret_cast<const byte*>(&data), sizeof(data)),
+                            parameters->point_shadow_view_matrices->GetView()
+                        );
+                    },
+                    RenderGraph::PassRecordPolicy::ParallelAllowed
+                );
+            }
+            const auto depth = ImportRasterTexture(graph, batch.pass_name, batch.depth_view.GetTexture());
+            const auto visible =
+                ImportRasterBuffer(graph, "ShadowDepth.visible", batch.culling.visible_instance_ids.GetBuffer());
+            const auto indirect =
+                ImportRasterBuffer(graph, "ShadowDepth.indirect", batch.culling.draw_commands.GetBuffer());
+            const auto count =
+                ImportRasterBuffer(graph, "ShadowDepth.count", batch.culling.draw_count.GetBuffer());
+            RenderGraph::TextureRange range{};
+            range.mip_first   = batch.depth_view.mip_level;
+            range.mip_count   = batch.depth_view.num_mips;
+            range.layer_first = batch.depth_view.array_layer;
+            range.layer_count = batch.depth_view.num_array;
+            draws.push_back(graph.AddRecordPass(
+                batch.pass_name,
                 [=](RenderGraph::PassBuilder& builder) {
-                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
-                        .Write(matrices, RenderGraph::BufferAccessType::TransferDestination);
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                        .Read(table)
+                        .Read(indices, RenderGraph::BufferAccessType::IndexBuffer)
+                        .Read(visible, RenderGraph::BufferAccessType::ShaderRead)
+                        .Read(indirect, RenderGraph::BufferAccessType::IndirectArgument)
+                        .Read(count, RenderGraph::BufferAccessType::IndirectArgument)
+                        .Write(depth, RenderGraph::TextureAccessType::DepthStencilAttachment, range);
+                    scene_reads.Declare(builder);
+                    if (matrices.IsValid()) {
+                        builder.Read(matrices, RenderGraph::BufferAccessType::ShaderRead);
+                    }
                 },
-                [parameters, index](CommandList& commands) {
-                    const auto& data = parameters->draws[index].multiview_matrices;
-                    commands.CopyFrom(
-                        std::span<const byte>(reinterpret_cast<const byte*>(&data), sizeof(data)),
-                        parameters->point_shadow_view_matrices->GetView()
-                    );
+                [this, parameters, index](CommandList& commands) {
+                    const auto& draw = parameters->draws[index];
+                    if (draw.multiview) {
+                        RecordPointShadowMultiviewDraw(commands, *parameters, draw);
+                    } else {
+                        RecordShadowDraw(commands, *parameters, draw);
+                    }
                 },
                 RenderGraph::PassRecordPolicy::ParallelAllowed
-            );
+            ));
         }
-        const auto depth = ImportRasterTexture(graph, batch.pass_name, batch.depth_view.GetTexture());
-        const auto visible =
-            ImportRasterBuffer(graph, "ShadowDepth.visible", batch.culling.visible_instance_ids.GetBuffer());
-        const auto indirect =
-            ImportRasterBuffer(graph, "ShadowDepth.indirect", batch.culling.draw_commands.GetBuffer());
-        const auto count =
-            ImportRasterBuffer(graph, "ShadowDepth.count", batch.culling.draw_count.GetBuffer());
-        RenderGraph::TextureRange range{};
-        range.mip_first   = batch.depth_view.mip_level;
-        range.mip_count   = batch.depth_view.num_mips;
-        range.layer_first = batch.depth_view.array_layer;
-        range.layer_count = batch.depth_view.num_array;
-        draws.push_back(graph.AddRecordPass(
-            batch.pass_name,
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
-                    .Read(table)
-                    .Read(indices, RenderGraph::BufferAccessType::IndexBuffer)
-                    .Read(visible, RenderGraph::BufferAccessType::ShaderRead)
-                    .Read(indirect, RenderGraph::BufferAccessType::IndirectArgument)
-                    .Read(count, RenderGraph::BufferAccessType::IndirectArgument)
-                    .Write(depth, RenderGraph::TextureAccessType::DepthStencilAttachment, range);
-                scene_reads.Declare(builder);
-                if (matrices.IsValid()) {
-                    builder.Read(matrices, RenderGraph::BufferAccessType::ShaderRead);
-                }
-            },
-            [this, parameters, index](CommandList& commands) {
-                const auto& draw = parameters->draws[index];
-                if (draw.multiview) {
-                    RecordPointShadowMultiviewDraw(commands, *parameters, draw);
-                } else {
-                    RecordShadowDraw(commands, *parameters, draw);
-                }
-            },
-            RenderGraph::PassRecordPolicy::ParallelAllowed
-        ));
     }
     return graph.AddRecordPass(
         "ShadowDepth.Ready",

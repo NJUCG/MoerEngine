@@ -981,22 +981,23 @@ bool RenderGraphLowering::Lower(
     LoweredPlan candidate{};
     candidate.queue_syncs = lowered_queue_syncs;
     candidate.passes.reserve(compiled.execution_order.size());
+    std::vector<uint32_t> pass_instruction_indices(graph.passes.size(), RenderGraph::InvalidIndex);
     for (const auto pass : compiled.execution_order) {
         if (!graph.IsValidPass(pass)) {
             return fail("execution order references an invalid pass");
         }
         if (gpu_pass[pass.pass_id]) {
+            pass_instruction_indices[pass.pass_id] = static_cast<uint32_t>(candidate.passes.size());
             candidate.passes.push_back(PassInstructions{.pass = pass});
         }
     }
 
     auto find_mutable_pass = [&](RenderGraph::PassHandle pass) -> PassInstructions* {
-        const auto found = std::find_if(
-            candidate.passes.begin(),
-            candidate.passes.end(),
-            [&](const PassInstructions& entry) { return entry.pass == pass; }
-        );
-        return found == candidate.passes.end() ? nullptr : &*found;
+        if (!graph.IsValidPass(pass)) {
+            return nullptr;
+        }
+        const auto index = pass_instruction_indices[pass.pass_id];
+        return index == RenderGraph::InvalidIndex ? nullptr : &candidate.passes[index];
     };
 
     auto binding_for = [&](RenderGraph::ResourceHandle handle) {
@@ -1013,14 +1014,14 @@ bool RenderGraphLowering::Lower(
         return binding;
     };
 
-    for (auto& pass_entry : candidate.passes) {
-        std::vector<RenderGraph::ResourceHandle> resources{};
-        for (const auto& access : compiled.accesses) {
-            if (access.pass == pass_entry.pass &&
-                graph.resources[access.resource.resource_id].kind != ResourceKind::Token) {
-                resources.push_back(access.resource);
-            }
+    std::vector<std::vector<RenderGraph::ResourceHandle>> resources_by_pass(graph.passes.size());
+    for (const auto& access : compiled.accesses) {
+        if (graph.resources[access.resource.resource_id].kind != ResourceKind::Token) {
+            resources_by_pass[access.pass.pass_id].push_back(access.resource);
         }
+    }
+    for (auto& pass_entry : candidate.passes) {
+        auto& resources = resources_by_pass[pass_entry.pass.pass_id];
         for (const auto resource : graph.passes[pass_entry.pass.pass_id].references) {
             if (graph.resources[resource.resource_id].kind != ResourceKind::Token) {
                 resources.push_back(resource);
@@ -1043,6 +1044,7 @@ bool RenderGraphLowering::Lower(
             ),
             resources.end()
         );
+        pass_entry.keepalive.reserve(resources.size());
         for (const auto resource : resources) {
             pass_entry.keepalive.push_back(binding_for(resource));
         }
@@ -1574,12 +1576,21 @@ bool RenderGraphLowering::Lower(
         pass->before.push_back(std::move(instruction));
     }
 
+    std::vector<std::vector<uint32_t>> boundaries_by_resource(graph.resources.size());
+    for (const auto barrier_index : compiled.prologue_barriers) {
+        const auto& barrier = compiled.barriers[barrier_index];
+        boundaries_by_resource[barrier.resource.resource_id].push_back(barrier_index);
+    }
+    for (const auto barrier_index : compiled.epilogue_barriers) {
+        const auto& barrier = compiled.barriers[barrier_index];
+        boundaries_by_resource[barrier.resource.resource_id].push_back(barrier_index);
+    }
     auto has_boundary = [&](const RenderGraph::CompiledAccess& access, bool initial) {
-        const auto& indices = initial ? compiled.prologue_barriers :
-                                        compiled.epilogue_barriers;
+        const auto& indices = boundaries_by_resource[access.resource.resource_id];
         return std::any_of(indices.begin(), indices.end(), [&](uint32_t barrier_index) {
             const auto& barrier = compiled.barriers[barrier_index];
-            return barrier.resource == access.resource && barrier.range == access.range &&
+            return (initial ? prologue[barrier_index] : epilogue[barrier_index]) &&
+                   barrier.resource == access.resource && barrier.range == access.range &&
                    (initial ? barrier.import_boundary : barrier.export_boundary);
         });
     };

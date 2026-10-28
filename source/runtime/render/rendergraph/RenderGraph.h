@@ -1101,6 +1101,8 @@ private:
         ResourceState state{};
         QueueRole     queue       = QueueRole::None;
         AccessMode    boundary_access = AccessMode::None;
+
+        friend bool operator==(const StateDeclaration&, const StateDeclaration&) = default;
     };
 
     struct ResourceDeclaration {

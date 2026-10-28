@@ -2995,7 +2995,9 @@ void RenderGraph::AddStateDeclaration(
     }
     StateDeclaration state_declaration{range, state, queue, boundary_access};
     auto&            target = initial ? declaration.initial_states : declaration.final_states;
-    target.push_back(std::move(state_declaration));
+    if (std::find(target.begin(), target.end(), state_declaration) == target.end()) {
+        target.push_back(std::move(state_declaration));
+    }
 }
 
 void RenderGraph::AddDependency(uint32_t pass_index, PassHandle dependency) {
