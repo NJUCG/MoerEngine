@@ -1,6 +1,5 @@
 #include "rhi/executor/RHIExecutorInternal.h"
 
-#include "log/LogSystem.h"
 #include "rhi/executor/testing/RHIExecutorTestHooksInternal.h"
 
 #include <algorithm>
@@ -17,15 +16,14 @@ struct RecordingSourcePayload {
     Array<CommandList::RecordingRejectionPreparation>
         rejection_preparations{};
     Array<PreparedCommandListRejection>
-                        prepared_rejections{};
-    Array<uint8>        terminal_snapshot{};
-    ERHIExecSubmitFlags flags{ERHIExecSubmitFlags::FlushGPU};
+                                    prepared_rejections{};
+    Array<ERecordingRejectionState> rejection_states{};
+    ERHIExecSubmitFlags             flags{ERHIExecSubmitFlags::FlushGPU};
 };
 
-void ApplyRecordingMetadata(
+void ApplyRecordingExecutionMetadata(
     CmdSubmit&                        _submit,
-    const RHIRecordingSubmitMetadata& _metadata,
-    size_t&                           _transferred_signal_count
+    const RHIRecordingSubmitMetadata& _metadata
 ) {
     if (_metadata.debug_label) {
         _submit.DebugLabel(*_metadata.debug_label, _metadata.debug_label_color);
@@ -48,7 +46,13 @@ void ApplyRecordingMetadata(
         }
     }
     _submit.async_queue_scope = _metadata.async_queue_scope;
+}
 
+void AppendRecordingFenceEvents(
+    CmdSubmit&                        _submit,
+    const RHIRecordingSubmitMetadata& _metadata,
+    size_t&                           _transferred_signal_count
+) {
     auto sync_keepalive = std::make_shared<Array<FenceRef>>();
     sync_keepalive->reserve(
         _metadata.wait_fences.size() +
@@ -104,6 +108,26 @@ void ApplyRecordingMetadata(
     }
 }
 
+void ValidateRecordedSources(const Array<RHIRecordingSource>& _sources) {
+    for (const RHIRecordingSource& source : _sources) {
+        const EQueueType queue =
+            source.command_list->GetQueueType();
+        if (!IsSubmissionQueue(queue)) {
+            throw std::runtime_error(
+                "recorded source changed to an invalid queue"
+            );
+        }
+        if (source.command_list->HasOpenQueries()) {
+            throw std::logic_error(
+                "recorded source contains an unclosed query"
+            );
+        }
+    }
+}
+
+// An engaged result, including an empty array, continues to submission. nullopt
+// means rejection has been handled and callers must not repeat cleanup; it does
+// not guarantee that every producer has stopped.
 std::optional<Array<RHISubmissionRequest>> MaterializeRecordingSources(RecordingSourcePayload& _payload) {
     Array<RHISubmissionRequest> submits{};
     Array<size_t>               materialized_source_indices{};
@@ -120,20 +144,7 @@ std::optional<Array<RHISubmissionRequest>> MaterializeRecordingSources(Recording
         // first source. An unclosed query must not run rejection
         // callbacks while a later source in the transaction is still
         // Pending.
-        for (const RHIRecordingSource& source : _payload.sources) {
-            const EQueueType queue =
-                source.command_list->GetQueueType();
-            if (!IsSubmissionQueue(queue)) {
-                throw std::runtime_error(
-                    "recorded source changed to an invalid queue"
-                );
-            }
-            if (source.command_list->HasOpenQueries()) {
-                throw std::logic_error(
-                    "recorded source contains an unclosed query"
-                );
-            }
-        }
+        ValidateRecordedSources(_payload.sources);
 
         // First seal every source. Only after the whole recording
         // group owns immutable CmdSubmit payloads may metadata be
@@ -157,52 +168,116 @@ std::optional<Array<RHISubmissionRequest>> MaterializeRecordingSources(Recording
         for (size_t submit_index = 0; submit_index < submits.size(); ++submit_index) {
             RHIRecordingSource& source =
                 _payload.sources[materialized_source_indices[submit_index]];
-            ApplyRecordingMetadata(
+            ApplyRecordingExecutionMetadata(submits[submit_index].submit, source.submit_metadata);
+            AppendRecordingFenceEvents(
                 submits[submit_index].submit,
                 source.submit_metadata,
                 metadata_signal_transfer_prefixes[materialized_source_indices[submit_index]]
             );
         }
-    } catch (const std::exception& exception) {
-        FinalizeFailedRecordingSources(
-            std::move(_payload.sources),
-            "recording source finalization failed",
-            _payload.rejection_preparations,
-            _payload.prepared_rejections,
-            _payload.terminal_snapshot,
-            std::move(submits),
-            metadata_signal_transfer_prefixes
-        );
-        try {
-            LOG_ERROR(
-                "[RHIExecutor] failed to materialize recording sources: {}",
-                exception.what()
-            );
-        } catch (...) {
-        }
-        return std::nullopt;
     } catch (...) {
         FinalizeFailedRecordingSources(
             std::move(_payload.sources),
             "recording source finalization failed",
             _payload.rejection_preparations,
             _payload.prepared_rejections,
-            _payload.terminal_snapshot,
+            _payload.rejection_states,
             std::move(submits),
             metadata_signal_transfer_prefixes
         );
-        try {
-            LOG_ERROR(
-                "[RHIExecutor] failed to materialize recording sources"
-            );
-        } catch (...) {
-        }
+        ReportExecutorFailure("SubmitRecording", "source materialization", std::current_exception());
         return std::nullopt;
     }
 
     _payload.sources.clear();
     return std::move(submits);
 }
+
+// An engaged result, including an empty array, continues to submission. nullopt
+// means rejection/cancellation has been handled and callers must not repeat
+// cleanup; producers may still own sources that could not be drained.
+std::optional<Array<RHISubmissionRequest>> PrepareRecordingSubmissionRequests(
+    RecordingSourcePayload& _payload,
+    ERHIExecutorWorkAction  _action
+) {
+    if (_action == ERHIExecutorWorkAction::Cancel) {
+        FinalizeCancelledRecordingSources(
+            std::move(_payload.sources), "completion gate cancelled during shutdown", _payload.rejection_preparations, _payload.prepared_rejections, _payload.rejection_states
+        );
+        return std::nullopt;
+    }
+    if (_action == ERHIExecutorWorkAction::Reject) {
+        FinalizeFailedRecordingSources(
+            std::move(_payload.sources), "recording completion gate failed", _payload.rejection_preparations, _payload.prepared_rejections, _payload.rejection_states
+        );
+        return std::nullopt;
+    }
+    return MaterializeRecordingSources(_payload);
+}
+
+// Owns the existing direct-submit scratch arrays until sealing succeeds or
+// the complete group is rejected. No work is published during preparation.
+struct DirectSubmissionPreparation {
+    Array<RHISubmissionRequest>          submits{};
+    Array<GpuCompletionCancellationView> completion_cancellations{};
+    Array<QueryCancellationView>         query_cancellations{};
+    Array<CommandList::RecordingRejectionPreparation>
+                                        rejection_preparations{};
+    Array<PreparedCommandListRejection> prepared_rejections{};
+    Array<size_t>                       materialized_source_indices{};
+
+    void Prepare(Array<CommandList>& _command_lists) {
+        submits.reserve(_command_lists.size());
+        completion_cancellations.reserve(_command_lists.size());
+        query_cancellations.reserve(_command_lists.size());
+        materialized_source_indices.reserve(_command_lists.size());
+        rejection_preparations.resize(_command_lists.size());
+        prepared_rejections.resize(_command_lists.size());
+        for (CommandList& command_list : _command_lists) {
+            completion_cancellations.emplace_back(
+                command_list.GetGpuCompletionCancellationView()
+            );
+            query_cancellations.emplace_back(
+                command_list.GetQueryCancellationView()
+            );
+        }
+    }
+
+    void SealCommandLists(Array<CommandList>& _command_lists) {
+        for (size_t source_index = 0;
+             source_index < _command_lists.size();
+             ++source_index) {
+            CommandList& command_list = _command_lists[source_index];
+            if (command_list.IsEmpty()) {
+                continue;
+            }
+            InvokeDirectCommandListMaterializationOverrideForTesting(
+                source_index
+            );
+            const EQueueType queue = command_list.GetQueueType();
+            submits.emplace_back(queue, command_list.Submit());
+            materialized_source_indices.emplace_back(source_index);
+        }
+    }
+
+    void Reject(
+        Array<CommandList>& _command_lists,
+        RHIPresentRequest*  _present,
+        std::string_view    _reason
+    ) noexcept {
+        FinalizeRejectedCommandListGroup(
+            _command_lists,
+            completion_cancellations,
+            query_cancellations,
+            rejection_preparations,
+            prepared_rejections,
+            materialized_source_indices,
+            std::move(submits),
+            _present,
+            _reason
+        );
+    }
+};
 
 } // namespace
 
@@ -228,124 +303,33 @@ void RHIExecutor::Submit(
         );
     }
 
-    Array<RHISubmissionRequest>          submits{};
-    Array<GpuCompletionCancellationView> completion_cancellations{};
-    Array<QueryCancellationView>         query_cancellations{};
-    Array<CommandList::RecordingRejectionPreparation>
-                                        rejection_preparations{};
-    Array<PreparedCommandListRejection> prepared_rejections{};
-    Array<size_t>                       materialized_source_indices{};
+    DirectSubmissionPreparation preparation{};
     try {
-        submits.reserve(_command_lists.size());
-        completion_cancellations.reserve(_command_lists.size());
-        query_cancellations.reserve(_command_lists.size());
-        materialized_source_indices.reserve(_command_lists.size());
-        rejection_preparations.resize(_command_lists.size());
-        prepared_rejections.resize(_command_lists.size());
-        for (CommandList& command_list : _command_lists) {
-            completion_cancellations.emplace_back(
-                command_list.GetGpuCompletionCancellationView()
-            );
-            query_cancellations.emplace_back(
-                command_list.GetQueryCancellationView()
-            );
-        }
-    } catch (const std::exception& exception) {
-        try {
-            LOG_ERROR(
-                "[RHIExecutor] failed to prepare CommandList group: {}",
-                exception.what()
-            );
-        } catch (...) {
-        }
-        // No CommandList has been touched yet. Propagate the allocation
-        // failure with the complete caller-owned transaction intact.
-        throw;
+        preparation.Prepare(_command_lists);
     } catch (...) {
-        try {
-            LOG_ERROR("[RHIExecutor] failed to prepare CommandList group");
-        } catch (...) {
-        }
+        // The entire caller-owned group is still intact.
+        ReportExecutorFailure("Submit", "CommandList group preparation", std::current_exception());
         throw;
     }
 
     const bool group_valid = std::all_of(
-        _command_lists.begin(),
-        _command_lists.end(),
-        [](const CommandList& command_list) {
-            return IsSubmissionQueue(command_list.GetQueueType()) &&
-                   !command_list.HasOpenQueries();
+        _command_lists.begin(), _command_lists.end(), [](const CommandList& command_list) {
+            return IsSubmissionQueue(command_list.GetQueueType()) && !command_list.HasOpenQueries();
         }
     );
     if (!group_valid) {
-        FinalizeRejectedCommandListGroup(
-            _command_lists,
-            completion_cancellations,
-            query_cancellations,
-            rejection_preparations,
-            prepared_rejections,
-            materialized_source_indices,
-            std::move(submits),
-            _present,
-            "CommandList group contains an invalid queue or open query"
-        );
+        preparation.Reject(_command_lists, _present, "CommandList group contains an invalid queue or open query");
         return;
     }
 
     try {
-        for (size_t source_index = 0;
-             source_index < _command_lists.size();
-             ++source_index) {
-            CommandList& command_list = _command_lists[source_index];
-            if (command_list.IsEmpty()) {
-                continue;
-            }
-            InvokeDirectCommandListMaterializationOverrideForTesting(
-                source_index
-            );
-            const EQueueType queue = command_list.GetQueueType();
-            submits.emplace_back(queue, command_list.Submit());
-            materialized_source_indices.emplace_back(source_index);
-        }
-    } catch (const std::exception& exception) {
-        try {
-            LOG_ERROR(
-                "[RHIExecutor] failed to materialize CommandList group: {}",
-                exception.what()
-            );
-        } catch (...) {
-        }
-        FinalizeRejectedCommandListGroup(
-            _command_lists,
-            completion_cancellations,
-            query_cancellations,
-            rejection_preparations,
-            prepared_rejections,
-            materialized_source_indices,
-            std::move(submits),
-            _present,
-            "CommandList group materialization failed"
-        );
-        return;
+        preparation.SealCommandLists(_command_lists);
     } catch (...) {
-        try {
-            LOG_ERROR("[RHIExecutor] failed to materialize CommandList group");
-        } catch (...) {
-        }
-        FinalizeRejectedCommandListGroup(
-            _command_lists,
-            completion_cancellations,
-            query_cancellations,
-            rejection_preparations,
-            prepared_rejections,
-            materialized_source_indices,
-            std::move(submits),
-            _present,
-            "CommandList group materialization failed"
-        );
+        ReportExecutorFailure("Submit", "CommandList group materialization", std::current_exception());
+        preparation.Reject(_command_lists, _present, "CommandList group materialization failed");
         return;
     }
-    Submit(std::move(submits), _flags, _present);
+    Submit(std::move(preparation.submits), _flags, _present);
 }
 
 void RHIExecutor::SubmitRecording(
@@ -377,20 +361,33 @@ void RHIExecutor::SubmitRecording(
     SubmitRecording(std::move(sources), _flags);
 }
 
+std::vector<RHIRecordingGateRef> RHIExecutor::CollectRecordingPrerequisites(
+    const Array<RHIRecordingSource>& _sources
+) {
+    std::vector<RHIRecordingGateRef> prerequisites{};
+    prerequisites.reserve(_sources.size() * 2);
+    for (const RHIRecordingSource& source : _sources) {
+        prerequisites.emplace_back(source.completion.gate);
+        if (source.commit &&
+            std::find(
+                prerequisites.begin(),
+                prerequisites.end(),
+                source.commit.gate
+            ) == prerequisites.end()) {
+            prerequisites.emplace_back(source.commit.gate);
+        }
+    }
+
+    return prerequisites;
+}
+
 void RHIExecutor::SubmitRecording(
     Array<RHIRecordingSource>&& _sources,
     ERHIExecSubmitFlags         _flags
 ) {
-    _sources.erase(
-        std::remove_if(
-            _sources.begin(),
-            _sources.end(),
-            [](const RHIRecordingSource& _source) {
-                return !_source.command_list;
-            }
-        ),
-        _sources.end()
-    );
+    std::erase_if(_sources, [](const RHIRecordingSource& source) {
+        return !source.command_list;
+    });
 
     for (RHIRecordingSource& source : _sources) {
         // Publication seals the current CommandList generation. Never trust a
@@ -411,10 +408,10 @@ void RHIExecutor::SubmitRecording(
     Array<CommandList::RecordingRejectionPreparation>
                                         rejection_preparations{};
     Array<PreparedCommandListRejection> prepared_rejections{};
-    Array<uint8>                        terminal_snapshot{};
+    Array<ERecordingRejectionState>     rejection_states{};
     rejection_preparations.resize(_sources.size());
     prepared_rejections.resize(_sources.size());
-    terminal_snapshot.resize(_sources.size(), uint8{0});
+    rejection_states.resize(_sources.size(), ERecordingRejectionState::ProducerOwned);
 
     const bool sources_valid = std::all_of(
         _sources.begin(),
@@ -430,24 +427,12 @@ void RHIExecutor::SubmitRecording(
             "missing completion gate or invalid queue",
             rejection_preparations,
             prepared_rejections,
-            terminal_snapshot
+            rejection_states
         );
         return;
     }
 
-    std::vector<RHIRecordingGateRef> prerequisites{};
-    prerequisites.reserve(_sources.size() * 2);
-    for (const RHIRecordingSource& source : _sources) {
-        prerequisites.emplace_back(source.completion.gate);
-        if (source.commit &&
-            std::find(
-                prerequisites.begin(),
-                prerequisites.end(),
-                source.commit.gate
-            ) == prerequisites.end()) {
-            prerequisites.emplace_back(source.commit.gate);
-        }
-    }
+    std::vector<RHIRecordingGateRef> prerequisites = CollectRecordingPrerequisites(_sources);
 
     auto payload     = std::make_shared<RecordingSourcePayload>();
     payload->sources = std::move(_sources);
@@ -455,36 +440,15 @@ void RHIExecutor::SubmitRecording(
         std::move(rejection_preparations);
     payload->prepared_rejections =
         std::move(prepared_rejections);
-    payload->terminal_snapshot =
-        std::move(terminal_snapshot);
+    payload->rejection_states =
+        std::move(rejection_states);
     payload->flags = _flags;
 
     try {
         RHIExecutorWork work{
             .prerequisites = std::move(prerequisites),
             .callback      = [this, payload](ERHIExecutorWorkAction _action) {
-                if (_action == ERHIExecutorWorkAction::Cancel) {
-                    FinalizeCancelledRecordingSources(
-                        std::move(payload->sources),
-                        "completion gate cancelled during shutdown",
-                        payload->rejection_preparations,
-                        payload->prepared_rejections,
-                        payload->terminal_snapshot
-                    );
-                    return;
-                }
-                if (_action == ERHIExecutorWorkAction::Reject) {
-                    FinalizeFailedRecordingSources(
-                        std::move(payload->sources),
-                        "recording completion gate failed",
-                        payload->rejection_preparations,
-                        payload->prepared_rejections,
-                        payload->terminal_snapshot
-                    );
-                    return;
-                }
-
-                auto submits = MaterializeRecordingSources(*payload);
+                auto submits = PrepareRecordingSubmissionRequests(*payload, _action);
                 if (!submits) {
                     return;
                 }

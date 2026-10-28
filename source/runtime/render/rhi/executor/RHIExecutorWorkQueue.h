@@ -2,17 +2,22 @@
 
 #include "RenderAPI.h"
 
+#include <cassert>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <stop_token>
 #include <thread>
 #include <vector>
 
 namespace Moer::Render {
+
+class RHIThreadHeartbeatScope;
 
 enum class ERHIRecordingStatus : uint8_t {
     Pending,
@@ -29,9 +34,9 @@ public:
     static std::shared_ptr<RHIRecordingGate> Create(bool _initially_complete = false);
 
     // Idempotent. Returns true only for the transition to the complete state.
-    bool Signal() noexcept;
-    bool Fail() noexcept;
-    [[nodiscard]] bool IsComplete() const noexcept;
+    bool                              Signal() noexcept;
+    bool                              Fail() noexcept;
+    [[nodiscard]] bool                IsComplete() const noexcept;
     [[nodiscard]] ERHIRecordingStatus Status() const noexcept;
     // Blocking producer-side join used at explicit RDG wave boundaries.
     // Unlike the worker overload, this wait is not cancellable and always
@@ -47,11 +52,13 @@ private:
                                   ERHIRecordingStatus::Pending
         ) {}
     bool Complete(ERHIRecordingStatus _status) noexcept;
-    [[nodiscard]] ERHIRecordingStatus Wait(std::stop_token _stop_token) const noexcept;
+    // Returns Succeeded/Failed, or nullopt if stopped before completion.
+    // Stopping the wait does not change the producer's gate status.
+    [[nodiscard]] std::optional<ERHIRecordingStatus> Wait(std::stop_token _stop_token) const noexcept;
 
-    mutable std::mutex              mutex;
+    mutable std::mutex                  mutex;
     mutable std::condition_variable_any cv;
-    ERHIRecordingStatus             status{ERHIRecordingStatus::Pending};
+    ERHIRecordingStatus                 status{ERHIRecordingStatus::Pending};
 };
 
 using RHIRecordingGateRef = std::shared_ptr<RHIRecordingGate>;
@@ -72,8 +79,10 @@ public:
         return gate && gate->IsComplete();
     }
 
+    // Requires a valid view; an absent gate has no recording status.
     [[nodiscard]] ERHIRecordingStatus Status() const noexcept {
-        return gate ? gate->Status() : ERHIRecordingStatus::Pending;
+        assert(gate);
+        return gate->Status();
     }
 
     friend bool operator==(
@@ -102,8 +111,9 @@ enum class ERHIExecutorWorkAction : uint8_t {
 
 // Optional CPU recording prerequisites and one callback for normal processing
 // or rejection/cancellation cleanup. An empty prerequisite list still respects FIFO.
+// Every prerequisite in a non-empty list must refer to a valid gate.
 struct RHIExecutorWork {
-    std::vector<RHIRecordingGateRef> prerequisites{};
+    std::vector<RHIRecordingGateRef>            prerequisites{};
     std::function<void(ERHIExecutorWorkAction)> callback{};
 };
 
@@ -124,26 +134,39 @@ public:
 
     // Accepted work always runs on the Executor worker, even without prerequisites.
     // If stopped, invokes the callback with Cancel on the calling thread.
-    // If insertion throws, ownership stays with the caller for cleanup.
+    // Invalid prerequisites throw before admission. If validation or insertion
+    // throws, ownership stays with the caller and no callback is invoked.
     void Enqueue(RHIExecutorWork&& _work);
 
-    void ShutDown();
+    void               ShutDown();
     [[nodiscard]] bool IsIdle() const noexcept;
 
 private:
     void Run(std::stop_token _stop_token) noexcept;
+    // False means stopped with no queued work; _work is left unchanged.
+    bool WaitAndPopWork(
+        RHIExecutorWork&         _work,
+        std::stop_token          _stop_token,
+        RHIThreadHeartbeatScope& _heartbeat
+    );
+    static ERHIExecutorWorkAction WaitForPrerequisites(
+        std::span<const RHIRecordingGateRef> _prerequisites,
+        std::stop_token                      _stop_token,
+        RHIThreadHeartbeatScope&             _heartbeat
+    );
+    void        CancelPendingWork();
     static void InvokeCallbackNoThrow(
         RHIExecutorWork&       _work,
         ERHIExecutorWorkAction _action
     ) noexcept;
 
-    mutable std::mutex                        mutex;
-    std::condition_variable_any               work_cv;
-    std::condition_variable                   idle_cv;
-    std::deque<RHIExecutorWork>               pending{};
-    std::jthread                              worker{};
-    bool                                      accepting{false};
-    bool                                      worker_busy{false};
+    mutable std::mutex          mutex;
+    std::condition_variable_any work_cv;
+    std::condition_variable     idle_cv;
+    std::deque<RHIExecutorWork> pending{};
+    std::jthread                worker{};
+    bool                        accepting{false};
+    bool                        worker_busy{false};
 };
 
 } // namespace Moer::Render

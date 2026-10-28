@@ -25,8 +25,9 @@ struct WorkerRequestDispatchResult {
 
 // The submission thread is a process-lifetime service. No request-owned
 // exception may escape its entry point: Submit must reject the payload still
-// owned by the request, while Sync/Stop must release their waiters. Stop is
-// terminal even when its final Sync fails.
+// owned by the request, while Sync/Stop pass the process exception (empty on
+// success) to their completion callback to release waiters. Stop is terminal
+// even when its final Sync fails.
 template <
     typename ProcessFn,
     typename RejectFn,
@@ -39,7 +40,8 @@ template <
     CompleteFn&&       _complete,
     ReportFailureFn&&  _report_failure
 ) noexcept {
-    bool failed = false;
+    bool               failed = false;
+    std::exception_ptr process_exception{};
 
     auto report_failure = [&](EWorkerRequestFailurePhase _phase,
                               std::exception_ptr          _exception) noexcept {
@@ -54,8 +56,8 @@ template <
     try {
         _process();
     } catch (...) {
-        failed = true;
-        const std::exception_ptr process_exception = std::current_exception();
+        failed            = true;
+        process_exception = std::current_exception();
         report_failure(EWorkerRequestFailurePhase::Process, process_exception);
 
         if (_kind == EWorkerRequestKind::Submit) {
@@ -71,7 +73,7 @@ template <
 
     if (_kind != EWorkerRequestKind::Submit) {
         try {
-            _complete();
+            _complete(process_exception);
         } catch (...) {
             failed = true;
             report_failure(

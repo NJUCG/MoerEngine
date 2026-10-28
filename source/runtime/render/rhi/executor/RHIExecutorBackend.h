@@ -1,7 +1,6 @@
 #pragma once
 
 #include "rhi/RHICommand.h"
-#include "taskgraph/GraphTask.h"
 
 #include <optional>
 #include <utility>
@@ -16,11 +15,6 @@ enum class ERHIExecSubmitFlags : uint8_t {
 constexpr bool HasRHIExecSubmitFlag(ERHIExecSubmitFlags _flags, ERHIExecSubmitFlags _flag) noexcept {
     return (static_cast<uint8_t>(_flags) & static_cast<uint8_t>(_flag)) != 0;
 }
-
-enum class ERHIFlushDepth : uint8_t {
-    RHITranslate = 0,
-    SubmitGPU    = 1,
-};
 
 enum class ERHISyncDepth : uint8_t {
     RHI     = 0,
@@ -79,16 +73,16 @@ struct RHISubmissionRequest {
 // Ordered requests published together, with an optional Present and the
 // topology used to schedule their native submissions.
 struct RHISubmissionBatch {
-    uint64                          sequence{0};
+    uint64                           sequence{0};
     Array<RHISubmissionRequest>      submits{};
     std::optional<RHIPresentRequest> present{};
     RHISubmissionTopologyPlan        topology{};
 
-    RHISubmissionBatch()                                      = default;
-    RHISubmissionBatch(RHISubmissionBatch&&) noexcept           = default;
+    RHISubmissionBatch()                                         = default;
+    RHISubmissionBatch(RHISubmissionBatch&&) noexcept            = default;
     RHISubmissionBatch& operator=(RHISubmissionBatch&&) noexcept = default;
-    RHISubmissionBatch(const RHISubmissionBatch&)               = delete;
-    RHISubmissionBatch& operator=(const RHISubmissionBatch&)    = delete;
+    RHISubmissionBatch(const RHISubmissionBatch&)                = delete;
+    RHISubmissionBatch& operator=(const RHISubmissionBatch&)     = delete;
 };
 
 class RHIBackendExecutor {
@@ -98,9 +92,23 @@ public:
     // RHIExecutor serializes Enqueue/Flush publication order. Sync may run
     // concurrently after its preceding batches have been published, so each
     // backend must safely linearize Sync against later Enqueue/Flush calls.
-    virtual void          Enqueue(RHISubmissionBatch&& _batch)                    = 0;
-    virtual GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI)           = 0;
-    virtual void          Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU) = 0;
+
+    // Normal return transfers responsibility for all further processing,
+    // including rejection, to the backend; it does not imply GPU acceptance.
+    // If Enqueue throws, only the unconsumed suffix remains in _batch for the
+    // caller to reject. The backend remains responsible for the consumed prefix.
+    virtual void Enqueue(RHISubmissionBatch&& _batch) = 0;
+
+    // Blocking host boundary for preceding backend work at the requested depth.
+    // Return only after the boundary completes, including CPU retirement;
+    // rejected submissions may still satisfy it. Throw if Sync itself cannot
+    // complete. Failure does not imply resources are safe to release.
+    virtual void Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) = 0;
+
+    // Non-blocking request for progress; does not guarantee native GPU
+    // submission or completion.
+    virtual void Flush() = 0;
+
     // Publish non-blocking cancellation before RHIExecutor waits for
     // concurrent Sync callers. Backends without cancellable host waits may
     // keep the default no-op implementation.

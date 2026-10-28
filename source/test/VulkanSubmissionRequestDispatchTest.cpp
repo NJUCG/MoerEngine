@@ -39,7 +39,9 @@ void SubmitExceptionRejectsEveryOutstandingObligation() {
             obligations.signals         = false;
             obligations.present_receipt = false;
         },
-        [&] { ++complete_count; },
+        [&](const std::exception_ptr&) {
+            ++complete_count;
+        },
         [&](EWorkerRequestFailurePhase _phase, const std::exception_ptr&) {
             failures.push_back(_phase);
         }
@@ -85,7 +87,7 @@ void SubmitExceptionPreservesTerminalizedPrefix() {
                 sources[source_index] = ESourceState::Rejected;
             }
         },
-        [] {},
+        [](const std::exception_ptr&) {},
         [](EWorkerRequestFailurePhase, const std::exception_ptr&) {}
     );
 
@@ -100,63 +102,102 @@ void SubmitExceptionPreservesTerminalizedPrefix() {
     );
 }
 
-void SyncExceptionAlwaysCompletes() {
-    uint32_t complete_count = 0;
+void SuccessfulSyncCompletesWithoutFailure() {
+    uint32_t           complete_count = 0;
+    uint32_t           reject_count   = 0;
+    std::exception_ptr propagated_failure{};
     const WorkerRequestDispatchResult result = DispatchWorkerRequestNoexcept(
         EWorkerRequestKind::Sync,
-        [] { throw std::runtime_error("injected Sync failure"); },
-        [] { throw std::runtime_error("Sync must not reject a Submit"); },
-        [&] { ++complete_count; },
+        [] {},
+        [&] {
+            ++reject_count;
+        },
+        [&](const std::exception_ptr& _failure) {
+            ++complete_count;
+            propagated_failure = _failure;
+        },
         [](EWorkerRequestFailurePhase, const std::exception_ptr&) {}
     );
 
-    Expect(result.failed, "Sync exception was not reported as failed");
-    Expect(!result.stop, "Sync exception incorrectly stopped the worker");
-    Expect(complete_count == 1, "Sync exception did not release its waiter");
+    Expect(!result.failed, "successful Sync was reported as failed");
+    Expect(!result.stop, "successful Sync incorrectly stopped the worker");
+    Expect(reject_count == 0, "successful Sync incorrectly rejected a Submit");
+    Expect(complete_count == 1, "successful Sync did not release its waiter exactly once");
+    Expect(!propagated_failure, "successful Sync propagated a failure");
 }
 
-void PresentSyncExceptionReachesCompletion() {
+void SyncExceptionReachesCompletionDespiteDiagnosticFailure() {
     uint32_t           complete_count = 0;
     uint32_t           reject_count   = 0;
     std::exception_ptr propagated_failure{};
     std::vector<EWorkerRequestFailurePhase> failures;
+    const std::exception_ptr injected_failure =
+        std::make_exception_ptr(std::runtime_error("injected Sync failure"));
 
     const WorkerRequestDispatchResult result = DispatchWorkerRequestNoexcept(
         EWorkerRequestKind::Sync,
-        [] {
-            throw std::runtime_error("injected Present sync failure");
+        [&] {
+            std::rethrow_exception(injected_failure);
         },
         [&] {
             ++reject_count;
         },
-        [&] {
+        [&](const std::exception_ptr& _failure) {
             ++complete_count;
-            Expect(propagated_failure != nullptr, "Present sync completion ran before failure publication");
+            propagated_failure = _failure;
         },
-        [&](EWorkerRequestFailurePhase _phase, const std::exception_ptr& _failure) {
+        [&](EWorkerRequestFailurePhase _phase, const std::exception_ptr&) {
             failures.push_back(_phase);
-            if (_phase == EWorkerRequestFailurePhase::Process) {
-                propagated_failure = _failure;
-            }
+            throw std::runtime_error("injected diagnostic failure");
         }
     );
 
-    Expect(result.failed, "Present sync exception was not reported as failed");
-    Expect(!result.stop, "Present sync exception incorrectly stopped the worker");
-    Expect(reject_count == 0, "Present sync exception incorrectly rejected a Submit");
-    Expect(complete_count == 1, "Present sync exception did not release its waiter exactly once");
+    Expect(result.failed, "Sync exception was not reported as failed");
+    Expect(!result.stop, "Sync exception incorrectly stopped the worker");
+    Expect(reject_count == 0, "Sync exception incorrectly rejected a Submit");
+    Expect(complete_count == 1, "Sync exception did not release its waiter exactly once");
+    Expect(propagated_failure == injected_failure, "Sync completion did not receive the original process exception");
     Expect(
         failures.size() == 1 && failures.front() == EWorkerRequestFailurePhase::Process,
-        "Present sync process failure was not diagnosed exactly once"
+        "Sync process failure was not diagnosed exactly once"
     );
     try {
         std::rethrow_exception(propagated_failure);
     } catch (const std::runtime_error& error) {
         Expect(
-            std::string_view(error.what()) == "injected Present sync failure",
-            "Present sync completion lost the process exception"
+            std::string_view(error.what()) == "injected Sync failure",
+            "Sync completion lost the process exception"
         );
     }
+}
+
+void StopProcessExceptionStillCompletesShutdown() {
+    uint32_t           complete_count = 0;
+    uint32_t           reject_count   = 0;
+    std::exception_ptr propagated_failure{};
+    const std::exception_ptr injected_failure =
+        std::make_exception_ptr(std::runtime_error("injected Stop Sync failure"));
+
+    const WorkerRequestDispatchResult result = DispatchWorkerRequestNoexcept(
+        EWorkerRequestKind::Stop,
+        [&] {
+            std::rethrow_exception(injected_failure);
+        },
+        [&] {
+            ++reject_count;
+        },
+        [&](const std::exception_ptr& _failure) {
+            ++complete_count;
+            propagated_failure = _failure;
+        },
+        [](EWorkerRequestFailurePhase, const std::exception_ptr&) {}
+    );
+
+    Expect(result.failed, "Stop process exception was not reported as failed");
+    Expect(result.stop, "Stop process exception did not terminate the worker");
+    Expect(reject_count == 0, "Stop process exception incorrectly rejected a Submit");
+    Expect(complete_count == 1, "Stop process exception did not finish shutdown exactly once");
+    Expect(propagated_failure == injected_failure, "Stop completion did not receive the original process exception");
 }
 
 void StopExceptionsAlwaysCompleteAndExit() {
@@ -166,7 +207,7 @@ void StopExceptionsAlwaysCompleteAndExit() {
         EWorkerRequestKind::Stop,
         [] { throw std::runtime_error("injected Stop Sync failure"); },
         [] { throw std::runtime_error("Stop must not reject a Submit"); },
-        [&] {
+        [&](const std::exception_ptr&) {
             ++complete_count;
             throw std::runtime_error("injected completion failure");
         },
@@ -195,7 +236,7 @@ void FailureReportingCannotEscapeOrSkipRejection() {
             ++reject_count;
             throw std::runtime_error("injected rejection failure");
         },
-        [] {},
+        [](const std::exception_ptr&) {},
         [](EWorkerRequestFailurePhase, const std::exception_ptr&) {
             throw std::runtime_error("injected diagnostic failure");
         }
@@ -211,8 +252,9 @@ int main() {
     try {
         SubmitExceptionRejectsEveryOutstandingObligation();
         SubmitExceptionPreservesTerminalizedPrefix();
-        SyncExceptionAlwaysCompletes();
-        PresentSyncExceptionReachesCompletion();
+        SuccessfulSyncCompletesWithoutFailure();
+        SyncExceptionReachesCompletionDespiteDiagnosticFailure();
+        StopProcessExceptionStillCompletesShutdown();
         StopExceptionsAlwaysCompleteAndExit();
         FailureReportingCannotEscapeOrSkipRejection();
         std::cout << "Vulkan submission request dispatch tests passed\n";

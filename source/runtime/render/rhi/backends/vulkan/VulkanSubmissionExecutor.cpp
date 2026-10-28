@@ -31,12 +31,6 @@ namespace Moer::Render {
 using namespace VulkanSubmissionDetail;
 namespace {
 
-GraphEventRef MakeCompletedEvent() {
-    GraphEventRef event = GraphEvent::CreateGraphEvent();
-    event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-    return event;
-}
-
 bool SubmitContainsQuery(const CmdSubmit& _submit) {
     return !_submit.query_tokens.empty() ||
            std::any_of(
@@ -757,15 +751,12 @@ void VulkanSubmissionExecutor::Enqueue(RHISubmissionBatch&& _batch) {
     cv.notify_one();
 }
 
-GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
+void VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
     auto completion = std::make_shared<CpuTaskCompletion>();
     {
         std::lock_guard lock(mutex);
         if (!accepting) {
-            if (_depth == ERHISyncDepth::Present) {
-                throw std::runtime_error("Present sync rejected during shutdown");
-            }
-            return MakeCompletedEvent();
+            throw std::runtime_error("Sync rejected during shutdown");
         }
         requests.emplace_back(
             WorkerRequest{
@@ -780,12 +771,11 @@ GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
     NotifyVulkanBackendSyncWait();
 #endif
     completion->Wait();
-    return MakeCompletedEvent();
 }
 
-void VulkanSubmissionExecutor::Flush(ERHIFlushDepth) {
+void VulkanSubmissionExecutor::Flush() {
     // Enqueue publishes directly to the runtime FIFO and wakes its owner.
-    // SubmitGPU intentionally does not wait; Sync is the explicit host boundary.
+    // Flush does not wait; Sync is the explicit host boundary.
     cv.notify_one();
 }
 
@@ -903,7 +893,6 @@ void VulkanSubmissionExecutor::RunTranslateThread() {
                 ERHIHeartbeatStage::AwaitCompletion
         );
         BatchExceptionState exception_state{};
-        std::exception_ptr  request_failure{};
         const VulkanSubmissionDetail::WorkerRequestDispatchResult dispatch_result =
             VulkanSubmissionDetail::DispatchWorkerRequestNoexcept(
                 request.kind,
@@ -938,21 +927,18 @@ void VulkanSubmissionExecutor::RunTranslateThread() {
                         exception_state.rejection_publication
                     );
                 },
-                [&] {
+                [&](const std::exception_ptr& _failure) {
+                    // Stop must still release its waiter so ShutDown can join
+                    // the owners. Sync reports failure for every requested depth.
                     CompleteRequest(
                         request.completion,
-                        request.kind == ERequestKind::Sync && request.sync_depth == ERHISyncDepth::Present ?
-                            request_failure :
+                        request.kind == ERequestKind::Sync ?
+                            _failure :
                             std::exception_ptr{}
                     );
                 },
                 [&](VulkanSubmissionDetail::EWorkerRequestFailurePhase _phase,
                     const std::exception_ptr&                          _exception) {
-                    if (request.kind == ERequestKind::Sync && request.sync_depth == ERHISyncDepth::Present &&
-                        _phase == VulkanSubmissionDetail::EWorkerRequestFailurePhase::Process &&
-                        !request_failure) {
-                        request_failure = _exception;
-                    }
                     LatchHardFailure(
                         StreamPosition{
                             request.batch.sequence,

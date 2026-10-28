@@ -10,52 +10,43 @@
 namespace Moer::Render {
 namespace {
 
-std::atomic<
-    const RHIDirectCommandListMaterializationOverrideForTesting*>
-           g_direct_command_list_materialization_override{nullptr};
-std::mutex g_direct_command_list_materialization_override_mutex{};
-std::condition_variable
-       g_direct_command_list_materialization_override_cv{};
-size_t g_direct_command_list_materialization_active_callbacks{0};
-bool   g_direct_command_list_materialization_override_retiring{false};
+// Installation, callback acquisition and retirement share one lifetime.
+struct MaterializationOverrideState {
+    std::atomic<const RHIDirectCommandListMaterializationOverrideForTesting*> current{nullptr};
+    std::mutex                                                                mutex;
+    std::condition_variable                                                   cv;
+    size_t                                                                    active_callbacks{0};
+    bool                                                                      retiring{false};
+};
+
+MaterializationOverrideState g_materialization_override;
 
 } // namespace
 
 void InvokeDirectCommandListMaterializationOverrideForTesting(
     size_t _source_index
 ) {
-    const auto* override =
-        g_direct_command_list_materialization_override.load(
-            std::memory_order_acquire
-        );
-    if (override == nullptr) {
+    const auto* hook = g_materialization_override.current.load(std::memory_order_acquire);
+    if (hook == nullptr) {
         return;
     }
     {
-        std::lock_guard lock(
-            g_direct_command_list_materialization_override_mutex
-        );
-        if (g_direct_command_list_materialization_override_retiring ||
-            g_direct_command_list_materialization_override.load(
-                std::memory_order_relaxed
-            ) != override) {
+        std::lock_guard lock(g_materialization_override.mutex);
+        if (g_materialization_override.retiring ||
+            g_materialization_override.current.load(std::memory_order_relaxed) != hook) {
             return;
         }
-        ++g_direct_command_list_materialization_active_callbacks;
+        ++g_materialization_override.active_callbacks;
     }
     auto release_reader = OnScopeExit([&]() noexcept {
-        std::lock_guard lock(
-            g_direct_command_list_materialization_override_mutex
-        );
-        assert(
-            g_direct_command_list_materialization_active_callbacks != 0
-        );
-        --g_direct_command_list_materialization_active_callbacks;
-        if (g_direct_command_list_materialization_active_callbacks == 0) {
-            g_direct_command_list_materialization_override_cv.notify_all();
+        std::lock_guard lock(g_materialization_override.mutex);
+        assert(g_materialization_override.active_callbacks != 0);
+        --g_materialization_override.active_callbacks;
+        if (g_materialization_override.active_callbacks == 0) {
+            g_materialization_override.cv.notify_all();
         }
     });
-    override->before_source(override->context, _source_index);
+    hook->before_source(hook->context, _source_index);
 }
 
 bool TryInstallRHIDirectCommandListMaterializationOverrideForTesting(
@@ -64,16 +55,12 @@ bool TryInstallRHIDirectCommandListMaterializationOverrideForTesting(
     if (_override == nullptr || _override->before_source == nullptr) {
         return false;
     }
-    std::lock_guard lock(
-        g_direct_command_list_materialization_override_mutex
-    );
-    if (g_direct_command_list_materialization_override_retiring ||
-        g_direct_command_list_materialization_override.load(
-            std::memory_order_relaxed
-        ) != nullptr) {
+    std::lock_guard lock(g_materialization_override.mutex);
+    if (g_materialization_override.retiring ||
+        g_materialization_override.current.load(std::memory_order_relaxed) != nullptr) {
         return false;
     }
-    g_direct_command_list_materialization_override.store(
+    g_materialization_override.current.store(
         _override, std::memory_order_release
     );
     return true;
@@ -85,27 +72,19 @@ bool RemoveRHIDirectCommandListMaterializationOverrideForTesting(
     if (_override == nullptr) {
         return false;
     }
-    std::unique_lock lock(
-        g_direct_command_list_materialization_override_mutex
-    );
-    if (g_direct_command_list_materialization_override_retiring ||
-        g_direct_command_list_materialization_override.load(
-            std::memory_order_relaxed
-        ) != _override) {
+    std::unique_lock lock(g_materialization_override.mutex);
+    if (g_materialization_override.retiring ||
+        g_materialization_override.current.load(std::memory_order_relaxed) != _override) {
         return false;
     }
-    g_direct_command_list_materialization_override_retiring = true;
-    g_direct_command_list_materialization_override.store(
+    g_materialization_override.retiring = true;
+    g_materialization_override.current.store(
         nullptr, std::memory_order_release
     );
-    g_direct_command_list_materialization_override_cv.wait(
-        lock,
-        [] {
-            return g_direct_command_list_materialization_active_callbacks ==
-                   0;
-        }
-    );
-    g_direct_command_list_materialization_override_retiring = false;
+    g_materialization_override.cv.wait(lock, [] {
+        return g_materialization_override.active_callbacks == 0;
+    });
+    g_materialization_override.retiring = false;
     return true;
 }
 

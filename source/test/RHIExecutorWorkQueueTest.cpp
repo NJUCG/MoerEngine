@@ -2297,6 +2297,116 @@ bool SubmitRecordingRefreshesAStaleCompletionCancellationView() {
     return okay;
 }
 
+bool MissingPrerequisitePreservesCallerOwnership() {
+    RHIExecutorWorkQueue queue{};
+    queue.Start();
+    ResolutionLog   log{};
+    auto            gate = RHIRecordingGate::Create(true);
+    RHIExecutorWork work{
+        .prerequisites = {gate, {}},
+        .callback      = [&log](ERHIExecutorWorkAction action) {
+            log.Push(1, action);
+        },
+    };
+
+    bool rejected = false;
+    try {
+        queue.Enqueue(std::move(work));
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    bool okay = Expect(rejected, "missing prerequisite was admitted") &&
+                Expect(work.prerequisites.size() == 2 && work.callback, "failed admission consumed caller-owned work") &&
+                Expect(log.Snapshot().empty(), "failed admission invoked a callback");
+    if (okay) {
+        work.prerequisites.pop_back();
+        queue.Enqueue(std::move(work));
+        okay &= Expect(log.WaitForSize(1), "corrected work could not be retried");
+    }
+    queue.ShutDown();
+    const auto entries = log.Snapshot();
+    return okay && Expect(entries.size() == 1 && entries[0].second == ERHIExecutorWorkAction::Execute, "corrected work was not executed exactly once");
+}
+
+bool StoppedSyncReportsFailureAtEveryDepth() {
+    RHIExecutor::ShutDown();
+
+    bool okay = true;
+    for (ERHISyncDepth depth : {ERHISyncDepth::RHI, ERHISyncDepth::Present}) {
+        bool rejected = false;
+        try {
+            RHIExecutor::Get().Sync(depth);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        } catch (...) {
+        }
+        okay &= Expect(
+            rejected,
+            depth == ERHISyncDepth::RHI ?
+                "stopped RHI Sync did not report runtime_error" :
+                "stopped Present Sync did not report runtime_error"
+        );
+    }
+    return okay;
+}
+
+bool RunningEmptySyncCompletesAtEveryDepth() {
+    RHIExecutor::StartUp();
+
+    bool okay = true;
+    for (ERHISyncDepth depth : {ERHISyncDepth::RHI, ERHISyncDepth::Present}) {
+        bool completed = false;
+        try {
+            RHIExecutor::Get().Sync(depth);
+            completed = true;
+        } catch (...) {
+        }
+        okay &= Expect(
+            completed,
+            depth == ERHISyncDepth::RHI ?
+                "running empty RHI Sync failed without a backend" :
+                "running empty Present Sync failed without a backend"
+        );
+    }
+    RHIExecutor::ShutDown();
+    return okay;
+}
+
+bool SyncRejectsEveryRHIOwnerRoleAtEveryDepth() {
+    RHIExecutor::StartUp();
+
+    constexpr std::array owner_roles{
+        ERHIThreadRole::Executor,
+        ERHIThreadRole::Translate,
+        ERHIThreadRole::Submission,
+        ERHIThreadRole::Completion,
+        ERHIThreadRole::RecordWorker,
+    };
+    bool okay = true;
+    for (ERHIThreadRole role : owner_roles) {
+        for (ERHISyncDepth depth : {ERHISyncDepth::RHI, ERHISyncDepth::Present}) {
+            bool rejected = false;
+            {
+                RHIThreadRoleScope role_scope(role);
+                try {
+                    RHIExecutor::Get().Sync(depth);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                } catch (...) {
+                }
+            }
+            okay &= Expect(
+                rejected,
+                depth == ERHISyncDepth::RHI ?
+                    "RHI owner role did not reject RHI Sync with logic_error" :
+                    "RHI owner role did not reject Present Sync with logic_error"
+            );
+        }
+    }
+    RHIExecutor::ShutDown();
+    return okay;
+}
+
 bool PerSourceGatesPreserveFifo() {
     RHIExecutorWorkQueue queue{};
     queue.Start();
@@ -3292,6 +3402,10 @@ int main() {
         !RecordingPreflightFailureTerminalizesEveryCompletionGeneration() ||
         !SubmitRecordingRefreshesAStaleQueryCancellationView() ||
         !SubmitRecordingRefreshesAStaleCompletionCancellationView() ||
+        !MissingPrerequisitePreservesCallerOwnership() ||
+        !StoppedSyncReportsFailureAtEveryDepth() ||
+        !RunningEmptySyncCompletesAtEveryDepth() ||
+        !SyncRejectsEveryRHIOwnerRoleAtEveryDepth() ||
         !PerSourceGatesPreserveFifo() ||
         !ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() ||
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||

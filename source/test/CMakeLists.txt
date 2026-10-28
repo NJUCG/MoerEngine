@@ -522,16 +522,16 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHISubmissionPipelinePolicyContract COMMAND $<TARGET_FILE:${test_target}>)
 
-# These CPU-only contracts still link implementations from Vulkan-only source
-# files, which the Render target excludes on macOS.
-if (NOT APPLE)
-    # Submission worker fault-injection and completion ownership.
-    set(test_target TestVulkanSubmissionRequestDispatch)
-    add_executable(${test_target} "VulkanSubmissionRequestDispatchTest.cpp")
-    target_link_libraries(${test_target} PRIVATE Moer::Render)
-    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-    add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
+# Header-only submission worker fault-injection and completion ownership.
+set(test_target TestVulkanSubmissionRequestDispatch)
+add_executable(${test_target} "VulkanSubmissionRequestDispatchTest.cpp")
+target_include_directories(${test_target} PRIVATE "${moer_source_dir}/runtime/render")
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# This CPU-only contract links a Vulkan-only implementation, which the Render
+# target excludes on macOS.
+if (NOT APPLE)
     # Dependency-wave contract for same-batch Vulkan translation.
     set(test_target TestVulkanTranslateWaveScheduler)
     add_executable(${test_target} "VulkanTranslateWaveSchedulerTest.cpp")

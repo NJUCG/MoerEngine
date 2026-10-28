@@ -5,8 +5,10 @@
 #include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/RHIThreadOwnership.h"
 
+#include <algorithm>
 #include <cassert>
 #include <exception>
+#include <stdexcept>
 #include <utility>
 
 namespace Moer::Render {
@@ -49,16 +51,21 @@ ERHIRecordingStatus RHIRecordingGate::Status() const noexcept {
 
 ERHIRecordingStatus RHIRecordingGate::Wait() const noexcept {
     std::unique_lock lock(mutex);
-    cv.wait(lock, [this] { return status != ERHIRecordingStatus::Pending; });
+    cv.wait(lock, [this] {
+        return status != ERHIRecordingStatus::Pending;
+    });
     return status;
 }
 
-ERHIRecordingStatus RHIRecordingGate::Wait(std::stop_token _stop_token) const noexcept {
+std::optional<ERHIRecordingStatus> RHIRecordingGate::Wait(std::stop_token _stop_token) const noexcept {
     std::unique_lock lock(mutex);
-    const bool completed = cv.wait(lock, _stop_token, [this] {
+    const bool       completed = cv.wait(lock, _stop_token, [this] {
         return status != ERHIRecordingStatus::Pending;
     });
-    return completed ? status : ERHIRecordingStatus::Pending;
+    if (!completed) {
+        return std::nullopt;
+    }
+    return status;
 }
 
 RHIExecutorWorkQueue::~RHIExecutorWorkQueue() {
@@ -77,13 +84,20 @@ void RHIExecutorWorkQueue::Start() {
     // std::jthread construction can throw (for example when the OS cannot
     // allocate another thread); in that case the queue must remain stopped so
     // callers cannot enqueue work that has no owner to drain it.
-    worker = std::jthread([this](std::stop_token _stop_token) { Run(_stop_token); });
+    worker    = std::jthread([this](std::stop_token _stop_token) {
+        Run(_stop_token);
+    });
     accepting = true;
 }
 
 void RHIExecutorWorkQueue::Enqueue(
     RHIExecutorWork&& _work
 ) {
+    if (std::any_of(_work.prerequisites.begin(), _work.prerequisites.end(), [](const RHIRecordingGateRef& gate) {
+            return !gate;
+        })) {
+        throw std::invalid_argument("executor work contains a missing prerequisite gate");
+    }
     bool cancel = false;
     {
         std::lock_guard lock(mutex);
@@ -113,7 +127,9 @@ void RHIExecutorWorkQueue::ShutDown() {
     }
 
     std::unique_lock lock(mutex);
-    idle_cv.wait(lock, [this] { return !worker_busy && pending.empty(); });
+    idle_cv.wait(lock, [this] {
+        return !worker_busy && pending.empty();
+    });
 }
 
 bool RHIExecutorWorkQueue::IsIdle() const noexcept {
@@ -123,64 +139,22 @@ bool RHIExecutorWorkQueue::IsIdle() const noexcept {
 
 void RHIExecutorWorkQueue::Run(std::stop_token _stop_token) noexcept {
     Platform::SetCurrentThreadName("Moer RHI Executor");
-    RHIThreadRoleScope owner_scope(ERHIThreadRole::Executor);
+    RHIThreadRoleScope      owner_scope(ERHIThreadRole::Executor);
     RHIThreadHeartbeatScope heartbeat(
         ERHIThreadRole::Executor,
         ERHIHeartbeatDomain::General,
         ERHIHeartbeatStage::Dispatch
     );
 
-    for (;;) {
+    while (true) {
         RHIExecutorWork work{};
-        {
-            heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
-            std::unique_lock lock(mutex);
-            RHIThreadHeartbeatWaitLock wait_lock(
-                lock, heartbeat, ERHIHeartbeatStage::Dispatch
-            );
-            work_cv.wait(wait_lock, _stop_token, [this] { return !pending.empty(); });
-            if (pending.empty()) {
-                assert(_stop_token.stop_requested());
-                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
-                break;
-            }
-            work = std::move(pending.front());
-            pending.pop_front();
-            worker_busy = true;
+        if (!WaitAndPopWork(work, _stop_token, heartbeat)) {
+            break;
         }
 
-        bool ready = true;
-        bool cancelled = false;
-        heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
-        for (const RHIRecordingGateRef& prerequisite : work.prerequisites) {
-            if (!prerequisite) {
-                ready = false;
-                continue;
-            }
-            ERHIRecordingStatus status = prerequisite->Status();
-            if (status == ERHIRecordingStatus::Pending) {
-                heartbeat.Pulse(ERHIHeartbeatStage::WaitForDependency);
-                status = prerequisite->Wait(_stop_token);
-                heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
-            }
-            if (status != ERHIRecordingStatus::Succeeded) {
-                ready = false;
-            }
-            // A producer failure does not make the remaining CommandLists
-            // safe to inspect. Keep waiting until every gate is terminal. A
-            // lifecycle cancellation is different: stop must remain bounded.
-            if (status == ERHIRecordingStatus::Pending) {
-                cancelled = true;
-                break;
-            }
-        }
-
-        InvokeCallbackNoThrow(
-            work,
-            cancelled ? ERHIExecutorWorkAction::Cancel :
-            ready     ? ERHIExecutorWorkAction::Execute :
-                        ERHIExecutorWorkAction::Reject
-        );
+        const ERHIExecutorWorkAction action =
+            WaitForPrerequisites(work.prerequisites, _stop_token, heartbeat);
+        InvokeCallbackNoThrow(work, action);
 
         {
             std::lock_guard lock(mutex);
@@ -188,12 +162,67 @@ void RHIExecutorWorkQueue::Run(std::stop_token _stop_token) noexcept {
         }
         idle_cv.notify_all();
 
-        if (cancelled) {
+        if (action == ERHIExecutorWorkAction::Cancel) {
             heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
             break;
         }
     }
 
+    CancelPendingWork();
+    heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
+}
+
+bool RHIExecutorWorkQueue::WaitAndPopWork(
+    RHIExecutorWork&         _work,
+    std::stop_token          _stop_token,
+    RHIThreadHeartbeatScope& _heartbeat
+) {
+    _heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
+    std::unique_lock           lock(mutex);
+    RHIThreadHeartbeatWaitLock wait_lock(lock, _heartbeat, ERHIHeartbeatStage::Dispatch);
+    work_cv.wait(wait_lock, _stop_token, [this] {
+        return !pending.empty();
+    });
+    if (pending.empty()) {
+        assert(_stop_token.stop_requested());
+        _heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
+        return false;
+    }
+    _work = std::move(pending.front());
+    pending.pop_front();
+    worker_busy = true;
+    return true;
+}
+
+ERHIExecutorWorkAction RHIExecutorWorkQueue::WaitForPrerequisites(
+    std::span<const RHIRecordingGateRef> _prerequisites,
+    std::stop_token                      _stop_token,
+    RHIThreadHeartbeatScope&             _heartbeat
+) {
+    ERHIExecutorWorkAction action = ERHIExecutorWorkAction::Execute;
+    _heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
+    for (const RHIRecordingGateRef& prerequisite : _prerequisites) {
+        assert(prerequisite);
+        ERHIRecordingStatus status = prerequisite->Status();
+        if (status == ERHIRecordingStatus::Pending) {
+            _heartbeat.Pulse(ERHIHeartbeatStage::WaitForDependency);
+            const std::optional<ERHIRecordingStatus> result = prerequisite->Wait(_stop_token);
+            _heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
+            if (!result) {
+                return ERHIExecutorWorkAction::Cancel;
+            }
+            status = *result;
+        }
+        // A failed producer does not make its siblings safe to inspect.
+        // Wait for every producer unless shutdown interrupts the wait.
+        if (status == ERHIRecordingStatus::Failed) {
+            action = ERHIExecutorWorkAction::Reject;
+        }
+    }
+    return action;
+}
+
+void RHIExecutorWorkQueue::CancelPendingWork() {
     std::deque<RHIExecutorWork> cancelled_work{};
     {
         std::lock_guard lock(mutex);
@@ -205,7 +234,6 @@ void RHIExecutorWorkQueue::Run(std::stop_token _stop_token) noexcept {
     for (RHIExecutorWork& work : cancelled_work) {
         InvokeCallbackNoThrow(work, ERHIExecutorWorkAction::Cancel);
     }
-    heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
 }
 
 void RHIExecutorWorkQueue::InvokeCallbackNoThrow(
