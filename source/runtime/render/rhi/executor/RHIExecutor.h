@@ -106,7 +106,10 @@ public:
     );
     void Present(RHIPresentRequest&& _present, bool _flush = true);
 
-    void Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU);
+    // Request publication of preceding pending submissions in Executor FIFO
+    // order. Return does not guarantee backend publication, native GPU
+    // submission, or GPU completion.
+    void Flush();
     // Blocking lifecycle boundaries must not be called recursively from an
     // RHI completion callback whose completion they are waiting for.
     void        Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI);
@@ -125,9 +128,14 @@ private:
     std::shared_ptr<RHIBackendExecutor> GetOrCreateBackendExecutorLocked();
     RHISubmissionBatch                  TakePendingSubmissionBatchLocked();
 
-    void                                    AppendPendingRequestsLocked(Array<RHISubmissionRequest>& _submits, RHIPresentRequest* _present);
-    std::optional<uint64>                   BeginShutdown(std::shared_ptr<RHIBackendExecutor>& _backend_to_cancel);
-    void                                    FinishShutdown(uint64 _generation);
+    void AppendPendingRequestsLocked(Array<RHISubmissionRequest>& _submits, RHIPresentRequest* _present);
+
+    // A value makes this caller responsible for finishing that shutdown
+    // generation. No value means shutdown is already complete or this call
+    // waited for another caller to complete it; no further work is needed.
+    // _backend_to_cancel is valid only when a generation is returned.
+    std::optional<uint64>                  BeginShutdown(std::shared_ptr<RHIBackendExecutor>& _backend_to_cancel);
+    void                                  FinishShutdown(uint64 _generation);
     static std::vector<RHIRecordingGateRef> CollectRecordingPrerequisites(
         const Array<RHIRecordingSource>& _sources
     );
@@ -138,7 +146,7 @@ private:
         ERHIExecSubmitFlags           _flags,
         RHIPresentRequest*            _present
     );
-    void ProcessFlushRequest(ERHIFlushDepth _depth);
+    void ProcessFlushRequest();
     void ProcessSyncRequest(ERHISyncDepth _depth);
 
     std::mutex                          submit_mutex;

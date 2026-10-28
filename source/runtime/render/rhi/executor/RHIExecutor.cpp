@@ -116,8 +116,8 @@ void RHIExecutorDetail::ReportExecutorFailure(
     }
 }
 
-// Owns one detached batch until the backend accepts it. On failure the same
-// batch retains the unconsumed suffix; rejection runs only after releasing locks.
+// Owns one detached batch until the backend takes responsibility. On failure
+// the batch retains its unconsumed suffix; rejection runs only after releasing locks.
 struct RHIExecutor::PendingBatchPublication {
     struct Failure {
         std::string_view   stage;
@@ -142,9 +142,9 @@ struct RHIExecutor::PendingBatchPublication {
         }
     }
 
-    void Flush(ERHIFlushDepth _depth) {
+    void Flush() {
         if (!failure && backend) {
-            backend->Flush(_depth);
+            backend->Flush();
         }
     }
 
@@ -370,7 +370,7 @@ void RHIExecutor::ProcessSubmissionRequests(
         if (_present) {
             publication.Publish();
             if (flush_gpu) {
-                publication.Flush(ERHIFlushDepth::SubmitGPU);
+                publication.Flush();
             }
         }
     }
@@ -388,7 +388,7 @@ void RHIExecutor::ProcessSubmissionRequests(
         return;
     }
     if (!_present && flush_gpu) {
-        ProcessFlushRequest(ERHIFlushDepth::SubmitGPU);
+        ProcessFlushRequest();
     }
 }
 
@@ -401,18 +401,18 @@ void RHIExecutor::Present(RHIPresentRequest&& _present, bool _flush) {
     );
 }
 
-void RHIExecutor::Flush(ERHIFlushDepth _depth) {
+void RHIExecutor::Flush() {
     work_queue.Enqueue(RHIExecutorWork{
         .prerequisites = {},
-        .callback      = [this, _depth](ERHIExecutorWorkAction _action) {
+        .callback      = [this](ERHIExecutorWorkAction _action) {
             if (_action == ERHIExecutorWorkAction::Execute) {
-                ProcessFlushRequest(_depth);
+                ProcessFlushRequest();
             }
         },
     });
 }
 
-void RHIExecutor::ProcessFlushRequest(ERHIFlushDepth _depth) {
+void RHIExecutor::ProcessFlushRequest() {
     {
         std::lock_guard lock(submit_mutex);
         if (lifecycle_state != ELifecycleState::Running) {
@@ -428,7 +428,7 @@ void RHIExecutor::ProcessFlushRequest(ERHIFlushDepth _depth) {
             publication = PreparePendingBatchLocked();
         }
         publication.Publish();
-        publication.Flush(_depth);
+        publication.Flush();
     }
     publication.RejectIfFailed("Flush");
 }
@@ -499,7 +499,7 @@ void RHIExecutor::ProcessSyncRequest(ERHISyncDepth _depth) {
             }
         }
         publication.Publish();
-        publication.Flush(ERHIFlushDepth::SubmitGPU);
+        publication.Flush();
     }
     if (publication.RejectIfFailed("Sync")) {
         if (_depth == ERHISyncDepth::Present) {
@@ -509,10 +509,7 @@ void RHIExecutor::ProcessSyncRequest(ERHISyncDepth _depth) {
     }
 
     if (publication.backend) {
-        GraphEventRef completion = publication.backend->Sync(_depth);
-        if (completion) {
-            completion->Wait(EThread::UNKNOWN_THREAD);
-        }
+        publication.backend->Sync(_depth);
     }
 }
 
@@ -596,7 +593,7 @@ void RHIExecutor::ShutDown() {
             publication.backend = std::move(executor.backend_executor);
         }
         publication.Publish();
-        publication.Flush(ERHIFlushDepth::SubmitGPU);
+        publication.Flush();
     }
     publication.RejectIfFailed("ShutDown");
 

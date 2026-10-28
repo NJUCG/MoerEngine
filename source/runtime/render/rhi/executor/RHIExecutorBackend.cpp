@@ -17,12 +17,6 @@
 namespace Moer::Render::RHIExecutorDetail {
 namespace {
 
-GraphEventRef MakeCompletedBackendEvent() {
-    GraphEventRef event = GraphEvent::CreateGraphEvent();
-    event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-    return event;
-}
-
 // Metal and D3D12 use the legacy queue interface. Keep that ownership path
 // isolated instead of weakening the Vulkan submission topology contract.
 class LegacyQueueBackendExecutor final : public RHIBackendExecutor {
@@ -77,7 +71,7 @@ public:
         }
     }
 
-    GraphEventRef Sync(ERHISyncDepth _depth) override {
+    void Sync(ERHISyncDepth _depth) override {
         StaticArray<bool, static_cast<size_t>(EQueueType::Num)> queues{};
         uint64                                                  copy_timeline = 0;
         {
@@ -99,18 +93,14 @@ public:
         if (_depth == ERHISyncDepth::Present) {
             RenderDevice::Get().WaitIdle();
         }
-        return MakeCompletedBackendEvent();
     }
 
-    void Flush(ERHIFlushDepth) override {
+    void Flush() override {
         // Queue::Execute has already crossed into the existing RHI FIFO.
     }
 
     void ShutDown() override {
-        GraphEventRef completion = Sync(ERHISyncDepth::Present);
-        if (completion) {
-            completion->Wait(EThread::UNKNOWN_THREAD);
-        }
+        Sync(ERHISyncDepth::Present);
     }
 
 private:

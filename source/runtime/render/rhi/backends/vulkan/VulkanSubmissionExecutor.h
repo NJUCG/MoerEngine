@@ -33,11 +33,11 @@ public:
     explicit VulkanSubmissionExecutor(uint32 _batch_window = 2);
     ~VulkanSubmissionExecutor() override;
 
-    void          Enqueue(RHISubmissionBatch&& _batch) override;
-    GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) override;
-    void          Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU) override;
-    void          BeginShutdown() noexcept override;
-    void          ShutDown() override;
+    void Enqueue(RHISubmissionBatch&& _batch) override;
+    void Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) override;
+    void Flush() override;
+    void BeginShutdown() noexcept override;
+    void ShutDown() override;
 
 private:
     // Host notification for CPU work, including batch dispatch, Sync and Stop.

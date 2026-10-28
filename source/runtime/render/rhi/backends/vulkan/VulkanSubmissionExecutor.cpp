@@ -31,12 +31,6 @@ namespace Moer::Render {
 using namespace VulkanSubmissionDetail;
 namespace {
 
-GraphEventRef MakeCompletedEvent() {
-    GraphEventRef event = GraphEvent::CreateGraphEvent();
-    event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-    return event;
-}
-
 bool SubmitContainsQuery(const CmdSubmit& _submit) {
     return !_submit.query_tokens.empty() ||
            std::any_of(
@@ -757,7 +751,7 @@ void VulkanSubmissionExecutor::Enqueue(RHISubmissionBatch&& _batch) {
     cv.notify_one();
 }
 
-GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
+void VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
     auto completion = std::make_shared<CpuTaskCompletion>();
     {
         std::lock_guard lock(mutex);
@@ -765,7 +759,7 @@ GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
             if (_depth == ERHISyncDepth::Present) {
                 throw std::runtime_error("Present sync rejected during shutdown");
             }
-            return MakeCompletedEvent();
+            return;
         }
         requests.emplace_back(
             WorkerRequest{
@@ -780,12 +774,11 @@ GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
     NotifyVulkanBackendSyncWait();
 #endif
     completion->Wait();
-    return MakeCompletedEvent();
 }
 
-void VulkanSubmissionExecutor::Flush(ERHIFlushDepth) {
+void VulkanSubmissionExecutor::Flush() {
     // Enqueue publishes directly to the runtime FIFO and wakes its owner.
-    // SubmitGPU intentionally does not wait; Sync is the explicit host boundary.
+    // Flush does not wait; Sync is the explicit host boundary.
     cv.notify_one();
 }
 
