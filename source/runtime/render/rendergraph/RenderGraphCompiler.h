@@ -3,6 +3,7 @@
 #include "rendergraph/RenderGraph.h"
 
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -65,11 +66,11 @@ private:
     bool BuildSemanticDependencies();
     bool BuildFinalBarriers();
     void AuditStatePlanCompleteness();
-    bool BuildTopologicalOrder();
     bool BuildExecutionOrder();
+    bool ValidateDeclarationOrder();
     void BuildQueuePlan();
-    void BuildDependencyLevels();
-    void BuildFrontendRecordUnits();
+    std::pmr::vector<uint32_t> BuildDependencyLevels();
+    void BuildFrontendRecordUnits(std::span<const uint32_t> dependency_levels);
     void BuildFrontendDispatchGroups();
     void BuildLifetimes();
     void BuildTransientAliasPlan();
@@ -122,6 +123,8 @@ private:
     // Declared first so all scratch containers are destroyed before their memory resource.
     std::pmr::monotonic_buffer_resource scratch_memory;
     std::pmr::unordered_map<uint64_t, size_t> edge_indices{&scratch_memory};
+    // Rank in the selected execution order, shared by lifetime and alias analysis.
+    std::pmr::vector<uint32_t> execution_position{&scratch_memory};
     // polymorphic_allocator propagates this resource to the nested PMR vectors.
     std::pmr::vector<std::pmr::vector<NormalizedAccess>> normalized_accesses{&scratch_memory};
     std::pmr::vector<std::pmr::vector<NormalizedStateDeclaration>> normalized_initial_states{&scratch_memory};

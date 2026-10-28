@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -1055,28 +1056,49 @@ void TestAliasBarrierCoversCompleteReaderFrontier(TestSuite& suite) {
 }
 
 void TestAliasChainUsesOneSlot(TestSuite& suite) {
-    constexpr std::string_view test = "three-resource alias chain uses one slot";
+    constexpr std::string_view test = "alias chain preserves semantic dependencies and final levels";
     RenderGraph graph("TransientAliasChain");
     const auto first  = graph.CreateTransientBuffer("First", kBufferDesc);
     const auto second = graph.CreateTransientBuffer("Second", kBufferDesc);
     const auto third  = graph.CreateTransientBuffer("Third", kBufferDesc);
-    const auto                 add_write = [&](std::string_view name, RenderGraph::BufferHandle buffer) {
-        graph.AddRecordPass(
+    const auto add_write = [&](std::string_view name, RenderGraph::BufferHandle buffer,
+                               RenderGraph::PassHandle dependency = {}) {
+        return graph.AddRecordPass(
             name,
             [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(
-                           buffer,
-                           RenderGraph::BufferAccessType::TransferDestination
-                )
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(buffer, RenderGraph::BufferAccessType::TransferDestination)
                     .SideEffect();
+                if (dependency.IsValid()) {
+                    builder.DependsOn(dependency);
+                }
             },
             [](CommandList&) {},
             RenderGraph::PassRecordPolicy::Serial
         );
     };
-    add_write("WriteFirst", first);
-    add_write("WriteSecond", second);
-    add_write("WriteThird", third);
+    const auto add_read = [&](std::string_view name, RenderGraph::BufferHandle buffer) {
+        return graph.AddRecordPass(
+            name,
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(buffer, RenderGraph::BufferAccessType::TransferSource);
+            },
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
+        );
+    };
+    const auto write_first = add_write("WriteFirst", first);
+    const auto read_first = add_read("ReadFirst", first);
+    const auto write_second = add_write("WriteSecond", second, read_first);
+    const auto late_branch = graph.AddRecordPass(
+        "LateBranch",
+        [=](RenderGraph::PassBuilder& builder) { builder.DependsOn(write_first).SideEffect(); },
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    const auto read_second = add_read("ReadSecond", second);
+    const auto write_third = add_write("WriteThird", third);
 
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
@@ -1093,6 +1115,53 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
         test,
         "compiler did not build the expected adjacent alias chain"
     );
+
+    const auto has_reason = [&](RenderGraph::PassHandle src, RenderGraph::PassHandle dst,
+                                RenderGraph::EdgeReasonKind kind) {
+        return std::any_of(plan.edges.begin(), plan.edges.end(), [&](const auto& edge) {
+            return edge.src == src && edge.dst == dst &&
+                   std::any_of(edge.reasons.begin(), edge.reasons.end(), [&](const auto& reason) {
+                       return reason.kind == kind;
+                   });
+        });
+    };
+    // The late branch changes canonical edge order before alias planning. The
+    // first alias augments an existing edge; the next alias adds a new edge.
+    suite.Check(
+        has_reason(read_first, write_second, RenderGraph::EdgeReasonKind::Explicit) &&
+            has_reason(read_first, write_second, RenderGraph::EdgeReasonKind::TransientAlias) &&
+            has_reason(read_second, write_third, RenderGraph::EdgeReasonKind::TransientAlias) &&
+            has_reason(write_first, late_branch, RenderGraph::EdgeReasonKind::Explicit) &&
+            !has_reason(write_first, late_branch, RenderGraph::EdgeReasonKind::TransientAlias),
+        test,
+        "alias insertion must preserve semantic reasons and attach each alias reason to its own edge"
+    );
+
+    const std::vector<std::vector<RenderGraph::PassHandle>> expected_levels{
+        {write_first}, {read_first, late_branch}, {write_second}, {read_second}, {write_third}
+    };
+    suite.Check(plan.dependency_levels.size() == expected_levels.size(), test,
+                "the alias-only successor must follow the complete preceding chain");
+    for (uint32_t level = 0; level < expected_levels.size(); ++level) {
+        if (level < plan.dependency_levels.size()) {
+            suite.Check(plan.dependency_levels[level].passes == expected_levels[level], test,
+                        "final dependency levels must include both semantic and alias edges");
+        }
+        for (const auto pass : expected_levels[level]) {
+            const auto unit = std::find_if(
+                plan.frontend_record_units.begin(), plan.frontend_record_units.end(),
+                [&](const auto& candidate) { return candidate.pass == pass; }
+            );
+            suite.Check(unit != plan.frontend_record_units.end() && unit->dependency_level_index == level,
+                        test, "recording metadata must use the final dependency level of each pass");
+        }
+    }
+
+    const std::string dump = graph.Dump();
+    const bool recompiled = graph.Compile();
+    suite.Check(recompiled, test, graph.GetCompileError());
+    suite.Check(recompiled && graph.Dump() == dump, test,
+                "recompilation must rebuild the same execution, alias and dependency plan");
 }
 
 void TestRecordReferenceRetainsCompletionLifetime(TestSuite& suite) {

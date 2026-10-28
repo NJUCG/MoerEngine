@@ -18,6 +18,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -596,7 +597,7 @@ void TestDependencyLevelOrdering(TestSuite& suite) {
     const std::vector<RenderGraph::PassHandle> declaration_order{
         root, independent, chain, fan_in, short_branch, join, late_independent
     };
-    suite.Check(plan.topological_order == declaration_order, test_name,
+    suite.Check(plan.execution_order == declaration_order, test_name,
                 "newly ready lower indices must precede older ready higher indices");
     const std::vector<std::vector<RenderGraph::PassHandle>> expected_levels{
         {root, independent, late_independent}, {chain, short_branch}, {fan_in}, {join}
@@ -606,6 +607,50 @@ void TestDependencyLevelOrdering(TestSuite& suite) {
     for (size_t index = 0; index < std::min(plan.dependency_levels.size(), expected_levels.size()); ++index) {
         suite.Check(plan.dependency_levels[index].passes == expected_levels[index], test_name,
                     "each dependency wave must preserve declaration order");
+    }
+}
+
+void TestExplicitDependencyOrderRejections(TestSuite& suite) {
+    for (const bool cycle : {false, true}) {
+        const std::string_view test_name = cycle ?
+            "explicit dependency cycle rejection" : "reverse declaration dependency rejection";
+        RenderGraph graph(cycle ? "DependencyCycle" : "ReverseDependency");
+        std::optional<RenderGraph::PassBuilder> first_builder;
+        int callback_count = 0;
+        const auto record = [&](Moer::Render::CommandList&) { ++callback_count; };
+        const auto first = graph.AddRecordPass(
+            "First",
+            [&](RenderGraph::PassBuilder& builder) { first_builder.emplace(builder); },
+            record,
+            RenderGraph::PassRecordPolicy::Serial
+        );
+        const auto second = graph.AddRecordPass(
+            "Second",
+            [=](RenderGraph::PassBuilder& builder) {
+                if (cycle) {
+                    builder.DependsOn(first);
+                }
+            },
+            record,
+            RenderGraph::PassRecordPolicy::Serial
+        );
+        // A copied public builder still refers to the live graph declaration.
+        // Add the backward edge only after both real pass handles exist.
+        first_builder->DependsOn(second);
+
+        const std::string_view expected_error = cycle ?
+            "pass dependency cycle detected" :
+            "serial declaration order cannot satisfy a compiled dependency";
+        for (uint32_t attempt = 0; attempt < 2; ++attempt) {
+            const bool compiled = graph.Compile();
+            suite.Check(!compiled && !graph.IsCompiled(), test_name,
+                        "an unsupported dependency order must not publish an executable plan");
+            suite.Check(Contains(graph.GetCompileError(), expected_error), test_name,
+                        "a cycle and an acyclic backward dependency must retain distinct diagnostics");
+        }
+        const bool recorded = RecordGraphForTest(graph);
+        suite.Check(!recorded && callback_count == 0, test_name,
+                    "a rejected graph must not execute recording callbacks");
     }
 }
 
@@ -7003,6 +7048,7 @@ int main() {
     TestImportedAliasIdentityAndDump(suite);
     TestResourceNameAndIdentityNamespaces(suite);
     TestDependencyLevelOrdering(suite);
+    TestExplicitDependencyOrderRejections(suite);
     TestHazardsAndDeterministicDump(suite);
     TestTransientReadBeforeProducerFailsWithoutCallbacks(suite);
     TestCrossGraphHandlesAreRejected(suite);

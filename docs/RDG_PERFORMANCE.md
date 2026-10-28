@@ -448,3 +448,78 @@ Raster 复测的 Compile p50 减少 **0.2462 ms（6.3%）**；RT 减少 **0.1675
 六次编辑器运行均正常退出，日志未发现 error、critical、VUID 或 Validation Error。profiling source 数仍为 Raster 2、RT 3。原始配置、二进制哈希、进程信息、capture、`timings.txt` 和 `per-frame-summary.json` 在 `build/rdg-bisect-results/`：`arena-before-raster`、`arena-after-raster`、`arena-before-repeat-raster`、`arena-after-repeat-raster`、`arena-before-ray`、`arena-after-ray`。
 
 结束时所有测试编辑器已关闭，正式 Render DLL 为上述 `DDCE23C2...` 新版。根目录及可执行目录默认配置仍为 Raster、关闭并行录制；本轮没有修改用户配置。
+
+## 9. 第六轮：编译计划及派生数据去重
+
+### 9.1 约束与实施计划
+
+本轮基线是 `22182607`，Render DLL 为 `DDCE23C29E4A3BA9131DE97ED842116688A68E6C07376F15BC51F87395B7C564`。目标是消除同一结果的重复存储、计算和转换；保留一次 Kahn 拓扑排序，以及现有的声明顺序合法性检查。支持逆声明顺序的输入、改变资源版本语义或增加 GPU 异步调度均不属于本轮范围。
+
+依赖图提供约束，拓扑排序选择合法顺序，执行层消费编译计划。这三者的职责保持独立。不能因为目前成功图的执行位置等于声明序号，就把 `pass_id` 当成执行位置；统一的位置表仍从实际 `execution_order` 构造。资源使用、队列同步和 alias 安全信息继续保留。
+
+实施顺序及原有保证的承接者：
+
+| 删除的重复工作 | 合并后的责任与有效期 |
+| --- | --- |
+| `topological_order` 与重新生成的声明顺序数组 | Kahn 直接生成唯一 `CompiledPlan::execution_order`；原声明顺序限制独立检查，成功图的行为不变 |
+| 生命周期、alias 规划、alias 校验各建一份执行位置表 | 编译器暂存一份 `pass → execution_position`，各阶段共享，到 Compile 返回时回收；Lowering 的独立校验不合并进该生命周期 |
+| `levels[pass] → dependency_levels 分组 → pass_to_dependency_level` 的往返 | 保留最终依赖图上计算得到的原始 level 表，直接供录制单元使用；分析用分组仍正常输出 |
+| alias 阶段重新审计全部原始依赖边 | 原始边的拓扑合法性由 Kahn 保证；每条新增 alias 依赖由 frontier 校验保证句柄有效、源早于目标、实际边存在，同时保留生命周期、描述符和屏障完整性检查 |
+| 最后一次边排序后回写 `edge_indices` | 排序完成后已无 `AddEdge` 消费者，省掉该回写；第一次排序后仍要修复索引，供后续 alias 插边使用 |
+
+保留 Kahn 后，当前的 `OutgoingEdges` 仍需要按源 Pass 排序的边，因此不能直接把所有排序推迟到 alias 之后。alias 会增加真实依赖，后续的最终规范化仍然必要。依赖层级也仍按所选拓扑顺序传播，不假定声明编号就是拓扑排名。
+
+### 9.2 验证方案
+
+更新顺序输出的消费者，并验证确定性顺序、依赖层级、重复编译、失败恢复、alias 前沿及混合语义/alias 边。完整 Debug 构建后执行相关 RDG/RHI 契约、Vulkan 并行集成测试，以及新版本 Raster/RT 运行检查。
+
+复用 `TestRenderGraphCompilerBenchmark` 的同一构图和计时逻辑，分别测量编译耗时与分配。由于删除 `CompiledPlan` 成员会改变 C++ 对象布局，旧版 benchmark EXE 必须与旧 Render DLL 配对，新版 EXE 与新 DLL 配对；不能像上一轮只更换 DLL。旧版 EXE 的 SHA-256 为 `B830BCAACA10E04DB235657178FC1FD3E8C6ECF0C518B985756E8D8779A60AB4`。比较相同输入下的编译/Lowering Dump 摘要及计划规模，检查语义没有变化。
+
+本轮真实编辑器运行用于正确性验证，编译性能对照使用固定图；不据此报告 FPS 提升。
+
+### 9.3 实现与契约验证
+
+`BuildExecutionOrder()` 保留最小声明序号优先的 Kahn 算法，直接写唯一顺序，并在出队时填写执行位置。随后独立执行 `ValidateDeclarationOrder()`，保留原来对逆声明顺序依赖的拒绝和环优先的诊断。它仍是当前输入契约，尚未放宽成任意合法 DAG 都能执行。失败图的部分编译输出不作为执行计划使用。
+
+位置表由 compiler arena 拥有，生命周期和 alias 阶段共同读取。`BuildDependencyLevels()` 在 alias 完成后返回 PMR level 表，`Compile()` 在自身作用域内通过 `span` 交给录制单元生成函数；没有保存借用视图到输出中。首次边排序后的插边索引修复并入已有的入度扫描，最终规范化不再回写没有消费者的索引。
+
+完整 MSVC Debug 构建通过，9 项相关 CTest 全部通过。新增公开 API 回归分别构造环和无环逆向依赖，检查重复编译维持原诊断且不录制任何回调。扩展原 transient alias 链用例，覆盖边排序位置变化、向已有语义边追加 alias reason、新增 alias 边、最终依赖层级、录制元数据和重复编译的确定性。Vulkan 并行集成测试 29 个用例全部 PASS，启用 validation，未发现 VUID 或 Validation Error；负向用例预期的拒绝日志不算运行故障。
+
+构建及验证日志为 `build/rdg-dedup-build.log`、`build/rdg-dedup-contracts.log`、`build/rdg-dedup-vulkan.log`。本轮新 Render DLL SHA-256 为 `137A5D0C68B2EEA897E4664963EF4753FBD0FF500F5B13761E2089F5E64487FC`，新 benchmark EXE 为 `FFE3347BB9F150B3741EE6E507AF51D7F0E8CA53F0E6673BE984CF6E7E1FE945`。
+
+### 9.4 固定图测量及限制
+
+benchmark 源码未修改，前后各自使用匹配其头文件布局的 EXE/DLL。输入沿用上一轮三种规模，每次新建图，5 次预热、80 次样本，独立进程交替执行三组。计时包含 Compiler 和 arena 析构，不包含构图、Dump、Lowering 和 Graph 最终析构；分配计数在另一次 Compile 中测量。
+
+| 图规模（Pass / 每类资源 / 每 Pass 每类访问） | 前三次 Compile p50，ms | 后三次 Compile p50，ms | 三次 p50 的中位数，前→后 |
+| --- | --- | --- | --- |
+| 16 / 16 / 4 | 0.7215 / 0.7147 / 0.7370 | 0.7330 / 0.7231 / 0.7206 | 0.7215 → 0.7231 |
+| 64 / 64 / 16 | 10.3926 / 10.0788 / 10.1622 | 10.4378 / 10.5529 / 10.1464 | 10.1622 → 10.4378 |
+| 128 / 128 / 16 | 20.7167 / 20.7339 / 20.7304 | 23.8491 / 23.3115 / 21.5092 | 20.7304 → 23.3115 |
+
+初轮中位数分别增加约 0.2%、2.7%、12.4%，没有显示加速。针对大图回退，随后在本机 Ryzen 9 9950X 上将进程固定到逻辑处理器 0（实际检查子进程 affinity mask 为 1），增加到 20 次预热、200 次样本，仍按前/后、后/前、前/后交替：
+
+| 大图固定逻辑处理器复测 | 第一次 p50 ms | 第二次 p50 ms | 第三次 p50 ms | 三次中位数 ms |
+| --- | ---: | ---: | ---: | ---: |
+| 前 | 26.1215 | 25.8288 | 30.4631 | 26.1215 |
+| 后 | 25.6072 | 25.7083 | 26.3752 | 25.7083 |
+
+复测没有重现初轮约 12% 的回退，三次中位数约下降 1.6%，但仍有显著运行波动，不能报告稳定的耗时改善或退化，也不能把结果归因于未经测量的调度、频率或缓存因素。两种采样条件分别比较，不能将固定处理器的绝对耗时与未固定处理器的耗时直接当作优化差值。仍未测量 Release 或本轮整帧 FPS 对照。
+
+| 图规模 | CRT 分配请求，前→后 | CRT 累计申请字节，前→后 | PMR 默认资源请求数，前→后 | PMR 峰值保留字节，前→后 |
+| --- | ---: | ---: | ---: | ---: |
+| 小 | 1662 → 1661 | 215237 → 214981 | 13 → 13 | 50616 → 50616 |
+| 中 | 19671 → 19669 | 3583302 → 3432982 | 15 → 14 | 443184 → 293888 |
+| 大 | 39135 → 39134 | 6870323 → 6868275 | 15 → 15 | 880960 → 880960 |
+
+分配结果在同规模的重复运行中一致，统计口径沿用 8.3 的 `pmr_default_resource`。中图的编译暂存 arena 向上游申请的峰值减少约 33.7%，其他两个规模的上游请求数和保留量未变；内部暂存需求减少，不一定会让上游块数下降。CRT 计数仍包含输出分配、排除绕过 CRT 的分配器，累计申请字节不是完整堆峰值。各次独立分配 probe 的 PMR 请求均在 Compile 返回前对应释放。
+
+前后编译 Dump、LoweredPlan Dump 摘要和访问/边/屏障数量一致。当前固定图全部使用 import 资源，没有 alias，因此它能测重复位置表、全边复审等共同成本，不能单独量化最终 alias 排序去重的收益；该路径由专门回归和 Vulkan alias 测试验证。
+
+本轮确定的结果是：减少重复表示和重复计算，保留单一编译顺序及原有调度契约，部分规模减少暂存内存；**尚未证明稳定的编译耗时收益**。原始 EXE/DLL 配对、元数据与 JSON 保存在 `build/rdg-dedup-variants/`，普通对照脚本为 `build/run_rdg_dedup_benchmark.ps1`，固定处理器复测文件以 `large-pinned-` 开头。
+
+### 9.5 编辑器运行检查
+
+完整新版本分别以 Raster、Raytracing 运行 Sponza，各运行 110 秒后正常关闭，退出码均为 0。两次日志均未发现 error、critical、VUID 或 Validation Error。使用独立配置覆盖文件和串行录制；运行期间未并发构建或基准测试。本轮没有旧版本编辑器对照，这两次运行只用于正确性检查，不作为帧率提升的依据。
+
+配置、进程信息、二进制哈希、日志和 capture 保存在 `build/rdg-bisect-results/dedup-after-raster/` 与 `build/rdg-bisect-results/dedup-after-ray/`，汇总日志为 `build/rdg-dedup-raster.log` 与 `build/rdg-dedup-ray.log`。两次均使用 9.3 所列的新 Render DLL，测试结束后没有遗留编辑器进程。根目录和可执行目录的默认配置仍为 Raster、关闭并行录制，未修改用户配置。

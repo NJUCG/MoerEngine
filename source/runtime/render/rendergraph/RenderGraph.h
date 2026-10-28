@@ -618,9 +618,7 @@ public:
      * synchronization endpoints remain intentionally absent.
      */
     struct CompiledPlan {
-        /** Stable topological order of semantic dependencies. */
-        std::vector<PassHandle> topological_order{};
-        /** Stable production order. CPU recording policy is described separately below. */
+        /** Stable topological execution order. CPU recording policy is described separately below. */
         std::vector<PassHandle> execution_order{};
         /** Minimal hazard, explicit, state, and ownership frontier without fake serial edges. */
         std::vector<CompiledEdge> edges{};
@@ -651,7 +649,6 @@ public:
         bool state_plan_complete = true;
 
         void Clear() {
-            topological_order.clear();
             execution_order.clear();
             edges.clear();
             accesses.clear();

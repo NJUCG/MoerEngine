@@ -229,8 +229,8 @@ bool RenderGraphCompiler::Compile() {
     resource_ever_written.assign(graph.resources.size(), false);
 
     if (!ValidateQueueTopology() || !NormalizeDeclarations() || !BuildAtomicCells() ||
-        !BuildSemanticDependencies() || !BuildFinalBarriers() || !BuildTopologicalOrder() ||
-        !BuildExecutionOrder()) {
+        !BuildSemanticDependencies() || !BuildFinalBarriers() || !BuildExecutionOrder() ||
+        !ValidateDeclarationOrder()) {
         return false;
     }
 
@@ -241,8 +241,8 @@ bool RenderGraphCompiler::Compile() {
         return false;
     }
     BuildQueuePlan();
-    BuildDependencyLevels();
-    BuildFrontendRecordUnits();
+    const auto dependency_levels = BuildDependencyLevels();
+    BuildFrontendRecordUnits(dependency_levels);
     BuildFrontendDispatchGroups();
     graph.compiled = true;
     return true;
@@ -1387,21 +1387,21 @@ void RenderGraphCompiler::SortEdges() {
                    (lhs.src.pass_id == rhs.src.pass_id && lhs.dst.pass_id < rhs.dst.pass_id);
         }
     );
-    // Alias planning may add edges after the semantic sort. Keep the lookup
-    // synchronized with the canonical output order at both sort boundaries.
-    for (size_t index = 0; index < graph.compiled_plan.edges.size(); ++index) {
-        auto& edge = graph.compiled_plan.edges[index];
+    for (auto& edge : graph.compiled_plan.edges) {
         std::sort(edge.reasons.begin(), edge.reasons.end(), ReasonLess);
         edge.reasons.erase(std::unique(edge.reasons.begin(), edge.reasons.end()), edge.reasons.end());
-        edge_indices.at((uint64_t{edge.src.pass_id} << 32) | edge.dst.pass_id) = index;
     }
 }
 
-bool RenderGraphCompiler::BuildTopologicalOrder() {
+bool RenderGraphCompiler::BuildExecutionOrder() {
     SortEdges();
     std::pmr::vector<uint32_t> indegree(graph.passes.size(), 0, &scratch_memory);
-    for (const auto& edge : graph.compiled_plan.edges) {
+    for (size_t index = 0; index < graph.compiled_plan.edges.size(); ++index) {
+        const auto& edge = graph.compiled_plan.edges[index];
         ++indegree[edge.dst.pass_id];
+        // Alias planning still adds edges. Only this intermediate sort needs
+        // to update the insertion lookup; the final sort has no later writer.
+        edge_indices.at((uint64_t{edge.src.pass_id} << 32) | edge.dst.pass_id) = index;
     }
 
     // Preserve the lowest declaration index tie-break without rescanning all passes.
@@ -1413,11 +1413,13 @@ bool RenderGraphCompiler::BuildTopologicalOrder() {
             ready.push(pass_index);
         }
     }
-    graph.compiled_plan.topological_order.reserve(graph.passes.size());
+    execution_position.assign(graph.passes.size(), RenderGraph::InvalidIndex);
+    graph.compiled_plan.execution_order.reserve(graph.passes.size());
     while (!ready.empty()) {
         const uint32_t next = ready.top();
         ready.pop();
-        graph.compiled_plan.topological_order.push_back(RenderGraph::PassHandle{next, graph.graph_id});
+        execution_position[next] = static_cast<uint32_t>(graph.compiled_plan.execution_order.size());
+        graph.compiled_plan.execution_order.push_back(RenderGraph::PassHandle{next, graph.graph_id});
         for (const auto& edge : OutgoingEdges(graph.compiled_plan.edges, next)) {
             assert(indegree[edge.dst.pass_id] > 0);
             if (--indegree[edge.dst.pass_id] == 0) {
@@ -1425,18 +1427,14 @@ bool RenderGraphCompiler::BuildTopologicalOrder() {
             }
         }
     }
-    if (graph.compiled_plan.topological_order.size() != graph.passes.size()) {
+    if (graph.compiled_plan.execution_order.size() != graph.passes.size()) {
         return Fail("pass dependency cycle detected");
     }
     return true;
 }
 
-bool RenderGraphCompiler::BuildExecutionOrder() {
-    graph.compiled_plan.execution_order.reserve(graph.passes.size());
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
-        graph.compiled_plan.execution_order.push_back(RenderGraph::PassHandle{pass_index, graph.graph_id});
-    }
-
+bool RenderGraphCompiler::ValidateDeclarationOrder() {
+    // Keep the existing input contract independent of the selected order.
     for (const auto& edge : graph.compiled_plan.edges) {
         if (edge.src.pass_id >= edge.dst.pass_id) {
             return Fail("serial declaration order cannot satisfy a compiled dependency");
@@ -1625,12 +1623,12 @@ void RenderGraphCompiler::BuildQueuePlan() {
     }
 }
 
-void RenderGraphCompiler::BuildDependencyLevels() {
+std::pmr::vector<uint32_t> RenderGraphCompiler::BuildDependencyLevels() {
     // A pass enters the wave after its deepest predecessor. The validated
     // topological order also covers alias edges added after the initial sort.
     std::pmr::vector<uint32_t> levels(graph.passes.size(), 0, &scratch_memory);
     uint32_t max_level = 0;
-    for (const auto pass : graph.compiled_plan.topological_order) {
+    for (const auto pass : graph.compiled_plan.execution_order) {
         for (const auto& edge : OutgoingEdges(graph.compiled_plan.edges, pass.pass_id)) {
             auto& destination_level = levels[edge.dst.pass_id];
             destination_level = std::max(destination_level, levels[pass.pass_id] + 1);
@@ -1643,23 +1641,10 @@ void RenderGraphCompiler::BuildDependencyLevels() {
             RenderGraph::PassHandle{pass_index, graph.graph_id}
         );
     }
+    return levels;
 }
 
-void RenderGraphCompiler::BuildFrontendRecordUnits() {
-    std::pmr::vector<uint32_t> pass_to_dependency_level(
-        graph.passes.size(),
-        RenderGraph::InvalidIndex,
-        &scratch_memory
-    );
-    for (uint32_t level_index = 0;
-         level_index < graph.compiled_plan.dependency_levels.size();
-         ++level_index) {
-        for (const auto pass :
-             graph.compiled_plan.dependency_levels[level_index].passes) {
-            pass_to_dependency_level[pass.pass_id] = level_index;
-        }
-    }
-
+void RenderGraphCompiler::BuildFrontendRecordUnits(std::span<const uint32_t> dependency_levels) {
     // Preserve one stable frontend source identity per pass in execution order.
     graph.compiled_plan.frontend_record_units.reserve(
         graph.compiled_plan.execution_order.size()
@@ -1679,7 +1664,7 @@ void RenderGraphCompiler::BuildFrontendRecordUnits() {
                 .native_translate_class = pass.translate_execution_class,
 
                 .dependency_level_index =
-                    pass_to_dependency_level[pass_handle.pass_id],
+                    dependency_levels[pass_handle.pass_id],
             }
         );
     }
@@ -1721,13 +1706,6 @@ void RenderGraphCompiler::BuildFrontendDispatchGroups() {
 }
 
 void RenderGraphCompiler::BuildLifetimes() {
-    std::pmr::vector<uint32_t> execution_position(
-        graph.passes.size(), RenderGraph::InvalidIndex, &scratch_memory
-    );
-    for (uint32_t position = 0; position < graph.compiled_plan.execution_order.size(); ++position) {
-        execution_position[graph.compiled_plan.execution_order[position].pass_id] = position;
-    }
-
     for (const auto& access : graph.compiled_plan.accesses) {
         auto&          resource = graph.resources[access.resource.resource_id];
         const uint32_t position = execution_position[access.pass.pass_id];
@@ -1817,16 +1795,6 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
             }
             return false;
         };
-
-    std::pmr::vector<uint32_t> execution_position(
-        graph.passes.size(),
-        RenderGraph::InvalidIndex,
-        &scratch_memory
-    );
-    for (uint32_t position = 0; position < graph.compiled_plan.execution_order.size();
-         ++position) {
-        execution_position[graph.compiled_plan.execution_order[position].pass_id] = position;
-    }
 
     std::pmr::vector<Candidate> candidates{&scratch_memory};
     candidates.reserve(graph.resources.size());
@@ -2085,23 +2053,6 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         return Fail("transient alias plan has an incomplete resource table");
     }
 
-    std::pmr::vector<uint32_t> execution_position(
-        graph.passes.size(),
-        RenderGraph::InvalidIndex,
-        &scratch_memory
-    );
-    std::pmr::vector<uint32_t> topological_position(
-        graph.passes.size(),
-        RenderGraph::InvalidIndex,
-        &scratch_memory
-    );
-    for (uint32_t position = 0; position < plan.execution_order.size(); ++position) {
-        execution_position[plan.execution_order[position].pass_id] = position;
-    }
-    for (uint32_t position = 0; position < plan.topological_order.size(); ++position) {
-        topological_position[plan.topological_order[position].pass_id] = position;
-    }
-
     const auto descriptors_match = [&](uint32_t lhs_index, uint32_t rhs_index) {
         const auto& lhs = graph.resources[lhs_index];
         const auto& rhs = graph.resources[rhs_index];
@@ -2145,20 +2096,8 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
             );
         };
 
-    for (const auto& edge : plan.edges) {
-        if (!graph.IsValidPass(edge.src) || !graph.IsValidPass(edge.dst) ||
-            topological_position[edge.src.pass_id] ==
-                RenderGraph::InvalidIndex ||
-            topological_position[edge.dst.pass_id] ==
-                RenderGraph::InvalidIndex ||
-            topological_position[edge.src.pass_id] >=
-                topological_position[edge.dst.pass_id]) {
-            return Fail(
-                "transient alias planning invalidated the compiled topological order"
-            );
-        }
-    }
-
+    // Semantic edges were validated when selecting execution_order. Every new
+    // alias edge is checked against that same rank through its frontier below.
     std::pmr::vector<uint32_t> alias_barrier_owners(plan.barriers.size(), 0, &scratch_memory);
     for (const auto& alias : plan.alias_boundaries) {
         if (!graph.IsValidResource(alias.predecessor_resource) ||
