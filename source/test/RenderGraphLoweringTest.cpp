@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -109,6 +111,128 @@ public:
 template<typename Enum>
 [[nodiscard]] bool HasFlag(Enum value, Enum flag) {
     return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flag)) != 0;
+}
+
+void TestReverseDependencyUsesCompiledOrder(TestSuite& suite) {
+    constexpr std::string_view test_name = "reverse dependency preserves resource semantics through lowering";
+    RenderGraph graph("ReverseDependency", RenderGraph::QueueTopology::DedicatedQueues());
+    BufferRef shared_buffer = MoerNew(FakeBuffer)(256);
+    BufferRef produced_buffer = MoerNew(FakeBuffer)(256);
+    const auto shared = graph.ImportBuffer("Shared", shared_buffer, RenderGraph::BufferDesc{.byte_size = 256});
+    const auto produced = graph.ImportBuffer("Produced", produced_buffer, RenderGraph::BufferDesc{.byte_size = 256});
+    graph.SetInitialState(shared, RenderGraph::BufferAccessType::ShaderRead,
+                          RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.SetInitialState(produced, RenderGraph::BufferBoundary::Undefined,
+                          RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+    std::optional<RenderGraph::PassBuilder> first_builder;
+    std::vector<std::string_view> callbacks;
+    const auto first_reader = graph.AddRecordPass(
+        "FirstReader",
+        [&](RenderGraph::PassBuilder& builder) {
+            builder.Read(shared, RenderGraph::BufferAccessType::ShaderRead);
+            first_builder.emplace(builder);
+        },
+        [&](Moer::Render::CommandList&) { callbacks.push_back("FirstReader"); },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    const auto writer = graph.AddRecordPass(
+        "ComputeWriter",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute)
+                .Write(produced, RenderGraph::BufferAccessType::Storage);
+        },
+        [&](Moer::Render::CommandList&) { callbacks.push_back("ComputeWriter"); },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    const auto last_reader = graph.AddRecordPass(
+        "LastReader",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(shared, RenderGraph::BufferAccessType::ShaderRead)
+                .Read(produced, RenderGraph::BufferAccessType::ShaderRead);
+        },
+        [&](Moer::Render::CommandList&) { callbacks.push_back("LastReader"); },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    // The compatible Shared readers may reverse, while Produced must retain
+    // its writer->reader ordering. No declaration acquires a different version.
+    first_builder->DependsOn(last_reader);
+    graph.Export(shared, RenderGraph::BufferAccessType::TransferSource,
+                 RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.Export(produced, RenderGraph::BufferAccessType::ShaderRead,
+                 RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+
+    const bool compiled = graph.Compile();
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    if (!compiled) {
+        return;
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    const std::vector<RenderGraph::PassHandle> expected_order{writer, last_reader, first_reader};
+    suite.Check(plan.execution_order == expected_order, test_name,
+                "an acyclic backward explicit edge must determine execution order");
+    const auto& shared_lifetime = plan.resources[shared.Untyped().resource_id];
+    const auto& produced_lifetime = plan.resources[produced.Untyped().resource_id];
+    suite.Check(shared_lifetime.first_use == 1 && shared_lifetime.last_use == 2 &&
+                    produced_lifetime.first_use == 0 && produced_lifetime.last_use == 1,
+                test_name, "resource lifetimes must use execution positions rather than pass identities");
+    const auto write_access = std::find_if(plan.accesses.begin(), plan.accesses.end(), [&](const auto& access) {
+        return access.pass == writer && access.resource == produced.Untyped();
+    });
+    const auto read_access = std::find_if(plan.accesses.begin(), plan.accesses.end(), [&](const auto& access) {
+        return access.pass == last_reader && access.resource == produced.Untyped();
+    });
+    suite.Check(write_access != plan.accesses.end() && read_access != plan.accesses.end() &&
+                    write_access->output_version == read_access->input_version &&
+                    read_access->input_version != RenderGraph::InvalidVersion,
+                test_name, "reordering must preserve the version selected by the resource declarations");
+    suite.Check(plan.queue_batches.size() == 2 &&
+                    plan.queue_batches[0].passes == std::vector<RenderGraph::PassHandle>{writer} &&
+                    plan.queue_batches[1].passes == std::vector<RenderGraph::PassHandle>{last_reader, first_reader},
+                test_name, "queue batches must follow the compiled order across queue families");
+
+    RenderGraphLowering::LoweredPlan lowered;
+    std::string error;
+    const bool lowered_ok = RenderGraphLowering::Lower(graph, lowered, error);
+    suite.Check(lowered_ok, test_name, error);
+    if (!lowered_ok) {
+        return;
+    }
+    std::vector<RenderGraph::PassHandle> lowered_order;
+    for (const auto& pass : lowered.passes) {
+        lowered_order.push_back(pass.pass);
+    }
+    suite.Check(lowered_order == expected_order, test_name,
+                "lowered instructions must preserve the compiled execution order");
+    suite.Check(lowered.queue_syncs.size() == 1 &&
+                    lowered.queue_syncs.front().signal_pass == writer &&
+                    lowered.queue_syncs.front().wait_pass == last_reader &&
+                    lowered.queue_syncs.front().signal_batch == 0 &&
+                    lowered.queue_syncs.front().wait_batch == 1,
+                test_name, "the cross-family wait must precede the actual consumer batch");
+    const auto shared_export = [&](const auto& instruction) {
+        return instruction.export_boundary && instruction.resource == shared.Untyped();
+    };
+    const auto after_first = lowered.After(first_reader);
+    const auto after_last = lowered.After(last_reader);
+    const auto final_barrier = std::find_if(after_first.begin(), after_first.end(), shared_export);
+    suite.Check(final_barrier != after_first.end() && final_barrier->source_frontier.size() == 2 &&
+                    std::none_of(after_last.begin(), after_last.end(), shared_export),
+                test_name, "the complete reader frontier must export after the latest execution position, not greatest pass id");
+
+    const std::string compiled_dump = graph.Dump();
+    const std::string lowered_dump = lowered.Dump();
+    const bool recompiled = graph.Compile();
+    suite.Check(recompiled, test_name, graph.GetCompileError());
+    const bool lowered_again = recompiled && RenderGraphLowering::Lower(graph, lowered, error);
+    suite.Check(lowered_again, test_name, error);
+    suite.Check(lowered_again && graph.Dump() == compiled_dump && lowered.Dump() == lowered_dump,
+                test_name, "recompilation must preserve the reordered execution and lowering plans");
+    const bool recorded = lowered_again && graph.ExecuteFrontendRecordingPlan(
+        {}, false, [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}
+    );
+    suite.Check(recorded, test_name, graph.GetCompileError());
+    suite.Check(callbacks == std::vector<std::string_view>{"ComputeWriter", "LastReader", "FirstReader"},
+                test_name, "serial recording callbacks must follow compiled order exactly once");
 }
 
 void TestTextureFanInAndDeterminism(TestSuite& suite) {
@@ -1635,6 +1759,7 @@ void TestFailClosedContracts(TestSuite& suite) {
 
 int main() {
     TestSuite suite;
+    TestReverseDependencyUsesCompiledOrder(suite);
     TestTextureFanInAndDeterminism(suite);
     TestShaderResourceAndSampledLayoutsRemainDistinct(suite);
     TestDepthAttachmentReadUsesBackendAttachmentLayout(suite);

@@ -67,7 +67,6 @@ private:
     bool BuildFinalBarriers();
     void AuditStatePlanCompleteness();
     bool BuildExecutionOrder();
-    bool ValidateDeclarationOrder();
     void BuildQueuePlan();
     std::pmr::vector<uint32_t> BuildDependencyLevels();
     void BuildFrontendRecordUnits(std::span<const uint32_t> dependency_levels);

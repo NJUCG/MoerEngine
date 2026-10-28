@@ -320,7 +320,7 @@ public:
 
     /** CPU recording policy; independent of GPU dependencies and native translation. */
     enum class PassRecordPolicy : uint8_t {
-        /** Join earlier recording, run on the caller, then allow the next group. */
+        /** Join earlier recording in compiled order, run on the caller, then allow the next group. */
         Serial,
         /** May record concurrently into an exclusively owned CommandList. */
         ParallelAllowed,
@@ -528,7 +528,7 @@ public:
     struct CompiledBarrier {
         ResourceHandle  resource{};
         ResourceRange   range{};
-        /** Latest actual predecessor in sources; invalid for an external/undefined boundary. */
+        /** Representative predecessor; sources is authoritative. Invalid for an external/undefined boundary. */
         PassHandle      src_pass{};
         PassHandle      dst_pass{};
         /** Current tracked state at the destination boundary, independent of source fan-in. */
@@ -734,6 +734,7 @@ public:
             return Reference(resource.Untyped());
         }
 
+        /** GPU dependency independent of declaration order; must not conflict with resource dependencies. */
         PassBuilder& DependsOn(PassHandle dependency);
         PassBuilder& SideEffect();
         PassBuilder& ExecuteOn(QueueRole queue, GpuWorkType work);
@@ -1010,7 +1011,10 @@ public:
         PassRecordPolicy policy
     );
 
-    /** Compiles declarations without emitting barriers or recording RHI commands. */
+    /**
+     * Compiles declarations without emitting barriers or recording RHI commands.
+     * Resource versions follow declaration order; execution follows the compiled dependencies.
+     */
     bool Compile();
 
     /**

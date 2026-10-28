@@ -229,8 +229,7 @@ bool RenderGraphCompiler::Compile() {
     resource_ever_written.assign(graph.resources.size(), false);
 
     if (!ValidateQueueTopology() || !NormalizeDeclarations() || !BuildAtomicCells() ||
-        !BuildSemanticDependencies() || !BuildFinalBarriers() || !BuildExecutionOrder() ||
-        !ValidateDeclarationOrder()) {
+        !BuildSemanticDependencies() || !BuildFinalBarriers() || !BuildExecutionOrder()) {
         return false;
     }
 
@@ -1429,16 +1428,6 @@ bool RenderGraphCompiler::BuildExecutionOrder() {
     }
     if (graph.compiled_plan.execution_order.size() != graph.passes.size()) {
         return Fail("pass dependency cycle detected");
-    }
-    return true;
-}
-
-bool RenderGraphCompiler::ValidateDeclarationOrder() {
-    // Keep the existing input contract independent of the selected order.
-    for (const auto& edge : graph.compiled_plan.edges) {
-        if (edge.src.pass_id >= edge.dst.pass_id) {
-            return Fail("serial declaration order cannot satisfy a compiled dependency");
-        }
     }
     return true;
 }

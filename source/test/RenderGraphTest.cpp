@@ -268,7 +268,7 @@ void TestStableSerialCallbackOrder(TestSuite& suite) {
     suite.Check(
         callback_order == std::vector<int>{1, 2, 3},
         test_name,
-        "callbacks must execute exactly once in declaration order"
+        "unconstrained serial callbacks must preserve the declaration-order tie-break"
     );
 }
 
@@ -610,24 +610,32 @@ void TestDependencyLevelOrdering(TestSuite& suite) {
     }
 }
 
-void TestExplicitDependencyOrderRejections(TestSuite& suite) {
-    for (const bool cycle : {false, true}) {
-        const std::string_view test_name = cycle ?
-            "explicit dependency cycle rejection" : "reverse declaration dependency rejection";
-        RenderGraph graph(cycle ? "DependencyCycle" : "ReverseDependency");
+void TestDependencyCyclesRejectRecording(TestSuite& suite) {
+    for (const bool resource_dependency : {false, true}) {
+        const std::string_view test_name = resource_dependency ?
+            "explicit dependency conflicts with resource version" : "explicit dependency cycle rejection";
+        RenderGraph graph(test_name);
+        const auto ready = graph.CreateTransientToken("Ready");
         std::optional<RenderGraph::PassBuilder> first_builder;
         int callback_count = 0;
         const auto record = [&](Moer::Render::CommandList&) { ++callback_count; };
         const auto first = graph.AddRecordPass(
             "First",
-            [&](RenderGraph::PassBuilder& builder) { first_builder.emplace(builder); },
+            [&](RenderGraph::PassBuilder& builder) {
+                first_builder.emplace(builder);
+                if (resource_dependency) {
+                    builder.Write(ready);
+                }
+            },
             record,
             RenderGraph::PassRecordPolicy::Serial
         );
         const auto second = graph.AddRecordPass(
             "Second",
             [=](RenderGraph::PassBuilder& builder) {
-                if (cycle) {
+                if (resource_dependency) {
+                    builder.Read(ready);
+                } else {
                     builder.DependsOn(first);
                 }
             },
@@ -638,15 +646,12 @@ void TestExplicitDependencyOrderRejections(TestSuite& suite) {
         // Add the backward edge only after both real pass handles exist.
         first_builder->DependsOn(second);
 
-        const std::string_view expected_error = cycle ?
-            "pass dependency cycle detected" :
-            "serial declaration order cannot satisfy a compiled dependency";
         for (uint32_t attempt = 0; attempt < 2; ++attempt) {
             const bool compiled = graph.Compile();
             suite.Check(!compiled && !graph.IsCompiled(), test_name,
-                        "an unsupported dependency order must not publish an executable plan");
-            suite.Check(Contains(graph.GetCompileError(), expected_error), test_name,
-                        "a cycle and an acyclic backward dependency must retain distinct diagnostics");
+                        "a dependency cycle must not publish an executable plan");
+            suite.Check(Contains(graph.GetCompileError(), "pass dependency cycle detected"), test_name,
+                        "explicit edges must not override resource versions or another explicit dependency");
         }
         const bool recorded = RecordGraphForTest(graph);
         suite.Check(!recorded && callback_count == 0, test_name,
@@ -982,7 +987,7 @@ void TestTypedTextureSubresourceHazards(TestSuite& suite) {
     suite.Check(
         callback_order == std::vector<int>{0, 1, 2},
         test_name,
-        "production callbacks must remain serial and declaration ordered"
+        "serial callbacks must follow the compiled order, including stable independent writers"
     );
 }
 
@@ -3348,7 +3353,7 @@ void TestPartialRangeBarrier(TestSuite& suite) {
     );
 }
 
-void TestMixedQueueExecuteRemainsDeclarationOrder(TestSuite& suite) {
+void TestMixedQueuePreservesDeclarationTieBreak(TestSuite& suite) {
     constexpr std::string_view test_name = "mixed-queue serial execution order";
     RenderGraph graph("MixedQueueExecute", RenderGraph::QueueTopology::DedicatedQueues());
     std::vector<int> callbacks;
@@ -3389,13 +3394,13 @@ void TestMixedQueueExecuteRemainsDeclarationOrder(TestSuite& suite) {
         graph.GetCompiledPlan().execution_order ==
             std::vector<RenderGraph::PassHandle>{first, second, third},
         test_name,
-        "mixed logical queues must not change the production execution order"
+        "queue selection alone must not change the declaration-order tie-break"
     );
     suite.Check(RecordGraphForTest(graph), test_name, graph.GetCompileError());
     suite.Check(
         callbacks == std::vector<int>{1, 2, 3},
         test_name,
-        "mixed-queue callbacks must still execute serially in declaration order"
+        "mixed-queue serial callbacks must follow the compiled order"
     );
 }
 
@@ -7048,7 +7053,7 @@ int main() {
     TestImportedAliasIdentityAndDump(suite);
     TestResourceNameAndIdentityNamespaces(suite);
     TestDependencyLevelOrdering(suite);
-    TestExplicitDependencyOrderRejections(suite);
+    TestDependencyCyclesRejectRecording(suite);
     TestHazardsAndDeterministicDump(suite);
     TestTransientReadBeforeProducerFailsWithoutCallbacks(suite);
     TestCrossGraphHandlesAreRejected(suite);
@@ -7085,7 +7090,7 @@ int main() {
     TestBatchPairSyncDeduplication(suite);
     TestGpuWorkTypesAndBarrierSources(suite);
     TestPartialRangeBarrier(suite);
-    TestMixedQueueExecuteRemainsDeclarationOrder(suite);
+    TestMixedQueuePreservesDeclarationTieBreak(suite);
     TestStageTwoDumpDeterminism(suite);
     TestBarrierSourcesIgnoreUnrelatedLastRead(suite);
     TestFanInBarrierPlacementCoversEverySourceBatch(suite);

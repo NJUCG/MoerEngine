@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1164,6 +1165,104 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
                 "recompilation must rebuild the same execution, alias and dependency plan");
 }
 
+void TestAliasFollowsReverseDeclarationDependency(TestSuite& suite) {
+    constexpr std::string_view test = "alias reuse follows compiled order across a reverse dependency";
+    RenderGraph graph("ReverseDependencyAlias");
+    const auto first = graph.CreateTransientBuffer("First", kBufferDesc);
+    const auto second = graph.CreateTransientBuffer("Second", kBufferDesc);
+    std::optional<RenderGraph::PassBuilder> first_builder;
+    const auto write_first = graph.AddRecordPass(
+        "WriteFirst",
+        [&](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(first, RenderGraph::BufferAccessType::TransferDestination);
+            first_builder.emplace(builder);
+        },
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    const auto write_second = graph.AddRecordPass(
+        "WriteSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(second, RenderGraph::BufferAccessType::TransferDestination);
+        },
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    first_builder->DependsOn(write_second);
+
+    const bool compiled = graph.Compile();
+    suite.Check(compiled, test, graph.GetCompileError());
+    if (!compiled) {
+        return;
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    const auto& first_resource = plan.resources[first.handle.resource_id];
+    const auto& second_resource = plan.resources[second.handle.resource_id];
+    suite.Check(
+        plan.execution_order == std::vector<RenderGraph::PassHandle>{write_second, write_first} &&
+            second_resource.first_use == 0 && second_resource.last_use == 0 &&
+            first_resource.first_use == 1 && first_resource.last_use == 1 &&
+            first_resource.transient_slot != RenderGraph::InvalidIndex &&
+            first_resource.transient_slot == second_resource.transient_slot,
+        test,
+        "lifetimes and shared allocation must follow execution positions, not declaration indices"
+    );
+    suite.Check(
+        plan.alias_boundaries.size() == 1 &&
+            plan.alias_boundaries.front().predecessor_resource == second.handle &&
+            plan.alias_boundaries.front().successor_resource == first.handle &&
+            plan.alias_boundaries.front().source_frontier ==
+                std::vector<RenderGraph::PassHandle>{write_second} &&
+            plan.alias_boundaries.front().dst_pass == write_first,
+        test,
+        "the later declared resource must retire before its earlier declared successor reuses the slot"
+    );
+    const auto has_reason = [&](RenderGraph::EdgeReasonKind kind) {
+        return plan.edges.size() == 1 && plan.edges.front().src == write_second &&
+               plan.edges.front().dst == write_first &&
+               std::any_of(plan.edges.front().reasons.begin(), plan.edges.front().reasons.end(),
+                           [&](const auto& reason) { return reason.kind == kind; });
+    };
+    suite.Check(has_reason(RenderGraph::EdgeReasonKind::Explicit) &&
+                    has_reason(RenderGraph::EdgeReasonKind::TransientAlias),
+                test, "alias planning must augment the existing reverse explicit edge");
+
+    const std::string dump = graph.Dump();
+    const bool recompiled = graph.Compile();
+    suite.Check(recompiled && graph.Dump() == dump, test,
+                "recompilation must preserve the reverse execution and alias plan");
+    if (!recompiled) {
+        return;
+    }
+
+    FactoryProbe probe{};
+    auto pool = probe.MakePool();
+    RenderGraphTransientAllocator allocator(pool);
+    std::string error;
+    const bool prepared = allocator.Prepare(graph, error);
+    suite.Check(prepared, test, error);
+    if (!prepared) {
+        return;
+    }
+    suite.Check(probe.buffers == 1 && graph.GetPhysicalBuffer(first).Get() ==
+                    graph.GetPhysicalBuffer(second).Get(),
+                test, "reverse dependency aliases must share one physical allocation");
+    RenderGraphLowering::LoweredPlan lowered;
+    const bool lowered_ok = RenderGraphLowering::Lower(graph, lowered, error);
+    suite.Check(lowered_ok, test, error);
+    if (lowered_ok) {
+        const auto before = lowered.Before(write_first);
+        suite.Check(std::any_of(before.begin(), before.end(), [&](const auto& instruction) {
+            return instruction.transient_alias && instruction.src_pass == write_second &&
+                   instruction.dst_pass == write_first &&
+                   instruction.source_frontier == std::vector<RenderGraph::PassHandle>{write_second};
+        }), test, "lowering must place the alias barrier before its successor in compiled order");
+    }
+    allocator.ReleaseNonExported(graph);
+}
+
 void TestRecordReferenceRetainsCompletionLifetime(TestSuite& suite) {
     constexpr std::string_view test =
         "recorded reference retains completion lifetime";
@@ -1386,6 +1485,7 @@ int main() {
     TestNonOverlappingTexturesAlias(suite);
     TestAliasBarrierCoversCompleteReaderFrontier(suite);
     TestAliasChainUsesOneSlot(suite);
+    TestAliasFollowsReverseDeclarationDependency(suite);
     TestRecordReferenceRetainsCompletionLifetime(suite);
     TestTransientExecutionContractsAndRollback(suite);
 

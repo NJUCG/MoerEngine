@@ -479,7 +479,7 @@ Raster 复测的 Compile p50 减少 **0.2462 ms（6.3%）**；RT 减少 **0.1675
 
 ### 9.3 实现与契约验证
 
-`BuildExecutionOrder()` 保留最小声明序号优先的 Kahn 算法，直接写唯一顺序，并在出队时填写执行位置。随后独立执行 `ValidateDeclarationOrder()`，保留原来对逆声明顺序依赖的拒绝和环优先的诊断。它仍是当前输入契约，尚未放宽成任意合法 DAG 都能执行。失败图的部分编译输出不作为执行计划使用。
+`BuildExecutionOrder()` 保留最小声明序号优先的 Kahn 算法，直接写唯一顺序，并在出队时填写执行位置。随后独立执行 `ValidateDeclarationOrder()`，保留原来对逆声明顺序依赖的拒绝和环优先的诊断。这是本轮当时保留的输入契约，后续第 10 节取消了该额外限制。失败图的部分编译输出不作为执行计划使用。
 
 位置表由 compiler arena 拥有，生命周期和 alias 阶段共同读取。`BuildDependencyLevels()` 在 alias 完成后返回 PMR level 表，`Compile()` 在自身作用域内通过 `span` 交给录制单元生成函数；没有保存借用视图到输出中。首次边排序后的插边索引修复并入已有的入度扫描，最终规范化不再回写没有消费者的索引。
 
@@ -523,3 +523,38 @@ benchmark 源码未修改，前后各自使用匹配其头文件布局的 EXE/DL
 完整新版本分别以 Raster、Raytracing 运行 Sponza，各运行 110 秒后正常关闭，退出码均为 0。两次日志均未发现 error、critical、VUID 或 Validation Error。使用独立配置覆盖文件和串行录制；运行期间未并发构建或基准测试。本轮没有旧版本编辑器对照，这两次运行只用于正确性检查，不作为帧率提升的依据。
 
 配置、进程信息、二进制哈希、日志和 capture 保存在 `build/rdg-bisect-results/dedup-after-raster/` 与 `build/rdg-bisect-results/dedup-after-ray/`，汇总日志为 `build/rdg-dedup-raster.log` 与 `build/rdg-dedup-ray.log`。两次均使用 9.3 所列的新 Render DLL，测试结束后没有遗留编辑器进程。根目录和可执行目录的默认配置仍为 Raster、关闭并行录制，未修改用户配置。
+
+## 10. 取消依赖必须沿声明顺序向前的限制
+
+### 10.1 真实约束与清理范围
+
+当前 `Read(R)`、`Write(R)` 没有由调用方指定资源版本。编译器按声明顺序解释访问，生成 RAW、WAR、WAW 以及状态和所有权依赖；这些边已经包含保持资源版本含义所需的先后约束。构图完成后，合法拓扑顺序可以直接作为执行顺序，无需再次要求每条边的 `src.pass_id < dst.pass_id`。
+
+原来的 `ValidateDeclarationOrder()` 维护了一个更强的输入限制：即使显式逆向依赖没有与任何资源语义冲突，也会拒绝该图。本轮取消这一限制；依赖环仍由 Kahn 拒绝，新增 alias 边仍必须沿选定执行顺序向前。资源版本分析、状态与所有权同步、生命周期和 alias 检查保持各自职责。
+
+这不改变资源访问声明的含义。先声明 transient reader、后声明 producer，仍会因为读取未初始化内容而失败；逆向显式依赖也不能要求某次读取改读另一个版本。如果显式依赖与已有资源依赖形成环，编译仍失败。多个就绪 Pass 继续优先选择较小声明序号，保持无额外约束时的确定性。
+
+串行录制回调跟随编译顺序，`Serial` 表达等待前组、在调用线程执行、再放行后组；GPU 依赖不成为 CPU 录制任务之间的数据传递协议。沿用现有 Prepare/Record 约束，不新增 CPU 调度层。
+
+### 10.2 实施与验证计划
+
+1. 删除声明顺序检查的声明、定义及调用，执行顺序继续由 Kahn 直接生成。
+2. 将无环逆向依赖的拒绝用例改为正向验证，覆盖重复编译、Lowering 和串行录制顺序；检查逆序兼容读者的 export 边界，以及逆序 transient 资源的同槽复用。保留真实环、未初始化 transient 读取及稳定顺序用例。
+3. 核查队列批次、屏障、生命周期及 alias 使用实际执行位置，修正仍把声明顺序当作普遍执行契约的描述。
+4. 完整 Debug 构建，运行 RDG/RHI 契约、Vulkan 集成测试及 Raster/RT 编辑器检查，验证后独立提交。
+
+本轮移除一次全边扫描并扩大合法输入范围，不引入新的调度启发式或 GPU 异步执行策略，不将这项清理表述为已经取得帧率收益。
+
+### 10.3 保证的承接与回归覆盖
+
+顺序合法性由同一套依赖边和 Kahn 维护。队列批次从 `execution_order` 构建，生命周期和 alias 读取执行位置；Lowering 的 ownership release 选择实际最后的源队列批次，export 屏障选择实际最后的来源位置。`CompiledBarrier::src_pass` 是代表源，不承诺执行最晚，注释已相应修正；完整 `sources` 仍是同步依据，无需为了改变代表源而增加新的排序或扫描。
+
+新增正向用例构造声明顺序 A、B、C，其中 A、C 兼容地读取 X，B 写入 Y，C 读取 Y，A 显式依赖 C。编译顺序成为 B、C、A，验证 Y 的版本关系和跨队列所有权同步、X/Y 生命周期、Lowering 和串行回调顺序；X 的 export 屏障必须放在实际最后的 A 之后，即使 A 的 Pass ID 最小。重复 Compile/Lower 的输出保持一致。
+
+另一个用例让两个相同描述符的 transient buffer 按逆声明顺序写入，验证生命周期及 alias 方向沿实际执行顺序、原显式边正确追加 alias 原因、只申请一个物理 buffer，并把 alias 屏障放在真正的后继之前。负向用例继续拒绝纯显式环，以及显式逆向边与资源 RAW 边构成的环，失败后不会录制回调。
+
+### 10.4 验证结果
+
+完整 MSVC Debug 构建通过，9 项相关 CTest 全部通过，新增逆序 Lowering 和 alias 用例均通过。`TestRHIParallelRecordVulkan.exe --parallel` 的 29 个用例全部 PASS，启用 validation，未发现 VUID 或 Validation Error。日志为 `build/rdg-order-build.log`、`build/rdg-order-contracts.log` 与 `build/rdg-order-vulkan.log`。
+
+Raster、Raytracing 分别以独立配置运行 Sponza 110 秒，均正常退出，日志未发现 error、critical、VUID 或 Validation Error。运行记录位于 `build/rdg-bisect-results/order-after-raster/`、`build/rdg-bisect-results/order-after-ray/`，汇总日志为 `build/rdg-order-raster.log`、`build/rdg-order-ray.log`。这些运行只验证正确性，没有进行本轮前后性能对照。测试编辑器均已关闭，根目录和可执行目录的默认配置仍为 Raster、关闭并行录制。
