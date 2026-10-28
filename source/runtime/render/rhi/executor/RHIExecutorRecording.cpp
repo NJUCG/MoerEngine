@@ -17,7 +17,7 @@ struct RecordingSourcePayload {
         rejection_preparations{};
     Array<PreparedCommandListRejection>
                                     prepared_rejections{};
-    Array<ERecordingRejectionState> terminal_snapshot{};
+    Array<ERecordingRejectionState> rejection_states{};
     ERHIExecSubmitFlags             flags{ERHIExecSubmitFlags::FlushGPU};
 };
 
@@ -125,6 +125,9 @@ void ValidateRecordedSources(const Array<RHIRecordingSource>& _sources) {
     }
 }
 
+// An engaged result, including an empty array, continues to submission. nullopt
+// means rejection has been handled and callers must not repeat cleanup; it does
+// not guarantee that every producer has stopped.
 std::optional<Array<RHISubmissionRequest>> MaterializeRecordingSources(RecordingSourcePayload& _payload) {
     Array<RHISubmissionRequest> submits{};
     Array<size_t>               materialized_source_indices{};
@@ -178,7 +181,7 @@ std::optional<Array<RHISubmissionRequest>> MaterializeRecordingSources(Recording
             "recording source finalization failed",
             _payload.rejection_preparations,
             _payload.prepared_rejections,
-            _payload.terminal_snapshot,
+            _payload.rejection_states,
             std::move(submits),
             metadata_signal_transfer_prefixes
         );
@@ -190,19 +193,22 @@ std::optional<Array<RHISubmissionRequest>> MaterializeRecordingSources(Recording
     return std::move(submits);
 }
 
+// An engaged result, including an empty array, continues to submission. nullopt
+// means rejection/cancellation has been handled and callers must not repeat
+// cleanup; producers may still own sources that could not be drained.
 std::optional<Array<RHISubmissionRequest>> PrepareRecordingSubmissionRequests(
     RecordingSourcePayload& _payload,
     ERHIExecutorWorkAction  _action
 ) {
     if (_action == ERHIExecutorWorkAction::Cancel) {
         FinalizeCancelledRecordingSources(
-            std::move(_payload.sources), "completion gate cancelled during shutdown", _payload.rejection_preparations, _payload.prepared_rejections, _payload.terminal_snapshot
+            std::move(_payload.sources), "completion gate cancelled during shutdown", _payload.rejection_preparations, _payload.prepared_rejections, _payload.rejection_states
         );
         return std::nullopt;
     }
     if (_action == ERHIExecutorWorkAction::Reject) {
         FinalizeFailedRecordingSources(
-            std::move(_payload.sources), "recording completion gate failed", _payload.rejection_preparations, _payload.prepared_rejections, _payload.terminal_snapshot
+            std::move(_payload.sources), "recording completion gate failed", _payload.rejection_preparations, _payload.prepared_rejections, _payload.rejection_states
         );
         return std::nullopt;
     }
@@ -402,10 +408,10 @@ void RHIExecutor::SubmitRecording(
     Array<CommandList::RecordingRejectionPreparation>
                                         rejection_preparations{};
     Array<PreparedCommandListRejection> prepared_rejections{};
-    Array<ERecordingRejectionState>     terminal_snapshot{};
+    Array<ERecordingRejectionState>     rejection_states{};
     rejection_preparations.resize(_sources.size());
     prepared_rejections.resize(_sources.size());
-    terminal_snapshot.resize(_sources.size(), ERecordingRejectionState::ProducerOwned);
+    rejection_states.resize(_sources.size(), ERecordingRejectionState::ProducerOwned);
 
     const bool sources_valid = std::all_of(
         _sources.begin(),
@@ -421,7 +427,7 @@ void RHIExecutor::SubmitRecording(
             "missing completion gate or invalid queue",
             rejection_preparations,
             prepared_rejections,
-            terminal_snapshot
+            rejection_states
         );
         return;
     }
@@ -434,8 +440,8 @@ void RHIExecutor::SubmitRecording(
         std::move(rejection_preparations);
     payload->prepared_rejections =
         std::move(prepared_rejections);
-    payload->terminal_snapshot =
-        std::move(terminal_snapshot);
+    payload->rejection_states =
+        std::move(rejection_states);
     payload->flags = _flags;
 
     try {

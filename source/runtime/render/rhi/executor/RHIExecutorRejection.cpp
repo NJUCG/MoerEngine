@@ -341,50 +341,28 @@ void FinalizeRejectedCommandListGroup(
 namespace {
 
 void RejectRecordingSignalMetadata(
-    const Array<RHIRecordingSource>&          _sources,
-    std::span<const ERecordingRejectionState> _owned_snapshot              = {},
-    std::span<const size_t>                   _transferred_signal_prefixes = {}
+    const RHIRecordingSource& _source,
+    size_t                    _transferred_signal_prefix
 ) noexcept {
-    // Metadata is prepared source-by-source and preparation can allocate.
-    // If any step throws, the entire immutable recording transaction is
-    // rejected, including producer values not yet transferred into CmdSubmit.
-    // A per-source committed prefix records points now owned by an immutable
-    // submit, so this fallback never invokes Fence::Reject twice and the
-    // published metadata itself remains immutable.
-    for (size_t source_index = 0;
-         source_index < _sources.size();
-         ++source_index) {
-        if (!_owned_snapshot.empty() &&
-            (source_index >= _owned_snapshot.size() ||
-             _owned_snapshot[source_index] != ERecordingRejectionState::SignalsPending)) {
+    // The transferred prefix belongs to an immutable CmdSubmit, whose rejection
+    // handles those signals. Reject only the remaining source-owned metadata so
+    // transferred entries are not rejected twice and published metadata stays immutable.
+    const auto& signal_fences = _source.submit_metadata.signal_fences;
+    for (size_t signal_index = std::min(_transferred_signal_prefix, signal_fences.size());
+         signal_index < signal_fences.size();
+         ++signal_index) {
+        const RHIRecordingFencePoint& point = signal_fences[signal_index];
+        if (!point.fence.IsValid() || point.value == 0) {
             continue;
         }
-        const RHIRecordingSource& source = _sources[source_index];
-        const size_t              transferred_prefix =
-            !_transferred_signal_prefixes.empty() &&
-                    source_index < _transferred_signal_prefixes.size() ?
-                std::min(
-                    _transferred_signal_prefixes[source_index],
-                    source.submit_metadata.signal_fences.size()
-                ) :
-                0;
-        for (size_t signal_index = transferred_prefix;
-             signal_index < source.submit_metadata.signal_fences.size();
-             ++signal_index) {
-            const RHIRecordingFencePoint& point =
-                source.submit_metadata.signal_fences[signal_index];
-            if (!point.fence.IsValid() || point.value == 0) {
-                continue;
-            }
-            try {
-                point.fence->Reject(point.value);
-            } catch (...) {
-            }
+        try {
+            point.fence->Reject(point.value);
+        } catch (...) {
         }
     }
 }
 
-bool RecordingSourceIsTerminal(
+bool CanDrainRecordingSource(
     const RHIRecordingSource& _source
 ) noexcept {
     if (!_source.completion ||
@@ -405,28 +383,28 @@ bool RecordingSourceIsTerminal(
            !_source.command_list->HasManagedRecordingLease();
 }
 
-bool PrepareNewlyTerminalSources(
+bool PrepareNewlyDrainableSources(
     std::span<RHIRecordingSource>                         _sources,
     std::span<CommandList::RecordingRejectionPreparation> _rejection_preparations,
     std::span<PreparedCommandListRejection>               _prepared,
-    std::span<ERecordingRejectionState>                   _terminal_snapshot,
-    size_t&                                               _terminal_source_count,
+    std::span<ERecordingRejectionState>                   _rejection_states,
+    size_t&                                               _drained_source_count,
     size_t&                                               _cleanup_callback_count
 ) noexcept {
     bool prepared_any = false;
     for (size_t source_index = 0;
          source_index < _sources.size();
          ++source_index) {
-        if (_terminal_snapshot[source_index] != ERecordingRejectionState::ProducerOwned) {
+        if (_rejection_states[source_index] != ERecordingRejectionState::ProducerOwned) {
             continue;
         }
         RHIRecordingSource& source = _sources[source_index];
-        if (!RecordingSourceIsTerminal(source)) {
+        if (!CanDrainRecordingSource(source)) {
             continue;
         }
 
-        _terminal_snapshot[source_index] = ERecordingRejectionState::SignalsPending;
-        ++_terminal_source_count;
+        _rejection_states[source_index] = ERecordingRejectionState::SignalRejectionPending;
+        ++_drained_source_count;
         prepared_any = true;
         if (!source.command_list) {
             continue;
@@ -452,12 +430,12 @@ bool PrepareNewlyTerminalSources(
 void PublishRecordingErrorsAndNotifyOwnedSources(
     Array<RHIRecordingSource>&                _sources,
     std::string_view                          _reason,
-    std::span<const ERecordingRejectionState> _terminal_snapshot,
+    std::span<const ERecordingRejectionState> _rejection_states,
     std::span<PreparedCommandListRejection>   _prepared
 ) noexcept {
-    // Both passes use the same ownership snapshot; never resample between
-    // signal rejection and callback notification while producers may finish.
-    assert(_terminal_snapshot.size() == _sources.size());
+    // Notification follows recorded rejection progress. Never resample producer
+    // gates between signal rejection and callback notification.
+    assert(_rejection_states.size() == _sources.size());
 
     const GpuCompletionPublishBatch completion_batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
@@ -476,7 +454,7 @@ void PublishRecordingErrorsAndNotifyOwnedSources(
     PublishPayloadQueryErrors({}, _prepared, _reason, query_batch);
     for (size_t source_index = 0; source_index < _sources.size();
          ++source_index) {
-        if (_terminal_snapshot[source_index] != ERecordingRejectionState::ProducerOwned) {
+        if (_rejection_states[source_index] != ERecordingRejectionState::ProducerOwned) {
             _sources[source_index].gpu_completion_cancellation.NotifyCancellation(
                 completion_batch
             );
@@ -486,7 +464,7 @@ void PublishRecordingErrorsAndNotifyOwnedSources(
     NotifyPayloadCompletions({}, _prepared, completion_batch);
     for (size_t source_index = 0; source_index < _sources.size();
          ++source_index) {
-        if (_terminal_snapshot[source_index] == ERecordingRejectionState::ProducerOwned) {
+        if (_rejection_states[source_index] == ERecordingRejectionState::ProducerOwned) {
             continue;
         }
         _sources[source_index].query_cancellation.NotifyCancellation(
@@ -513,63 +491,65 @@ void FinalizeCancelledRecordingSources(
     Array<CommandList::RecordingRejectionPreparation>&
                                          _rejection_preparations,
     Array<PreparedCommandListRejection>& _prepared,
-    Array<ERecordingRejectionState>&     _terminal_snapshot
+    Array<ERecordingRejectionState>&     _rejection_states
 ) noexcept {
     // A source protected by an incomplete recording gate must remain opaque:
     // even reading IsEmpty(), let alone draining callbacks, races its producer.
-    // A terminal gate, however, is the ownership handoff point and its ordinary
+    // Once both gates are terminal and the managed lease is released, ordinary
     // callbacks still own CPU/resource cleanup even when shutdown cancels the
     // FIFO before the source can be materialized. Success-only callbacks must
     // never run because no GPU submission was published.
     assert(
         _rejection_preparations.size() == _sources.size() &&
         _prepared.size() == _sources.size() &&
-        _terminal_snapshot.size() == _sources.size()
+        _rejection_states.size() == _sources.size()
     );
     std::fill(
-        _terminal_snapshot.begin(),
-        _terminal_snapshot.end(),
+        _rejection_states.begin(),
+        _rejection_states.end(),
         ERecordingRejectionState::ProducerOwned
     );
-    size_t terminal_source_count  = 0;
+    size_t drained_source_count   = 0;
     size_t cleanup_callback_count = 0;
     // Publish host Errors for the complete group before invoking any
-    // Fence::Reject hook. The all-zero snapshot intentionally releases no
-    // callback: ownership-complete sources are discovered and detached by the
-    // fixed-point loop below, while opaque sources remain callback-deferred.
+    // Fence::Reject hook. Initially every rejection state is ProducerOwned, so
+    // no callback is released. The fixed-point loop below discovers and detaches
+    // drainable sources, while opaque sources remain callback-deferred.
     PublishRecordingErrorsAndNotifyOwnedSources(
-        _sources, _reason, _terminal_snapshot, _prepared
+        _sources, _reason, _rejection_states, _prepared
     );
 
-    // Sanitize every ownership-complete frontier before its metadata or
+    // Detach every newly drainable source before its metadata or
     // payload Fence rejection. A rejection hook may synchronously complete
     // another producer/commit gate; the next iteration detaches that newly
     // owned generation before touching any of its re-entrant observers.
-    while (PrepareNewlyTerminalSources(
-        _sources, _rejection_preparations, _prepared, _terminal_snapshot, terminal_source_count, cleanup_callback_count
+    while (PrepareNewlyDrainableSources(
+        _sources, _rejection_preparations, _prepared, _rejection_states, drained_source_count, cleanup_callback_count
     )) {
-        RejectRecordingSignalMetadata(
-            _sources, _terminal_snapshot
-        );
+        for (size_t source_index = 0; source_index < _sources.size(); ++source_index) {
+            if (_rejection_states[source_index] == ERecordingRejectionState::SignalRejectionPending) {
+                RejectRecordingSignalMetadata(_sources[source_index], 0);
+            }
+        }
         for (size_t source_index = 0;
              source_index < _prepared.size();
              ++source_index) {
-            if (_terminal_snapshot[source_index] != ERecordingRejectionState::SignalsPending) {
+            if (_rejection_states[source_index] != ERecordingRejectionState::SignalRejectionPending) {
                 continue;
             }
             if (_prepared[source_index].payload) {
                 _prepared[source_index].payload->RejectPendingSignals();
             }
-            _terminal_snapshot[source_index] = ERecordingRejectionState::SignalsRejected;
+            _rejection_states[source_index] = ERecordingRejectionState::SignalRejectionComplete;
         }
     }
 
     // Sources still absent from the fixed point remain opaque and receive
     // Error publication without callback release.
     const size_t opaque_source_count =
-        _sources.size() - terminal_source_count;
+        _sources.size() - drained_source_count;
     PublishRecordingErrorsAndNotifyOwnedSources(
-        _sources, _reason, _terminal_snapshot, _prepared
+        _sources, _reason, _rejection_states, _prepared
     );
     CleanupPreparedRejections(_prepared, "[RHIExecutor] cancelled recording");
 
@@ -579,7 +559,7 @@ void FinalizeCancelledRecordingSources(
             "terminal_sources={} opaque_sources={} cleanup_callbacks={}",
             _sources.size(),
             _reason,
-            terminal_source_count,
+            drained_source_count,
             opaque_source_count,
             cleanup_callback_count
         );
@@ -592,23 +572,23 @@ void FinalizeFailedRecordingSources(
     std::string_view                                   _reason,
     Array<CommandList::RecordingRejectionPreparation>& _rejection_preparations,
     Array<PreparedCommandListRejection>&               _prepared,
-    Array<ERecordingRejectionState>&                   _terminal_snapshot,
+    Array<ERecordingRejectionState>&                   _rejection_states,
     Array<RHISubmissionRequest>                        _materialized_submits,
     std::span<const size_t>                            _metadata_signal_transfer_prefixes
 ) noexcept {
-    // Reject is emitted only after every producer gate is terminal. This is
-    // the ownership point at which failed/partial CommandLists are immutable
-    // and may be destructively drained for their ordinary cleanup callbacks.
+    // Reject normally follows terminal producer/commit gates and released
+    // managed leases. Failed/partial CommandLists are then immutable and may be
+    // destructively drained for their ordinary cleanup callbacks.
     // Detach every generation before publishing errors or invoking observers;
     // rejected payloads retain cleanup ownership and never reach a backend.
-    const bool all_terminal = std::all_of(
+    const bool all_sources_drainable = std::all_of(
         _sources.begin(),
         _sources.end(),
         [](const RHIRecordingSource& _source) {
-            return RecordingSourceIsTerminal(_source);
+            return CanDrainRecordingSource(_source);
         }
     );
-    if (!all_terminal) {
+    if (!all_sources_drainable) {
         try {
             LOG_ERROR(
                 "[RHIExecutor] failed recording group resolved before every producer became terminal"
@@ -625,7 +605,7 @@ void FinalizeFailedRecordingSources(
             "failed recording group still has a mutable producer",
             _rejection_preparations,
             _prepared,
-            _terminal_snapshot
+            _rejection_states
         );
         if (!_materialized_submits.empty()) {
             FinalizeRejectedSubmissions(
@@ -640,7 +620,7 @@ void FinalizeFailedRecordingSources(
     assert(
         _rejection_preparations.size() == _sources.size() &&
         _prepared.size() == _sources.size() &&
-        _terminal_snapshot.size() == _sources.size()
+        _rejection_states.size() == _sources.size()
     );
     size_t cleanup_callback_count = 0;
     for (size_t source_index = 0; source_index < _sources.size();
@@ -685,9 +665,13 @@ void FinalizeFailedRecordingSources(
     // host observation is terminal before synchronous Fence rejection. A
     // prefix may already be an immutable CmdSubmit; its signals remain owned
     // here and must be rejected before callback notification.
-    RejectRecordingSignalMetadata(
-        _sources, {}, _metadata_signal_transfer_prefixes
-    );
+    for (size_t source_index = 0; source_index < _sources.size(); ++source_index) {
+        const size_t transferred_prefix =
+            source_index < _metadata_signal_transfer_prefixes.size() ?
+                _metadata_signal_transfer_prefixes[source_index] :
+                0;
+        RejectRecordingSignalMetadata(_sources[source_index], transferred_prefix);
+    }
     RejectPayloadSignals(_materialized_submits, _prepared);
 
     for (RHIRecordingSource& source : _sources) {

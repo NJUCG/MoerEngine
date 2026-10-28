@@ -27,11 +27,12 @@ struct PreparedCommandListRejection {
     std::optional<CmdSubmit> payload{};
 };
 
-// One sampled ownership boundary, advanced only after its signals are rejected.
+// Per-source cancellation progress: acquire the producer generation, reject its
+// metadata and payload signals, then allow callback notification.
 enum class ERecordingRejectionState : uint8 {
     ProducerOwned,
-    SignalsPending,
-    SignalsRejected,
+    SignalRejectionPending,
+    SignalRejectionComplete,
 };
 
 void ReportExecutorFailure(
@@ -66,7 +67,7 @@ void FinalizeCancelledRecordingSources(
     Array<CommandList::RecordingRejectionPreparation>&
                                          _rejection_preparations,
     Array<PreparedCommandListRejection>& _prepared,
-    Array<ERecordingRejectionState>&     _terminal_snapshot
+    Array<ERecordingRejectionState>&     _rejection_states
 ) noexcept;
 
 void FinalizeFailedRecordingSources(
@@ -74,7 +75,7 @@ void FinalizeFailedRecordingSources(
     std::string_view                                   _reason,
     Array<CommandList::RecordingRejectionPreparation>& _rejection_preparations,
     Array<PreparedCommandListRejection>&               _prepared,
-    Array<ERecordingRejectionState>&                   _terminal_snapshot,
+    Array<ERecordingRejectionState>&                   _rejection_states,
     Array<RHISubmissionRequest>                        _materialized_submits              = {},
     std::span<const size_t>                            _metadata_signal_transfer_prefixes = {}
 ) noexcept;
