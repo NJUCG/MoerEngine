@@ -8,11 +8,14 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <stop_token>
 #include <thread>
 #include <vector>
 
 namespace Moer::Render {
+
+class RHIThreadHeartbeatScope;
 
 enum class ERHIRecordingStatus : uint8_t {
     Pending,
@@ -29,9 +32,9 @@ public:
     static std::shared_ptr<RHIRecordingGate> Create(bool _initially_complete = false);
 
     // Idempotent. Returns true only for the transition to the complete state.
-    bool Signal() noexcept;
-    bool Fail() noexcept;
-    [[nodiscard]] bool IsComplete() const noexcept;
+    bool                              Signal() noexcept;
+    bool                              Fail() noexcept;
+    [[nodiscard]] bool                IsComplete() const noexcept;
     [[nodiscard]] ERHIRecordingStatus Status() const noexcept;
     // Blocking producer-side join used at explicit RDG wave boundaries.
     // Unlike the worker overload, this wait is not cancellable and always
@@ -46,12 +49,12 @@ private:
             _initially_complete ? ERHIRecordingStatus::Succeeded :
                                   ERHIRecordingStatus::Pending
         ) {}
-    bool Complete(ERHIRecordingStatus _status) noexcept;
+    bool                              Complete(ERHIRecordingStatus _status) noexcept;
     [[nodiscard]] ERHIRecordingStatus Wait(std::stop_token _stop_token) const noexcept;
 
-    mutable std::mutex              mutex;
+    mutable std::mutex                  mutex;
     mutable std::condition_variable_any cv;
-    ERHIRecordingStatus             status{ERHIRecordingStatus::Pending};
+    ERHIRecordingStatus                 status{ERHIRecordingStatus::Pending};
 };
 
 using RHIRecordingGateRef = std::shared_ptr<RHIRecordingGate>;
@@ -103,7 +106,7 @@ enum class ERHIExecutorWorkAction : uint8_t {
 // Optional CPU recording prerequisites and one callback for normal processing
 // or rejection/cancellation cleanup. An empty prerequisite list still respects FIFO.
 struct RHIExecutorWork {
-    std::vector<RHIRecordingGateRef> prerequisites{};
+    std::vector<RHIRecordingGateRef>            prerequisites{};
     std::function<void(ERHIExecutorWorkAction)> callback{};
 };
 
@@ -127,23 +130,34 @@ public:
     // If insertion throws, ownership stays with the caller for cleanup.
     void Enqueue(RHIExecutorWork&& _work);
 
-    void ShutDown();
+    void               ShutDown();
     [[nodiscard]] bool IsIdle() const noexcept;
 
 private:
     void Run(std::stop_token _stop_token) noexcept;
+    bool WaitAndPopWork(
+        RHIExecutorWork&         _work,
+        std::stop_token          _stop_token,
+        RHIThreadHeartbeatScope& _heartbeat
+    );
+    static ERHIExecutorWorkAction WaitForPrerequisites(
+        std::span<const RHIRecordingGateRef> _prerequisites,
+        std::stop_token                      _stop_token,
+        RHIThreadHeartbeatScope&             _heartbeat
+    );
+    void        CancelPendingWork();
     static void InvokeCallbackNoThrow(
         RHIExecutorWork&       _work,
         ERHIExecutorWorkAction _action
     ) noexcept;
 
-    mutable std::mutex                        mutex;
-    std::condition_variable_any               work_cv;
-    std::condition_variable                   idle_cv;
-    std::deque<RHIExecutorWork>               pending{};
-    std::jthread                              worker{};
-    bool                                      accepting{false};
-    bool                                      worker_busy{false};
+    mutable std::mutex          mutex;
+    std::condition_variable_any work_cv;
+    std::condition_variable     idle_cv;
+    std::deque<RHIExecutorWork> pending{};
+    std::jthread                worker{};
+    bool                        accepting{false};
+    bool                        worker_busy{false};
 };
 
 } // namespace Moer::Render

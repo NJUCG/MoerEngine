@@ -2,6 +2,7 @@
 
 #include "rhi/executor/RHIExecutor.h"
 
+#include <exception>
 #include <span>
 #include <string_view>
 
@@ -25,6 +26,19 @@ inline bool SubmitHasWork(const CmdSubmit& _submit) {
 struct PreparedCommandListRejection {
     std::optional<CmdSubmit> payload{};
 };
+
+// One sampled ownership boundary, advanced only after its signals are rejected.
+enum class ERecordingRejectionState : uint8 {
+    ProducerOwned,
+    SignalsPending,
+    SignalsRejected,
+};
+
+void ReportExecutorFailure(
+    std::string_view          _operation,
+    std::string_view          _stage,
+    const std::exception_ptr& _failure
+) noexcept;
 
 std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor(uint32 _submission_batch_window);
 
@@ -52,7 +66,7 @@ void FinalizeCancelledRecordingSources(
     Array<CommandList::RecordingRejectionPreparation>&
                                          _rejection_preparations,
     Array<PreparedCommandListRejection>& _prepared,
-    Array<uint8>&                        _terminal_snapshot
+    Array<ERecordingRejectionState>&     _terminal_snapshot
 ) noexcept;
 
 void FinalizeFailedRecordingSources(
@@ -60,7 +74,7 @@ void FinalizeFailedRecordingSources(
     std::string_view                                   _reason,
     Array<CommandList::RecordingRejectionPreparation>& _rejection_preparations,
     Array<PreparedCommandListRejection>&               _prepared,
-    Array<uint8>&                                      _terminal_snapshot,
+    Array<ERecordingRejectionState>&                   _terminal_snapshot,
     Array<RHISubmissionRequest>                        _materialized_submits              = {},
     std::span<const size_t>                            _metadata_signal_transfer_prefixes = {}
 ) noexcept;

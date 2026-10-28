@@ -38,30 +38,14 @@ bool BatchHasWork(const RHISubmissionBatch& _batch) {
     return !_batch.submits.empty() || _batch.present.has_value();
 }
 
-void ReportExecutorFailure(
-    std::string_view          _operation,
-    std::string_view          _stage,
-    const std::exception_ptr& _failure
-) noexcept {
-    try {
-        std::rethrow_exception(_failure);
-    } catch (const std::exception& exception) {
-        try {
-            LOG_ERROR("[RHIExecutor] {} failed during {}: {}", _stage, _operation, exception.what());
-        } catch (...) {
-        }
-    } catch (...) {
-        try {
-            LOG_ERROR("[RHIExecutor] {} failed during {}", _stage, _operation);
-        } catch (...) {
-        }
-    }
-}
-
 struct SubmissionRequestPayload {
     Array<RHISubmissionRequest>      submits{};
     ERHIExecSubmitFlags              flags{ERHIExecSubmitFlags::FlushGPU};
     std::optional<RHIPresentRequest> present{};
+
+    RHIPresentRequest* GetPresent() noexcept {
+        return present ? &*present : nullptr;
+    }
 };
 
 class ExecutorSyncCompletion final {
@@ -111,6 +95,26 @@ RHISubmissionTopologyPlan BuildBatchTopology(const RHISubmissionBatch& _batch) {
 }
 
 } // namespace
+
+void RHIExecutorDetail::ReportExecutorFailure(
+    std::string_view          _operation,
+    std::string_view          _stage,
+    const std::exception_ptr& _failure
+) noexcept {
+    try {
+        std::rethrow_exception(_failure);
+    } catch (const std::exception& exception) {
+        try {
+            LOG_ERROR("[RHIExecutor] {} failed during {}: {}", _stage, _operation, exception.what());
+        } catch (...) {
+        }
+    } catch (...) {
+        try {
+            LOG_ERROR("[RHIExecutor] {} failed during {}", _stage, _operation);
+        } catch (...) {
+        }
+    }
+}
 
 // Owns one detached batch until the backend accepts it. On failure the same
 // batch retains the unconsumed suffix; rejection runs only after releasing locks.
@@ -207,7 +211,7 @@ RHISubmissionBatch RHIExecutor::TakePendingSubmissionBatchLocked() {
     batch.present = std::move(pending_present);
     pending_submits.clear();
     pending_present.reset();
-    if (!batch.submits.empty() || batch.present.has_value()) {
+    if (BatchHasWork(batch)) {
         batch.sequence = next_batch_sequence++;
     }
     return batch;
@@ -271,10 +275,7 @@ void RHIExecutor::Submit(
         RHIExecutorWork work{
             .prerequisites = {},
             .callback      = [this, payload](ERHIExecutorWorkAction _action) {
-                RHIPresentRequest* present =
-                    payload->present.has_value() ?
-                        &*payload->present :
-                        nullptr;
+                RHIPresentRequest* present = payload->GetPresent();
                 if (_action != ERHIExecutorWorkAction::Execute) {
                     FinalizeRejectedSubmissions(
                         std::move(payload->submits),
@@ -288,14 +289,29 @@ void RHIExecutor::Submit(
         };
         work_queue.Enqueue(std::move(work));
     } catch (...) {
-        RHIPresentRequest* present = payload->present.has_value() ?
-                                         &*payload->present :
-                                         nullptr;
+        RHIPresentRequest* present = payload->GetPresent();
         FinalizeRejectedSubmissions(
             std::move(payload->submits),
             "executor work queue admission failed",
             present
         );
+    }
+}
+
+void RHIExecutor::AppendPendingRequestsLocked(
+    Array<RHISubmissionRequest>& _submits,
+    RHIPresentRequest*           _present
+) {
+    // Allocate before moving any request. The remaining moves
+    // cannot throw, so rejection never sees a half-staged group.
+    static_assert(std::is_nothrow_move_constructible_v<RHISubmissionRequest>);
+    static_assert(std::is_nothrow_move_constructible_v<RHIPresentRequest>);
+    pending_submits.reserve(pending_submits.size() + _submits.size());
+    for (RHISubmissionRequest& entry : _submits) {
+        pending_submits.emplace_back(std::move(entry));
+    }
+    if (_present) {
+        pending_present.emplace(std::move(*_present));
     }
 }
 
@@ -342,17 +358,7 @@ void RHIExecutor::ProcessSubmissionRequests(
             rejected = lifecycle_state != ELifecycleState::Running || pending_present.has_value();
             if (!rejected) {
                 try {
-                    // Allocate before moving any request. The remaining moves
-                    // cannot throw, so rejection never sees a half-staged group.
-                    static_assert(std::is_nothrow_move_constructible_v<RHISubmissionRequest>);
-                    static_assert(std::is_nothrow_move_constructible_v<RHIPresentRequest>);
-                    pending_submits.reserve(pending_submits.size() + _submits.size());
-                    for (RHISubmissionRequest& entry : _submits) {
-                        pending_submits.emplace_back(std::move(entry));
-                    }
-                    if (_present) {
-                        pending_present.emplace(std::move(*_present));
-                    }
+                    AppendPendingRequestsLocked(_submits, _present);
                 } catch (...) {
                     staging_failure = std::current_exception();
                 }
@@ -510,31 +516,48 @@ void RHIExecutor::ProcessSyncRequest(ERHISyncDepth _depth) {
     }
 }
 
+std::optional<uint64> RHIExecutor::BeginShutdown(
+    std::shared_ptr<RHIBackendExecutor>& _backend_to_cancel
+) {
+    std::unique_lock lock(submit_mutex);
+    if (lifecycle_state == ELifecycleState::Stopped) {
+        return std::nullopt;
+    }
+    if (lifecycle_state == ELifecycleState::Stopping) {
+        const uint64 generation = shutdown_generation;
+        lifecycle_cv.wait(lock, [this, generation] {
+            return completed_shutdown_generation >= generation;
+        });
+        return std::nullopt;
+    }
+    lifecycle_state = ELifecycleState::Stopping;
+    ++shutdown_generation;
+    _backend_to_cancel = backend_executor;
+    return shutdown_generation;
+}
+
+void RHIExecutor::FinishShutdown(uint64 _generation) {
+    {
+        std::lock_guard lock(submit_mutex);
+        completed_shutdown_generation = std::max(completed_shutdown_generation, _generation);
+        lifecycle_state               = ELifecycleState::Stopped;
+    }
+    lifecycle_cv.notify_all();
+}
+
 void RHIExecutor::ShutDown() {
     if (RejectOwnedThreadBlockingCall("ShutDown")) {
         return;
     }
-    RHIExecutor&                        executor             = Get();
-    uint64                              shutdown_to_complete = 0;
+    RHIExecutor&                        executor = Get();
     std::shared_ptr<RHIBackendExecutor> backend_to_cancel{};
     PendingBatchPublication             publication{};
 
-    {
-        std::unique_lock lock(executor.submit_mutex);
-        if (executor.lifecycle_state == ELifecycleState::Stopped) {
-            return;
-        }
-        if (executor.lifecycle_state == ELifecycleState::Stopping) {
-            const uint64 shutdown_to_wait = executor.shutdown_generation;
-            executor.lifecycle_cv.wait(lock, [&executor, shutdown_to_wait] {
-                return executor.completed_shutdown_generation >= shutdown_to_wait;
-            });
-            return;
-        }
-        executor.lifecycle_state = ELifecycleState::Stopping;
-        shutdown_to_complete     = ++executor.shutdown_generation;
-        backend_to_cancel        = executor.backend_executor;
+    const std::optional<uint64> shutdown_generation = executor.BeginShutdown(backend_to_cancel);
+    if (!shutdown_generation) {
+        return;
     }
+    const uint64 shutdown_to_complete = *shutdown_generation;
 
     // Install lifecycle completion before any operation that can allocate or
     // otherwise throw. In particular, lazy backend construction must never
@@ -547,15 +570,7 @@ void RHIExecutor::ShutDown() {
             publication.batch = {};
             publication.backend.reset();
             backend_to_cancel.reset();
-            {
-                std::lock_guard lock(executor.submit_mutex);
-                executor.completed_shutdown_generation = std::max(
-                    executor.completed_shutdown_generation,
-                    shutdown_to_complete
-                );
-                executor.lifecycle_state = ELifecycleState::Stopped;
-            }
-            executor.lifecycle_cv.notify_all();
+            executor.FinishShutdown(shutdown_to_complete);
         };
     auto finish_shutdown_guard = OnScopeExit(std::move(finish_shutdown));
 

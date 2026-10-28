@@ -79,16 +79,16 @@ struct RHISubmissionRequest {
 // Ordered requests published together, with an optional Present and the
 // topology used to schedule their native submissions.
 struct RHISubmissionBatch {
-    uint64                          sequence{0};
+    uint64                           sequence{0};
     Array<RHISubmissionRequest>      submits{};
     std::optional<RHIPresentRequest> present{};
     RHISubmissionTopologyPlan        topology{};
 
-    RHISubmissionBatch()                                      = default;
-    RHISubmissionBatch(RHISubmissionBatch&&) noexcept           = default;
+    RHISubmissionBatch()                                         = default;
+    RHISubmissionBatch(RHISubmissionBatch&&) noexcept            = default;
     RHISubmissionBatch& operator=(RHISubmissionBatch&&) noexcept = default;
-    RHISubmissionBatch(const RHISubmissionBatch&)               = delete;
-    RHISubmissionBatch& operator=(const RHISubmissionBatch&)    = delete;
+    RHISubmissionBatch(const RHISubmissionBatch&)                = delete;
+    RHISubmissionBatch& operator=(const RHISubmissionBatch&)     = delete;
 };
 
 class RHIBackendExecutor {
@@ -98,8 +98,8 @@ public:
     // RHIExecutor serializes Enqueue/Flush publication order. Sync may run
     // concurrently after its preceding batches have been published, so each
     // backend must safely linearize Sync against later Enqueue/Flush calls.
-    virtual void          Enqueue(RHISubmissionBatch&& _batch)                    = 0;
-    virtual GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI)           = 0;
+    virtual void          Enqueue(RHISubmissionBatch&& _batch)                     = 0;
+    virtual GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI)          = 0;
     virtual void          Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU) = 0;
     // Publish non-blocking cancellation before RHIExecutor waits for
     // concurrent Sync callers. Backends without cancellable host waits may

@@ -125,6 +125,13 @@ private:
     std::shared_ptr<RHIBackendExecutor> GetOrCreateBackendExecutorLocked();
     RHISubmissionBatch                  TakePendingSubmissionBatchLocked();
 
+    void                                    AppendPendingRequestsLocked(Array<RHISubmissionRequest>& _submits, RHIPresentRequest* _present);
+    std::optional<uint64>                   BeginShutdown(std::shared_ptr<RHIBackendExecutor>& _backend_to_cancel);
+    void                                    FinishShutdown(uint64 _generation);
+    static std::vector<RHIRecordingGateRef> CollectRecordingPrerequisites(
+        const Array<RHIRecordingSource>& _sources
+    );
+
     // Run on the Executor worker after preceding work has been processed.
     void ProcessSubmissionRequests(
         Array<RHISubmissionRequest>&& _submits,
