@@ -29,16 +29,21 @@ struct Options {
     uint32_t accesses = 16;
     uint32_t warmup = 5;
     uint32_t samples = 80;
+    bool subranges = false;
 };
 
 Options ParseOptions(int argc, char** argv) {
     Options options;
-    for (int index = 1; index < argc; index += 2) {
+    for (int index = 1; index < argc; ++index) {
         const std::string_view option = argv[index];
-        if (index + 1 == argc) {
-            throw std::runtime_error("each option requires an unsigned integer value");
+        if (option == "--subranges") {
+            options.subranges = true;
+            continue;
         }
-        const std::string_view text = argv[index + 1];
+        if (index + 1 == argc) {
+            throw std::runtime_error("numeric options require an unsigned integer value");
+        }
+        const std::string_view text = argv[++index];
         uint32_t value = 0;
         const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
         if (error != std::errc{} || end != text.data() + text.size()) {
@@ -125,12 +130,23 @@ void BuildGraph(RenderGraph& graph, const Options& options, const PhysicalResour
         graph.AddRecordPass("Pass" + std::to_string(pass), [&](RenderGraph::PassBuilder& builder) {
             for (uint32_t access = 0; access < options.accesses; ++access) {
                 const auto index = (uint64_t{pass} * 3 + access) % options.resources;
+                auto texture_range = RenderGraph::TextureRange::Whole();
+                auto buffer_range = RenderGraph::BufferRange::Whole();
+                if (options.subranges) {
+                    // Each touched resource has internal boundaries. Select from its
+                    // eight mip/layer pairs and equal-sized buffer ranges without
+                    // changing the number of accesses or the read/write pattern.
+                    const auto slice = static_cast<uint32_t>((uint64_t{pass} + access) % 8);
+                    texture_range = {.mip_first = slice % 4, .mip_count = 1,
+                                     .layer_first = slice / 4, .layer_count = 1};
+                    buffer_range = {.offset = uint64_t{slice} * 512, .size = 512};
+                }
                 if (pass % 4 == 0) {
-                    builder.Write(textures[index], RenderGraph::TextureAccessType::Storage);
-                    builder.Write(buffers[index], RenderGraph::BufferAccessType::Storage);
+                    builder.Write(textures[index], RenderGraph::TextureAccessType::Storage, texture_range);
+                    builder.Write(buffers[index], RenderGraph::BufferAccessType::Storage, buffer_range);
                 } else {
-                    builder.Read(textures[index], RenderGraph::TextureAccessType::Sampled);
-                    builder.Read(buffers[index], RenderGraph::BufferAccessType::Storage);
+                    builder.Read(textures[index], RenderGraph::TextureAccessType::Sampled, texture_range);
+                    builder.Read(buffers[index], RenderGraph::BufferAccessType::Storage, buffer_range);
                 }
             }
         }, [](Moer::Render::CommandList&) {}, RenderGraph::PassRecordPolicy::ParallelAllowed);
@@ -335,6 +351,7 @@ void PrintResult(const Options& options, const TimingResult& timing, const Alloc
         << "{\"passes\":" << options.passes
         << ",\"textures\":" << options.resources << ",\"buffers\":" << options.resources
         << ",\"accesses_per_kind_per_pass\":" << options.accesses
+        << ",\"subranges\":" << options.subranges
         << ",\"warmup\":" << options.warmup << ",\"samples\":" << options.samples
         << ",\"compile_p50_ms\":" << timing.p50_ms << ",\"compile_p95_ms\":" << timing.p95_ms
         << ",\"dump_fnv1a\":\"" << timing.dump_digest << "\",\"lowered_dump_fnv1a\":\"" << memory.lowered_digest
@@ -362,8 +379,9 @@ int main(int argc, char** argv) {
 #endif
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Usage: TestRenderGraphCompilerBenchmark [--passes 64] [--resources 64] "
-                     "[--accesses 16] [--warmup 5] [--samples 80]\n"
+                     "[--accesses 16] [--warmup 5] [--samples 80] [--subranges]\n"
                      "Outputs JSON. Rebuilds the graph for every Compile; excludes build, Dump, Lower and graph destruction.\n"
+                     "--subranges selects single mip/layer pairs and 512-byte buffer ranges instead of whole resources.\n"
                      "Timing includes compiler/arena destruction and has no allocation hooks.\n"
                      "A separate Compile counts PMR default-resource requests (including any library proxies),\n"
                      "and MSVC Debug CRT requests excluding CRT internal blocks. CRT counts include CompiledPlan,\n"

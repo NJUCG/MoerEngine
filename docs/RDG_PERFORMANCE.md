@@ -646,3 +646,55 @@ Compile 仍包含 setup 等待及 compiler 析构；阶段计时覆盖各自函�
 表中为分别计算的中位数，不能相加。稳定窗口未发生 SceneUpdate。其余准备检查、帧尾包装和帧内未覆盖部分分别约 0.0613、0.1304、0.3127 ms。由此可见，不能把原来未覆盖的时间全部归为 compiler；`AddToGraph` 包含 Pass 业务准备，后续应进一步定位该阶段。profile Seal/Drain 和提交等待也不能算作 RDG 算法成本。
 
 完整 Debug 构建、9 项 RDG/RHI 契约与 Raster 运行通过，正常退出，未发现 error、critical、VUID 或 Validation Error。二进制 SHA-256 为 `4AA289BCFA93E133DB56A152E665B551A0DFACC1FEBF180D8F54EEB9D6D9D991`。日志为 `build/rdg-frame-scopes-build.log`、`build/rdg-frame-scopes-contracts.log`、`build/rdg-frame-scopes-raster.log`，原始 capture、配置和进程信息位于 `build/rdg-bisect-results/raster-frame-scopes-before/`，分析脚本为 `build/analyze_raster_frame_stages.py`。本步仅改计时边界，不声称性能改善。
+
+### 12.3 精确容量预留
+
+区间端点去重后，Buffer 的 cell 数恰好为端点数减一；Texture 的 cell 数恰好为有效 aspect 数、mip 区间数与 layer 区间数的乘积。当前生成循环会完整构建这个网格，因此可以直接 reserve，无需估计访问密度或新增缓存。有效 descriptor 已保证 aspect 位合法，数量直接用 `std::popcount` 计算；乘积用 `size_t`，先用 `max_size()` 除法检查避免溢出。一对一规范化的初始/最终状态声明也按输入数量 reserve。
+
+该调整避免 vector 增长时搬迁 cell。monotonic arena 不能提前回收扩容前的旧存储，精确预留也减少这部分暂存需求。容器仍由单次 Compiler 拥有，输出仍独立持有内存；cell 顺序、初始化、版本、来源和依赖规则不变。
+
+原固定图只访问 Whole，每个资源仅一个 cell，无法有效检验本次优化。基准增加可选 `--subranges`：从现有 4 mip × 2 layer 中选择一个子资源，从 4096 字节 Buffer 中选择一个 512 字节区间，保留资源数、访问条数和读写周期。默认输入不变；新模式在原三种规模中让每个资源形成 8 个 cell。前后使用同一新版基准 EXE，分别配对旧/新 Render DLL，比较耗时、分配和两个 Dump 摘要。
+
+### 12.4 Raster 对照及测量限制
+
+最终版本 `raster-cell-reserve-final` 同样运行 110 秒，正常退出且无运行/validation 错误。与 12.2 的相同 profiling 配置基线比较：
+
+| 指标 | 前 | 最终版本 |
+| --- | ---: | ---: |
+| 稳定窗口 FPS | 56.19 | 55.78 |
+| RenderFrame p50 ms | 17.0343 | 17.1675 |
+| 主图 Compile p50 ms | 2.5436 | 2.5221 |
+| 全部图 Compile，每帧 p50 ms | 3.0635 | 3.0599 |
+| BuildAtomicCells p50 ms | 0.3320 | 0.3222 |
+| 主 Pass 声明与准备 p50 ms | 4.9382 | 5.0397 |
+
+区间构造约减少 0.010 ms；整帧和全部编译时间没有显示稳定收益。不能将固定多区间图的收益比例外推到 Raster 帧率。两边都是 MSVC Debug 并启用 capture，尚未测量 Release 或关闭 profiling 的帧率。
+
+在最终版本之前，使用逐项 aspect 计数的中间实现也采样了一次（`raster-frame-scopes-after`，DLL `7C4860FE769717073C9BA2F6592F6B922DAF96CC0FF912371DE8AEC323AD889D`）。该窗口 FPS 为 52.64，主图 Compile p50 为 2.4929 ms，却有一次 2044.4249 ms 的公共 Compile 停顿，发生在 compiler 函数计时之外。公共入口还包含 setup 派发/等待及外围工作，当前 scope 不能确定具体原因，不能归因于 reserve 或作为其加速证据。保留原始样本，不用挑选后续窗口替代它；最终版本另用 `std::popcount` 简化 aspect 数量计算，并重新运行全部对照。
+
+最终 DLL SHA-256 为 `83FCA96E2BCC76F1689778426E81965E3E6DF5A6F2B1FC789C072F2AF3FB4C06`。运行日志为 `build/rdg-cell-reserve-final-raster.log`，最终 capture、配置、进程信息及分析结果在 `build/rdg-bisect-results/raster-cell-reserve-final/`。根目录配置仍为 Raster、关闭并行录制。
+
+### 12.5 固定图结果与验证
+
+每种模式、每种规模运行三组独立进程，顺序为前/后、后/前、前/后；5 次预热、80 次计时，计时与分配 probe 分开。运行期间无编辑器、构建或其他测试。配对 EXE SHA-256 均为 `83ACC19E07EBEEA36309D9DE1722DDB93B88C48FC78663148FE20144C733F76C`；旧/新 DLL 分别对应 12.2 和 12.4 的最终哈希。表中耗时为三次 p50 的中位数，规模依次为 16/16/4、64/64/16、128/128/16（Pass / 每类资源 / 每 Pass 每类访问）。
+
+| 模式与规模 | Compile p50，前→后 ms | 变化 | PMR 峰值保留字节，前→后 | CRT 分配请求，前→后 |
+| --- | ---: | ---: | ---: | ---: |
+| Whole 小 | 0.6889 → 0.6914 | +0.4% | 50616 → 50616 | 1643 → 1643 |
+| Whole 中 | 9.0239 → 9.1249 | +1.1% | 293888 → 293888 | 18829 → 18829 |
+| Whole 大 | 18.2240 → 18.4668 | +1.3% | 880960 → 880960 | 37568 → 37568 |
+| Subranges 小 | 1.2363 → 1.1258 | −8.9% | 172904 → 76360 | 3985 → 3471 |
+| Subranges 中 | 8.4086 → 8.0278 | −4.5% | 667128 → 443184 | 21152 → 19103 |
+| Subranges 大 | 16.9652 → 16.1365 | −4.9% | 1326352 → 880960 | 43702 → 39605 |
+
+多区间模式的九组配对全部变快，PMR 峰值保留量约减少 56%、34%、34%，上游请求数分别从 16 降为 14、15、15。Whole 模式不减少分配，耗时有轻微增加，因此不将本次调整描述为所有输入上的普遍加速。Debug 的 CRT 结果还包含容器调试设施，不能直接外推 Release 收益。PMR 计数口径沿用前文，它不是全部 RDG 堆峰值。
+
+全部 36 次运行的同输入 Compile/Lowering Dump 摘要、访问/边/屏障数量一致，每次 PMR live bytes 在 Compile 返回后均为 0。最终完整 Debug 构建、9 项 RDG/RHI 契约和 29 项真实 Vulkan 用例全部通过，Vulkan validation 错误为 0；未添加只检验 capacity 的实现镜像测试。日志为 `build/rdg-cell-reserve-final-build.log`、`build/rdg-cell-reserve-final-contracts.log`、`build/rdg-cell-reserve-final-vulkan.log`。
+
+前后配对二进制、逐次 JSON 和 `summary.json` 保存在 `build/rdg-cell-reserve-variants/`；执行及分析脚本为 `build/run_rdg_cell_reserve_benchmark.ps1`、`build/analyze_rdg_cell_reserve_benchmark.py`。中间逐项计数版本的结果另保留在 `count-if-after/`，不与最终版本合并统计。
+
+### 12.6 下一热点
+
+当前数据将下一优先级指向主 Pass 的同步准备，而非继续调整拓扑排序或直接引入区间索引。`ShadowDepthPass`、`ProbeUpdatePass`、`GeometryPass` 的 `AddToGraph` 都调用业务 `Prepare`，应先分别计量 Prepare 和声明注册，再判断工作能否复用。只读检查还发现同步 setup callback 中的 vector 值捕获，以及同一图内重复导入 Scene 读取集合，可作为局部候选；实际 Pass 的资源读取声明与录制时的强引用所有权仍须保留。
+
+本轮完成计时覆盖和精确容量预留两个独立步骤，未调整图边界、跨帧生命周期或队列调度架构。约 2 秒公共 Compile 异常仍需单独定位 setup 和外围等待，不能通过删除等待来掩盖。

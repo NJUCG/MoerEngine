@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cassert>
 #include <functional>
 #include <queue>
@@ -330,6 +331,7 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                                     std::pmr::vector<NormalizedStateDeclaration>&     normalized_states,
                                     bool                                              initial
                                 ) -> bool {
+            normalized_states.reserve(declarations.size());
             for (const auto& declaration : declarations) {
                 if (RenderGraph::IsUnspecified(declaration.state)) {
                     return Fail("boundary state cannot be unspecified on resource '" + resource.name + "'");
@@ -614,6 +616,17 @@ bool RenderGraphCompiler::BuildAtomicCells() {
             SortUnique(mip_boundaries);
             SortUnique(layer_boundaries);
 
+            const size_t mip_intervals   = mip_boundaries.size() - 1;
+            const size_t layer_intervals = layer_boundaries.size() - 1;
+            const size_t aspect_count    = std::popcount(AspectMask(resource.texture_desc.aspects));
+            // Valid descriptors and unique endpoints make every factor nonzero.
+            // Reserve the exact grid once; arena storage from growth cannot be reclaimed early.
+            if (mip_intervals > cells.max_size() / layer_intervals ||
+                mip_intervals * layer_intervals > cells.max_size() / aspect_count) {
+                return Fail("texture compiler interval count exceeds container capacity: " + resource.name);
+            }
+            cells.reserve(mip_intervals * layer_intervals * aspect_count);
+
             for (TextureAspect aspect : texture_aspects) {
                 if (!HasAspect(resource.texture_desc.aspects, aspect)) {
                     continue;
@@ -665,6 +678,7 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                 add_buffer_boundaries(state.range);
             }
             SortUnique(boundaries);
+            cells.reserve(boundaries.size() - 1);
             for (uint32_t index = 0; index + 1 < boundaries.size(); ++index) {
                 if (boundaries[index] == boundaries[index + 1]) {
                     continue;
