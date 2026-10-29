@@ -787,3 +787,75 @@ RenderFrame p50 从 17.3626 降至 16.6707 ms，FPS 从 54.83 到 57.19。本组
 当前还值得优化的稳定工作是约 2 ms 的 CSM 准备、Probe/Geometry 合计约 0.94 ms 的重复 Scene 导入，以及上一轮约 1.69 ms 的全部图 Lowering。CSM 可先检查同一 Prepare 内跨 cascade 重复的包围盒变换；Scene 导入可检查同一图内的句柄复用，仍需保留各 Pass 的读取声明和录制所有权。同步声明 callback 的值捕获也可继续审查。这些是候选方向，尚未实现或证明收益。
 
 长尾则需要继续区分 lighting job 内部、profiler Emit 和 batch completion 发布/唤醒，不能通过删除必要的等待处理。本轮三个步骤只补充计时和删去不会改变结果的业务准备工作，未改变 RDG 依赖、图边界、资源生命周期或队列架构。
+
+## 14. 关闭 Probe GI 后重新比较 RDG 接管前后
+
+### 14.1 对照计划与口径
+
+用户先要求默认关闭 Probe GI（`d0fed580`），随后要求重新比较 RDG 接管前后的耗时。本轮比较 Raster 的直接父提交 `e971a229`、完整接管提交 `15e64157` 和当前优化后版本 `d0fed580`。历史两版仅在独立 worktree 将 Probe GI 默认值改为 false；当前主工作区不回退，历史二进制使用独立输出目录。
+
+三个版本均使用 MSVC Debug、Sponza、1920×1080 输出、固定 ImGui 布局、串行录制、关闭垂直同步与帧率锁、Vulkan validation 和 ProfileDump。旧版 `render_graph = false` 选择原 linear 路径；完整接管后该字段不再关闭 RDG。保持各版本自己的匹配二进制与资源，不混用 Render DLL ABI。每次预热后取完整的稳定 30 秒；旧路径与当前版本重复运行，以暴露运行间波动。构建、其他测试和大 capture 解析不与采样并发。
+
+对照先比较相同的 RenderFrame 和帧间隔，再对当前版本按同线程区间并集拆分构图、编译、Lowering、录制、提交与等待。历史版本没有的细分 scope 标为不可测，不能记成零。当前版本有更多诊断 scope，其测量开销也可能影响跨版本差值；本轮结果属于开启 capture 的 Debug 配置，不能外推 Release 或断言全部差额都是 RDG 算法本身。接管前后的相邻提交用于识别原始回退；当前与旧版之间还包含其他重构。
+
+为估计细分 CPU capture 的影响，在两次当前完整计时运行之间增加一组诊断：临时让 CPU producer 仅记录 `Raster.RenderFrame` 和 `Raster.PrepareFrame`，与旧路径的两个 CPU scope 一致，GPU profiling 保持原样。只重建 Core，不修改 RDG 或渲染算法；运行后恢复原始源码、重建，再恢复保存的匹配二进制。未激活的 scope 对象构造和快速返回仍有成本，该诊断不是完全关闭 profiling 的测量，运行间波动也不能忽略。
+
+### 14.2 接管前、接管初版与当前结果
+
+第一轮旧版运行 130 秒，其余每次 140 秒，全部取得完整稳定 30 秒。实际顺序如下，帧间隔根据相邻完整 RenderFrame 的开始时间计算，RenderFrame 列为 CPU scope p50：
+
+| 运行目录 | 版本 / CPU capture | FPS | 帧间隔均值 ms | RenderFrame p50 ms |
+| --- | --- | ---: | ---: | ---: |
+| `takeover-legacy-1` | `e971a229` / 原有帧级计时 | 110.46 | 9.0533 | 8.2580 |
+| `takeover-initial-1` | `15e64157` / 原有计时 | 29.99 | 33.3463 | 31.7998 |
+| `takeover-current-1` | `d0fed580` / 完整计时 | 54.06 | 18.4986 | 17.3175 |
+| `takeover-current-frame-scopes` | `d0fed580` / 仅帧级 CPU 计时 | 62.31 | 16.0477 | 15.0236 |
+| `takeover-current-2` | `d0fed580` / 恢复完整计时 | 54.88 | 18.2228 | 17.2405 |
+| `takeover-legacy-2` | `e971a229` / 原有帧级计时 | 113.76 | 8.7903 | 8.0789 |
+
+相邻提交确认原始接管回退依然可复现，Probe GI 并非必要条件。当前版本恢复了相当一部分性能，但在仅保留帧级 CPU 计时的诊断中，RenderFrame 仍比旧版多约 6.77～6.94 ms。它是同画质下两个实现的差额，包含 RDG、其他 RHI 重构及剩余测量成本，不能直接命名为“纯 RDG 算法税”。
+
+两次完整计时的当前版本结果接近，夹在中间的帧级诊断比它们少约 2.22～2.29 ms。每个完整 RenderFrame 内主线程 CPU 事件数分别为：旧版 1、接管初版 57、当前 152、帧级诊断 1；当前还有 15 个 setup worker 事件。PrepareFrame 在 RenderFrame 之外，未计入上述帧内事件数。这表明细分 CPU 采集的影响不可忽略，但只有一组帧级诊断，不能把该差额当作精确、恒定的 profiler 成本。后续比较优化收益应固定计时集合，并用较少计时的运行核对整帧结果。
+
+### 14.3 当前开销分布
+
+下表是同线程完整帧的区间归因，录制已扣除嵌套 UI 图的 Compile、Lowering 和物化。每列是各自的中位数，不能相加；worker 时间不与 render thread 时间相加。
+
+| 阶段 | 当前第 1 次 p50 ms | 当前第 2 次 p50 ms |
+| --- | ---: | ---: |
+| 主 Pass 声明及同步准备 | 3.9692 | 3.9387 |
+| 全部图 Compile | 3.3661 | 3.3811 |
+| 前端命令录制与合并 | 3.1603 | 3.1219 |
+| 全部图 Lowering | 1.6797 | 1.6234 |
+| 提交接受等待 | 1.5519 | 1.4703 |
+| GPU profiling Seal/Drain | 1.4127 | 1.4185 |
+| 主图生命周期内其余工作 | 0.5217 | 0.5082 |
+| 后处理声明及准备 | 0.3996 | 0.3940 |
+| 主图资源导入 | 0.2588 | 0.2585 |
+| 屏障物化 | 0.1253 | 0.1219 |
+
+主 Pass 的约 3.94～3.97 ms 中，同步 Prepare 占约 2.18～2.20 ms，其中 CSM 约 2.01～2.02 ms；Scene 导入约 0.74～0.75 ms，其余注册/包装约 0.94～0.96 ms。Probe Prepare 已降至约 0.10 ms。不能将整段 3.9 ms 都作为 RDG 元数据工作。关闭 Probe 后，每帧只观测到一次 Scene 读取集合导入，来自 Geometry；此前多个 Pass 共享 Scene 导入结果的候选已不再优先。
+
+主图公共 Compile 约 2.69～2.72 ms，内部 compiler 函数约 2.30～2.33 ms。依赖分析约 0.80 ms，最终屏障生成约 0.33～0.34 ms，区间构造约 0.33～0.34 ms，含边排序的执行顺序生成约 0.13 ms。setup Wait 每帧 p50 约 0.079 ms，最大 0.320 / 0.496 ms；本轮稳定窗口最长主图 Compile 为 4.69 / 5.53 ms，没有重现先前的大停顿，不代表原长尾问题已解决。
+
+接管初版与当前都每帧编译三个图。初版全部 Compile p50 为 6.9513 ms，当前约 3.37 ms；仅扣除嵌套 Compile 后的录制区间为 5.9515→3.2820 / 3.2360 ms。后者尚包含嵌套图的准备，与上表进一步扣除 Lowering/物化的录制口径不同。旧路径没有这些 CPU scope，也没有 Vulkan reorder/native-record/native-submit 的 CPU scope，其成本不可测，不能填成零或从总帧差额反推。
+
+GPU 也不能假设已经恢复。共同的 `Raster Geometry Draw` scope p50，旧版两次为 0.3645 / 0.3523 ms，当前为 0.5673 / 0.5724 ms，帧级 CPU 诊断为 0.5181 ms。对应 Lighting Pass 的 p50，旧版约 0.63～0.65 ms、当前约 1.19 ms；AO 约 0.53～0.55→1.51～1.52 ms。GPU 数据没有 host 时间戳，使用独立的 `frame_id > 300` 窗口，且新旧 Pass 边界不同，不能与 CPU 最后 30 秒精确对齐、相加为 GPU 帧时间，或认定 shader 本身变慢。后续需控制 GPU 运行状态并检查屏障、流水线停顿与时间戳边界，区分真实 GPU 工作和同步/测量影响。
+
+### 14.4 保持架构的下一步
+
+当前仍有明确的优化空间，先针对已看到的重复工作，而不是减少必要的依赖和生命周期保证：
+
+1. **Lowering 的资源集合整理与暂存分配。** `RenderGraphCompiler.cpp` 已按 pass/resource/cell 输出访问；`RenderGraphLowering.cpp` 仍按 cell 收集重复资源，再逐 Pass sort/unique。可顺序跳过相邻重复资源，另行合并 identity-only references。对已知来源数量的 `source_frontier`、指令列表预留容量，再测量局部 scratch 使用现有 arena 思路是否有效。最终 LoweredPlan 和物理强引用必须继续独立拥有内存。先用少量粗粒度计时区分验证、keepalive 收集、屏障转换和边界覆盖检查，不能将整个约 1.6 ms 都视为可删除。
+2. **录制准备的所有权复制与查找。** `RenderGraphRecording.cpp` 在图已经进入不可再次执行状态后，仍把每个 `std::function` callback 复制到已有 recording lifetime；可检查改为移动所有权。逐 Pass 的 `lowered.Keepalive()` 又线性查找 Pass，现有 execution-order 索引可以避免重复查找；同一串行 range 内重复强引用也可只保留一次。需要验证图析构后录制数据仍有效、并行任务独占、失败时不提交半张图及跨队列 release 所有权，不能直接删掉保活。
+3. **按实际访问形状继续优化编译。** 依赖分析仍是主图 compiler 内最大的阶段。其每条访问扫描对应资源全部 cells 的成本值得计量，但 Raster 多为 Whole/少量 cells 时，新增复杂区间索引未必值得。应先记录访问量与 cell 分布，避免再次为小输入引入额外组织成本。
+
+GPU 同步与 profiling 应单独排查；它们可能解释部分整帧差额，不能被 CPU 编译优化掩盖。Lowering 的物理绑定、状态完整性和所有权检查具有执行前验证职责，不因为 Compiler 已分析依赖就一概删除。上述候选尚未实施或证明毫秒收益；跨帧缓存、合并图边界或队列架构调整仍需先征求用户同意。
+
+### 14.5 验证和证据
+
+历史两版编辑器构建、诊断 Core 构建及恢复构建均成功。六次 Raster 正常退出，日志中运行/validation 错误为 0。六个 capture 均有完整尾包，CRC 校验通过，无截断、packet-index 缺口或 Loss 通知，SessionEnd 的 dropped records 均为 0。本轮最终仅修改本文，未保留 profiler filter 或渲染实现改动；不重复运行与文档无关的契约测试。
+
+Render DLL SHA-256：旧版 `ADE524A6B9FA641F9CB42C0B305A1E8ACB8ABDE80A028715DA4818420D7E8F0A`，接管初版 `E7752D2C1709ACAB016C283E7E0C7308AD0D618605AEDA34FC4B57FAB4C303E5`，当前 `7C1BFB9710A9A1D6CD464252C91E630556409C4C0183CBD8B2050F6FBCD39F7E`。匹配 EXE/全部 engine DLL 及 manifest 保存在 `build/rdg-takeover-variants/`；历史 Probe 配置补丁也保存在该目录。主工作区最终 EXE/DLL 全部与 current manifest 匹配，ProfileScope 源码恢复；历史 worktree 恢复原 `1244d4f4` 且干净，测试编辑器已关闭。
+
+运行目录位于 `build/rdg-bisect-results/`，名称见 14.2；每个目录保存 capture、配置、日志、进程信息和 `takeover-summary.json`。旧版重复运行的 metadata 同时保留采样时 checkout 和实际构建 commit，避免切换二进制后误标版本。汇总为 `build/rdg-takeover-summary.json`，分析日志为 `build/rdg-takeover-analysis.log`，当前细分结果为各目录的 `raster-frame-stages.json`、`raster-prepare-hotspots.json`、`compiler-stages.json`。执行脚本为 `build/run_rdg_bisect.ps1`、`build/run_rdg_takeover_remaining.ps1`，分析脚本为 `build/analyze_rdg_takeover.py` 及前文三个细分脚本。以上为本机忽略目录内的证据，关键条件与结果由本文保留。
