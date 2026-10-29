@@ -2,6 +2,7 @@
 
 #include "ProbeAdaptiveLayout.h"
 #include "misc/BoundingBox.h"
+#include "misc/NumericLimits.h"
 
 #include <algorithm>
 #include <bit>
@@ -22,6 +23,7 @@ class ProbeGeometryClassifier {
 public:
     static constexpr uint OCCUPANCY_GRID_DIM    = RASTER_PROBE_OCCUPANCY_GRID_DIM;
     static constexpr uint OCCUPANCY_VOXEL_COUNT = RASTER_PROBE_OCCUPANCY_VOXEL_COUNT;
+    static_assert(OCCUPANCY_VOXEL_COUNT > 0u && OCCUPANCY_VOXEL_COUNT <= 64u);
 
     static Box3D BuildCellInfluenceBounds(
         float3 cell_origin,
@@ -69,8 +71,9 @@ public:
             return stats;
         }
 
-        const float padding = std::max(geometry_padding, 0.0f);
-        uint64_t    occupancy_mask = 0u;
+        constexpr uint64_t full_occupancy_mask = MaxValue<uint64_t> >> (64u - OCCUPANCY_VOXEL_COUNT);
+        const float        padding = std::max(geometry_padding, 0.0f);
+        uint64_t           occupancy_mask = 0u;
         for (const Box3D& primitive_bound : primitive_bounds) {
             if (!primitive_bound.IsValid()) {
                 continue;
@@ -88,6 +91,10 @@ public:
             }
 
             ++stats.intersecting_primitive_count;
+            // Coverage cannot grow once full, but every intersection still contributes to diagnostics.
+            if (occupancy_mask == full_occupancy_mask) {
+                continue;
+            }
             const uint3 voxel_min = ToVoxelCoord(overlap_min, cell_bounds.min, cell_extent);
             const uint3 voxel_max = ToVoxelCoord(overlap_max, cell_bounds.min, cell_extent);
             for (uint z = voxel_min.z; z <= voxel_max.z; ++z) {
@@ -136,7 +143,5 @@ private:
         return std::min(static_cast<uint>(std::floor(scaled)), OCCUPANCY_GRID_DIM - 1u);
     }
 };
-
-static_assert(ProbeGeometryClassifier::OCCUPANCY_VOXEL_COUNT <= 64u);
 
 } // namespace Moer::Render::Raster

@@ -726,3 +726,21 @@ setup 派发每帧 p50 0.1138 ms，等待 p50 0.1861 ms、p95 0.3156 ms。主图
 只读审计未发现 setup/TaskGraph 的固定 2 秒超时。Wait 的真实条件是全部 job 终结、completion task 发布结果。另一个测量限制是 `ScopedCpuProfile` 先采结束时间再 Emit：Emit 的锁/分配/调度延迟会进入父 scope，却不在该子 scope 内。分析保存 Wait.end 到 Compiler.begin、最后 Job.end 到 BatchComplete.begin 的间隙，避免把所有间隙都算作业务或排队成本。
 
 完整 Debug 构建、9 项 RDG/RHI 契约和 Raster 运行通过，正常退出，无 error、critical、VUID 或 Validation Error。DLL SHA-256 为 `AC659DD08E72DB32A721F89442C3BE383AA462F36BB8F010063FC5E7BA820651`。日志为 `build/rdg-prepare-scopes-build.log`、`build/rdg-prepare-scopes-contracts.log`、`build/rdg-prepare-before-raster.log`；原始记录和 `raster-prepare-hotspots.json` 在 `build/rdg-bisect-results/raster-prepare-before/`，分析脚本为 `build/analyze_raster_prepare_hotspots.py`。
+
+### 13.3 Probe 占用饱和后的重复工作
+
+Probe 准备中的 `ProbeGeometryClassifier::Analyze` 需要两个不同结果：准确的相交 primitive 数，以及小网格的联合占用 mask。原实现即使 64 个 voxel 全部已占用，仍对后续每个相交 primitive 执行 voxel 坐标转换和三重置位循环。Sponza 的密集 cell 能达到全占用，因此这部分工作不再改变结果。
+
+本步在原相交判断及计数之后检查满 mask，满时只跳过坐标转换和置位。继续遍历全部 primitive，保留 invalid/outside 过滤、padding、相交数量、占用率和 subdivision 判断，不提前结束整个分类。满 mask 由现有 `MaxValue<uint64_t>` 推导，支持 1～64 个 voxel，避免左移 64 位；不增加缓存或状态生命周期。
+
+回归在网格先被填满后继续加入相交、不相交、无效及仅 padding 后相交的 bounds，并将完整覆盖 primitive 分别放在首尾，检查准确计数、占据率及分类。原有空、稀疏、密集和 padding 用例保留。使用相同细分计时配置比较修改前后的 Probe Prepare 与完整 Raster 帧，再独立提交。
+
+### 13.4 Probe 优化结果
+
+同配置 `raster-probe-occupancy-after` 运行 110 秒、正常退出，无运行或 validation 错误。稳定窗口中的 Probe Prepare p50 从 **1.0111 降至 0.5424 ms**，约减少 46.4%；Probe AddToGraph 从 2.0408 降至 1.5539 ms；主 Pass 声明从 5.0523 降至 4.5227 ms。前后实际 cell 日志均为 2071/2330 个相交 primitive、64/64 个 occupied voxel、occupancy=1、desired_level=0。
+
+RenderFrame p50 从 17.3626 降至 16.6707 ms，FPS 从 54.83 到 57.19。本组观察到约 4.3% 的 FPS 增加，但只有一组整帧对照，不能把全部差额归给此改动；目标阶段约 0.47 ms 的减少更直接。Shadow Prepare 基本不变（1.9679→1.9543 ms），lighting setup 仍有约 9 ms 的长尾，未宣称停顿问题已解决。
+
+完整 Debug 构建及六个 Probe 测试程序通过：GeometryClassifier（含新增语义回归）、AdaptiveLayout、PhysicalAllocator、DirtyTracker、Clipmap、Streaming。这些程序当前未注册为 CTest，直接运行对应 EXE 并检查退出码。日志为 `build/rdg-probe-occupancy-build.log`、`build/rdg-occupancy-TestProbe*.exe.log`、`build/rdg-probe-occupancy-raster.log`。
+
+新 DLL SHA-256 为 `4A8C4F48D56EA11D5386FF46A90BF1F5632D0AEA51F8427A2B2403B3A9696826`；前后 EXE/DLL 快照在 `build/rdg-probe-occupancy-variants/`，新 capture 与分析在 `build/rdg-bisect-results/raster-probe-occupancy-after/`。本次收益来自业务准备中删去不会改变结果的工作，没有改变 RDG 图、缓存失效或资源生命周期。

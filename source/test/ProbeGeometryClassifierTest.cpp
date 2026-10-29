@@ -1,5 +1,6 @@
 #include "renderer/raster/ProbeGeometryClassifier.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -56,6 +57,31 @@ int main() {
         const auto stats = ProbeGeometryClassifier::Analyze(cell_bounds, geometry, 0.0f, 0.25f, 8u);
         Expect(stats.occupied_voxel_count == 64u, "Full geometry must occupy the complete analysis grid.");
         Expect(stats.desired_subdivision_level == 0u, "Dense geometry must request the finest level.");
+    }
+
+    {
+        std::array geometry = {
+            cell_bounds,
+            Box3D(float3(0.1f), float3(1.0f)),
+            Box3D(float3(3.0f), float3(2.0f)),
+            Box3D(float3(10.0f), float3(11.0f)),
+            Box3D(float3(8.10f, 0.1f, 0.1f), float3(8.20f, 1.0f, 1.0f)),
+            Box3D(float3(7.8f, 1.0f, 1.0f), float3(9.0f, 2.0f, 2.0f))
+        };
+        // Full coverage must preserve exact counts, whether reached first or last.
+        for (unsigned order = 0; order < 2; ++order) {
+            for (float padding : {0.0f, 0.20f}) {
+                const auto stats = ProbeGeometryClassifier::Analyze(cell_bounds, geometry, padding, 1.0f, 8u);
+                Expect(
+                    stats.intersecting_primitive_count == (padding == 0.0f ? 3u : 4u),
+                    "Full coverage must still count later intersections and respect padding and invalid bounds."
+                );
+                Expect(stats.occupied_voxel_count == 64u, "Later primitives must preserve full coverage.");
+                Expect(NearlyEqual(stats.occupancy, 1.0f), "Full coverage must retain an occupancy ratio of one.");
+                Expect(stats.desired_subdivision_level == 0u, "Full coverage must retain the finest level.");
+            }
+            std::rotate(geometry.begin(), geometry.begin() + 1, geometry.end());
+        }
     }
 
     {
