@@ -698,3 +698,31 @@ Compile 仍包含 setup 等待及 compiler 析构；阶段计时覆盖各自函�
 当前数据将下一优先级指向主 Pass 的同步准备，而非继续调整拓扑排序或直接引入区间索引。`ShadowDepthPass`、`ProbeUpdatePass`、`GeometryPass` 的 `AddToGraph` 都调用业务 `Prepare`，应先分别计量 Prepare 和声明注册，再判断工作能否复用。只读检查还发现同步 setup callback 中的 vector 值捕获，以及同一图内重复导入 Scene 读取集合，可作为局部候选；实际 Pass 的资源读取声明与录制时的强引用所有权仍须保留。
 
 本轮完成计时覆盖和精确容量预留两个独立步骤，未调整图边界、跨帧生命周期或队列调度架构。约 2 秒公共 Compile 异常仍需单独定位 setup 和外围等待，不能通过删除等待来掩盖。
+
+## 13. 主 Pass 准备与 setup 等待定位
+
+### 13.1 计划与测量边界
+
+主 Pass 声明阶段约 5 ms，但它包含同步业务准备，不能直接当作 RDG 注册成本。本轮先为各 Raster `AddToGraph`、Shadow/Probe/Geometry 的同步 Prepare、公共 Culling Prepare、CSM 准备及 Scene 资源导入补充粗粒度 scope。父子 scope 按区间并集扣除重复，分别报告 Prepare、资源导入和声明注册残余；残余也可能包含参数所有权构造/销毁，不能假定全是图算法。
+
+公共 Compile 另外区分 setup 派发、等待、各 worker 的任务执行及 batch 完成。worker 时间不能加到 render thread 的墙钟耗时上；如果长停顿未重现，只报告观察到的分布和审计结果，不推断原因。等待仍保证所有准备结果成功发布后才能编译/录制，保持原有错误传播与所有权。
+
+完成同配置基线后独立提交计时与记录，再根据热点选择局部优化。保留资源版本、逐 Pass 访问声明、录制强引用和已有同步要求；不引入跨帧缓存或调整队列架构。
+
+### 13.2 细分基线
+
+`raster-prepare-before` 使用相同 Debug、Sponza、串行录制配置运行 110 秒，最后 30 秒有 1644 个完整帧，54.83 FPS，主 Pass 声明 p50 约 5.0523 ms。各项按同线程完整帧归因：
+
+| Pass | AddToGraph p50 ms | 同步 Prepare p50 ms | Scene 导入 p50 ms | 其余注册/包装 p50 ms |
+| --- | ---: | ---: | ---: | ---: |
+| ShadowDepth | 2.0362 | 1.9679 | 0 | 0.0688 |
+| ProbeUpdate | 2.0408 | 1.0111 | 0.6931 | 0.3335 |
+| Geometry | 0.4869 | 0.0281 | 0.2505 | 0.2094 |
+
+表中分别取中位数，不能直接相加。Shadow 的 Prepare 几乎都在 CSM（p50 1.9436 ms）；稳定窗口 shadow cache 命中、没有 Shadow draw 的 Scene 导入，不能按每帧四个 shadow draw 估算注册工作。Probe 与 Geometry 仍各自导入同一 Scene 读取集合。约 5 ms 中有约 3 ms 来自同步业务 Prepare，说明整个 DeclareMainPasses 不应都算作 RDG 构图算法。
+
+setup 派发每帧 p50 0.1138 ms，等待 p50 0.1861 ms、p95 0.3156 ms。主图析构还会再调用 Wait，分析按帧汇总，不能直接使用混合两次调用的单次中位数。最长稳定窗口 Compile 为 11.9360 ms：Wait 9.4109 ms，同窗口 `UploadLightingData.Prepare` 9.4084 ms，compiler 函数 2.2912 ms。整个 capture 最长 Compile 11.9744 ms，本轮未重现原先约 2 秒异常；只能说本轮最长等待与 lighting prepare 重叠，不能据此证明上轮异常同因。
+
+只读审计未发现 setup/TaskGraph 的固定 2 秒超时。Wait 的真实条件是全部 job 终结、completion task 发布结果。另一个测量限制是 `ScopedCpuProfile` 先采结束时间再 Emit：Emit 的锁/分配/调度延迟会进入父 scope，却不在该子 scope 内。分析保存 Wait.end 到 Compiler.begin、最后 Job.end 到 BatchComplete.begin 的间隙，避免把所有间隙都算作业务或排队成本。
+
+完整 Debug 构建、9 项 RDG/RHI 契约和 Raster 运行通过，正常退出，无 error、critical、VUID 或 Validation Error。DLL SHA-256 为 `AC659DD08E72DB32A721F89442C3BE383AA462F36BB8F010063FC5E7BA820651`。日志为 `build/rdg-prepare-scopes-build.log`、`build/rdg-prepare-scopes-contracts.log`、`build/rdg-prepare-before-raster.log`；原始记录和 `raster-prepare-hotspots.json` 在 `build/rdg-bisect-results/raster-prepare-before/`，分析脚本为 `build/analyze_raster_prepare_hotspots.py`。

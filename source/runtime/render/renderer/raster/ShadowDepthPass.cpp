@@ -5,6 +5,7 @@
 #include "RasterTextures.h"
 #include "RasterTool.h"
 #include "misc/Timer.h"
+#include "profile/ProfileScope.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "scene/LogicalComponents.h"
@@ -565,6 +566,7 @@ ShadowDepthPass::ShadowDepthPass(RasterContext& context) : m_culling_pass(contex
 }
 
 bool ShadowDepthPass::RefreshShadowCasterBounds(RasterContext& context) {
+    MOER_PROFILE_SCOPE("Raster.Shadow.RefreshCasterBounds");
     const SceneUpdateBatch& scene_updates = context.GetSceneUpdates();
     if (!scene_updates.scene_ready) {
         if (!m_shadow_caster_bounds_valid && m_shadow_caster_bounds.empty()) {
@@ -743,6 +745,7 @@ void ShadowDepthPass::PrepareCSM(
     const Camera& camera,
     RecordParameters& parameters
 ) {
+    MOER_PROFILE_SCOPE("Raster.Shadow.PrepareCSM");
     enabled_cascade_layers = ui_config.shadow_csm_num_of_cascades;
     assert(enabled_cascade_layers <= CSM_MAX_CASCADES);
 
@@ -932,6 +935,7 @@ ShadowDepthPass::RecordParameters ShadowDepthPass::Prepare(
     const RasterConfig& ui_config,
     const Camera& camera
 ) {
+    MOER_PROFILE_SCOPE("Raster.Prepare.ShadowDepth");
     RecordParameters parameters{
         .bindless = context.bdls,
         .index_buffer = context.GetGpuSceneRes().index_buf.buf->GetView(),

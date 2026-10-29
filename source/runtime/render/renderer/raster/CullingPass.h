@@ -8,6 +8,7 @@
 
 #include "math/Function.h"
 #include "misc/STL.h"
+#include "profile/ProfileScope.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "scene/camera/Camera.h"
@@ -619,6 +620,7 @@ private:
         CullStatistics*                   out_stats,
         std::string_view                  profile_scope_name
     ) {
+        MOER_PROFILE_SCOPE("Raster.Prepare.Culling");
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
         const uint instance_count =
             static_cast<uint>(gpu_scene_res.instance_buf.buf->GetByteSize() / sizeof(GInstance));

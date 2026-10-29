@@ -61,6 +61,7 @@ RenderGraph::PassHandle ShadowDepthPass::AddToGraph(
     const Camera&       camera,
     GraphResources      resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.ShadowDepthPass");
     // Allocation and cache decisions determine the graph's physical resources
     // and node count, so they must finish before Compile. GPU recording remains parallel.
     auto       parameters = std::make_shared<const RecordParameters>(Prepare(context, ui_config, camera));
@@ -169,6 +170,7 @@ RenderGraph::PassHandle ProbeUpdatePass::AddToGraph(
     uint64              frame_index,
     GraphResources      resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.ProbeUpdatePass");
     auto parameters = std::make_shared<const RecordParameters>(Prepare(context, config, camera, frame_index));
     if (!parameters->enabled) {
         return {};
@@ -272,6 +274,7 @@ RenderGraph::PassHandle GeometryPass::AddToGraph(
     const Camera&  camera,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.GeometryPass");
     auto parameters = std::make_shared<const RecordParameters>(Prepare(context, raster_config, camera));
     culling_pass.AddToGraph(graph, "Geometry", parameters->culling, resources.hiz_previous);
     const RasterSceneGraphReads scene_reads(graph, context.GetGpuSceneRes());
@@ -311,6 +314,7 @@ void TessellatedSurfacePass::AddToGraph(
     const Camera& camera,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.TessellatedSurfacePass");
     if (!supported || !config.tessellated_surface_enabled) {
         return;
     }
@@ -360,6 +364,7 @@ void HiZBuildPass::AddToGraph(
     const RasterContext& context,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.HiZBuildPass");
     auto prepared = graph.AddSetupPass(
         "HiZBuild.Prepare",
         uint8_t{0},
@@ -391,6 +396,7 @@ void DirectionalShadowMaskPass::AddToGraph(
     GraphResources resources,
     std::span<const RenderGraph::SetupPassHandle> setup_dependencies
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.DirectionalShadowMaskPass");
     auto prepared = graph.AddSetupPass(
         "DirectionalShadowMask.Prepare",
         uint8_t{0},
@@ -430,6 +436,7 @@ void LightingPass::AddToGraph(
     const RasterConfig& ui_config,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.LightingPass");
     auto prepared = graph.AddSetupPass(
         "Lighting.Prepare",
         uint8_t{0},
@@ -484,6 +491,7 @@ void SkyboxPass::AddToGraph(
     const Camera& camera,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.SkyboxPass");
     auto prepared = graph.AddSetupPass(
         "Skybox.Prepare",
         uint8_t{0},
@@ -521,6 +529,7 @@ void ProbeGizmoPass::AddToGraph(
     GraphResources resources,
     std::span<const RenderGraph::SetupPassHandle> setup_dependencies
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.ProbeGizmoPass");
     auto prepared = graph.AddSetupPass(
         "ProbeGizmo.Prepare",
         uint8_t{0},
@@ -560,6 +569,7 @@ void AoPass::AddToGraph(
     uint64 frame_index,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.AoPass");
     auto prepared = graph.AddSetupPass(
         "AmbientOcclusion.Prepare",
         uint8_t{0},
@@ -659,6 +669,7 @@ void RtaoDenoiserPass::AddToGraph(
     uint ao_only_index,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.RtaoDenoiserPass");
     if (!ui_config.rtao_denoiser_enable ||
         (ui_config.ao_mode != EAoMode::RTAO && ui_config.ao_mode != EAoMode::RTAO_AO_ONLY)) {
         return;
@@ -711,6 +722,7 @@ void BilateralFilterDenoiserPass::AddToGraph(
     TextureWithHandle input_image,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.BilateralFilterDenoiserPass");
     auto prepared = graph.AddSetupPass(
         "BilateralDenoise.Prepare",
         std::move(input_image),
@@ -745,6 +757,7 @@ void SsrPass::AddToGraph(
     TextureWithHandle input_image,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.SsrPass");
     auto prepared = graph.AddSetupPass(
         "ScreenSpaceReflection.Prepare",
         std::move(input_image),
@@ -783,6 +796,7 @@ void AaPass::AddToGraph(
     uint8 smaa_phase,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.AaPass");
     auto prepared = graph.AddSetupPass(
         "AntiAliasing.Prepare",
         std::move(input_image),
@@ -879,6 +893,7 @@ void BloomPass::AddToGraph(
     TextureWithHandle input_texture,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.BloomPass");
     if (!raster_config.bloom_enabled) {
         return;
     }
@@ -973,6 +988,7 @@ void TonemappingPass::AddToGraph(
     TextureWithHandle input_image,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.TonemappingPass");
     auto prepared = graph.AddSetupPass(
         "Tonemapping.Prepare",
         std::move(input_image),
@@ -1056,6 +1072,7 @@ void CameraGizmoPass::AddToGraph(
     const Camera& main_camera,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.CameraGizmoPass");
     auto prepared = graph.AddSetupPass(
         "CameraGizmo.Prepare",
         uint8_t{0},
@@ -1092,6 +1109,7 @@ void CsmGizmoPass::AddToGraph(
     GraphResources resources,
     std::span<const RenderGraph::SetupPassHandle> setup_dependencies
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.CsmGizmoPass");
     auto prepared = graph.AddSetupPass(
         "CsmGizmo.Prepare",
         uint8_t{0},
@@ -1151,6 +1169,7 @@ void UiCombinePass::AddToGraph(
     TextureView processing_input,
     GraphResources resources
 ) {
+    MOER_PROFILE_SCOPE("Raster.AddToGraph.UiCombinePass");
     struct PrepareInput {
         bool        is_separate_window{};
         uint2       resolution{};

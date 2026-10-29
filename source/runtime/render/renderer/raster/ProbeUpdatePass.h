@@ -2,6 +2,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "profile/ProfileScope.h"
 #include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
@@ -112,6 +113,7 @@ public:
         const Camera&       camera,
         uint64              frame_index
     ) {
+        MOER_PROFILE_SCOPE("Raster.Prepare.ProbeUpdate");
         RecordParameters parameters{};
         parameters.update = context.probe_volume.PrepareUpdate(
             config,

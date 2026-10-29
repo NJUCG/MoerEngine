@@ -217,6 +217,7 @@ private:
             return;
         }
         try {
+            ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.SetupJob", jobs[index].name);
             RHICommandAccessRestrictionScope access_scope(
                 jobs[index].safety == SetupPassSafety::Restricted
             );
@@ -266,6 +267,7 @@ private:
     }
 
     void CompleteFromJobs() noexcept {
+        MOER_PROFILE_SCOPE("RenderGraph.SetupBatchComplete");
         for (size_t index = 0; index < runtimes.size(); ++index) {
             if (runtimes[index].status.load(std::memory_order_acquire) ==
                 JobStatus::Failed) {
@@ -3203,6 +3205,7 @@ RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
 }
 
 void RenderGraph::DispatchSetupPassesAsync() {
+    ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.DispatchSetup", name);
     if (setup_dispatched || setup_passes.empty()) {
         return;
     }
@@ -3283,6 +3286,7 @@ void RenderGraph::FailUndispatchedSetupPasses(
 }
 
 bool RenderGraph::WaitSetupPasses(std::string& error) noexcept {
+    ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.WaitSetup", name);
     if (setup_failed_before_batch) {
         try {
             error = "RenderGraph async setup batch creation failed";

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ProbeVolumeResource.h"
+#include "profile/ProfileScope.h"
 #include "renderer/common/GraphResourceBoundary.h"
 #include "rendergraph/RenderGraph.h"
 #include "scene/GpuScene.h"
@@ -62,6 +63,7 @@ struct RasterSceneGraphReads {
     std::vector<RenderGraph::TextureHandle> textures;
 
     RasterSceneGraphReads(RenderGraph& graph, const GpuScene::Res& scene) {
+        MOER_PROFILE_SCOPE("Raster.ImportSceneGraphReads");
         for (const auto* resource :
              {&scene.instance_buf,
               &scene.primitive_buf,

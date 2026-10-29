@@ -3,6 +3,7 @@
 
 #include "math/Function.h"
 #include "misc/STL.h"
+#include "profile/ProfileScope.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rendergraph/RenderGraph.h"
@@ -92,6 +93,7 @@ public:
 
     [[nodiscard]] RecordParameters
     Prepare(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {
+        MOER_PROFILE_SCOPE("Raster.Prepare.Geometry");
         const auto& gpu_scene_res = context.GetGpuSceneRes();
 
         const bool use_occlusion_culling = raster_config.enable_occlusion_culling &&
