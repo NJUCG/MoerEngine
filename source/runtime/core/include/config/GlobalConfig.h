@@ -35,9 +35,6 @@ struct CORE_API GlobalConfig {
             bool render_thread           = false;
             bool profile_logging         = false;
             uint submission_batch_window = 2;
-            bool rhi_heartbeat_enabled = false;
-            uint rhi_heartbeat_stall_timeout_ms = 5000;
-            uint rhi_heartbeat_poll_interval_ms = 1000;
             uint max_frame_lag           = 0;
         } threading;
 

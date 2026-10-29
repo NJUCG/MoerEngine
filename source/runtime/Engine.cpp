@@ -245,9 +245,6 @@ EngineConsoleStartupConfig MakeConsoleStartupConfig(const Config::GlobalConfig& 
         .render_thread = config.engine.threading.render_thread,
         .profile_logging = config.engine.threading.profile_logging,
         .configured_submission_batch_window = config.engine.threading.submission_batch_window,
-        .rhi_heartbeat_enabled = config.engine.threading.rhi_heartbeat_enabled,
-        .rhi_heartbeat_stall_timeout_ms = config.engine.threading.rhi_heartbeat_stall_timeout_ms,
-        .rhi_heartbeat_poll_interval_ms = config.engine.threading.rhi_heartbeat_poll_interval_ms,
         .max_frame_lag = config.engine.threading.max_frame_lag,
         .max_frames_in_flight = config.engine.rhi.max_frame_in_flight,
         .raster_rdg_debug_dump = config.engine.render.raster.render_graph_debug_dump,
@@ -1313,16 +1310,11 @@ void Engine::Init(
     LOG_INFO("[Threading] GameThread id = {}", GetGameThreadId());
     LOG_INFO(
         "[Threading] render_thread={}, max_frame_lag={}, "
-        "profile_logging={}, submission_batch_window={}, "
-        "rhi_heartbeat_enabled={}, rhi_heartbeat_stall_timeout_ms={}, "
-        "rhi_heartbeat_poll_interval_ms={}",
+        "profile_logging={}, submission_batch_window={}",
         startup_config.render_thread,
         startup_config.max_frame_lag,
         startup_config.profile_logging,
-        submission_batch_window,
-        startup_config.rhi_heartbeat_enabled,
-        startup_config.rhi_heartbeat_stall_timeout_ms,
-        startup_config.rhi_heartbeat_poll_interval_ms
+        submission_batch_window
     );
 
     if (startup_config.render_thread) {
@@ -1380,12 +1372,6 @@ void Engine::Init(
                 .name            = "MoerEngine",
                 .rhi_api_version = config.engine.rhi.api_version,
                 .submission_batch_window = submission_batch_window,
-                .rhi_heartbeat_enabled =
-                    startup_config.rhi_heartbeat_enabled,
-                .rhi_heartbeat_stall_timeout_ms =
-                    startup_config.rhi_heartbeat_stall_timeout_ms,
-                .rhi_heartbeat_poll_interval_ms =
-                    startup_config.rhi_heartbeat_poll_interval_ms,
             }
         )
     );

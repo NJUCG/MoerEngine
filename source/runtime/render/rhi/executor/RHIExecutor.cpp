@@ -2,6 +2,7 @@
 
 #include "log/LogSystem.h"
 #include "misc/RAII.h"
+#include "profile/ProfileScope.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIThreadOwnership.h"
 
@@ -133,6 +134,7 @@ struct RHIExecutor::PendingBatchPublication {
         if (failure || !BatchHasWork(batch)) {
             return;
         }
+        MOER_PROFILE_SCOPE("RHI.Executor.PublishBatch");
         try {
             batch.topology = BuildBatchTopology(batch);
             backend->Enqueue(std::move(batch));
@@ -457,6 +459,7 @@ void RHIExecutor::Sync(ERHISyncDepth _depth) {
 }
 
 void RHIExecutor::ProcessSyncRequest(ERHISyncDepth _depth) {
+    MOER_PROFILE_SCOPE("RHI.Executor.Sync");
     PendingBatchPublication publication{};
     bool                    sync_registered   = false;
     auto                    finish_sync_guard = OnScopeExit([this, &publication, &sync_registered] {

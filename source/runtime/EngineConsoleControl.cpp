@@ -181,21 +181,6 @@ struct EngineConsoleControl::Impl {
             "Configured bounded submission batch window before policy clamping.",
             &EngineConsoleStartupConfig::configured_submission_batch_window
         );
-        register_bool(
-            "RHI.Heartbeat.Enabled",
-            "Configured request for the RHI ownership heartbeat watchdog.",
-            &EngineConsoleStartupConfig::rhi_heartbeat_enabled
-        );
-        register_uint(
-            "RHI.Heartbeat.StallTimeoutMs",
-            "Configured RHI heartbeat stall timeout in milliseconds.",
-            &EngineConsoleStartupConfig::rhi_heartbeat_stall_timeout_ms
-        );
-        register_uint(
-            "RHI.Heartbeat.PollIntervalMs",
-            "Configured RHI heartbeat polling interval in milliseconds.",
-            &EngineConsoleStartupConfig::rhi_heartbeat_poll_interval_ms
-        );
 
         const auto register_rdg =
             [&register_bool](

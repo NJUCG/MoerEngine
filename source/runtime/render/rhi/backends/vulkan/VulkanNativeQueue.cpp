@@ -5,7 +5,6 @@
 #include "vulkan/VulkanFaultInjection.h"
 #endif
 #include "log/LogSystem.h"
-#include "rhi/RHIThreadHeartbeat.h"
 
 #include <algorithm>
 #include <cmath>

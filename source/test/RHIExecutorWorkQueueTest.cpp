@@ -1,7 +1,9 @@
+#include "profile/ProfileDumpTemplates.h"
+#include "profile/ProfileScope.h"
+#include "renderer/raytracing/RaytracingExportSubmission.h"
+#include "rhi/RHIThreadOwnership.h"
 #include "rhi/executor/RHIExecutor.h"
 #include "rhi/executor/testing/RHIExecutorTestHooksInternal.h"
-#include "rhi/RHIThreadOwnership.h"
-#include "renderer/raytracing/RaytracingExportSubmission.h"
 
 #include <array>
 #include <atomic>
@@ -9,11 +11,14 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -3380,6 +3385,60 @@ bool ShutdownDrainsAcceptedReadyWork() {
            );
 }
 
+bool CompletedWorkEmitsCpuProfiles() {
+    using namespace Moer::ProfileDump;
+
+    const std::filesystem::path directory =
+        std::filesystem::temp_directory_path() /
+        ("moer-executor-profile-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code error;
+    if (!Expect(std::filesystem::create_directory(directory, error), "could not create profile output directory")) {
+        return false;
+    }
+
+    const bool started = Start(RuntimeConfig{.output_path = directory / "capture.mpds"}) == StartResult::Started;
+    bool       okay    = Expect(started, "could not start the CPU profile runtime");
+    if (started) {
+        const SchemaRegistration schema = RegisterSchema(Templates::CpuScope());
+        okay &= Expect(schema.status == SchemaStatus::Registered, "could not register the CPU scope schema");
+        okay &= Expect(
+            CpuScopeProducer::Activate(schema.handle) == CpuScopeActivationResult::Activated,
+            "could not activate the CPU scope producer"
+        );
+    }
+    if (okay) {
+        RHIExecutorWorkQueue queue;
+        queue.Start();
+        queue.Enqueue(RHIExecutorWork{
+            .callback = [](ERHIExecutorWorkAction) {},
+        });
+        // Join the owner so its local scopes have ended before capture is disabled.
+        queue.ShutDown();
+    }
+
+    CpuScopeProducer::Deactivate();
+    if (started) {
+        const FlushResult flushed = FlushAll();
+        okay &= Expect(
+            flushed == FlushResult::Completed || flushed == FlushResult::NothingPending,
+            "could not flush completed Executor profiles"
+        );
+        okay &= Expect(Shutdown() == ShutdownResult::Completed, "could not finalize the CPU profile capture");
+        const RuntimeStats stats = GetRuntimeStats();
+        okay &= Expect(stats.records_committed > 0, "Executor work did not emit CPU profiles");
+        okay &= Expect(stats.records_written == stats.records_committed, "completed Executor profiles were lost");
+        okay &= Expect(
+            stats.records_dropped_stopped == 0 && stats.records_dropped_stale_generation == 0 &&
+                stats.records_dropped_oversized == 0 && stats.records_dropped_queue_full == 0 &&
+                stats.records_dropped_after_fault == 0 && stats.chunks_dropped == 0,
+            "CPU profiling dropped Executor records"
+        );
+    }
+    std::filesystem::remove_all(directory, error);
+    return okay;
+}
+
 } // namespace
 
 int main() {
@@ -3417,7 +3476,8 @@ int main() {
         !ShutdownDrainsTerminalSourceBehindPendingHead() ||
         !ShutdownUsesOneTerminalSnapshotForSignalAndQueryNotification() ||
         !ShutdownCancelsAnUnsignalledGate() ||
-        !ShutdownDrainsAcceptedReadyWork()) {
+        !ShutdownDrainsAcceptedReadyWork() ||
+        !CompletedWorkEmitsCpuProfiles()) {
         return EXIT_FAILURE;
     }
     std::cout << "RHIExecutor work queue contract passed\n";

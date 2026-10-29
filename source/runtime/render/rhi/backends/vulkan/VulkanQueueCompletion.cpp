@@ -5,7 +5,8 @@
 #include "VulkanQueueInternal.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
-#include "rhi/RHIThreadHeartbeat.h"
+#include "profile/ProfileScope.h"
+#include "rhi/RHIThreadOwnership.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
 #endif
@@ -15,22 +16,6 @@
 #include <stdexcept>
 
 namespace Moer::Render {
-
-namespace {
-ERHIHeartbeatDomain HeartbeatDomainForQueue(EQueueType _type) noexcept {
-    switch (_type) {
-        case EQueueType::Graphics:
-            return ERHIHeartbeatDomain::Graphics;
-        case EQueueType::Compute:
-            return ERHIHeartbeatDomain::Compute;
-        case EQueueType::Copy:
-            return ERHIHeartbeatDomain::Copy;
-        default:
-            return ERHIHeartbeatDomain::General;
-    }
-}
-
-} // namespace
 
 VulkanBatchCompletionGroup::VulkanBatchCompletionGroup(size_t _participant_count) :
     participants(_participant_count),
@@ -130,22 +115,16 @@ void VulkanCommandQueue::CompletionThreadMain() {
     Platform::SetCurrentThreadName(
         queue.GetType() == EQueueType::Graphics ? "Vulkan Gfx Completion" : "Vulkan Compute Completion"
     );
-    RHIThreadRoleScope      owner_scope(ERHIThreadRole::Completion);
-    RHIThreadHeartbeatScope heartbeat(
-        ERHIThreadRole::Completion, HeartbeatDomainForQueue(queue.GetType()), ERHIHeartbeatStage::PollCompletion
-    );
+    RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
 
     while (true) {
-        heartbeat.Pulse(ERHIHeartbeatStage::PollCompletion);
         std::optional<CompletionEvent> completion;
         {
             std::unique_lock<std::mutex> lock(event_mutex);
-            RHIThreadHeartbeatWaitLock   wait_lock(lock, heartbeat, ERHIHeartbeatStage::PollCompletion);
-            queue_cv.wait(wait_lock, [this]() {
+            queue_cv.wait(lock, [this]() {
                 return !completion_worker_running || !event_queue.empty();
             });
             if (!completion_worker_running && event_queue.empty()) {
-                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
                 break;
             }
             if (event_queue.empty()) {
@@ -156,7 +135,7 @@ void VulkanCommandQueue::CompletionThreadMain() {
             event_queue.pop_front();
         }
 
-        heartbeat.Pulse(ERHIHeartbeatStage::AwaitCompletion);
+        MOER_PROFILE_SCOPE("Vulkan.ProcessQueueCompletion");
         ProcessCompletion(*completion);
     }
 }

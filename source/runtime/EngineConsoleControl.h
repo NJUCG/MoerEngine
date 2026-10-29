@@ -17,9 +17,6 @@ struct EngineConsoleStartupConfig {
     bool          render_thread                          = false;
     bool          profile_logging                        = false;
     std::uint32_t configured_submission_batch_window     = 2;
-    bool          rhi_heartbeat_enabled                  = false;
-    std::uint32_t rhi_heartbeat_stall_timeout_ms         = 5000;
-    std::uint32_t rhi_heartbeat_poll_interval_ms         = 1000;
     std::uint32_t max_frame_lag                          = 0;
     std::uint32_t max_frames_in_flight                   = 0;
 

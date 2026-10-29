@@ -4,8 +4,9 @@
 #include "VulkanQueueInternal.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
+#include "profile/ProfileScope.h"
+#include "rhi/RHIThreadOwnership.h"
 #include "rhi/executor/RHIExecutorBackend.h"
-#include "rhi/RHIThreadHeartbeat.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
 #endif
@@ -505,31 +506,21 @@ FenceRef VulkanCopyQueue::GetFenceHandle() {
 void VulkanCopyQueue::ExecuteThread() {
     Platform::SetCurrentThreadName("Vulkan Copy Completion");
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
-    RHIThreadHeartbeatScope heartbeat(
-        ERHIThreadRole::Completion,
-        ERHIHeartbeatDomain::Copy,
-        ERHIHeartbeatStage::PollCompletion
-    );
     while (true) {
         std::optional<CompletionEvent> evt;
         {
-            heartbeat.Pulse(ERHIHeartbeatStage::PollCompletion);
             std::unique_lock<std::mutex> lock(event_mutex);
-            RHIThreadHeartbeatWaitLock wait_lock(
-                lock, heartbeat, ERHIHeartbeatStage::PollCompletion
-            );
-            queue_cv.wait(wait_lock, [this]() {
+            queue_cv.wait(lock, [this]() {
                 return !enabled.load(std::memory_order_acquire) || !event_queue.empty();
             });
             if (!enabled.load(std::memory_order_acquire) && event_queue.empty()) {
-                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
                 break;
             }
             evt.emplace(std::move(event_queue.front()));
             event_queue.pop_front();
         }
 
-        heartbeat.Pulse(ERHIHeartbeatStage::AwaitCompletion);
+        MOER_PROFILE_SCOPE("Vulkan.ProcessCopyCompletion");
         const uint64 event_timeline = evt->timeline;
         auto& batch = evt->batch;
         bool batch_gpu_success = false;
