@@ -558,3 +558,57 @@ benchmark 源码未修改，前后各自使用匹配其头文件布局的 EXE/DL
 完整 MSVC Debug 构建通过，9 项相关 CTest 全部通过，新增逆序 Lowering 和 alias 用例均通过。`TestRHIParallelRecordVulkan.exe --parallel` 的 29 个用例全部 PASS，启用 validation，未发现 VUID 或 Validation Error。日志为 `build/rdg-order-build.log`、`build/rdg-order-contracts.log` 与 `build/rdg-order-vulkan.log`。
 
 Raster、Raytracing 分别以独立配置运行 Sponza 110 秒，均正常退出，日志未发现 error、critical、VUID 或 Validation Error。运行记录位于 `build/rdg-bisect-results/order-after-raster/`、`build/rdg-bisect-results/order-after-ray/`，汇总日志为 `build/rdg-order-raster.log`、`build/rdg-order-ray.log`。这些运行只验证正确性，没有进行本轮前后性能对照。测试编辑器均已关闭，根目录和可执行目录的默认配置仍为 Raster、关闭并行录制。
+
+## 11. Raster 编译热点定位与优化
+
+### 11.1 三次编译的来源与优先级
+
+`order-after-raster` 的 1292 个完整稳定帧各包含三次 Compile，分别是 `RasterFrame`（50 个 Pass）、`UI.FrameTail`（1 个 Pass）与嵌在 UI 录制回调中的 `UI.PrivateBuffers`（2 个 Pass）。根据调用位置和 scope 嵌套映射，三者编译 p50 分别为 3.0076、0.1254、0.1434 ms。主图占累计编译时间约 91.7%。这不是主图被重复编译三遍，也不对应三次 GPU 提交；正常路径的命令最终合并进同一个 Raster command list。
+
+主图负责场景和后处理，帧尾图声明 UI 图像访问，私有 buffer 图声明顶点、索引和参数上传及读取。UI backend 到录制阶段才取得/扩容 upload-ring buffer，因此当前封装选择了独立小图；Vulkan 不要求这样的图边界。合并需要改变准备时机、资源声明和 slot 生命周期，本轮优先定位主图，不调整这些边界。多 viewport、资源上传或启用 CUDA 会改变图数量，不能把三次当成固定架构要求。
+
+### 11.2 计划与测量口径
+
+1. 复用已有 ProfileDump，补充图名和 compiler 阶段计时，不创建新的统计框架；保留公共 Compile 的原有计时。
+2. 在固定 Sponza、Debug、Raster 串行配置下采样主图，区分规范化、区间构造、依赖/屏障生成、排序、生命周期、alias 和队列计划。
+3. 根据实际热点选择局部优化，保持资源版本、依赖、输出顺序和同步架构；相同计时配置下对比前后结果。
+4. 验证契约和真实 Vulkan 行为，将收益和测量限制落入本节，再提交。
+
+Compile 仍包含 setup 等待及 compiler 析构；阶段计时覆盖各自函数，不把函数外的初始化/析构差额冒充某个算法耗时。性能对照双方使用相同新增 scopes，避免把增加计时本身与优化混在一起。
+
+### 11.3 实测热点与本轮改动
+
+新增计时后的 `raster-stages-before` 稳定窗口中，主图 Compile p50 为 2.5542 ms。`BuildSemanticDependencies` 为 1.0004 ms，`BuildAtomicCells` 为 0.3301 ms，`BuildFinalBarriers` 为 0.2756 ms，包含边排序的 `BuildExecutionOrder` 为 0.1363 ms。主热点是访问依赖和屏障来源分析，不能把整个编译成本归给拓扑排序。
+
+同一 Pass 对同一区间的访问在进入分析前已合并为一份 `CellUsage`，每个 Pass/cell 只处理一次。写访问清空 readers 后建立 writer，只读访问追加新的 Pass 身份。因此 reader 身份不重复，writer 和 readers 可以同时存在，但身份不会重叠。原实现仍在追加 reader 时线性查重，并在收集屏障来源时多次加入 writer/readers 再线性去重。
+
+本轮直接追加已唯一的 reader，writer 只加入一次，写访问收集 readers 一次；只读状态/所有权转换仍在原来的内存依赖判定之后收集 readers，保留该判定的语义。Token 不再收集不会生成物理屏障的临时来源列表，但 RAW/WAR/WAW 边照常产生。owner-family 过滤和空前沿补充保持原有顺序。不增加缓存、状态字段或新的图边界。
+
+完整 Debug 构建、9 项 RDG/RHI 契约和 29 项真实 Vulkan 用例均通过，未发现 Vulkan validation 错误。对应日志为 `build/rdg-raster-frontier-build.log`、`build/rdg-raster-frontier-contracts.log`、`build/rdg-raster-frontier-vulkan.log`。
+
+### 11.4 同口径前后对照
+
+两次 Raster 均运行 110 秒，以最后的稳定 30 秒窗口统计，保持 Sponza、场景视口 1500×1002、1920×1080 输出、串行录制和相同新增 CPU scopes。前后 Render DLL SHA-256 分别为 `1A9A766E3F9A18C87A6EC0CA50194B9B2611033621209037C7F7C9BE4811E3D1`、`D986843622C9FFE5A35AD91EFDA2789BB3365E010D9F5B86BDEAFCFA32E5A337`。
+
+| 指标 | 前 | 后 |
+| --- | ---: | ---: |
+| FPS | 56.74 | 57.33 |
+| 主图 Compile p50 ms | 2.5542 | 2.4706 |
+| 依赖来源分析 p50 ms | 1.0004 | 0.9374 |
+| 区间构造 p50 ms | 0.3301 | 0.3254 |
+| 最终屏障生成 p50 ms | 0.2756 | 0.2681 |
+| 执行顺序生成（含边排序）p50 ms | 0.1363 | 0.1353 |
+
+本组主图 Compile 减少约 0.084 ms（3.3%），目标阶段减少约 6.3%；FPS 仅增加约 1.0%，单组前后对照不足以证明稳定整帧收益。本次基线本来就高于先前夜间采样的约 43 FPS，不能把不同时间运行的差额归到这次优化。两次正常退出且无运行错误；原始配置、进程、哈希、capture 和 `compiler-stages.json` 位于 `build/rdg-bisect-results/raster-stages-before/`、`raster-stages-after/`，分析脚本为 `build/analyze_raster_compiler_stages.py`。
+
+固定图基准沿用未修改的构图、5 次预热和 80 个计时样本，每种规模做三组独立进程，执行顺序前/后、后/前、前/后。两侧均使用相同 profiling 代码，基准未启动 CPU capture；分配 probe 与计时分开。以下为三次 p50 的中位数：
+
+| 图规模（Pass / 每类资源 / 每 Pass 每类访问） | Compile p50，前→后 ms | CRT 分配请求，前→后 |
+| --- | ---: | ---: |
+| 16 / 16 / 4 | 0.7189 → 0.6793 | 1661 → 1643 |
+| 64 / 64 / 16 | 10.0882 → 9.0547 | 19669 → 18829 |
+| 128 / 128 / 16 | 20.4280 → 18.2497 | 39134 → 37568 |
+
+三个规模的三次运行都变快，中位数分别减少约 5.5%、10.2%、10.7%。编译/Lowering Dump 摘要与访问、边、屏障数量全部一致；PMR 返回后 live bytes 仍为 0，上游块数和保留量未变。分配请求减少来自来源集合更少的增容，不能据此推导全 RDG 内存峰值变化。原始配对二进制、全部 JSON 与哈希汇总在 `build/rdg-raster-compiler-variants/`，执行脚本为 `build/run_rdg_raster_frontier_benchmark.ps1`。
+
+本轮证明了局部编译工作减少及固定图的耗时改善，尚未解决 Raster 整帧开销，也未测量 Release。根目录和可执行目录默认配置保持 Raster、关闭并行录制，测试编辑器均已关闭。

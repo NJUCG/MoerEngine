@@ -1670,6 +1670,7 @@ bool RenderGraph::Compile() {
         return false;
     }
     MOER_PROFILE_SCOPE("RenderGraph.Compile");
+    ProfileDump::ScopedCpuProfile graph_profile("RenderGraph.CompileGraph", name);
     DispatchSetupPassesAsync();
 
     std::string setup_error{};

@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraphCompiler.h"
+#include "profile/ProfileScope.h"
 
 #include <algorithm>
 #include <array>
@@ -201,6 +202,7 @@ void RetainCurrentOwnerFamilySources(
 } // namespace
 
 bool RenderGraphCompiler::Compile() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.Compile");
     graph.compiled = false;
     graph.compile_error.clear();
     graph.compiled_plan.Clear();
@@ -248,6 +250,7 @@ bool RenderGraphCompiler::Compile() {
 }
 
 bool RenderGraphCompiler::ValidateQueueTopology() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.ValidateQueueTopology");
     const std::array expected_roles{
         RenderGraph::QueueRole::Graphics,
         RenderGraph::QueueRole::Compute,
@@ -272,6 +275,7 @@ bool RenderGraphCompiler::ValidateQueueTopology() {
 }
 
 bool RenderGraphCompiler::NormalizeDeclarations() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.NormalizeDeclarations");
     for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         if (!ValidateExecutionDomain(pass_index)) {
             return false;
@@ -559,6 +563,7 @@ bool RenderGraphCompiler::ValidateAccessState(
 }
 
 bool RenderGraphCompiler::BuildAtomicCells() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildAtomicCells");
     static constexpr std::array<TextureAspect, 3> texture_aspects{
         TextureAspect::Color, TextureAspect::Depth, TextureAspect::Stencil
     };
@@ -728,6 +733,7 @@ bool RenderGraphCompiler::BuildAtomicCells() {
 }
 
 bool RenderGraphCompiler::BuildSemanticDependencies() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildSemanticDependencies");
     // Reuse cell storage across passes, and visit only resources that the
     // current pass accesses. Unused resources have no per-pass state to merge.
     std::pmr::vector<std::pmr::vector<CellUsage>> usages{&scratch_memory};
@@ -806,24 +812,15 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     (source_state_unknown || !StatesCompatible(cell.state, next_state));
 
                 std::vector<RenderGraph::CompiledBarrierSource> barrier_sources{};
-                auto append_source = [&](const RenderGraph::CompiledBarrierSource& source) {
-                    if (!source.pass.IsValid()) {
-                        return;
-                    }
-                    if (std::find(barrier_sources.begin(), barrier_sources.end(), source) ==
-                        barrier_sources.end()) {
-                        barrier_sources.push_back(source);
-                    }
-                };
-                if (usage.read && cell.last_writer != RenderGraph::InvalidIndex) {
-                    append_source(cell.last_writer_source);
-                }
-                if (usage.write) {
+                // Each pass/cell is merged once. Readers have distinct pass identities,
+                // and the last writer is never also a reader. Tokens need only hazard
+                // edges, so they do not build a physical barrier source frontier.
+                if (physical_resource) {
                     if (cell.last_writer != RenderGraph::InvalidIndex) {
-                        append_source(cell.last_writer_source);
+                        barrier_sources.push_back(cell.last_writer_source);
                     }
-                    for (const auto& reader : cell.readers) {
-                        append_source(reader);
+                    if (usage.write) {
+                        barrier_sources.insert(barrier_sources.end(), cell.readers.begin(), cell.readers.end());
                     }
                 }
 
@@ -843,8 +840,10 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                 }
 
                 if (state_transition || queue_ownership) {
-                    for (const auto& reader : cell.readers) {
-                        append_source(reader);
+                    // Writes already included the readers for their memory dependency.
+                    // Read-only transitions add them here, after that decision.
+                    if (!usage.write) {
+                        barrier_sources.insert(barrier_sources.end(), cell.readers.begin(), cell.readers.end());
                     }
                     if (queue_ownership) {
                         // Only accesses in the currently owning family can participate in the
@@ -856,7 +855,7 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     }
                     if (cell.last_access != RenderGraph::InvalidIndex &&
                         barrier_sources.empty()) {
-                        append_source(RenderGraph::CompiledBarrierSource{
+                        barrier_sources.push_back(RenderGraph::CompiledBarrierSource{
                             .pass   = RenderGraph::PassHandle{cell.last_access, graph.graph_id},
                             .state  = cell.state,
                             .access = cell.last_mode,
@@ -1025,16 +1024,13 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                         cell.last_writer        = RenderGraph::InvalidIndex;
                         cell.last_writer_source = {};
                     }
-                    const auto reader = RenderGraph::CompiledBarrierSource{
+                    // Earlier declarations for this pass were merged into usage above.
+                    cell.readers.push_back(RenderGraph::CompiledBarrierSource{
                         .pass   = RenderGraph::PassHandle{pass_index, graph.graph_id},
                         .state  = next_state,
                         .access = access_mode,
                         .domain = pass.domain,
-                    };
-                    if (std::find(cell.readers.begin(), cell.readers.end(), reader) ==
-                        cell.readers.end()) {
-                        cell.readers.push_back(reader);
-                    }
+                    });
                 }
 
                 graph.compiled_plan.accesses.push_back(RenderGraph::CompiledAccess{
@@ -1246,6 +1242,7 @@ void RenderGraphCompiler::AddBarrier(
 }
 
 bool RenderGraphCompiler::BuildFinalBarriers() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildFinalBarriers");
     for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         const auto& finals   = normalized_final_states[resource_index];
@@ -1329,6 +1326,7 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
 }
 
 void RenderGraphCompiler::AuditStatePlanCompleteness() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.AuditStatePlanCompleteness");
     for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         if (resource.kind == ResourceKind::Token) {
@@ -1393,6 +1391,7 @@ void RenderGraphCompiler::SortEdges() {
 }
 
 bool RenderGraphCompiler::BuildExecutionOrder() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildExecutionOrder");
     SortEdges();
     std::pmr::vector<uint32_t> indegree(graph.passes.size(), 0, &scratch_memory);
     for (size_t index = 0; index < graph.compiled_plan.edges.size(); ++index) {
@@ -1433,6 +1432,7 @@ bool RenderGraphCompiler::BuildExecutionOrder() {
 }
 
 void RenderGraphCompiler::BuildQueuePlan() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildQueuePlan");
     std::pmr::vector<uint32_t> pass_to_batch(
         graph.passes.size(), RenderGraph::InvalidIndex, &scratch_memory
     );
@@ -1613,6 +1613,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
 }
 
 std::pmr::vector<uint32_t> RenderGraphCompiler::BuildDependencyLevels() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildDependencyLevels");
     // A pass enters the wave after its deepest predecessor. The validated
     // topological order also covers alias edges added after the initial sort.
     std::pmr::vector<uint32_t> levels(graph.passes.size(), 0, &scratch_memory);
@@ -1634,6 +1635,7 @@ std::pmr::vector<uint32_t> RenderGraphCompiler::BuildDependencyLevels() {
 }
 
 void RenderGraphCompiler::BuildFrontendRecordUnits(std::span<const uint32_t> dependency_levels) {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildFrontendRecordUnits");
     // Preserve one stable frontend source identity per pass in execution order.
     graph.compiled_plan.frontend_record_units.reserve(
         graph.compiled_plan.execution_order.size()
@@ -1660,6 +1662,7 @@ void RenderGraphCompiler::BuildFrontendRecordUnits(std::span<const uint32_t> dep
 }
 
 void RenderGraphCompiler::BuildFrontendDispatchGroups() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildFrontendDispatchGroups");
     // Graph edges describe GPU execution, state, and ownership. They do not
     // order frontend Record callbacks: every callback consumes immutable
     // prepared data and writes a private command stream. Only the declared CPU
@@ -1695,6 +1698,7 @@ void RenderGraphCompiler::BuildFrontendDispatchGroups() {
 }
 
 void RenderGraphCompiler::BuildLifetimes() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildLifetimes");
     for (const auto& access : graph.compiled_plan.accesses) {
         auto&          resource = graph.resources[access.resource.resource_id];
         const uint32_t position = execution_position[access.pass.pass_id];
@@ -1731,6 +1735,7 @@ void RenderGraphCompiler::BuildLifetimes() {
 }
 
 void RenderGraphCompiler::BuildTransientAliasPlan() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildTransientAliasPlan");
     using CompiledAccess = RenderGraph::CompiledAccess;
 
     struct Candidate {
@@ -2037,6 +2042,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
 }
 
 bool RenderGraphCompiler::ValidateTransientAliasPlan() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.ValidateTransientAliasPlan");
     const auto& plan = graph.compiled_plan;
     if (plan.resources.size() != graph.resources.size()) {
         return Fail("transient alias plan has an incomplete resource table");
