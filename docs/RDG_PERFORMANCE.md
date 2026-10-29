@@ -612,3 +612,37 @@ Compile 仍包含 setup 等待及 compiler 析构；阶段计时覆盖各自函�
 三个规模的三次运行都变快，中位数分别减少约 5.5%、10.2%、10.7%。编译/Lowering Dump 摘要与访问、边、屏障数量全部一致；PMR 返回后 live bytes 仍为 0，上游块数和保留量未变。分配请求减少来自来源集合更少的增容，不能据此推导全 RDG 内存峰值变化。原始配对二进制、全部 JSON 与哈希汇总在 `build/rdg-raster-compiler-variants/`，执行脚本为 `build/run_rdg_raster_frontier_benchmark.ps1`。
 
 本轮证明了局部编译工作减少及固定图的耗时改善，尚未解决 Raster 整帧开销，也未测量 Release。根目录和可执行目录默认配置保持 Raster、关闭并行录制，测试编辑器均已关闭。
+
+## 12. Raster 帧内开销覆盖与区间容量优化
+
+### 12.1 分步计划与约束
+
+上一轮稳定窗口中，RenderFrame p50 为 16.6681 ms；Compile 与录制入口按时间区间去重后为 5.8638 ms，其外仍有 10.7932 ms。各项中位数不能直接相加。尤其 merged recording 的 `Validate()` 在原录制 scope 之前执行，Lowering 和物理屏障转换都没有计入，剩余时间也包含场景更新、提交及等待，不能全部归因于 RDG 编译。
+
+1. 补齐粗粒度计时并独立提交：图导入与 Pass 声明、主图生命周期、Lowering、merged recording 准备及批量屏障转换、场景更新、帧尾录制、提交请求和提交接受等待。复用 ProfileDump，不在每个 cell 或 barrier 上增加事件。
+2. 在相同计时配置下，为已知完整区间数量的 cell 容器预留精确容量。用前后配对的固定图和 Raster 运行检查验证性能、输出和内存分配，独立提交。
+3. 依据新数据选择下一热点。只有访问扫描确实值得优化时才改区间查找；跨帧缓存、UI 图边界及 GPU 调度架构仍需单独讨论。
+
+`Lower` scope 包含函数内临时数据析构；`PrepareMergedRecording` 包含 Lower 和 Materialize，不能相加。`GraphLifetime` 包含构图、编译、准备、录制与图析构，用子区间并集计算残余，不能把残余全部视为析构。`SubmitFrame` 覆盖封装命令、创建 present 请求和交给 executor，不等于 native queue submit；`WaitFrameSubmitted` 等待 native 提交接受结果，不表示 GPU 完成。各阶段保留原有顺序、资源生命周期和同步保证。
+
+### 12.2 补齐计时后的基线
+
+`raster-frame-scopes-before` 运行 110 秒，使用同样的 Debug、Sponza、串行录制配置。最后稳定 30 秒共有 1685 个完整帧，FPS 为 56.19，RenderFrame p50 为 17.0343 ms。只对 RenderFrame 所在线程归因；嵌套 UI 图按时间区间并集扣除重复，逐帧独占阶段之和严格等于该帧时长。
+
+| 独占阶段 | 每帧 p50 ms |
+| --- | ---: |
+| 主 Pass 声明与准备 | 4.9382 |
+| 所有图 Compile | 3.0635 |
+| 前端录制与合并，扣除嵌套图编译和准备 | 2.7990 |
+| 所有图 Lowering | 1.6865 |
+| 提交接受等待 | 1.4922 |
+| GPU profiling Seal/Drain | 1.2340 |
+| 主图生命周期内其余工作 | 0.5102 |
+| 后处理 Pass 声明与准备 | 0.2958 |
+| 主图资源导入 | 0.2507 |
+| 屏障物化 | 0.1253 |
+| 主线程提交封装与入队 | 0.0701 |
+
+表中为分别计算的中位数，不能相加。稳定窗口未发生 SceneUpdate。其余准备检查、帧尾包装和帧内未覆盖部分分别约 0.0613、0.1304、0.3127 ms。由此可见，不能把原来未覆盖的时间全部归为 compiler；`AddToGraph` 包含 Pass 业务准备，后续应进一步定位该阶段。profile Seal/Drain 和提交等待也不能算作 RDG 算法成本。
+
+完整 Debug 构建、9 项 RDG/RHI 契约与 Raster 运行通过，正常退出，未发现 error、critical、VUID 或 Validation Error。二进制 SHA-256 为 `4AA289BCFA93E133DB56A152E665B551A0DFACC1FEBF180D8F54EEB9D6D9D991`。日志为 `build/rdg-frame-scopes-build.log`、`build/rdg-frame-scopes-contracts.log`、`build/rdg-frame-scopes-raster.log`，原始 capture、配置和进程信息位于 `build/rdg-bisect-results/raster-frame-scopes-before/`，分析脚本为 `build/analyze_raster_frame_stages.py`。本步仅改计时边界，不声称性能改善。

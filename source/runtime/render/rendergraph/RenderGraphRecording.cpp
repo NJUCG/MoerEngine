@@ -237,6 +237,7 @@ private:
     }
 
     [[nodiscard]] bool Validate() {
+        ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.PrepareMergedRecording", graph.name);
         if (!graph.compiled) {
             return Fail(
                 "RecordAndMergeFrontendCommands called before a successful Compile"
@@ -280,6 +281,7 @@ private:
             if (!RenderGraphLowering::Lower(graph, lowered, graph.compile_error)) { return false; }
             if (!lowered.queue_syncs.empty()) { return Fail("merged recording cannot execute queue synchronization"); }
             // Materialize before launching workers so invalid bindings cannot leave a partial frame.
+            ProfileDump::ScopedCpuProfile materialize_scope("RenderGraph.MaterializeBarriers", graph.name);
             before.resize(graph.passes.size());
             after.resize(graph.passes.size());
             const auto append = [&](const auto& instruction, auto& barriers) {

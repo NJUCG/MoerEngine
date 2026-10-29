@@ -777,6 +777,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             );
         };
         if (scene_updates.initial_gpu_update) {
+            MOER_PROFILE_SCOPE("Raster.InitialSceneUpdate");
             auto commands = render_scene->ApplyUpdate(
                 std::move(*scene_updates.initial_gpu_update),
                 setup_scene_update_profiling
@@ -819,6 +820,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         const auto& scene_tick_state = scene_updates.tick_state;
         if (scene_updates.update_gpu_update) {
+            MOER_PROFILE_SCOPE("Raster.SceneUpdate");
             auto commands = render_scene->ApplyUpdate(
                 std::move(*scene_updates.update_gpu_update),
                 setup_scene_update_profiling
@@ -952,6 +954,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             // Profile sources and RDG barriers must use the initialized RHI's
             // physical queue identity rather than the test-only single-queue
             // default (native/family zero).
+            MOER_PROFILE_SCOPE("Raster.GraphLifetime");
             RenderGraph graph(
                 "RasterFrame", RenderGraph::QueueTopology::FromRHI()
             );
@@ -1001,6 +1004,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 }
             };
             auto import_graph_resources = [&](RenderGraph& graph) {
+                MOER_PROFILE_SCOPE("Raster.ImportGraphResources");
                 auto import_physical_texture = [&](std::string_view name, Texture* physical_texture) {
                     return ImportRasterTexture(graph, name, physical_texture);
                 };
@@ -1131,6 +1135,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             import_graph_resources(graph);
 
             {
+                MOER_PROFILE_SCOPE("Raster.DeclareMainPasses");
                 shadow_depth_pass->AddToGraph(
                     graph, raster_context, raster_config, camera, {.shadow_maps = graph_resources.shadow_maps}
                 );
@@ -1282,153 +1287,154 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 );
                 processing_image = raster_context.textures.ao_output;
                 processing_image_resource = graph_resources.ao_output;
+            }
 
 #if WITH_CUDA
-                if (raster_config.ai_is_cuda_enabled) {
-                    compile_and_record(graph);
-                    const auto prefix_accepted = device.CreateFence();
-                    cmd_list.Signal(prefix_accepted, 1);
-                    RHIExecutor::Get().Submit(
-                        EQueueType::Graphics,
-                        cmd_list.Submit().SetProfilingPhase(ERHIProfilingPhase::Begin),
-                        ERHIExecSubmitFlags::FlushGPU
-                    );
-                    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-                    if (!prefix_accepted->WaitSubmitted(1)) {
-                        throw std::runtime_error("Raster pre-CUDA graph submission was rejected");
-                    }
-                    split_graph_profiling_frame = true;
-                    cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-                    // The interop owner releases Sampled images to CUDA in
-                    // GENERAL, waits for CUDA, then reacquires them as Sampled.
-                    processing_image =
-                        tensor_rt_pass->Process(raster_context, raster_config, ao_result.ao_only_idx);
+            if (raster_config.ai_is_cuda_enabled) {
+                compile_and_record(graph);
+                const auto prefix_accepted = device.CreateFence();
+                cmd_list.Signal(prefix_accepted, 1);
+                RHIExecutor::Get().Submit(
+                    EQueueType::Graphics,
+                    cmd_list.Submit().SetProfilingPhase(ERHIProfilingPhase::Begin),
+                    ERHIExecSubmitFlags::FlushGPU
+                );
+                RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+                if (!prefix_accepted->WaitSubmitted(1)) {
+                    throw std::runtime_error("Raster pre-CUDA graph submission was rejected");
                 }
+                split_graph_profiling_frame = true;
+                cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+                // The interop owner releases Sampled images to CUDA in
+                // GENERAL, waits for CUDA, then reacquires them as Sampled.
+                processing_image =
+                    tensor_rt_pass->Process(raster_context, raster_config, ao_result.ao_only_idx);
+            }
 #endif
-                auto add_postprocess = [&](RenderGraph& graph) {
-                    bilateral_filter_denoiser_pass->AddToGraph(
+            auto add_postprocess = [&](RenderGraph& graph) {
+                MOER_PROFILE_SCOPE("Raster.DeclarePostprocessPasses");
+                bilateral_filter_denoiser_pass->AddToGraph(
+                    graph,
+                    raster_context,
+                    raster_config,
+                    processing_image,
+                    {.input           = processing_image_resource,
+                     .denoiser_output = graph_resources.denoiser_output}
+                );
+                if (raster_config.denoiser_mode != EDenoiserMode::NONE) {
+                    processing_image          = raster_context.textures.denoiser_output;
+                    processing_image_resource = graph_resources.denoiser_output;
+                }
+                ssr_pass->AddToGraph(
+                    graph,
+                    raster_context,
+                    raster_config,
+                    camera,
+                    processing_image,
+                    {.input          = processing_image_resource,
+                     .normal         = graph_resources.normal,
+                     .depth          = graph_resources.depth,
+                     .metal_rough_ao = graph_resources.metal_rough_ao,
+                     .ssr_output     = graph_resources.ssr_output}
+                );
+                if (raster_config.ssr_is_ssr_enabled != 0) {
+                    processing_image          = raster_context.textures.ssr_output;
+                    processing_image_resource = graph_resources.ssr_output;
+                }
+                aa_pass->AddToGraph(
+                    graph,
+                    raster_context,
+                    raster_config,
+                    camera,
+                    processing_image,
+                    smaa_t2x_phase,
+                    {.input     = processing_image_resource,
+                     .depth     = graph_resources.depth,
+                     .aa_output = graph_resources.aa_output}
+                );
+                processing_image          = raster_context.textures.aa_output;
+                processing_image_resource = graph_resources.aa_output;
+                bloom_pass->AddToGraph(
+                    graph,
+                    raster_context,
+                    raster_config,
+                    processing_image,
+                    {.input            = processing_image_resource,
+                     .downsample_chain = graph_resources.bloom_downsample_chain,
+                     .upsample_chain   = graph_resources.bloom_upsample_chain}
+                );
+                tonemapping_pass->AddToGraph(
+                    graph,
+                    raster_context,
+                    raster_config,
+                    processing_image,
+                    {.input              = processing_image_resource,
+                     .histogram          = graph_resources.tonemapping_histogram,
+                     .exposure           = graph_resources.tonemapping_exposure,
+                     .tonemapping_output = graph_resources.tonemapping_output}
+                );
+                processing_image          = raster_context.textures.tonemapping_output;
+                processing_image_resource = graph_resources.tonemapping_output;
+
+                if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
+                    camera_gizmo_pass->AddToGraph(
                         graph,
                         raster_context,
-                        raster_config,
-                        processing_image,
-                        {.input           = processing_image_resource,
-                         .denoiser_output = graph_resources.denoiser_output}
-                    );
-                    if (raster_config.denoiser_mode != EDenoiserMode::NONE) {
-                        processing_image          = raster_context.textures.denoiser_output;
-                        processing_image_resource = graph_resources.denoiser_output;
-                    }
-                    ssr_pass->AddToGraph(
-                        graph,
-                        raster_context,
-                        raster_config,
                         camera,
-                        processing_image,
-                        {.input          = processing_image_resource,
-                         .normal         = graph_resources.normal,
-                         .depth          = graph_resources.depth,
-                         .metal_rough_ao = graph_resources.metal_rough_ao,
-                         .ssr_output     = graph_resources.ssr_output}
+                        main_camera,
+                        {.tonemapping_output = graph_resources.tonemapping_output}
                     );
-                    if (raster_config.ssr_is_ssr_enabled != 0) {
-                        processing_image          = raster_context.textures.ssr_output;
-                        processing_image_resource = graph_resources.ssr_output;
-                    }
-                    aa_pass->AddToGraph(
+                }
+                if (draw_scene_gizmos && scene_gizmos.show_csm) {
+                    csm_gizmo_pass->AddToGraph(
                         graph,
                         raster_context,
                         raster_config,
+                        scene_gizmos,
                         camera,
-                        processing_image,
-                        smaa_t2x_phase,
-                        {.input     = processing_image_resource,
-                         .depth     = graph_resources.depth,
-                         .aa_output = graph_resources.aa_output}
-                    );
-                    processing_image          = raster_context.textures.aa_output;
-                    processing_image_resource = graph_resources.aa_output;
-                    bloom_pass->AddToGraph(
-                        graph,
-                        raster_context,
-                        raster_config,
-                        processing_image,
-                        {.input            = processing_image_resource,
-                         .downsample_chain = graph_resources.bloom_downsample_chain,
-                         .upsample_chain   = graph_resources.bloom_upsample_chain}
-                    );
-                    tonemapping_pass->AddToGraph(
-                        graph,
-                        raster_context,
-                        raster_config,
-                        processing_image,
-                        {.input              = processing_image_resource,
-                         .histogram          = graph_resources.tonemapping_histogram,
-                         .exposure           = graph_resources.tonemapping_exposure,
+                        main_camera,
+                        {.shadow_maps        = graph_resources.shadow_maps,
                          .tonemapping_output = graph_resources.tonemapping_output}
                     );
-                    processing_image          = raster_context.textures.tonemapping_output;
-                    processing_image_resource = graph_resources.tonemapping_output;
-
-                    if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
-                        camera_gizmo_pass->AddToGraph(
-                            graph,
-                            raster_context,
-                            camera,
-                            main_camera,
-                            {.tonemapping_output = graph_resources.tonemapping_output}
-                        );
-                    }
-                    if (draw_scene_gizmos && scene_gizmos.show_csm) {
-                        csm_gizmo_pass->AddToGraph(
-                            graph,
-                            raster_context,
-                            raster_config,
-                            scene_gizmos,
-                            camera,
-                            main_camera,
-                            {.shadow_maps        = graph_resources.shadow_maps,
-                             .tonemapping_output = graph_resources.tonemapping_output}
-                        );
-                    }
-
-                    const auto& ui_frame = frame_packet.ui_composition;
-                    ui_combine_pass->AddToGraph(
-                        graph,
-                        ui_frame.enabled,
-                        ui_writes_external_window,
-                        ui_frame.separate_window,
-                        ui_frame.enabled ? ui_frame.output_resolution : presentation_resolution,
-                        ui_frame.scene_color_position,
-                        ui_frame.scene_color_resolution,
-                        window_framebuffer_view,
-                        selected_framebuffer_view,
-                        TextureView(raster_context.textures.output.tex),
-                        TextureView(processing_image.tex),
-                        {.processing_input     = processing_image_resource,
-                         .selected_framebuffer = graph_resources.selected_framebuffer,
-                         .window_framebuffer   = graph_resources.window_framebuffer,
-                         .output               = graph_resources.output}
-                    );
-                    graph.Export(graph_resources.output);
-                    if (ui_writes_external_window) {
-                        graph.Export(graph_resources.window_framebuffer);
-                    }
-
-                    compile_and_record(graph);
-                    raster_pipeline_recorded = true;
-                };
-#if WITH_CUDA
-                if (raster_config.ai_is_cuda_enabled) {
-                    RenderGraph postprocess_graph("RasterAfterCUDA", RenderGraph::QueueTopology::FromRHI());
-                    import_graph_resources(postprocess_graph);
-                    processing_image_resource = graph_resources.lighting_output;
-                    add_postprocess(postprocess_graph);
-                } else
-#endif
-                {
-                    add_postprocess(graph);
                 }
+
+                const auto& ui_frame = frame_packet.ui_composition;
+                ui_combine_pass->AddToGraph(
+                    graph,
+                    ui_frame.enabled,
+                    ui_writes_external_window,
+                    ui_frame.separate_window,
+                    ui_frame.enabled ? ui_frame.output_resolution : presentation_resolution,
+                    ui_frame.scene_color_position,
+                    ui_frame.scene_color_resolution,
+                    window_framebuffer_view,
+                    selected_framebuffer_view,
+                    TextureView(raster_context.textures.output.tex),
+                    TextureView(processing_image.tex),
+                    {.processing_input     = processing_image_resource,
+                     .selected_framebuffer = graph_resources.selected_framebuffer,
+                     .window_framebuffer   = graph_resources.window_framebuffer,
+                     .output               = graph_resources.output}
+                );
+                graph.Export(graph_resources.output);
+                if (ui_writes_external_window) {
+                    graph.Export(graph_resources.window_framebuffer);
+                }
+            };
+#if WITH_CUDA
+            if (raster_config.ai_is_cuda_enabled) {
+                RenderGraph postprocess_graph("RasterAfterCUDA", RenderGraph::QueueTopology::FromRHI());
+                import_graph_resources(postprocess_graph);
+                processing_image_resource = graph_resources.lighting_output;
+                add_postprocess(postprocess_graph);
+                compile_and_record(postprocess_graph);
+            } else
+#endif
+            {
+                add_postprocess(graph);
+                compile_and_record(graph);
             }
+            raster_pipeline_recorded = true;
         }
 
         if (raster_config.debug_fps_limit_enable) {
@@ -1449,6 +1455,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     const bool ui_recording_claimed =
         ui_slot_claim.IsReadyForRecording();
     const auto record_frame_tail = [&]() {
+        MOER_PROFILE_SCOPE("Raster.RecordFrameTail");
         if (ui_recording_claimed) {
             cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
             UiFrameGraphPass::RecordCompiledDraw(
@@ -1487,72 +1494,80 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     time++;
     // Host 同步的 copy 操作已经完成。此处触发 timeline，向 validation layer 传递执行顺序，
     // 无需再额外等待 copy queue。
-    CmdSubmit frame_submit =
-        cmd_list.Submit()
-            .DebugLabel(
-                std::format("Raster Frame {}", frame_packet.frame_id),
-                GpuMarkerPalette::Frame()
-            )
-            .Signal(timeline, time)
-            .DeleteResources();
-    if (split_graph_profiling_frame) {
-        frame_submit.SetProfilingPhase(ERHIProfilingPhase::End);
-    } else {
-        frame_submit.TickProfiling();
-    }
-
-    std::optional<RHIPresentRequest> present_request{};
-
-    if (!skip_present) {
-        const auto output_view = default_output_texture->GetView();
-        const Extent2D presentation_extent =
-            main_presentation_surface.GetExtent();
-        if (frame_packet.window.transition != EWindowFrameTransition::Stable &&
-            frame_packet.window.transition != EWindowFrameTransition::LogicalResized) {
-            LOG_INFO(
-                "[Threading][Resize] Main present source={}x{}, swapchain={}x{}, UI platform viewports={}.",
-                output_view.extent.x,
-                output_view.extent.y,
-                presentation_extent.x,
-                presentation_extent.y,
-                frame_packet.ui_draw_frame.platform_viewports.size()
-            );
-        }
-        PresentReceiptRef continuous_present_receipt{};
-        present_request = main_presentation_surface.CreatePresentRequest(
-            frame_packet.window,
-            output_view,
-            &continuous_present_receipt
-        );
-        if (!present_request.has_value()) {
-            main_present_receipt = {};
-            LOG_WARNING(
-                "Skipping stale main-window present: source={}x{}, swapchain={}x{}.",
-                output_view.extent.x,
-                output_view.extent.y,
-                presentation_extent.x,
-                presentation_extent.y
-            );
+    {
+        MOER_PROFILE_SCOPE("Raster.SubmitFrame");
+        CmdSubmit frame_submit =
+            cmd_list.Submit()
+                .DebugLabel(
+                    std::format("Raster Frame {}", frame_packet.frame_id),
+                    GpuMarkerPalette::Frame()
+                )
+                .Signal(timeline, time)
+                .DeleteResources();
+        if (split_graph_profiling_frame) {
+            frame_submit.SetProfilingPhase(ERHIProfilingPhase::End);
         } else {
-            main_present_receipt = SelectMainPresentReceipt(
-                frame_packet.scene_updates.scene_ready,
-                continuous_present_receipt
-            );
+            frame_submit.TickProfiling();
         }
-    }
 
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(frame_submit),
-        ERHIExecSubmitFlags::FlushGPU,
-        present_request ? &*present_request : nullptr
-    );
+        std::optional<RHIPresentRequest> present_request{};
+
+        if (!skip_present) {
+            const auto output_view = default_output_texture->GetView();
+            const Extent2D presentation_extent =
+                main_presentation_surface.GetExtent();
+            if (frame_packet.window.transition != EWindowFrameTransition::Stable &&
+                frame_packet.window.transition != EWindowFrameTransition::LogicalResized) {
+                LOG_INFO(
+                    "[Threading][Resize] Main present source={}x{}, swapchain={}x{}, UI platform viewports={}.",
+                    output_view.extent.x,
+                    output_view.extent.y,
+                    presentation_extent.x,
+                    presentation_extent.y,
+                    frame_packet.ui_draw_frame.platform_viewports.size()
+                );
+            }
+            PresentReceiptRef continuous_present_receipt{};
+            present_request = main_presentation_surface.CreatePresentRequest(
+                frame_packet.window,
+                output_view,
+                &continuous_present_receipt
+            );
+            if (!present_request.has_value()) {
+                main_present_receipt = {};
+                LOG_WARNING(
+                    "Skipping stale main-window present: source={}x{}, swapchain={}x{}.",
+                    output_view.extent.x,
+                    output_view.extent.y,
+                    presentation_extent.x,
+                    presentation_extent.y
+                );
+            } else {
+                main_present_receipt = SelectMainPresentReceipt(
+                    frame_packet.scene_updates.scene_ready,
+                    continuous_present_receipt
+                );
+            }
+        }
+
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(frame_submit),
+            ERHIExecSubmitFlags::FlushGPU,
+            present_request ? &*present_request : nullptr
+        );
+    }
     if (render_profile_capture != nullptr && gpu_profile_frame.Valid()) {
+        MOER_PROFILE_SCOPE("Raster.SealGpuProfile");
         static_cast<void>(render_profile_capture->Seal(gpu_profile_frame));
         static_cast<void>(render_profile_capture->DrainReadyFrames());
     }
 
-    const bool frame_native_accepted = timeline->WaitSubmitted(time);
+    bool frame_native_accepted;
+    {
+        MOER_PROFILE_SCOPE("Raster.WaitFrameSubmitted");
+        frame_native_accepted = timeline->WaitSubmitted(time);
+    }
     if (frame_native_accepted && raster_pipeline_recorded) {
         raster_context.CommitHiZHistory(raster_commit_view_proj);
         ao_pass->CommitFrame(raster_commit_view_proj, raster_commit_ao_index);

@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraphLowering.h"
+#include "profile/ProfileScope.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -445,6 +446,7 @@ bool RenderGraphLowering::Lower(
     LoweredPlan&       output,
     std::string&       error
 ) {
+    ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Lower", graph.name);
     output.Clear();
     error.clear();
     auto fail = [&](std::string message) {
