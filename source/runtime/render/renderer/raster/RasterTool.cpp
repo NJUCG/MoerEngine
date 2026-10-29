@@ -73,12 +73,6 @@ static_assert(s_point_shadow_face_marker_names.size() == CUBE_FACE_Num);
 static_assert(s_point_shadow_culling_scope_names.size() == CUBE_FACE_Num);
 static_assert(s_point_shadow_draw_scope_names.size() == CUBE_FACE_Num);
 
-std::string BuildDebugLogSiteKey(std::source_location location) {
-    std::ostringstream stream;
-    stream << location.file_name() << ':' << location.line();
-    return stream.str();
-}
-
 double FindGpuTime(const ProfileData& profile_data, std::string_view name) {
     for (const auto& entry : profile_data.gpu_entries) {
         if (entry.name == name) {
@@ -149,29 +143,36 @@ std::string_view RasterTool::GetPointShadowDrawProfileScopeName(uint face) {
     return s_point_shadow_draw_scope_names[face];
 }
 
-void RasterTool::LogDebugEverySeconds(
-    std::string_view     message,
+bool RasterTool::ShouldLogDebugEverySeconds(
     double               seconds,
     std::source_location location
 ) {
+#if SPDLOG_ACTIVE_LEVEL > SPDLOG_LEVEL_DEBUG
+    (void)seconds;
+    (void)location;
+    return false;
+#else
+    const auto* logger = spdlog::default_logger_raw();
+    if (!logger->should_log(spdlog::level::debug) && !logger->should_backtrace()) {
+        return false;
+    }
     if (seconds <= 0.0) {
-        LOG_DEBUG("{}", message);
-        return;
+        return true;
     }
 
     static UnorderedMap<std::string, LoopedTimer> s_debug_log_timers;
 
-    const std::string site_key = BuildDebugLogSiteKey(location);
-    auto [timer_it, inserted]  = s_debug_log_timers.try_emplace(site_key, seconds, true);
-    if (inserted || timer_it->second.Tick()) {
-        LOG_DEBUG("{}", message);
-    }
+    std::ostringstream site_key;
+    site_key << location.file_name() << ':' << location.line();
+    auto timer_it = s_debug_log_timers.try_emplace(site_key.str(), seconds, true).first;
+    return timer_it->second.Tick();
+#endif
 }
 
 // 按固定时间间隔输出 raster GPU profiling 汇总，避免把 profiler 状态放进 renderer。
 void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config) {
     const auto profile_data = gfx_queue.GetProfilerEntry();
-    if (profile_data.gpu_entries.empty()) {
+    if (profile_data.gpu_entries.empty() || !ShouldLogDebugEverySeconds(1.0)) {
         return;
     }
 
@@ -232,7 +233,7 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
                << " ratio=" << culling_stats.GetCullingRatio() * 100.0f << "%";
     }
 
-    LogDebugEverySeconds(stream.str(), 1.0);
+    LOG_DEBUG("{}", stream.str());
 }
 
 // 执行 Scene 同步阶段积累的 copy/gfx command list。

@@ -40,8 +40,7 @@ public:
 
     static std::string_view GetPointShadowDrawProfileScopeName(uint face);
 
-    static void LogDebugEverySeconds(
-        std::string_view      message,
+    [[nodiscard]] static bool ShouldLogDebugEverySeconds(
         double                seconds,
         std::source_location  location = std::source_location::current()
     );

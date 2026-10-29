@@ -744,3 +744,46 @@ RenderFrame p50 从 17.3626 降至 16.6707 ms，FPS 从 54.83 到 57.19。本组
 完整 Debug 构建及六个 Probe 测试程序通过：GeometryClassifier（含新增语义回归）、AdaptiveLayout、PhysicalAllocator、DirtyTracker、Clipmap、Streaming。这些程序当前未注册为 CTest，直接运行对应 EXE 并检查退出码。日志为 `build/rdg-probe-occupancy-build.log`、`build/rdg-occupancy-TestProbe*.exe.log`、`build/rdg-probe-occupancy-raster.log`。
 
 新 DLL SHA-256 为 `4A8C4F48D56EA11D5386FF46A90BF1F5632D0AEA51F8427A2B2403B3A9696826`；前后 EXE/DLL 快照在 `build/rdg-probe-occupancy-variants/`，新 capture 与分析在 `build/rdg-bisect-results/raster-probe-occupancy-after/`。本次收益来自业务准备中删去不会改变结果的工作，没有改变 RDG 图、缓存失效或资源生命周期。
+
+### 13.5 将诊断格式化放到节流判定之后
+
+`UploadLightingData.Prepare` 的常见耗时仍约 0.24 ms。审计发现 Probe GI 开启时每帧会构造约 80 个字段的 `ostringstream`，再交给“两秒一次”的日志函数。未输出的帧同样支付统计读取、数值转换和字符串分配；Release 虽关闭 `LOG_DEBUG`，原调用方的字符串构造仍会执行。
+
+将已有 helper 改为 `ShouldLogDebugEverySeconds` 判定，并在调用方构造日志之前使用它。编译期关闭 Debug 时直接不构造；运行时同时考虑 logger level 和 backtrace，保留 backtrace 捕获被 level 过滤消息的能力。真实的 `FillLightingData`、矩阵、灯光和 shader 参数赋值不受判定控制。现有 profiling 日志调用点同步适配，不引入通用日志框架。
+
+沿用原有按调用站点保存的 timer map，不增加状态或同步机制；首次插入也执行 Tick，修复原 `inserted || Tick()` 短路造成的首次连续输出两次。该调整只消除不需要输出时的格式化；到期后的真实日志输出仍可能阻塞，不能据此宣称已解释或解决旧的 2 秒停顿。
+
+### 13.6 日志优化结果与长尾边界
+
+首次修改后运行 `raster-lighting-log-after` 110 秒，启动较慢，按既有规则得到的可用窗口只有 27.6759 秒、1105 个完整帧。FPS 为 39.97，RenderFrame p50 为 22.8158 ms；未修改的 Shadow Prepare 也从上一轮 1.9543 增至 2.2915 ms。lighting job 的 p50 降到 0.0659 ms、p95 为 0.1111 ms，但存在 322.5410 ms 的峰值，对应公共 Compile 326.5496 ms、setup Wait 322.5271 ms。保留该样本，不能只报告中位数或用后续较快窗口替代。
+
+随后恢复保存的旧 EXE/DLL，再切换新 EXE/DLL，分别运行 140 秒。两侧使用相同 Sponza、Debug、串行录制和 CPU capture，稳定窗口各 30 秒，完整帧分别为 1127、1420。运行期间未并发执行构建、测试或 capture 分析；未暂停用户的其他应用。前后统计如下，worker job 与 render thread 等待分别统计，不能相加：
+
+| 指标 | 旧日志实现 | 延后格式化 |
+| --- | ---: | ---: |
+| FPS | 37.62 | 47.36 |
+| RenderFrame p50 ms | 25.3777 | 19.2441 |
+| lighting job p50 ms | 0.2807 | 0.0569 |
+| lighting job p95 ms | 0.4465 | 0.0849 |
+| lighting job 平均 ms | 0.3158 | 0.0867 |
+| lighting job 最大 ms | 9.6097 | 9.6346 |
+| setup Wait 每帧 p50 ms | 0.1523 | 0.0791 |
+| setup Wait 每帧 p95 ms | 0.3204 | 0.1697 |
+| setup Wait 每帧最大 ms | 9.5644 | 10.5119 |
+| Shadow Prepare p50 ms（未改动） | 2.5996 | 2.0431 |
+
+两次新版本采样中，lighting job 的常见耗时都降至约 0.06 ms；复测目标阶段 p50 减少约 0.224 ms。但保存的同一旧二进制也从先前 57.19 FPS 降至 37.62 FPS，且复测中未修改的阶段同时变快，说明整帧测量存在明显运行间波动。不能把 37.62→47.36 FPS 全部归给日志优化，也不能将第一次新版本的低帧率单独归因于该改动；当前还没有稳定的整帧收益估计。
+
+复测新版本的最长公共 Compile 为 14.9317 ms，其中 Wait 10.5106 ms；最后一个 setup job scope 结束到 batch completion scope 开始之间有 10.5228 ms 的间隙。这是进一步定位 completion 路径的依据，但 job scope 的结束早于 profiler Emit 和任务最终完成，不能直接认定为 TaskGraph 唤醒故障。首次新版本约 323 ms 的 lighting job 峰值与旧的约 2 秒异常均未解释，延后格式化并未解决全部长尾。
+
+首次新版本的诊断日志间隔最短 2.000 秒；复测新版本首个间隔 2.009 秒，后续为 2.000～2.029 秒。旧版本复测的前两条仅相隔 0.047 秒，确认首次重复输出已消除。所有实际光照数据准备仍逐帧执行。
+
+完整 Debug 构建通过；三次日志对照运行均正常退出，无运行或 validation 错误。最终二进制另通过 29 项真实 Vulkan 用例，0 FAIL、0 VUID、0 Validation Error。本轮前两步的 9 项 RDG/RHI 契约和六个 Probe 程序也已通过。日志为 `build/rdg-lighting-log-build.log`、`build/rdg-lighting-log-raster.log`、`build/rdg-lighting-log-repeat.log`、`build/rdg-prepare-final-vulkan.log`。
+
+新 Render DLL SHA-256 为 `C47BFB1047AABF0526466AD10FFE55CED30763B2F63F6697015B669EC6D8C41F`，旧 DLL 为 13.4 的 `4A8C4F48...`。配对 EXE/DLL 保存在 `build/rdg-lighting-log-variants/`；执行脚本为 `build/run_rdg_lighting_log_pair.ps1`。原始 capture、配置、进程及 `raster-prepare-hotspots.json` 分别位于 `build/rdg-bisect-results/raster-lighting-log-after/`、`raster-lighting-log-repeat-before/`、`raster-lighting-log-repeat-after/`。对照结束后已恢复最终新二进制，测试编辑器均关闭，默认配置仍为 Raster、串行录制。
+
+### 13.7 后续热点
+
+当前还值得优化的稳定工作是约 2 ms 的 CSM 准备、Probe/Geometry 合计约 0.94 ms 的重复 Scene 导入，以及上一轮约 1.69 ms 的全部图 Lowering。CSM 可先检查同一 Prepare 内跨 cascade 重复的包围盒变换；Scene 导入可检查同一图内的句柄复用，仍需保留各 Pass 的读取声明和录制所有权。同步声明 callback 的值捕获也可继续审查。这些是候选方向，尚未实现或证明收益。
+
+长尾则需要继续区分 lighting job 内部、profiler Emit 和 batch completion 发布/唤醒，不能通过删除必要的等待处理。本轮三个步骤只补充计时和删去不会改变结果的业务准备工作，未改变 RDG 依赖、图边界、资源生命周期或队列架构。

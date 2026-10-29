@@ -246,7 +246,7 @@ struct LightingUploadRecordParameters {
 
     context.probe_volume.FillLightingData(*lighting_data);
 
-    if (ui_config.probe_gi_enabled) {
+    if (ui_config.probe_gi_enabled && RasterTool::ShouldLogDebugEverySeconds(2.0)) {
         const uint resident_bricks  = context.probe_volume.GetResidentBrickCount();
         const uint scheduled_bricks = context.probe_volume.GetScheduledBrickCount();
         const uint deferred_bricks  = resident_bricks > scheduled_bricks ? resident_bricks - scheduled_bricks : 0u;
@@ -327,7 +327,7 @@ struct LightingUploadRecordParameters {
                << ui_config.probe_gi_visibility_min_weight << ", "
                << ui_config.probe_gi_visibility_strength << ")"
                << " sky=" << ui_config.probe_gi_sky_intensity;
-        RasterTool::LogDebugEverySeconds(stream.str(), 2.0);
+        LOG_DEBUG("{}", stream.str());
     }
 
     return LightingUploadRecordParameters{
