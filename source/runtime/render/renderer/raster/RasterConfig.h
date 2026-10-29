@@ -221,7 +221,7 @@ struct RasterConfig {
     bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
     // MARK: Probe GI
-    bool   probe_gi_enabled                   = true;
+    bool   probe_gi_enabled                   = false;
     int    probe_gi_volume_count              = 2;
     int    probe_gi_selected_volume           = 0;
     bool   probe_gi_sparse_bricks_enabled     = false;
