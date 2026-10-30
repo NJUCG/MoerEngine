@@ -1456,7 +1456,7 @@ void RecordCompiledBindlessUpdate(
         protect(
             table->GetBufferDescriptorBuffer(),
             table->buffer_descriptors_byte_offset,
-            table->handles.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+            table->bindings.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
             table->GetDescriptorReadAccess()
         );
     }
@@ -1464,7 +1464,7 @@ void RecordCompiledBindlessUpdate(
         protect(
             table->GetTextureSamplerDescriptorBuffer(),
             table->texture_offset_in_buffer,
-            table->handles.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+            table->bindings.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
             table->GetDescriptorReadAccess()
         );
     }

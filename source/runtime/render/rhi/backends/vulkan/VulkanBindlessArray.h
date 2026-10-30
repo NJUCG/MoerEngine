@@ -15,32 +15,22 @@ namespace Moer::Render {
 
 class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
 public:
-    enum EType : uint32 {
+    enum class EResourceType : uint8 {
         Texture,
         Buffer
     };
-    struct Handle {
-        uint32 ptr_1;
-        uint32 ptr_2;
-        uint32 slot : 22;
-        uint32 attrib : 8;
-        uint32 type : 2;
+    struct BindingRecord {
+        // Borrowed from resource_allocation_counts. A null resource marks an
+        // empty record; descriptor_slot and type are meaningful only when bound.
+        RHIResource*  resource{nullptr};
+        uint32        descriptor_slot{0};
+        EResourceType type{EResourceType::Texture};
 
-        Handle(uint64 _ptr, uint32 _slot, uint32 _attrib, uint32 _type) :
-            ptr_1(_ptr >> 32),
-            ptr_2(_ptr & 0xffffffff),
-            slot(_slot),
-            attrib(_attrib),
-            type(_type) {}
-        Handle() : ptr_1(0), ptr_2(0), slot(0), attrib(0), type(0) {}
         bool IsTexture() const {
-            return type == Texture;
+            return resource != nullptr && type == EResourceType::Texture;
         }
         bool IsBuffer() const {
-            return type == Buffer;
-        }
-        uint64 Ptr() const {
-            return uint64(ptr_1) << 32 | uint64(ptr_2);
+            return resource != nullptr && type == EResourceType::Buffer;
         }
     };
 
@@ -108,9 +98,9 @@ public:
     }
 
 public:
-    uint64        texture_offset_in_buffer;
-    uint64        buffer_descriptors_byte_offset = 0;
-    Array<Handle> handles;
+    uint64               texture_offset_in_buffer;
+    uint64               buffer_descriptors_byte_offset = 0;
+    Array<BindingRecord> bindings;
 
 private:
     struct LegacyDescriptorSets;
