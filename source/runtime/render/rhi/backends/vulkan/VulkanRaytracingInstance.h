@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanCommon.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 
 #include <algorithm>
@@ -12,9 +13,9 @@ namespace Moer::Render::VulkanRaytracingDetail {
 // Instance IDs are stable array slots, including after a free/reuse cycle.
 inline RaytracingInstance& AddInstance(
     Array<RaytracingInstance>& instances,
-    Array<uint>& free_slots
+    Array<uint32>&             free_slots
 ) {
-    const uint slot = free_slots.empty() ? uint(instances.size()) : free_slots.back();
+    const uint32       slot = free_slots.empty() ? uint32(instances.size()) : free_slots.back();
     RaytracingInstance instance{.array_idx = slot, .instance_id = slot};
     if (free_slots.empty()) {
         if (instances.size() == instances.capacity()) {
@@ -30,7 +31,7 @@ inline RaytracingInstance& AddInstance(
     return instances[slot];
 }
 
-inline void FreeInstance(Array<RaytracingInstance>& instances, Array<uint>& free_slots, uint slot) {
+inline void FreeInstance(Array<RaytracingInstance>& instances, Array<uint32>& free_slots, uint32 slot) {
     if (slot >= instances.size() || std::find(free_slots.begin(), free_slots.end(), slot) != free_slots.end()) {
         throw std::invalid_argument("Ray tracing instance slot is invalid or already free");
     }

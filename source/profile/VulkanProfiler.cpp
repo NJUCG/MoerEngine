@@ -1,7 +1,8 @@
 #include "VulkanProfiler.h"
+#include "MinHook.h"
 #include "Profile.h"
 #include "ProfileUtils.h"
-#include "MinHook.h"
+#include "misc/Types.h"
 
 namespace Moer::Render {
 class VulkanDevice;
@@ -10,10 +11,7 @@ enum class EVkInternalBufferUsage;
 } // namespace Moer::Render
 
 using TemporaryBufferUsage       = Moer::Render::EVkInternalBufferUsage;
-using PFN_CreateTemporaryBuffer  = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&,
-                                                                  uint64_t,
-                                                                  std::string_view,
-                                                                  TemporaryBufferUsage);
+using PFN_CreateTemporaryBuffer                        = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&, Moer::uint64, std::string_view, TemporaryBufferUsage);
 using PFN_DestroyTemporaryBuffer = void (*)(Moer::Render::VulkanBuffer*);
 PFN_CreateTemporaryBuffer  orig_CreateTemporaryBuffer  = nullptr;
 PFN_DestroyTemporaryBuffer orig_DestroyTemporaryBuffer = nullptr;
@@ -28,9 +26,9 @@ __attribute__((noinline))
 #endif
 void RecordTemporaryBufferAllocation(
     Moer::Render::VulkanBuffer* _buffer,
-    uint64_t                    _size,
+    Moer::uint64                _size,
     std::string_view            _name,
-    uint32_t                    _usage
+    Moer::uint32                _usage
 ) {
     auto* ring = g_rings[static_cast<size_t>(MemorySource::VulkanTmp)];
     if (!ring || !_buffer) {
@@ -58,12 +56,12 @@ void RecordTemporaryBufferAllocation(
 
 Moer::Render::VulkanBuffer* CreateTemporaryBufferHook(
     Moer::Render::VulkanDevice& _device,
-    uint64_t                    _size,
+    Moer::uint64                _size,
     std::string_view            _name,
     TemporaryBufferUsage        _usage
 ) {
     auto* buffer = orig_CreateTemporaryBuffer(_device, _size, _name, _usage);
-    RecordTemporaryBufferAllocation(buffer, _size, _name, static_cast<uint32_t>(_usage));
+    RecordTemporaryBufferAllocation(buffer, _size, _name, static_cast<Moer::uint32>(_usage));
     return buffer;
 }
 
@@ -118,7 +116,7 @@ VkResult VKAPI_PTR Detour_vkAllocateMemory(
 
         //g_in_hook = true;
 
-        uint64_t size = pAllocateInfo->allocationSize;
+        Moer::uint64 size = pAllocateInfo->allocationSize;
         void* p = reinterpret_cast<void*>(*pMemory);
 
         EventRecord rec;
@@ -158,7 +156,7 @@ void VKAPI_PTR Detour_vkFreeMemory(
         static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Vulkan]);
 
         void* p = reinterpret_cast<void*>(memory);
-        uint64_t size = 0;
+        Moer::uint64 size = 0;
 
         EventRecord rec;
         rec.ts_us = now_us();
@@ -310,33 +308,33 @@ static QueueState& GetOrCreateQueueState(VkQueue queue) {
     return qs;
 }
 
-typedef VkResult(VKAPI_PTR* PFN_vkQueueSubmit)(VkQueue, uint32_t, const VkSubmitInfo*, VkFence);
+typedef VkResult(VKAPI_PTR* PFN_vkQueueSubmit)(VkQueue, Moer::uint32, const VkSubmitInfo*, VkFence);
 PFN_vkQueueSubmit orig_vkQueueSubmit = nullptr;
 
 VkResult VKAPI_PTR Detour_vkQueueSubmit(
-    VkQueue queue,
-    uint32_t submitCount,
+    VkQueue             queue,
+    Moer::uint32        submitCount,
     const VkSubmitInfo* pSubmits,
-    VkFence fence)
-{
+    VkFence             fence
+) {
     VkResult result = orig_vkQueueSubmit(queue, submitCount, pSubmits, fence);
 
     return result;
 }
 
-typedef VkResult (VKAPI_PTR *PFN_vkQueueSubmit2)(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2* pSubmits, VkFence fence);
+typedef VkResult(VKAPI_PTR* PFN_vkQueueSubmit2)(VkQueue queue, Moer::uint32 submitCount, const VkSubmitInfo2* pSubmits, VkFence fence);
 PFN_vkQueueSubmit2 orig_vkQueueSubmit2 = nullptr;
 
 //vulkan规定vkQueueSubmit2必须手动互斥，参见VulkanQueue.h:43.说明在同一Queue中hook不需要加锁
 VkResult VKAPI_PTR Detour_vkQueueSubmit2(
     VkQueue              queue,
-    uint32_t             submitCount,
+    Moer::uint32         submitCount,
     const VkSubmitInfo2* pSubmits,
-    VkFence              fence)
-{
+    VkFence              fence
+) {
     QueueState& qs = GetOrCreateQueueState(queue);
 
-    uint64_t completed = 0;
+    Moer::uint64 completed = 0;
     if (fn_vkGetSemaphoreCounterValue)
     {
         fn_vkGetSemaphoreCounterValue(g_vk_device, qs.timeline_sem, &completed);
@@ -354,23 +352,23 @@ VkResult VKAPI_PTR Detour_vkQueueSubmit2(
         for (auto& snap : rec.cb_snapshots) {
             if (!snap.pool_valid || snap.pass_count == 0) continue;
 
-            uint64_t timestamps[MAX_GPU_PASSES * 2] = {};
-            VkResult qr = fn_vkGetQueryPoolResults(
+            Moer::uint64 timestamps[MAX_GPU_PASSES * 2] = {};
+            VkResult     qr                             = fn_vkGetQueryPoolResults(
                 g_vk_device,
                 snap.pool,
                 0,
                 snap.pass_count * 2,
-                sizeof(uint64_t) * snap.pass_count * 2,
+                sizeof(Moer::uint64) * snap.pass_count * 2,
                 timestamps,
-                sizeof(uint64_t),
+                sizeof(Moer::uint64),
                 VK_QUERY_RESULT_64_BIT
             );
 
             //读取失败也无所谓
             if (qr == VK_SUCCESS) {
                 for (int i = 0; i < snap.pass_count; i++) {
-                    uint64_t begin = timestamps[i * 2];
-                    uint64_t end   = timestamps[i * 2 + 1];
+                    Moer::uint64 begin = timestamps[i * 2];
+                    Moer::uint64 end   = timestamps[i * 2 + 1];
                     if (end > begin) {
                         snap.passes[i].gpu_render_ms =
                             (float)((end - begin) * g_timestamp_period * 1e-6f);
@@ -392,9 +390,9 @@ VkResult VKAPI_PTR Detour_vkQueueSubmit2(
     SubmitRecord record;
     record.signal_value = 0;
 
-    for (uint32_t s = 0; s < submitCount; s++) {
+    for (Moer::uint32 s = 0; s < submitCount; s++) {
         const VkSubmitInfo2& si = pSubmits[s];
-        for (uint32_t c = 0; c < si.commandBufferInfoCount; c++) {
+        for (Moer::uint32 c = 0; c < si.commandBufferInfoCount; c++) {
             VkCommandBuffer cb_handle = si.pCommandBufferInfos[c].commandBuffer;
 
             std::unique_lock lock(g_cb_states_mtx);
@@ -461,7 +459,7 @@ VkResult VKAPI_PTR Detour_vkQueueSubmit2(
     }
 */
     //直接创建空submit只做signal
-    uint64_t this_value = ++qs.timeline_value;
+    Moer::uint64 this_value = ++qs.timeline_value;
     record.signal_value = this_value;
 
     VkResult result = VK_SUCCESS;
@@ -762,7 +760,7 @@ PFN_vkVoidFunction VKAPI_PTR Detour_vkGetInstanceProcAddr(
 }
 
 //目前没有启用
-typedef void(__thiscall* PFN_OnFinishPresent)(void* _this, uint64_t _image_idx);
+typedef void(__thiscall* PFN_OnFinishPresent)(void* _this, Moer::uint64 _image_idx);
 PFN_OnFinishPresent orig_OnFinishPresent = nullptr;
 
 void SetupVulkanHooks(HMODULE vklib) {

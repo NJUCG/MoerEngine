@@ -2,8 +2,8 @@
 
 #include "API_Macro.h"
 
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -17,14 +17,14 @@ struct EngineCommandProcessorLimits {
     std::size_t output_capacity  = 2048;
 };
 
-enum class ESubmitStatus : std::uint8_t {
+enum class ESubmitStatus : uint8 {
     Accepted,
     Empty,
     QueueFull,
     Closed,
 };
 
-enum class EProcessStatus : std::uint8_t {
+enum class EProcessStatus : uint8 {
     Processed,
     Empty,
     Busy,
@@ -37,25 +37,25 @@ struct ProcessPendingResult {
 };
 
 struct CommandOutputLineView {
-    std::uint64_t    sequence = 0;
+    uint64           sequence = 0;
     std::string_view text;
 };
 
 struct CommandOutputLine {
-    std::uint64_t sequence = 0;
+    uint64        sequence = 0;
     std::string   text;
 };
 
 struct CommandOutputPollResult {
-    std::uint64_t next_sequence = 1;
-    std::uint64_t dropped_count = 0;
+    uint64        next_sequence = 1;
+    uint64        dropped_count = 0;
     std::size_t   visited_count = 0;
 };
 
 struct CommandOutputBatch {
     std::vector<CommandOutputLine> lines;
-    std::uint64_t                  next_sequence = 1;
-    std::uint64_t                  dropped_count = 0;
+    uint64                         next_sequence = 1;
+    uint64                         dropped_count = 0;
 };
 
 struct CommandCandidateView {
@@ -95,7 +95,7 @@ public:
     // Raw visitors are invoked after releasing processor locks. The owning
     // convenience wrappers below copy in the caller's allocation domain.
     [[nodiscard]] CORE_API CommandOutputPollResult VisitOutput(
-        std::uint64_t        _next_sequence,
+        uint64               _next_sequence,
         std::size_t          _max_count,
         CommandOutputVisitor _visitor,
         void*                _context
@@ -108,7 +108,7 @@ public:
     ) const;
 
     [[nodiscard]] CommandOutputBatch
-    PollOutput(std::uint64_t _next_sequence = 1, std::size_t _max_count = 256) const {
+    PollOutput(uint64 _next_sequence = 1, std::size_t _max_count = 256) const {
         CommandOutputBatch            batch;
         const CommandOutputPollResult result = VisitOutput(
             _next_sequence,

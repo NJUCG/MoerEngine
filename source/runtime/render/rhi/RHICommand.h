@@ -7,6 +7,7 @@
 #include "math/Base.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHICompletion.h"
 #include "rhi/RHIGpuScope.h"
@@ -15,8 +16,8 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHISubmissionTopology.h"
 #include "shader/ShaderPipeline.h"
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -76,14 +77,14 @@ inline float4 Scope() noexcept {
 }
 } // namespace GpuMarkerPalette
 
-enum class EGpuMarkerMode : uint8_t {
+enum class EGpuMarkerMode : uint8 {
     Label,
     Timestamp,
 };
 
 struct Command {
 public:
-    enum class EType : uint8_t {
+    enum class EType : uint8 {
         UploadBuffer,
         CopyBackBuffer,
         BufferToBuffer,
@@ -134,7 +135,7 @@ public:
     CachedArgumentReferencesAreValid(size_t) const noexcept {
         return true;
     }
-    virtual void RebaseCachedArgumentReferences(uint) noexcept {}
+    virtual void RebaseCachedArgumentReferences(uint32) noexcept {}
 
 public:
     EType Type() const {
@@ -159,8 +160,8 @@ struct IndirectDrawParam {
     std::optional<BufferView> count_buffer;
 
     //when count_buffer is not null, count is the max count of draw calls
-    uint count;
-    uint stride;
+    uint32 count;
+    uint32 stride;
 };
 
 using TDrawParam = std::variant<Array<SingleDrawParam>, IndirectDrawParam>;
@@ -169,7 +170,7 @@ struct MeshDrawData {
     // vtx_views的数量与顺序应该在外部代码进行维护！MeshDrawData没有任何保护措施！
     // 关于内部顺序：buffer顺序应当按照EVertexAttributes枚举值的顺序排列。例如，PositionBuffer应该在NormalBuffer之前。（最自然的顺序）
     Array<VertexBuffer>             vtx_views;
-    std::variant<IndexBuffer, uint> idx_view = 0u;
+    std::variant<IndexBuffer, uint32> idx_view = 0u;
 
     Array<SingleDrawParam>           draw_params;
     std::optional<IndirectDrawParam> indirect_draw_param;
@@ -214,16 +215,16 @@ public:
         vtx_views.assign(_vtx_views.begin(), _vtx_views.end());
     }
 
-    MeshDrawData(std::span<VertexBuffer> _vtx_views, uint _index_cnt) : idx_view(_index_cnt) {
+    MeshDrawData(std::span<VertexBuffer> _vtx_views, uint32 _index_cnt) : idx_view(_index_cnt) {
         vtx_views.assign(_vtx_views.begin(), _vtx_views.end());
     }
 
     void EmplaceDrawIndexed(
-        uint _first_index,
-        uint _index_cnt,
-        uint _first_vertex,
-        uint _first_instance,
-        uint _instance_cnt = 1
+        uint32 _first_index,
+        uint32 _index_cnt,
+        uint32 _first_vertex,
+        uint32 _first_instance,
+        uint32 _instance_cnt = 1
     ) {
 
         draw_params.emplace_back(
@@ -231,21 +232,21 @@ public:
         );
     }
 
-    void DrawIndirect(BufferView _buffer, uint _count, uint _stride) {
+    void DrawIndirect(BufferView _buffer, uint32 _count, uint32 _stride) {
         indirect_draw_param = IndirectDrawParam{_buffer, std::nullopt, _count, _stride};
     }
 
-    void DrawIndirect(BufferView _buffer, BufferView _count_buffer, uint _max_cnt, uint _stride) {
+    void DrawIndirect(BufferView _buffer, BufferView _count_buffer, uint32 _max_cnt, uint32 _stride) {
         indirect_draw_param = IndirectDrawParam{_buffer, _count_buffer, _max_cnt, _stride};
     }
 
-    void EmplaceDraw(uint _vertex_cnt, uint _first_vertex, uint _first_instance, uint _instance_cnt = 1) {
+    void EmplaceDraw(uint32 _vertex_cnt, uint32 _first_vertex, uint32 _first_instance, uint32 _instance_cnt = 1) {
 
         draw_params.emplace_back(
             SingleDrawParam{_vertex_cnt, _instance_cnt, 0, _first_vertex, _first_instance}
         );
     }
-    void Reserve(uint _size) {
+    void Reserve(uint32 _size) {
         draw_params.reserve(_size);
     }
 };
@@ -258,12 +259,12 @@ struct DispatchMeshData {
         return DispatchMeshData{_group_count};
     }
 
-    static DispatchMeshData DispatchIndirect(BufferView _buffer, uint _count, uint _stride) {
+    static DispatchMeshData DispatchIndirect(BufferView _buffer, uint32 _count, uint32 _stride) {
         return DispatchMeshData{IndirectDrawParam{_buffer, std::nullopt, _count, _stride}};
     }
 
     static DispatchMeshData
-    DispatchIndirectCount(BufferView _buffer, BufferView _count_buffer, uint _max_cnt, uint _stride) {
+    DispatchIndirectCount(BufferView _buffer, BufferView _count_buffer, uint32 _max_cnt, uint32 _stride) {
         return DispatchMeshData{IndirectDrawParam{_buffer, _count_buffer, _max_cnt, _stride}};
     }
 };
@@ -1037,7 +1038,7 @@ public:
 
         DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
 
-        DrawDispatcher& SetViewMask(uint32_t mask) {
+        DrawDispatcher& SetViewMask(uint32 mask) {
             view_mask = mask;
             return *this;
         }
@@ -1095,7 +1096,7 @@ public:
         void Draw(
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
-            uint                     _vtx_cnt,
+            uint32                   _vtx_cnt,
             Array<SingleDrawParam>&& _mesh_data,
             DepthAttachment          _depth,
             TRenderTarget&&... _render_targets
@@ -1220,7 +1221,7 @@ public:
             std::string_view         _name,
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
-            uint                     _vtx_cnt,
+            uint32                   _vtx_cnt,
             Array<SingleDrawParam>&& _mesh_data,
             DepthAttachment          _depth,
             TRenderTarget&&... _render_targets
@@ -1242,7 +1243,7 @@ public:
             std::string_view         _name,
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
-            uint                     _vtx_cnt,
+            uint32                   _vtx_cnt,
             Array<SingleDrawParam>&& _mesh_data,
             TRenderTarget&&... _render_targets
         ) {
@@ -1284,8 +1285,8 @@ public:
             std::span<VertexBuffer> _vtx,
             IndexBuffer             _idx,
             BufferView              _indirect_buffer,
-            uint                    _count,
-            uint                    _stride,
+            uint32                  _count,
+            uint32                  _stride,
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info(
@@ -1309,8 +1310,8 @@ public:
             std::span<VertexBuffer> _vtx,
             IndexBuffer             _idx,
             BufferView              _indirect_buffer,
-            uint                    _count,
-            uint                    _stride,
+            uint32                  _count,
+            uint32                  _stride,
             DepthAttachment         _depth,
             TRenderTarget&&... _render_targets
         ) {
@@ -1334,8 +1335,8 @@ public:
             IndexBuffer             _idx,
             BufferView              _indirect_buffer,
             BufferView              _count_buffer,
-            uint                    _stride,
-            uint                    _max_cnt,
+            uint32                  _stride,
+            uint32                  _max_cnt,
             DepthAttachment         _depth,
             TRenderTarget&&... _render_targets
         ) {
@@ -1359,8 +1360,8 @@ public:
             IndexBuffer             _idx,
             BufferView              _indirect_buffer,
             BufferView              _count_buffer,
-            uint                    _max_cnt,
-            uint                    _stride,
+            uint32                  _max_cnt,
+            uint32                  _stride,
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info(
@@ -1381,11 +1382,11 @@ public:
             std::string_view        _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
-            uint                    _vtx_cnt,
+            uint32                  _vtx_cnt,
             BufferView              _indirect_buffer,
             BufferView              _count_buffer,
-            uint                    _max_cnt,
-            uint                    _stride,
+            uint32                  _max_cnt,
+            uint32                  _stride,
             DepthAttachment         _depth,
             TRenderTarget&&... _render_targets
         ) {
@@ -1405,11 +1406,11 @@ public:
             std::string_view        _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
-            uint                    _vtx_cnt,
+            uint32                  _vtx_cnt,
             BufferView              _indirect_buffer,
             BufferView              _count_buffer,
-            uint                    _max_cnt,
-            uint                    _stride,
+            uint32                  _max_cnt,
+            uint32                  _stride,
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info(
@@ -1430,10 +1431,10 @@ public:
             std::string_view        _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
-            uint                    _vtx_cnt,
+            uint32                  _vtx_cnt,
             BufferView              _indirect_buffer,
-            uint                    _count,
-            uint                    _stride,
+            uint32                  _count,
+            uint32                  _stride,
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info(
@@ -1454,10 +1455,10 @@ public:
             std::string_view        _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
-            uint                    _vtx_cnt,
+            uint32                  _vtx_cnt,
             BufferView              _indirect_buffer,
-            uint                    _count,
-            uint                    _stride,
+            uint32                  _count,
+            uint32                  _stride,
             DepthAttachment         _depth,
             TRenderTarget&&... _render_targets
         ) {
@@ -1477,7 +1478,7 @@ public:
         ArrayArguments  args;
 
     private:
-        uint32_t        view_mask = 0;
+        uint32          view_mask = 0;
         TCachedArgArray args_cache;
     };
 
@@ -1504,7 +1505,7 @@ public:
             draw_batch = std::move(_draw_batch);
             return *this;
         }
-        MutiDrawDispatcher& SetViewMask(uint32_t mask) {
+        MutiDrawDispatcher& SetViewMask(uint32 mask) {
             pass_info.view_mask = mask;
             return *this;
         }
@@ -1549,26 +1550,26 @@ public:
     struct RENDER_API ComputeDispatcher {
         void Dispatch(
             Vector2ui        _group_count,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            std::string_view _name    = Command::typenames[(uint32)Command::EType::ShaderDispatch],
             ProfileSection   _section = ProfileSection("Other")
         ) {
             Dispatch(uint3(_group_count, 1), _name, _section);
         }
         void Dispatch(
             Vector3ui        _group_count,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            std::string_view _name    = Command::typenames[(uint32)Command::EType::ShaderDispatch],
             ProfileSection   _section = ProfileSection("Other")
         );
         void Dispatch(
-            uint             _group_cnt,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            uint32           _group_cnt,
+            std::string_view _name    = Command::typenames[(uint32)Command::EType::ShaderDispatch],
             ProfileSection   _section = ProfileSection("Other")
         ) {
             Dispatch(Vector3ui(_group_cnt, 1, 1), _name, _section);
         }
         void DispatchIndirect(
             BufferView,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            std::string_view _name    = Command::typenames[(uint32)Command::EType::ShaderDispatch],
             ProfileSection   _section = ProfileSection("Other")
         );
         ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
@@ -1664,62 +1665,62 @@ public:
     RENDER_API void CopyFrom(
         BufferView       _src,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::BufferToBuffer]
     );
     RENDER_API void CopyFrom(
         TextureView      _src,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::TextureToTexture]
     );
     RENDER_API void CopyFrom(
         TextureView      _src,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::TextureToBuffer]
     );
     RENDER_API void CopyFrom(
         BufferView       _src,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::BufferToTexture]
     );
     RENDER_API void CopyFrom(
         std::span<byte>  _data,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
         std::span<const byte> _data,
         BufferView            _dst,
-        std::string_view      _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        std::string_view      _name = Command::typenames[(uint32)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
         std::span<byte>  _data,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         std::span<const byte> _data,
         TextureView           _dst,
-        std::string_view      _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        std::string_view      _name = Command::typenames[(uint32)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         Array<byte>&&    _data,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
         Array<byte>&&    _data,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         BufferView       _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::CopyBackBuffer]
     );
     RENDER_API void CopyFrom(
         TextureView      _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::CopyBackTexture]
     );
 
     // Owning host readback. The returned Future does not expose native
@@ -1727,18 +1728,18 @@ public:
     // retired and an immutable CPU byte snapshot has been materialized.
     [[nodiscard]] RENDER_API ReadbackFuture Readback(
         BufferView       _src,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::CopyBackBuffer]
     );
     [[nodiscard]] RENDER_API ReadbackFuture Readback(
         TextureView      _src,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::CopyBackTexture]
     );
 
     RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
 
-    RENDER_API void ClearResource(BufferView _buffer, uint32_t _value);
+    RENDER_API void ClearResource(BufferView _buffer, uint32 _value);
     RENDER_API void ClearResource(TextureView _texture, float4 _color);
-    RENDER_API void ClearResource(TextureView _texture, uint32_t _value);
+    RENDER_API void ClearResource(TextureView _texture, uint32 _value);
 
     RENDER_API void PushScope(
         std::string_view _name,
@@ -1783,40 +1784,40 @@ public:
 
     template<typename T>
     struct CountType<T> {
-        static constexpr uint32_t value = 0;
+        static constexpr uint32 value = 0;
     };
 
     template<typename T, typename First, typename... Rest>
     struct CountType<T, First, Rest...> {
-        static constexpr uint32_t value = std::is_same_v<T, First> + CountType<T, Rest...>::value;
+        static constexpr uint32 value = std::is_same_v<T, First> + CountType<T, Rest...>::value;
     };
 
     template<typename... Args>
     struct GetReadTextureCnt {
-        static constexpr uint32_t value = CountType<ReadTexture, Args...>::value;
+        static constexpr uint32 value = CountType<ReadTexture, Args...>::value;
     };
 
     template<typename... Args>
     struct GetWriteTextureCnt {
-        static constexpr uint32_t value = CountType<WriteTexture, Args...>::value;
+        static constexpr uint32 value = CountType<WriteTexture, Args...>::value;
     };
 
     template<typename... Args>
     struct GetReadBufferCnt {
-        static constexpr uint32_t value = CountType<ReadBuffer, Args...>::value;
+        static constexpr uint32 value = CountType<ReadBuffer, Args...>::value;
     };
 
     template<typename... Args>
     struct GetWriteBufferCnt {
-        static constexpr uint32_t value = CountType<WriteBuffer, Args...>::value;
+        static constexpr uint32 value = CountType<WriteBuffer, Args...>::value;
     };
 
     template<typename... T>
     void Barriers(EQueueType _src_queue, EQueueType _dst_queue, EPassType _pass, T... _args) {
-        constexpr uint read_tex_cnt  = GetReadTextureCnt<T...>::value;
-        constexpr uint write_tex_cnt = GetWriteTextureCnt<T...>::value;
-        constexpr uint read_buf_cnt  = GetReadBufferCnt<T...>::value;
-        constexpr uint write_buf_cnt = GetWriteBufferCnt<T...>::value;
+        constexpr uint32 read_tex_cnt  = GetReadTextureCnt<T...>::value;
+        constexpr uint32 write_tex_cnt = GetWriteTextureCnt<T...>::value;
+        constexpr uint32 read_buf_cnt  = GetReadBufferCnt<T...>::value;
+        constexpr uint32 write_buf_cnt = GetWriteBufferCnt<T...>::value;
         static_assert(read_tex_cnt + write_tex_cnt + read_buf_cnt + write_buf_cnt > 0, "no barriers");
 
         BeginBarriers(read_tex_cnt, write_tex_cnt, read_buf_cnt, write_buf_cnt, _src_queue, _dst_queue);
@@ -1941,7 +1942,7 @@ public:
 
     RENDER_API void AddCustomCommand(
         UniquePtr<Command>&& _cmd,
-        std::string_view     _name = Command::typenames[(uint)Command::EType::Custom]
+        std::string_view     _name = Command::typenames[(uint32)Command::EType::Custom]
     );
 
 #pragma endregion
@@ -2122,10 +2123,10 @@ private:
     );
 
     RENDER_API void BeginBarriers(
-        uint       _read_tex_cnt,
-        uint       _write_tex_cnt,
-        uint       _read_buf_cnt,
-        uint       _write_buf_cnt,
+        uint32     _read_tex_cnt,
+        uint32     _write_tex_cnt,
+        uint32     _read_buf_cnt,
+        uint32     _write_buf_cnt,
         EQueueType _src_queue,
         EQueueType _dst_queue
     );
@@ -2293,7 +2294,7 @@ struct ProfileData {
     Array<ProfileResultEntry> cpu_entries;
 };
 
-enum class EPresentStatus : uint8_t {
+enum class EPresentStatus : uint8 {
     Unresolved,
     Success,
     Suboptimal,
@@ -2304,7 +2305,7 @@ enum class EPresentStatus : uint8_t {
     Faulted,
 };
 
-enum class EPresentStage : uint8_t {
+enum class EPresentStage : uint8 {
     None,
     Validation,
     Acquire,
@@ -2324,7 +2325,7 @@ PresentStatusRequiresNativeSurfaceRefresh(EPresentStatus status) noexcept {
     return status == EPresentStatus::SurfaceLost;
 }
 
-[[nodiscard]] constexpr uint8_t PresentRecoveryPriority(EPresentStatus status) noexcept {
+[[nodiscard]] constexpr uint8 PresentRecoveryPriority(EPresentStatus status) noexcept {
     switch (status) {
         case EPresentStatus::SurfaceLost:
             return 3;

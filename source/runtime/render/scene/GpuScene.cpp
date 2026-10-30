@@ -1,4 +1,5 @@
 #include "GpuScene.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraphUpload.h"
 #include "rhi/RHIImpl.h"
 
@@ -36,7 +37,7 @@ bool RecreateByteBufferIfNeeded(
         target.hdl = 0;
     }
 
-    target.buf = device.CreateBuffer<byte>(name, static_cast<uint>(required_byte_size), usage);
+    target.buf = device.CreateBuffer<byte>(name, static_cast<uint32>(required_byte_size), usage);
     target.hdl = bindless_array->AllocateBuffer(target.buf->GetView());
     return true;
 }
@@ -319,12 +320,12 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
         );
 
         uint64 offset = 0;
-        for (uint subresource = 0;
+        for (uint32 subresource = 0;
              subresource < texture.mip_level_count * texture.array_layer_count;
              ++subresource) {
-            const uint mip           = subresource % texture.mip_level_count;
-            const uint layer         = subresource / texture.mip_level_count;
-            const uint mip_byte_size = gpu_texture.tex->GetMipByteSize(mip);
+            const uint32 mip           = subresource % texture.mip_level_count;
+            const uint32 layer         = subresource / texture.mip_level_count;
+            const uint32 mip_byte_size = gpu_texture.tex->GetMipByteSize(mip);
             assert(offset + mip_byte_size <= texture.data.size());
             RecordNewGraphicsTextureUpload(
                 m_pending_commands,
@@ -353,7 +354,7 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
         if (byte_size == 0) {
             return;
         }
-        target.buf = device.CreateBuffer<byte>(name, static_cast<uint>(byte_size), usage);
+        target.buf = device.CreateBuffer<byte>(name, static_cast<uint32>(byte_size), usage);
     };
 
     create_byte_buffer(
@@ -371,7 +372,7 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
     if (!update.draw_commands.empty()) {
         m_res.draw_cmd_buf.buf = device.CreateBuffer<DrawIndexedCmdData>(
             "GpuScene::DrawCmdBuffer",
-            static_cast<uint>(update.draw_commands.size()),
+            static_cast<uint32>(update.draw_commands.size()),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
         );
     }
@@ -532,7 +533,7 @@ void GpuScene::UpdateDrawCommandBuffer(
         }
         m_res.draw_cmd_buf.buf = RenderDevice::Get().CreateBuffer<DrawIndexedCmdData>(
             "GpuScene::DrawCmdBuffer",
-            static_cast<uint>(draw_commands.size()),
+            static_cast<uint32>(draw_commands.size()),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
         );
         m_res.draw_cmd_buf.hdl =
@@ -747,7 +748,7 @@ void GpuScene::InitRaytracingScene(
             continue;
         }
 
-        const uint instance_index = static_cast<uint>(m_rt_instance_cache.size());
+        const uint32 instance_index = static_cast<uint32>(m_rt_instance_cache.size());
         auto&      instance       = m_res.rt_scene->AddInstance();
         instance.geom             = blas_it->second;
         instance.transform        = source.world_transform.ToTransposedMatrix3x4f();
@@ -819,7 +820,7 @@ void GpuScene::RebuildRaytracingSceneTlas(
             continue;
         }
 
-        const uint instance_index = static_cast<uint>(m_rt_instance_cache.size());
+        const uint32 instance_index = static_cast<uint32>(m_rt_instance_cache.size());
         auto&      instance       = m_res.rt_scene->AddInstance();
         instance.geom             = blas_it->second;
         instance.transform        = source.world_transform.ToTransposedMatrix3x4f();
@@ -859,7 +860,7 @@ void GpuScene::UpdateRaytracingScene(
         return;
     }
 
-    uint valid_instance_count = 0;
+    uint32 valid_instance_count = 0;
     for (const GpuSceneRtInstanceData& source : instances) {
         if (m_mesh_key_to_blas.contains(source.mesh_key)) {
             ++valid_instance_count;
@@ -870,7 +871,7 @@ void GpuScene::UpdateRaytracingScene(
         return;
     }
 
-    uint instance_index = 0;
+    uint32 instance_index = 0;
     for (const GpuSceneRtInstanceData& source : instances) {
         if (!m_mesh_key_to_blas.contains(source.mesh_key)) {
             continue;

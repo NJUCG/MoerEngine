@@ -1,4 +1,5 @@
 #include "profile_capture_ui/ProfileCaptureControlModel.h"
+#include "misc/Types.h"
 
 #include "profile/ProfileDump.h"
 #include "profile/ProfileScope.h"
@@ -27,9 +28,9 @@ void Expect(bool condition, std::string_view message) {
 class ScopedCaptureOutput final {
 public:
     ScopedCaptureOutput() {
-        static std::atomic_uint64_t next_id{0};
-        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
-            const auto now = static_cast<std::uint64_t>(
+        static std::atomic<uint64> next_id{0};
+        for (uint32 attempt = 0; attempt < 64; ++attempt) {
+            const auto now = static_cast<uint64>(
                 std::chrono::steady_clock::now()
                     .time_since_epoch()
                     .count()
@@ -78,7 +79,7 @@ ProfileCaptureControlModel MakeModel(
                     return controller.RequestStart(std::move(options));
                 },
             .request_stop =
-                [&controller](std::uint64_t generation) {
+                [&controller](uint64 generation) {
                     return controller.RequestStop(generation);
                 },
             .get_snapshot =
@@ -137,7 +138,7 @@ void CpuOnlyStartStopUsesEngineOwnedTicketBoundary() {
                 ProfileCaptureCompletionStatus::StartedCpuOnly,
         "control model did not observe the CPU-only Start completion"
     );
-    const std::uint64_t generation =
+    const uint64 generation =
         model.Snapshot().active_generation;
 
     Expect(
@@ -169,7 +170,7 @@ void CpuOnlyStartStopUsesEngineOwnedTicketBoundary() {
 }
 
 void LocalValidationAndMalformedRejectionStayBounded() {
-    std::uint64_t start_calls = 0;
+    uint64                           start_calls = 0;
     ProfileCaptureControllerSnapshot snapshot;
     snapshot.state              = ProfileCaptureControllerState::Idle;
     snapshot.accepting_requests = true;
@@ -315,7 +316,7 @@ void SynchronousRejectionProtocolFailsClosed() {
         ProfileCaptureControlCallbacks{
             .request_start = {},
             .request_stop =
-                [&mismatch_controller](std::uint64_t) {
+                [&mismatch_controller](uint64) {
                     ProfileCaptureRequestSubmission submission =
                         mismatch_controller.RequestStop(0);
                     submission.result = ProfileCaptureSubmitResult::QueueFull;
@@ -483,7 +484,7 @@ void StaleUiStopProtectsTheNewGeneration() {
                 ProfileCaptureCompletionStatus::StartedCpuOnly,
         "stale UI Stop fixture did not complete generation A Start"
     );
-    const std::uint64_t generation_a = start_a_completion.generation;
+    const uint64 generation_a = start_a_completion.generation;
 
     ProfileCaptureRequestSubmission stop_a =
         controller.RequestStop(generation_a);
@@ -515,7 +516,7 @@ void StaleUiStopProtectsTheNewGeneration() {
             start_b_completion.generation > generation_a,
         "stale UI Stop fixture did not publish a newer generation B"
     );
-    const std::uint64_t generation_b = start_b_completion.generation;
+    const uint64 generation_b = start_b_completion.generation;
 
     ProfileCaptureControllerSnapshot stale_snapshot =
         controller.GetSnapshot();
@@ -524,7 +525,7 @@ void StaleUiStopProtectsTheNewGeneration() {
         ProfileCaptureControlCallbacks{
             .request_start = {},
             .request_stop =
-                [&controller](std::uint64_t generation) {
+                [&controller](uint64 generation) {
                     return controller.RequestStop(generation);
                 },
             .get_snapshot =

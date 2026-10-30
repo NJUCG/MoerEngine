@@ -1,11 +1,13 @@
 #ifndef GRAPH_TASK_H
 #define GRAPH_TASK_H
+
 #include "API_Macro.h"
 #include "ThreadManager.h"
 #include "misc/CountableRef.h"
 #include "misc/LockFree.h"
 #include "misc/MMemory.h"
 #include "misc/MacroUtils.h"
+#include "misc/Types.h"
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -17,7 +19,7 @@ typedef CountableRef<GraphEvent>   GraphEventRef;
 typedef Moer::Array<GraphEventRef> GraphEventArray;
 class BaseGraphTask {
 public:
-    BaseGraphTask(int32_t count) : m_prerequests_count{count} {}
+    BaseGraphTask(Moer::int32 count) : m_prerequests_count{count} {}
     virtual ~BaseGraphTask() {}
     virtual void ExecuteTasks(EThread::Type currentThread) = 0;
     virtual void DestroyTask()                             = 0;
@@ -33,7 +35,7 @@ public:
     void QueueTask(EThread::Type currentThread, bool shouldWakeWorker) noexcept;
 
     CORE_API void
-    PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock = true) noexcept;
+    PrerequestsComplete(EThread::Type currentThread, Moer::int32 finishedCount, bool unlock = true) noexcept;
 
     bool ConditionalQueueTask(EThread::Type currentThread, bool shouldWakeWorker) noexcept {
         if (m_prerequests_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
@@ -51,12 +53,12 @@ public:
 
 protected:
     EThread::Type        m_preferd_thread{EThread::Invalid};
-    std::atomic<int32_t> m_prerequests_count;
+    std::atomic<Moer::int32> m_prerequests_count;
 };
 
-template<int32_t size>
+template<Moer::int32 size>
 struct Container {
-    uint8_t pad[size];
+    Moer::uint8 pad[size];
 };
 
 class GraphEvent : public Countable {
@@ -244,7 +246,7 @@ public:
     };
 
 private:
-    GraphTask(GraphEventRef _subsequents, int32_t initialCount) : BaseGraphTask(initialCount + 1) {
+    GraphTask(GraphEventRef _subsequents, Moer::int32 initialCount) : BaseGraphTask(initialCount + 1) {
         m_subsequents.Swap(_subsequents);
     }
     GraphTask() : BaseGraphTask(1) {}
@@ -256,12 +258,12 @@ private:
     ) {
         GraphEventRef prevent_deconstruct = m_subsequents;
         TaskType&     task                = *(TaskType*)&task_slot;
-        int32_t       completed_prerequest_count{0};
+        Moer::int32   completed_prerequest_count{0};
         if (m_preferd_thread == EThread::Invalid) {
             BaseGraphTask::SetPreferredThread(task.GetPreferredThread());
         }
         if (prerequests != nullptr) {
-            for (int32_t i = 0; i < prerequests->size(); i++) {
+            for (Moer::int32 i = 0; i < prerequests->size(); i++) {
                 GraphEvent* event = (*prerequests)[i].Get();
                 if (event == nullptr || !event->AddSubsequent(this)) {
                     completed_prerequest_count++;
@@ -278,8 +280,8 @@ private:
         if (m_preferd_thread == EThread::Invalid) {
             BaseGraphTask::SetPreferredThread(task.GetPreferredThread());
         }
-        uint32_t completed_prerequest_count{0};
-        for (int32_t i = 0; i < _events_to_wait.size(); i++) {
+        Moer::uint32 completed_prerequest_count{0};
+        for (Moer::int32 i = 0; i < _events_to_wait.size(); i++) {
             GraphEvent* event = _events_to_wait[i].Get();
             if (event == nullptr || !event->AddSubsequent(this)) {
                 completed_prerequest_count++;

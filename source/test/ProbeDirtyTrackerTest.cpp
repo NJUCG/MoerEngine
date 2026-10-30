@@ -1,7 +1,7 @@
 #include "renderer/raster/ProbeDirtyTracker.h"
 
+#include "misc/Types.h"
 #include <cmath>
-#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 
@@ -97,7 +97,7 @@ int main() {
         const Moer::Array<ProbeDirtyRegion> regions = {
             {nearby_dirty, RASTER_PROBE_DIRTY_DYNAMIC},
         };
-        const uint32_t reasons = ProbeDirtyTracker::ResolveReasons(
+        const Moer::uint32 reasons = ProbeDirtyTracker::ResolveReasons(
             probe_bounds,
             regions,
             RASTER_PROBE_DIRTY_LIGHT,

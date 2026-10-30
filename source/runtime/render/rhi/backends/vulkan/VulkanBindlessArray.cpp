@@ -5,6 +5,7 @@
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
 #include "misc/RAII.h"
+#include "misc/Types.h"
 #include "rhi/RHIBindlessUpdateLifecycle.h"
 #include "rhi/executor/RHIExecutor.h"
 
@@ -74,8 +75,8 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
     );
     if (_device->GetDescriptorMode() == VulkanDescriptorMode::Sets)
         return;
-    const uint buffer_size = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-    const uint image_size  = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    const uint32 buffer_size = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    const uint32 image_size  = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     if (_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
         heap_lease = g_heap.CreateDescriptorBufferLease();
         try {
@@ -96,7 +97,7 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
         return;
     }
     // Query both layouts: implementations may add padding before binding 0.
-    auto table_size = [&](VkDescriptorType type, uint count, uint64& binding_offset) {
+    auto table_size = [&](VkDescriptorType type, uint32 count, uint64& binding_offset) {
         VkDescriptorSetLayoutBinding   binding{0, type, count, VK_SHADER_STAGE_ALL};
         const VkDescriptorBindingFlags flags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
                                                VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
@@ -121,7 +122,7 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
         vkGetDescriptorSetLayoutBindingOffsetEXT(_device->GetDevice(), layout, 0, &binding_offset);
         return size;
     };
-    const uint   table_capacity = RenderDevice::k_default_bindless_array_size;
+    const uint32 table_capacity = RenderDevice::k_default_bindless_array_size;
     const uint64 buffer_bytes =
         table_size(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, table_capacity, buffer_descriptors_byte_offset);
     uint64       image_binding_offset = 0;
@@ -140,9 +141,9 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
         VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
             VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
     );
-    const uint  sampler_stride = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLER);
+    const uint32 sampler_stride = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLER);
     Array<byte> sampler_data(VulkanDevice::bindless_sampler_count * sampler_stride);
-    for (uint i = 0; i < VulkanDevice::bindless_sampler_count; ++i)
+    for (uint32 i = 0; i < VulkanDevice::bindless_sampler_count; ++i)
         g_heap.CopyDescriptorToMemory(
             {VK_DESCRIPTOR_TYPE_SAMPLER, i},
             std::span(sampler_data).subspan(i * sampler_stride, sampler_stride)
@@ -163,15 +164,15 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 }
 
-void VulkanBindlessArray::CreateLegacySets(uint max_size) {
+void VulkanBindlessArray::CreateLegacySets(uint32 max_size) {
     legacy_sets                    = std::make_unique<LegacyDescriptorSets>(m_device->GetDevice());
     const VkDescriptorType types[] = {
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLER
     };
-    const uint           counts[] = {max_size, max_size, VulkanDevice::bindless_sampler_count};
+    const uint32         counts[] = {max_size, max_size, VulkanDevice::bindless_sampler_count};
     auto&                layouts  = legacy_sets->layouts;
     VkDescriptorPoolSize sizes[3]{};
-    for (uint i = 0; i < 3; ++i) {
+    for (uint32 i = 0; i < 3; ++i) {
         VkDescriptorSetLayoutBinding binding{
             0, types[i], i == 2 ? counts[i] : RenderDevice::k_default_bindless_array_size, VK_SHADER_STAGE_ALL
         };
@@ -210,7 +211,7 @@ void VulkanBindlessArray::CreateLegacySets(uint max_size) {
     allocate.pSetLayouts        = layouts;
     VK_CHECK_RESULT(vkAllocateDescriptorSets(m_device->GetDevice(), &allocate, legacy_sets->sets));
     Array<VkDescriptorImageInfo> samplers(counts[2]);
-    for (uint i = 0; i < counts[2]; ++i)
+    for (uint32 i = 0; i < counts[2]; ++i)
         samplers[i].sampler = m_device->GetImmutableSamplers()[i < m_device->ImmutableSamplerCount() ? i : 0];
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet          = legacy_sets->sets[2];
@@ -233,9 +234,9 @@ VkAccessFlags2 VulkanBindlessArray::GetDescriptorReadAccess() const {
                VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT;
 }
 
-static uint SamplerToIndex(const Sampler& _samp) {
-    uint idx = uint(_samp.filter) + uint(_samp.address_mode) * uint(SF_Num) +
-               uint(_samp.compare_function) * uint(SAM_Num) * uint(SF_Num);
+static uint32 SamplerToIndex(const Sampler& _samp) {
+    uint32 idx = uint32(_samp.filter) + uint32(_samp.address_mode) * uint32(SF_Num) +
+                 uint32(_samp.compare_function) * uint32(SAM_Num) * uint32(SF_Num);
     return idx;
 }
 
@@ -274,7 +275,7 @@ void VulkanBindlessArray::UntrackResource(uint64 _handle) {
     }
 }
 
-void VulkanBindlessArray::TrackTextureView(uint _array_idx, const TextureView& _view) {
+void VulkanBindlessArray::TrackTextureView(uint32 _array_idx, const TextureView& _view) {
     if (_array_idx >= texture_view_infos.size()) {
         throw std::runtime_error("bindless texture view slot is outside capacity");
     }
@@ -298,7 +299,7 @@ void VulkanBindlessArray::TrackTextureView(uint _array_idx, const TextureView& _
     ++ref_count;
 }
 
-void VulkanBindlessArray::UntrackTextureView(uint _array_idx) {
+void VulkanBindlessArray::UntrackTextureView(uint32 _array_idx) {
     if (_array_idx >= texture_view_infos.size()) {
         return;
     }
@@ -329,25 +330,25 @@ void VulkanBindlessArray::UntrackTextureView(uint _array_idx) {
 UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
     std::unique_lock<std::mutex> lk(mtx);
 
-    Array<std::pair<uint, uint>> array_indices_dat;
+    Array<std::pair<uint32, uint32>> array_indices_dat;
     Array<byte>                  array_dat;
-    Array<std::pair<uint, uint>> texture_indices_dat;
+    Array<std::pair<uint32, uint32>> texture_indices_dat;
     Array<byte>                  texture_dat;
-    Array<std::pair<uint, uint>> buffer_indices_dat;
+    Array<std::pair<uint32, uint32>> buffer_indices_dat;
     Array<byte>                  buffer_dat;
 
     {
         VulkanDescriptorHeap& heap   = m_device->GetGlobalDescriptorHeap();
         uint64 texture_handle_stride = heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
         uint64 buffer_handle_stride  = heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        uint64 array_handle_stride   = sizeof(uint);
+        uint64                array_handle_stride   = sizeof(uint32);
 
         //update all cpu data here instead of during execution
 
         //handle update data first
-        uint   array_idx            = 0;
-        uint   texture_cnt          = 0;
-        uint   buffer_cnt           = 0;
+        uint32 array_idx            = 0;
+        uint32 texture_cnt          = 0;
+        uint32 buffer_cnt           = 0;
         uint64 update_command_token = 0;
         if (!update_cmds.empty()) {
             if (next_update_command_token == std::numeric_limits<uint64>::max()) {
@@ -464,8 +465,8 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
                                         .subspan(texture_cnt * texture_handle_stride, texture_handle_stride)
                                 );
                             }
-                            uint indirect_handle = (m_device->GetSamplerIndex(_cmd.sampler) & 0xff) |
-                                                   (_cmd.slot & 0xffffff) << 8;
+                            uint32 indirect_handle = (m_device->GetSamplerIndex(_cmd.sampler) & 0xff) |
+                                                     (_cmd.slot & 0xffffff) << 8;
                             memcpy(
                                 array_dat.data() + array_idx * array_handle_stride,
                                 &indirect_handle,
@@ -510,7 +511,7 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
                                 );
                             }
                             memcpy(
-                                array_dat.data() + array_idx * array_handle_stride, &_cmd.slot, sizeof(uint)
+                                array_dat.data() + array_idx * array_handle_stride, &_cmd.slot, sizeof(uint32)
                             );
                             array_indices_dat[array_idx]   = {array_idx, _cmd.array_idx};
                             buffer_indices_dat[buffer_cnt] = {buffer_cnt, _cmd.slot};
@@ -546,11 +547,11 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
     return cmd;
 }
 
-uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
+uint32 VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
     std::unique_lock<std::mutex> lk(mtx);
-    const uint                   capacity              = static_cast<uint>(handles.size());
-    const uint                   reused_array_slot     = free_slots.Pop();
-    const uint                   reused_texture_slot   = free_texture_slots.Pop();
+    const uint32                 capacity              = static_cast<uint32>(handles.size());
+    const uint32                 reused_array_slot     = free_slots.Pop();
+    const uint32                 reused_texture_slot   = free_texture_slots.Pop();
     auto                         rollback_reused_slots = [&] {
         if (reused_array_slot != 0 && reused_array_slot < capacity) {
             free_slots.Push(reused_array_slot);
@@ -570,8 +571,8 @@ uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _
         throw std::runtime_error("bindless texture capacity exhausted");
     }
 
-    const uint slot_idx     = reused_array_slot == 0 ? slot_offset++ : reused_array_slot;
-    const uint texture_slot = reused_texture_slot == 0 ? texture_slot_offset++ : reused_texture_slot;
+    const uint32 slot_idx     = reused_array_slot == 0 ? slot_offset++ : reused_array_slot;
+    const uint32 texture_slot = reused_texture_slot == 0 ? texture_slot_offset++ : reused_texture_slot;
     if (array_slot_generations[slot_idx] == std::numeric_limits<uint64>::max() ||
         texture_slot_generations[texture_slot] == std::numeric_limits<uint64>::max()) {
         free_slots.Push(slot_idx);
@@ -607,11 +608,11 @@ uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _
     return slot_idx;
 }
 
-uint VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
+uint32 VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
     std::unique_lock<std::mutex> lk(mtx);
-    const uint                   capacity              = static_cast<uint>(handles.size());
-    const uint                   reused_array_slot     = free_slots.Pop();
-    const uint                   reused_buffer_slot    = free_buffer_slots.Pop();
+    const uint32                 capacity              = static_cast<uint32>(handles.size());
+    const uint32                 reused_array_slot     = free_slots.Pop();
+    const uint32                 reused_buffer_slot    = free_buffer_slots.Pop();
     auto                         rollback_reused_slots = [&] {
         if (reused_array_slot != 0 && reused_array_slot < capacity) {
             free_slots.Push(reused_array_slot);
@@ -631,8 +632,8 @@ uint VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
         throw std::runtime_error("bindless buffer capacity exhausted");
     }
 
-    const uint slot_idx    = reused_array_slot == 0 ? slot_offset++ : reused_array_slot;
-    const uint buffer_slot = reused_buffer_slot == 0 ? buffer_slot_offset++ : reused_buffer_slot;
+    const uint32 slot_idx    = reused_array_slot == 0 ? slot_offset++ : reused_array_slot;
+    const uint32 buffer_slot = reused_buffer_slot == 0 ? buffer_slot_offset++ : reused_buffer_slot;
     if (array_slot_generations[slot_idx] == std::numeric_limits<uint64>::max() ||
         buffer_slot_generations[buffer_slot] == std::numeric_limits<uint64>::max()) {
         free_slots.Push(slot_idx);
@@ -661,7 +662,7 @@ uint VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
     return slot_idx;
 }
 static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
-void                 VulkanBindlessArray::UnbindTexture(uint _array_idx) {
+void                 VulkanBindlessArray::UnbindTexture(uint32 _array_idx) {
     std::unique_lock<std::mutex> lk(mtx);
     // Entries in this map have not been captured by CreateUpdateCommand yet;
     // cancelling an allocation here is normal while the initial extent settles.
@@ -796,7 +797,7 @@ void                 VulkanBindlessArray::UnbindTexture(uint _array_idx) {
     temp_slot_to_cmd[_array_idx] = update_cmds.size() - 1;
 }
 
-void VulkanBindlessArray::UnbindBuffer(uint _array_idx) {
+void VulkanBindlessArray::UnbindBuffer(uint32 _array_idx) {
     std::unique_lock<std::mutex> lk(mtx);
 
     if (auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()) {
@@ -1053,9 +1054,9 @@ bool VulkanBindlessArray::BeginUpdateCommand(const Array<BindlessArray::UpdateCm
         );
     }
 
-    UnorderedSet<uint> global_claims;
-    UnorderedSet<uint> texture_claims;
-    UnorderedSet<uint> buffer_claims;
+    UnorderedSet<uint32> global_claims;
+    UnorderedSet<uint32> texture_claims;
+    UnorderedSet<uint32> buffer_claims;
     for (const BindlessArray::UpdateCmd& update : _updates) {
         std::visit(
             [&](const auto& _cmd) {
@@ -1109,9 +1110,9 @@ struct VulkanBindlessArray::UpdateCompletionPlan {
     UnorderedMap<uint64, uint32>                     resource_decrements;
     UnorderedMap<TextureSubresourceKeyT<VulkanTexture>, uint32, TextureSubresourceKeyHashT<VulkanTexture>>
                        view_decrements;
-    UnorderedSet<uint> global_claims;
-    UnorderedSet<uint> texture_claims;
-    UnorderedSet<uint> buffer_claims;
+    UnorderedSet<uint32> global_claims;
+    UnorderedSet<uint32> texture_claims;
+    UnorderedSet<uint32> buffer_claims;
 };
 
 void VulkanBindlessArray::FinalizeUpdateCommand(
@@ -1142,9 +1143,9 @@ void VulkanBindlessArray::DiscardUpdateCommand(const Array<UpdateCmd>& _updates)
 VulkanBindlessArray::UpdateCompletionPlan
 VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool gpu_update_succeeded) const {
     UpdateCompletionPlan plan;
-    UnorderedSet<uint>   global_slots;
-    UnorderedSet<uint>   texture_slots;
-    UnorderedSet<uint>   buffer_slots;
+    UnorderedSet<uint32> global_slots;
+    UnorderedSet<uint32> texture_slots;
+    UnorderedSet<uint32> buffer_slots;
 
     auto reserve_slot_mutation = [&](const auto& _cmd, bool _texture) {
         if (!global_slots.emplace(_cmd.array_idx).second) {
@@ -1330,9 +1331,9 @@ VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool
 VulkanBindlessArray::UpdateCompletionPlan
 VulkanBindlessArray::BuildDiscardPlan(const Array<UpdateCmd>& updates) const {
     UpdateCompletionPlan plan;
-    UnorderedSet<uint>   global_slots;
-    UnorderedSet<uint>   texture_slots;
-    UnorderedSet<uint>   buffer_slots;
+    UnorderedSet<uint32> global_slots;
+    UnorderedSet<uint32> texture_slots;
+    UnorderedSet<uint32> buffer_slots;
 
     auto reserve_slot = [&](const auto& _cmd, bool _texture) {
         if (!global_slots.emplace(_cmd.array_idx).second) {
@@ -1499,20 +1500,20 @@ void VulkanBindlessArray::ValidateReferenceDecrements(const UpdateCompletionPlan
 }
 
 void VulkanBindlessArray::ApplySlotClaims(
-    const UnorderedSet<uint>& array_slots,
-    const UnorderedSet<uint>& texture_slots,
-    const UnorderedSet<uint>& buffer_slots,
-    uint64                    command_token
+    const UnorderedSet<uint32>& array_slots,
+    const UnorderedSet<uint32>& texture_slots,
+    const UnorderedSet<uint32>& buffer_slots,
+    uint64                      command_token
 ) {
-    for (const uint slot : array_slots) {
+    for (const uint32 slot : array_slots) {
         ++array_slot_generations[slot];
         array_slot_claim_tokens[slot] = command_token;
     }
-    for (const uint slot : texture_slots) {
+    for (const uint32 slot : texture_slots) {
         ++texture_slot_generations[slot];
         texture_slot_claim_tokens[slot] = command_token;
     }
-    for (const uint slot : buffer_slots) {
+    for (const uint32 slot : buffer_slots) {
         ++buffer_slot_generations[slot];
         buffer_slot_claim_tokens[slot] = command_token;
     }

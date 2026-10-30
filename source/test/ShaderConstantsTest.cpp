@@ -1,8 +1,9 @@
+#include "shaderheaders/shared/test/ShaderConstants.h"
 #include "config/ConfigManager.h"
+#include "misc/Types.h"
 #include "rhi/ShaderConstantLayout.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderPipeline.h"
-#include "shaderheaders/shared/test/ShaderConstants.h"
 #include "shaderheaders/shared/raster/lighting_pass/Constants.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
@@ -23,7 +24,7 @@ class BindlessConstants : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(BindlessConstants);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT(uint, index);
+    DEFINE_SHADER_CONSTANT(uint32, index);
     DEFINE_SHADER_CONSTANT(float, scale);
     DEFINE_SHADER_ARGS(bdls, index, scale);
 };
@@ -32,7 +33,7 @@ class BindlessSingleConstant : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(BindlessSingleConstant);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT(uint, index);
+    DEFINE_SHADER_CONSTANT(uint32, index);
     DEFINE_SHADER_ARGS(bdls, index);
 };
 
@@ -97,8 +98,8 @@ void CheckPacking() {
     const auto metadata = MixedConstants::GetArgumentMetadata();
     const auto layouts  = metadata.GetConstantLayouts();
     Require(metadata.GetConstantByteSize() == 116 && layouts.size() == 5, "Unexpected packed constant size");
-    const uint offsets[] = {0, 16, 32, 48, 112};
-    for (uint index = 0; index < 5; ++index) {
+    const uint32 offsets[] = {0, 16, 32, 48, 112};
+    for (uint32 index = 0; index < 5; ++index) {
         Require(layouts[index].byte_offset == offsets[index], "Unexpected constant offset");
     }
     Require(layouts[1].argument_index == 2, "Resource argument consumed constant storage");
@@ -107,7 +108,7 @@ void CheckPacking() {
     const ConstantTestData data{3, 4};
     const float3 tint{0.25f, 0.5f, 0.75f};
     const float4x4 transform = float4x4::Identity();
-    const uint bias = 5;
+    const uint32           bias      = 5;
     const auto packed = MixedConstants::SetArgs(scale, BufferView{}, data, tint, transform, bias);
     const auto* bytes = reinterpret_cast<const unsigned char*>(packed.constants.data());
     Require(std::memcmp(bytes, &scale, sizeof(scale)) == 0, "Scalar overwritten");
@@ -115,7 +116,8 @@ void CheckPacking() {
     Require(std::memcmp(bytes + 32, &tint, sizeof(tint)) == 0, "Vector overwritten");
     Require(std::memcmp(bytes + 48, &transform, sizeof(transform)) == 0, "Matrix overwritten");
     Require(std::memcmp(bytes + 112, &bias, sizeof(bias)) == 0, "Last scalar overwritten");
-    for (uint index = 4; index < 16; ++index) Require(bytes[index] == 0, "Padding was not initialized");
+    for (uint32 index = 4; index < 16; ++index)
+        Require(bytes[index] == 0, "Padding was not initialized");
     Require(NoConstants::SetArgs().constants.empty(), "Zero-constant pipeline allocated data");
     Require(
         SingleConstant::GetArgumentMetadata().GetConstantByteSize() == sizeof(data),
@@ -135,7 +137,7 @@ void CheckMetadataOwnership() {
                   PipelineArgumentMetadata,
                   std::span<const PipelineArgumentInfo>,
                   std::span<const ShaderConstantArgumentLayout>,
-                  uint>);
+                  uint32>);
     static_assert(std::is_same_v<
                   decltype(std::declval<PipelineArgumentMetadata&>().GetArguments()),
                   std::span<const PipelineArgumentInfo>>);
@@ -177,7 +179,7 @@ ShaderCompilerInput MakeInput(EShaderType stage, const char* entry, EShaderPlatf
     input.relative_source_file_path = "test/ShaderConstants.hlsl";
     input.shader_name = entry;
     const auto info = MakeInfo();
-    input.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint(1));
+    input.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint32(1));
     const auto& metadata = info.argument_metadata;
     input.environment.SetDefine("MOER_PC_BYTE_SIZE", metadata.GetConstantByteSize());
     for (const auto& argument : metadata.GetConstantLayouts()) {
@@ -263,10 +265,10 @@ void CheckReflection(EShaderPlatform platform) {
 
     const auto input = MakeInput(ST_COMPUTE, "ComputeMain", platform);
     auto shifted = input;
-    shifted.environment.SetDefine("MOER_PC_OFFSET_bias", uint(120));
+    shifted.environment.SetDefine("MOER_PC_OFFSET_bias", uint32(120));
     Require(!(input == shifted), "Layout offsets did not affect cache identity");
     shifted = input;
-    shifted.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint(2));
+    shifted.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint32(2));
     Require(!(input == shifted), "Layout version did not affect cache identity");
 }
 
@@ -281,8 +283,8 @@ ShaderCompilerOutput CompileBindlessTest(
     input.relative_source_file_path = source;
     input.shader_name = entry;
     input.environment.SetDefine("MOER_PC_BYTE_SIZE", metadata.GetConstantByteSize());
-    input.environment.SetDefine("MOER_TEST_SINGLE_CONSTANT", uint(single));
-    input.environment.SetDefine("MOER_TEST_ADDRESS_ONLY", uint(address_only));
+    input.environment.SetDefine("MOER_TEST_SINGLE_CONSTANT", uint32(single));
+    input.environment.SetDefine("MOER_TEST_ADDRESS_ONLY", uint32(address_only));
     for (const auto& layout : metadata.GetConstantLayouts()) {
         const auto name = metadata.GetArguments()[layout.argument_index].name;
         input.environment.SetDefine("MOER_PC_OFFSET_" + std::string(name), layout.byte_offset);
@@ -304,8 +306,8 @@ void CheckBindlessAddress(EShaderPlatform platform) {
         Require(bindings->buffer->binding == (vulkan ? 0 : 1), "Wrong buffer descriptor binding");
         Require(bindings->array.has_value() == !vulkan, "Vulkan retained the index-table descriptor");
         Require(bindings->index_table_address.has_value() == vulkan, "Wrong index-table access mechanism");
-        const uint user_size = metadata.GetConstantByteSize();
-        const uint total_size = ((user_size + 7u) & ~7u) + 8u;
+        const uint32       user_size  = metadata.GetConstantByteSize();
+        const uint32       total_size = ((user_size + 7u) & ~7u) + 8u;
         PipelineShaderInfo info{
             .shaders = {{.name = "bindless", .shader_type = ST_COMPUTE, .shader_param_map = &output.parameter_map}},
             .argument_metadata = metadata

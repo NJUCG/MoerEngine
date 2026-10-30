@@ -2,11 +2,11 @@
 #include "profile/ProfileDump.h"
 #include "profile/ProfileDumpCodec.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -29,7 +29,7 @@ void Expect(bool _condition, std::string_view _message) {
 }
 
 template<typename Predicate>
-bool WaitUntil(Predicate _predicate, std::uint32_t _timeout_ms = 2000) {
+bool WaitUntil(Predicate _predicate, Moer::uint32 _timeout_ms = 2000) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(_timeout_ms);
     while (!_predicate() && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
@@ -40,10 +40,10 @@ bool WaitUntil(Predicate _predicate, std::uint32_t _timeout_ms = 2000) {
 class ScopedOutput {
 public:
     explicit ScopedOutput(std::string_view _stem) {
-        static std::atomic<std::uint64_t> next_id{0};
-        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
+        static std::atomic<Moer::uint64> next_id{0};
+        for (Moer::uint32 attempt = 0; attempt < 64; ++attempt) {
             const auto now =
-                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+                static_cast<Moer::uint64>(std::chrono::steady_clock::now().time_since_epoch().count());
             const std::filesystem::path candidate =
                 std::filesystem::temp_directory_path() /
                 (std::string(_stem) + "-" + std::to_string(now) + "-" +
@@ -97,12 +97,12 @@ public:
     std::filesystem::path path;
 };
 
-std::vector<std::uint8_t> ReadBinaryFile(const std::filesystem::path& _path) {
+std::vector<Moer::uint8> ReadBinaryFile(const std::filesystem::path& _path) {
     std::ifstream stream(_path, std::ios::binary | std::ios::ate);
     Expect(stream.is_open(), "profile dump output could not be opened");
     const std::streamoff size = stream.tellg();
     Expect(size >= 0, "profile dump output size is invalid");
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+    std::vector<Moer::uint8> bytes(static_cast<std::size_t>(size));
     stream.seekg(0);
     if (!bytes.empty()) {
         stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -113,7 +113,7 @@ std::vector<std::uint8_t> ReadBinaryFile(const std::filesystem::path& _path) {
 
 struct ParsedDump {
     std::vector<PacketType>       packet_types;
-    std::vector<std::uint64_t>    packet_indices;
+    std::vector<Moer::uint64>     packet_indices;
     std::vector<SchemaDescriptor> schemas;
     std::vector<DecodedRecord>    records;
     std::vector<LossNotice>       losses;
@@ -122,7 +122,7 @@ struct ParsedDump {
 };
 
 ParsedDump ParseDump(const std::filesystem::path& _path, const CodecLimits& _limits) {
-    const std::vector<std::uint8_t> bytes = ReadBinaryFile(_path);
+    const std::vector<Moer::uint8> bytes = ReadBinaryFile(_path);
     Expect(!bytes.empty(), "profile dump output is empty");
 
     ParsedDump  parsed;
@@ -131,7 +131,7 @@ ParsedDump ParseDump(const std::filesystem::path& _path, const CodecLimits& _lim
         PacketView         packet{};
         std::size_t        consumed = 0;
         const DecodeStatus status =
-            DecodePacket(std::span<const std::uint8_t>(bytes).subspan(offset), _limits, packet, consumed);
+            DecodePacket(std::span<const Moer::uint8>(bytes).subspan(offset), _limits, packet, consumed);
         Expect(status == DecodeStatus::Ok, "profile dump packet failed validation");
         Expect(consumed > 0, "successful packet decode consumed no input");
         parsed.packet_types.push_back(packet.header.type);
@@ -234,7 +234,7 @@ SchemaDescriptor MakeRuntimeSchema() {
 }
 
 void TestV3LittleEndianGoldenVector() {
-    constexpr std::array<std::uint8_t, 16> expected_payload = {
+    constexpr std::array<Moer::uint8, 16> expected_payload = {
         0x08,
         0x07,
         0x06,
@@ -255,24 +255,69 @@ void TestV3LittleEndianGoldenVector() {
     // Fixed protocol vector. CRC32 constants were generated independently
     // from the v3 wire specification, not decoded from codec output:
     // payload_crc32 = 0xcbd946cf, header_crc32 = 0x782b1023.
-    constexpr std::array<std::uint8_t, 48> expected_packet = {
-        0x4d, 0x50, 0x44, 0x53, 0x03, 0x00, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
-        0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21, 0xcf, 0x46, 0xd9, 0xcb, 0x23, 0x10, 0x2b, 0x78,
-        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
+    constexpr std::array<Moer::uint8, 48> expected_packet = {
+        0x4d,
+        0x50,
+        0x44,
+        0x53,
+        0x03,
+        0x00,
+        0x20,
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x10,
+        0x00,
+        0x00,
+        0x00,
+        0x28,
+        0x27,
+        0x26,
+        0x25,
+        0x24,
+        0x23,
+        0x22,
+        0x21,
+        0xcf,
+        0x46,
+        0xd9,
+        0xcb,
+        0x23,
+        0x10,
+        0x2b,
+        0x78,
+        0x08,
+        0x07,
+        0x06,
+        0x05,
+        0x04,
+        0x03,
+        0x02,
+        0x01,
+        0x18,
+        0x17,
+        0x16,
+        0x15,
+        0x14,
+        0x13,
+        0x12,
+        0x11,
     };
     const SessionBeginInfo source{
         .generation      = 0x0102030405060708ull,
         .started_unix_ns = 0x1112131415161718ull,
     };
 
-    Moer::Array<std::uint8_t> payload;
+    Moer::Array<Moer::uint8> payload;
     EncodeSessionBeginPayload(source, payload);
     Expect(
         std::equal(payload.begin(), payload.end(), expected_payload.begin(), expected_payload.end()),
         "session begin payload no longer uses the v3 explicit little-endian vector"
     );
 
-    Moer::Array<std::uint8_t> packet;
+    Moer::Array<Moer::uint8> packet;
     Expect(
         WrapPacket(PacketType::SessionBegin, 0x2122232425262728ull, payload, CodecLimits{}, packet) ==
             EncodeStatus::Ok,
@@ -307,28 +352,28 @@ void TestLossDecodeHardening() {
         .last_sequence  = 12,
         .record_count   = 3,
         .value_bytes    = 99,
-        .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
     };
-    Moer::Array<std::uint8_t> valid_payload;
+    Moer::Array<Moer::uint8> valid_payload;
     EncodeLossPayload(valid, valid_payload);
     Expect(valid_payload.size() == 36, "v3 loss payload size changed");
 
-    auto WriteU64 = [](Moer::Array<std::uint8_t>& _payload, std::size_t _offset, std::uint64_t _value) {
+    auto WriteU64 = [](Moer::Array<Moer::uint8>& _payload, std::size_t _offset, Moer::uint64 _value) {
         for (std::size_t byte = 0; byte < sizeof(_value); ++byte) {
-            _payload[_offset + byte] = static_cast<std::uint8_t>(_value >> (byte * 8));
+            _payload[_offset + byte] = static_cast<Moer::uint8>(_value >> (byte * 8));
         }
     };
-    auto WriteU32 = [](Moer::Array<std::uint8_t>& _payload, std::size_t _offset, std::uint32_t _value) {
+    auto WriteU32 = [](Moer::Array<Moer::uint8>& _payload, std::size_t _offset, Moer::uint32 _value) {
         for (std::size_t byte = 0; byte < sizeof(_value); ++byte) {
-            _payload[_offset + byte] = static_cast<std::uint8_t>(_value >> (byte * 8));
+            _payload[_offset + byte] = static_cast<Moer::uint8>(_value >> (byte * 8));
         }
     };
-    auto ExpectMalformed = [&](Moer::Array<std::uint8_t> _payload, std::string_view _message) {
+    auto ExpectMalformed = [&](Moer::Array<Moer::uint8> _payload, std::string_view _message) {
         const PacketView packet{
             .header =
                 PacketHeader{
                     .type          = PacketType::Loss,
-                    .payload_bytes = static_cast<std::uint32_t>(_payload.size()),
+                    .payload_bytes = static_cast<Moer::uint32>(_payload.size()),
                 },
             .payload = _payload,
         };
@@ -336,7 +381,7 @@ void TestLossDecodeHardening() {
         Expect(DecodeLossPayload(packet, decoded) == DecodeStatus::MalformedPayload, _message);
     };
 
-    Moer::Array<std::uint8_t> malformed = valid_payload;
+    Moer::Array<Moer::uint8> malformed = valid_payload;
     WriteU64(malformed, 16, 0);
     ExpectMalformed(std::move(malformed), "zero-count loss notice was accepted");
     malformed = valid_payload;
@@ -358,12 +403,12 @@ void TestCodecRoundTripAndChecksums() {
     const CodecLimits      limits{};
     const SchemaDescriptor schema = MakeAllTypesSchema();
 
-    Moer::Array<std::uint8_t> schema_payload;
+    Moer::Array<Moer::uint8> schema_payload;
     Expect(
         EncodeSchemaPayload(schema, limits, schema_payload) == EncodeStatus::Ok,
         "all-types schema failed to encode"
     );
-    Moer::Array<std::uint8_t> schema_packet;
+    Moer::Array<Moer::uint8> schema_packet;
     Expect(
         WrapPacket(PacketType::Schema, 0, schema_payload, limits, schema_packet) == EncodeStatus::Ok,
         "schema packet failed to wrap"
@@ -389,16 +434,16 @@ void TestCodecRoundTripAndChecksums() {
 
     const std::array<FieldValueView, 8> values = {
         FieldValueView{true},
-        FieldValueView{std::int32_t{-17}},
-        FieldValueView{std::uint32_t{23}},
-        FieldValueView{std::int64_t{-1234567890123}},
-        FieldValueView{std::uint64_t{12345678901234}},
+        FieldValueView{Moer::int32{-17}},
+        FieldValueView{Moer::uint32{23}},
+        FieldValueView{Moer::int64{-1234567890123}},
+        FieldValueView{Moer::uint64{12345678901234}},
         FieldValueView{1.25F},
         FieldValueView{-9.5},
         FieldValueView{std::string_view("round-trip-string")},
     };
-    Moer::Array<std::uint8_t> record_payload;
-    const std::uint64_t       schema_hash = ComputeSchemaHash(schema);
+    Moer::Array<Moer::uint8> record_payload;
+    const Moer::uint64       schema_hash = ComputeSchemaHash(schema);
     Expect(schema_hash != 0, "valid schema produced the reserved zero hash");
     Expect(
         EncodeRecordPayload(0, 91, schema.fields, values, limits, record_payload) ==
@@ -410,7 +455,7 @@ void TestCodecRoundTripAndChecksums() {
             EncodeStatus::Ok,
         "all-types record failed to encode"
     );
-    Moer::Array<std::uint8_t> record_packet;
+    Moer::Array<Moer::uint8> record_packet;
     Expect(
         WrapPacket(PacketType::Record, 1, record_payload, limits, record_packet) == EncodeStatus::Ok,
         "record packet failed to wrap"
@@ -431,10 +476,10 @@ void TestCodecRoundTripAndChecksums() {
     Expect(record.sequence == 91, "record sequence changed");
     Expect(record.values.size() == values.size(), "record value count changed");
     Expect(std::get<bool>(record.values[0]), "bool value changed");
-    Expect(std::get<std::int32_t>(record.values[1]) == -17, "int32 value changed");
-    Expect(std::get<std::uint32_t>(record.values[2]) == 23, "uint32 value changed");
-    Expect(std::get<std::int64_t>(record.values[3]) == -1234567890123, "int64 value changed");
-    Expect(std::get<std::uint64_t>(record.values[4]) == 12345678901234, "uint64 value changed");
+    Expect(std::get<Moer::int32>(record.values[1]) == -17, "int32 value changed");
+    Expect(std::get<Moer::uint32>(record.values[2]) == 23, "uint32 value changed");
+    Expect(std::get<Moer::int64>(record.values[3]) == -1234567890123, "int64 value changed");
+    Expect(std::get<Moer::uint64>(record.values[4]) == 12345678901234, "uint64 value changed");
     Expect(std::get<float>(record.values[5]) == 1.25F, "float32 value changed");
     Expect(std::get<double>(record.values[6]) == -9.5, "float64 value changed");
     Expect(std::get<ProfileString>(record.values[7]) == "round-trip-string", "string value changed");
@@ -443,13 +488,13 @@ void TestCodecRoundTripAndChecksums() {
         PacketView truncated_packet{};
         consumed                  = 99;
         const DecodeStatus status = DecodePacket(
-            std::span<const std::uint8_t>(record_packet).first(prefix), limits, truncated_packet, consumed
+            std::span<const Moer::uint8>(record_packet).first(prefix), limits, truncated_packet, consumed
         );
         Expect(status == DecodeStatus::NeedMoreData, "truncated packet was not retryable");
         Expect(consumed == 0, "truncated packet consumed input");
     }
 
-    Moer::Array<std::uint8_t> damaged_header = record_packet;
+    Moer::Array<Moer::uint8> damaged_header = record_packet;
     damaged_header[kPacketHeaderBytes - 1] ^= 0x80;
     PacketView damaged_packet{};
     consumed = 99;
@@ -459,7 +504,7 @@ void TestCodecRoundTripAndChecksums() {
     );
     Expect(consumed == 0, "bad header CRC consumed input");
 
-    Moer::Array<std::uint8_t> damaged_payload = record_packet;
+    Moer::Array<Moer::uint8> damaged_payload = record_packet;
     damaged_payload[kPacketHeaderBytes] ^= 0x80;
     consumed = 99;
     Expect(
@@ -471,7 +516,7 @@ void TestCodecRoundTripAndChecksums() {
 
 void TestSchemaHashCoverage() {
     const SchemaDescriptor baseline      = MakeAllTypesSchema();
-    const std::uint64_t    baseline_hash = ComputeSchemaHash(baseline);
+    const Moer::uint64     baseline_hash = ComputeSchemaHash(baseline);
     auto                   ExpectChanged = [&](SchemaDescriptor _changed, std::string_view _message) {
         Expect(ComputeSchemaHash(_changed) != baseline_hash, _message);
     };
@@ -619,8 +664,8 @@ void TestRuntimeLifecycleAndRestart() {
     Expect(duplicate.handle == registration.handle, "duplicate registration changed the handle");
 
     const std::array<FieldValueView, 3> values = {
-        FieldValueView{std::uint64_t{3}},
-        FieldValueView{std::uint64_t{17}},
+        FieldValueView{Moer::uint64{3}},
+        FieldValueView{Moer::uint64{17}},
         FieldValueView{std::string_view("single")},
     };
     Expect(Emit(registration.handle, values) == EmitStatus::Accepted, "runtime rejected a valid record");
@@ -731,13 +776,13 @@ void TestShutdownFinalizeAllocationFailureClosesWriter() {
     const std::filesystem::path session_temp = output.InProgressPath();
     std::filesystem::path       moved_temp   = output.directory / "closed-writer-forensic.inprogress";
     std::error_code             move_error;
-    for (std::uint32_t attempt = 0; attempt < 8; ++attempt) {
+    for (Moer::uint32 attempt = 0; attempt < 8; ++attempt) {
         move_error.clear();
         std::filesystem::rename(session_temp, moved_temp, move_error);
         if (!move_error) {
             break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1U << std::min<std::uint32_t>(attempt, 5U)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1U << std::min<Moer::uint32>(attempt, 5U)));
     }
     Expect(!move_error, "shutdown allocation fault left the writer file handle open");
     Expect(
@@ -768,7 +813,7 @@ void TestExclusiveTempCreateRace() {
     ResumeWriterOnExit  resume_guard;
     Expect(Testing::WaitForWriterPaused(2000), "writer did not reach the deterministic pre-open pause");
 
-    const std::array<std::uint8_t, 9> competing_bytes = {
+    const std::array<Moer::uint8, 9> competing_bytes = {
         0x45,
         0x58,
         0x54,
@@ -789,7 +834,7 @@ void TestExclusiveTempCreateRace() {
     Expect(start_result == StartResult::FileOpenFailed, "exclusive temp collision did not fail startup");
     Expect(
         ReadBinaryFile(output.InProgressPath()) ==
-            std::vector<std::uint8_t>(competing_bytes.begin(), competing_bytes.end()),
+            std::vector<Moer::uint8>(competing_bytes.begin(), competing_bytes.end()),
         "exclusive temp collision truncated or removed the competing file"
     );
     Expect(!std::filesystem::exists(output.path), "exclusive temp collision exposed a final output");
@@ -811,7 +856,7 @@ void TestReplacementPreservesForeignTemp() {
     // artifact instead of unlinking it.
     std::filesystem::path foreign_temp = output.path;
     foreign_temp += ".inprogress";
-    const std::array<std::uint8_t, 7> foreign_bytes = {
+    const std::array<Moer::uint8, 7> foreign_bytes = {
         0x46,
         0x4f,
         0x52,
@@ -836,7 +881,7 @@ void TestReplacementPreservesForeignTemp() {
         "replacement runtime did not keep its temp separate from the foreign temp"
     );
     Expect(
-        ReadBinaryFile(foreign_temp) == std::vector<std::uint8_t>(foreign_bytes.begin(), foreign_bytes.end()),
+        ReadBinaryFile(foreign_temp) == std::vector<Moer::uint8>(foreign_bytes.begin(), foreign_bytes.end()),
         "replacement startup modified the foreign temp"
     );
     Expect(Shutdown() == ShutdownResult::Completed, "replacement runtime did not shut down cleanly");
@@ -846,14 +891,14 @@ void TestReplacementPreservesForeignTemp() {
         "replacement finalization removed or retained the wrong temp"
     );
     Expect(
-        ReadBinaryFile(foreign_temp) == std::vector<std::uint8_t>(foreign_bytes.begin(), foreign_bytes.end()),
+        ReadBinaryFile(foreign_temp) == std::vector<Moer::uint8>(foreign_bytes.begin(), foreign_bytes.end()),
         "replacement finalization modified the foreign temp"
     );
 }
 
 void TestFinalPublicationRaces() {
     Testing::ClearHooks();
-    const std::array<std::uint8_t, 8> competing_final = {
+    const std::array<Moer::uint8, 8> competing_final = {
         0x45,
         0x58,
         0x54,
@@ -887,7 +932,7 @@ void TestFinalPublicationRaces() {
         Expect(stats.last_fault == RuntimeFault::RenameFinal, "final-name race fault identity changed");
         Expect(
             ReadBinaryFile(output.path) ==
-                std::vector<std::uint8_t>(competing_final.begin(), competing_final.end()),
+                std::vector<Moer::uint8>(competing_final.begin(), competing_final.end()),
             "no-replace publication modified the competing final"
         );
         Expect(
@@ -939,16 +984,16 @@ void TestMultithreadedProducers() {
     const SchemaRegistration registration = RegisterSchema(schema);
     Expect(registration.status == SchemaStatus::Registered, "multithread schema failed to register");
 
-    constexpr std::uint64_t    producer_count       = 6;
-    constexpr std::uint64_t    records_per_producer = 41;
-    std::atomic<std::uint64_t> accepted{0};
-    std::atomic<std::uint64_t> rejected{0};
-    std::atomic<std::uint64_t> producer_flushes{0};
+    constexpr Moer::uint64     producer_count       = 6;
+    constexpr Moer::uint64     records_per_producer = 41;
+    std::atomic<Moer::uint64>  accepted{0};
+    std::atomic<Moer::uint64>  rejected{0};
+    std::atomic<Moer::uint64>  producer_flushes{0};
     std::vector<std::jthread>  producers;
     producers.reserve(producer_count);
-    for (std::uint64_t producer = 0; producer < producer_count; ++producer) {
+    for (Moer::uint64 producer = 0; producer < producer_count; ++producer) {
         producers.emplace_back([&, producer] {
-            for (std::uint64_t sequence = 0; sequence < records_per_producer; ++sequence) {
+            for (Moer::uint64 sequence = 0; sequence < records_per_producer; ++sequence) {
                 const std::array<FieldValueView, 3> values = {
                     FieldValueView{producer},
                     FieldValueView{sequence},
@@ -969,7 +1014,7 @@ void TestMultithreadedProducers() {
     }
     producers.clear();
 
-    const std::uint64_t expected_records = producer_count * records_per_producer;
+    const Moer::uint64 expected_records = producer_count * records_per_producer;
     Expect(rejected.load(std::memory_order_relaxed) == 0, "a producer operation failed");
     Expect(
         producer_flushes.load(std::memory_order_relaxed) == producer_count,
@@ -987,8 +1032,8 @@ void TestMultithreadedProducers() {
     std::vector<bool> seen(expected_records, false);
     for (const DecodedRecord& record : dump.records) {
         Expect(record.values.size() == 3, "multithread record value count changed");
-        const std::uint64_t producer = std::get<std::uint64_t>(record.values[0]);
-        const std::uint64_t sequence = std::get<std::uint64_t>(record.values[1]);
+        const Moer::uint64 producer = std::get<Moer::uint64>(record.values[0]);
+        const Moer::uint64 sequence = std::get<Moer::uint64>(record.values[1]);
         Expect(producer < producer_count, "multithread record producer is out of range");
         Expect(sequence < records_per_producer, "multithread record sequence is out of range");
         const std::size_t key = static_cast<std::size_t>(producer * records_per_producer + sequence);
@@ -1019,8 +1064,8 @@ void TestFlushAllHarvestsParkedLiveShard() {
     EmitStatus        worker_status{EmitStatus::Disabled};
     std::jthread      worker([&](std::stop_token _stop) {
         const std::array<FieldValueView, 3> values = {
-            FieldValueView{std::uint64_t{71}},
-            FieldValueView{std::uint64_t{1}},
+            FieldValueView{Moer::uint64{71}},
+            FieldValueView{Moer::uint64{1}},
             FieldValueView{std::string_view("parked-flush")},
         };
         worker_status = Emit(registration.handle, values);
@@ -1071,8 +1116,8 @@ void TestShutdownHarvestsParkedLiveShard() {
     EmitStatus        worker_status{EmitStatus::Disabled};
     std::jthread      worker([&](std::stop_token _stop) {
         const std::array<FieldValueView, 3> values = {
-            FieldValueView{std::uint64_t{72}},
-            FieldValueView{std::uint64_t{1}},
+            FieldValueView{Moer::uint64{72}},
+            FieldValueView{Moer::uint64{1}},
             FieldValueView{std::string_view("parked-shutdown")},
         };
         worker_status = Emit(registration.handle, values);
@@ -1133,8 +1178,8 @@ void TestShutdownWaitsForAdmittedEmitterBeforeHarvest() {
     std::atomic<bool> shutdown_done{false};
     worker = std::jthread([&] {
         const std::array<FieldValueView, 3> values = {
-            FieldValueView{std::uint64_t{74}},
-            FieldValueView{std::uint64_t{1}},
+            FieldValueView{Moer::uint64{74}},
+            FieldValueView{Moer::uint64{1}},
             FieldValueView{std::string_view("active-shutdown")},
         };
         emit_status = Emit(registration.handle, values);
@@ -1184,11 +1229,11 @@ void TestParkedWorkerRebindsAcrossGenerations() {
     std::array<SchemaHandle, 2> handles{};
     handles[0] = first_registration.handle;
     std::array<EmitStatus, 2>  statuses{EmitStatus::Disabled, EmitStatus::Disabled};
-    std::atomic<std::uint32_t> command{0};
-    std::atomic<std::uint32_t> completed{0};
+    std::atomic<Moer::uint32>  command{0};
+    std::atomic<Moer::uint32>  completed{0};
     std::atomic<bool>          release{false};
     std::jthread               worker([&](std::stop_token _stop) {
-        for (std::uint32_t phase = 1; phase <= 2; ++phase) {
+        for (Moer::uint32 phase = 1; phase <= 2; ++phase) {
             while (command.load(std::memory_order_acquire) < phase && !_stop.stop_requested()) {
                 std::this_thread::yield();
             }
@@ -1196,8 +1241,8 @@ void TestParkedWorkerRebindsAcrossGenerations() {
                 return;
             }
             const std::array<FieldValueView, 3> values = {
-                FieldValueView{std::uint64_t{73}},
-                FieldValueView{std::uint64_t{phase}},
+                FieldValueView{Moer::uint64{73}},
+                FieldValueView{Moer::uint64{phase}},
                 FieldValueView{std::string_view("parked-generation")},
             };
             statuses[phase - 1] = Emit(handles[phase - 1], values);
@@ -1252,8 +1297,8 @@ void TestParkedWorkerRebindsAcrossGenerations() {
     const ParsedDump second_dump = ParseDump(second_output.path, second_config.codec_limits);
     Expect(second_dump.records.size() == 1, "second live generation lost or duplicated its record");
     Expect(
-        std::get<std::uint64_t>(first_dump.records.front().values[1]) == 1 &&
-            std::get<std::uint64_t>(second_dump.records.front().values[1]) == 2,
+        std::get<Moer::uint64>(first_dump.records.front().values[1]) == 1 &&
+            std::get<Moer::uint64>(second_dump.records.front().values[1]) == 2,
         "parked worker records crossed generation boundaries"
     );
 
@@ -1289,8 +1334,8 @@ void TestTlsDestructorRacesFlushAllExactlyOnce() {
     for (std::size_t index = 0; index < worker_count; ++index) {
         workers.emplace_back([&, index] {
             const std::array<FieldValueView, 3> values = {
-                FieldValueView{static_cast<std::uint64_t>(index)},
-                FieldValueView{std::uint64_t{1}},
+                FieldValueView{static_cast<Moer::uint64>(index)},
+                FieldValueView{Moer::uint64{1}},
                 FieldValueView{std::string_view("destructor-race")},
             };
             if (Emit(registration.handle, values) == EmitStatus::Accepted) {
@@ -1311,7 +1356,7 @@ void TestTlsDestructorRacesFlushAllExactlyOnce() {
     Expect(dump.records.size() == worker_count, "TLS destructor race lost or duplicated records");
     std::vector<bool> seen(worker_count, false);
     for (const DecodedRecord& record : dump.records) {
-        const std::uint64_t producer = std::get<std::uint64_t>(record.values[0]);
+        const Moer::uint64 producer = std::get<Moer::uint64>(record.values[0]);
         Expect(producer < worker_count, "TLS destructor race persisted an invalid producer");
         Expect(!seen[producer], "TLS destructor race duplicated a producer record");
         seen[producer] = true;
@@ -1339,17 +1384,17 @@ void TestBoundedQueueDropNewest() {
 
     const SchemaDescriptor              schema = MakeRuntimeSchema();
     const std::array<FieldValueView, 3> values = {
-        FieldValueView{std::uint64_t{7}},
-        FieldValueView{std::uint64_t{11}},
+        FieldValueView{Moer::uint64{7}},
+        FieldValueView{Moer::uint64{11}},
         FieldValueView{std::string_view("bounded")},
     };
     const std::string                   oversized_label(80, 'x');
     const std::array<FieldValueView, 3> oversized_values = {
-        FieldValueView{std::uint64_t{7}},
-        FieldValueView{std::uint64_t{12}},
+        FieldValueView{Moer::uint64{7}},
+        FieldValueView{Moer::uint64{12}},
         FieldValueView{std::string_view(oversized_label)},
     };
-    Moer::Array<std::uint8_t> encoded_record;
+    Moer::Array<Moer::uint8>  encoded_record;
     const CodecLimits         limits{};
     Expect(
         EncodeRecordPayload(ComputeSchemaHash(schema), 1, schema.fields, values, limits, encoded_record) ==
@@ -1434,14 +1479,14 @@ void TestBoundedQueueDropNewest() {
     Expect(loss.last_sequence == 4, "loss aggregate has the wrong last sequence");
     Expect(loss.record_count == 2, "loss aggregate has the wrong record count");
     // Two uint64 values plus one length-prefixed string: 8 + 8 + 4 + N.
-    constexpr std::uint64_t queue_full_value_bytes = 8 + 8 + 4 + 7;
-    constexpr std::uint64_t oversized_value_bytes  = 8 + 8 + 4 + 80;
+    constexpr Moer::uint64 queue_full_value_bytes = 8 + 8 + 4 + 7;
+    constexpr Moer::uint64 oversized_value_bytes  = 8 + 8 + 4 + 80;
     Expect(
         loss.value_bytes == queue_full_value_bytes + oversized_value_bytes,
         "loss aggregate has the wrong attempted value byte count"
     );
-    const std::uint32_t required_reasons =
-        static_cast<std::uint32_t>(LossReason::QueueFull) | static_cast<std::uint32_t>(LossReason::Oversized);
+    const Moer::uint32 required_reasons =
+        static_cast<Moer::uint32>(LossReason::QueueFull) | static_cast<Moer::uint32>(LossReason::Oversized);
     Expect(
         (loss.reason_mask & required_reasons) == required_reasons,
         "loss aggregate omitted queue-full or oversized reason"
@@ -1474,11 +1519,11 @@ void TestMultiShardHarvestHonorsQueueLimitsAndLoss() {
     const SchemaDescriptor              schema = MakeRuntimeSchema();
     constexpr std::string_view          label{"multi-shard"};
     const std::array<FieldValueView, 3> sizing_values = {
-        FieldValueView{std::uint64_t{1}},
-        FieldValueView{std::uint64_t{1}},
+        FieldValueView{Moer::uint64{1}},
+        FieldValueView{Moer::uint64{1}},
         FieldValueView{label},
     };
-    Moer::Array<std::uint8_t> encoded_record;
+    Moer::Array<Moer::uint8>  encoded_record;
     const CodecLimits         limits{};
     Expect(
         EncodeRecordPayload(
@@ -1512,8 +1557,8 @@ void TestMultiShardHarvestHonorsQueueLimitsAndLoss() {
     for (std::size_t index = 0; index < worker_count; ++index) {
         workers.emplace_back([&, index](std::stop_token _stop) {
             const std::array<FieldValueView, 3> values = {
-                FieldValueView{static_cast<std::uint64_t>(index)},
-                FieldValueView{std::uint64_t{1}},
+                FieldValueView{static_cast<Moer::uint64>(index)},
+                FieldValueView{Moer::uint64{1}},
                 FieldValueView{label},
             };
             if (Emit(registration.handle, values) == EmitStatus::Accepted) {
@@ -1590,10 +1635,10 @@ void TestMultiShardHarvestHonorsQueueLimitsAndLoss() {
     const LossNotice& loss = dump.losses.front();
     Expect(loss.record_count == 2, "multi-shard loss notice has the wrong record count");
     Expect(
-        (loss.reason_mask & static_cast<std::uint32_t>(LossReason::QueueFull)) != 0,
+        (loss.reason_mask & static_cast<Moer::uint32>(LossReason::QueueFull)) != 0,
         "multi-shard loss notice omitted QueueFull"
     );
-    constexpr std::uint64_t value_bytes_per_record = 8 + 8 + 4 + label.size();
+    constexpr Moer::uint64 value_bytes_per_record = 8 + 8 + 4 + label.size();
     Expect(
         loss.value_bytes == value_bytes_per_record * 2,
         "multi-shard loss notice has the wrong value byte count"
@@ -1624,8 +1669,8 @@ void TestConcurrentFlushWaiters() {
     const SchemaRegistration registration = RegisterSchema(schema);
     Expect(registration.status == SchemaStatus::Registered, "flush waiter schema failed to register");
     const std::array<FieldValueView, 3> values = {
-        FieldValueView{std::uint64_t{34}},
-        FieldValueView{std::uint64_t{55}},
+        FieldValueView{Moer::uint64{34}},
+        FieldValueView{Moer::uint64{55}},
         FieldValueView{std::string_view("flush-waiters")},
     };
     Expect(
@@ -1700,11 +1745,11 @@ void TestFaultedRestartDiscardsParkedStaleShard() {
     std::array<SchemaHandle, 2> handles{};
     handles[0] = first_registration.handle;
     std::array<EmitStatus, 2>  statuses{EmitStatus::Disabled, EmitStatus::Disabled};
-    std::atomic<std::uint32_t> command{0};
-    std::atomic<std::uint32_t> completed{0};
+    std::atomic<Moer::uint32>  command{0};
+    std::atomic<Moer::uint32>  completed{0};
     std::atomic<bool>          release{false};
     std::jthread               worker([&](std::stop_token _stop) {
-        for (std::uint32_t phase = 1; phase <= 2; ++phase) {
+        for (Moer::uint32 phase = 1; phase <= 2; ++phase) {
             while (command.load(std::memory_order_acquire) < phase && !_stop.stop_requested()) {
                 std::this_thread::yield();
             }
@@ -1712,8 +1757,8 @@ void TestFaultedRestartDiscardsParkedStaleShard() {
                 return;
             }
             const std::array<FieldValueView, 3> values = {
-                FieldValueView{std::uint64_t{88}},
-                FieldValueView{std::uint64_t{phase}},
+                FieldValueView{Moer::uint64{88}},
+                FieldValueView{Moer::uint64{phase}},
                 FieldValueView{std::string_view("fault-restart-worker")},
             };
             statuses[phase - 1] = Emit(handles[phase - 1], values);
@@ -1735,8 +1780,8 @@ void TestFaultedRestartDiscardsParkedStaleShard() {
     Expect(GetRuntimeStats().records_enqueued == 0, "parked pre-fault record published too early");
 
     const std::array<FieldValueView, 3> trigger_values = {
-        FieldValueView{std::uint64_t{99}},
-        FieldValueView{std::uint64_t{1}},
+        FieldValueView{Moer::uint64{99}},
+        FieldValueView{Moer::uint64{1}},
         FieldValueView{std::string_view("fault-trigger")},
     };
     const EmitStatus first_trigger  = Emit(first_registration.handle, trigger_values);
@@ -1794,8 +1839,8 @@ void TestFaultedRestartDiscardsParkedStaleShard() {
     const ParsedDump dump = ParseDump(output.path, config.codec_limits);
     Expect(dump.records.size() == 1, "fault restart output retained old or duplicated new parked data");
     Expect(
-        std::get<std::uint64_t>(dump.records.front().values[0]) == 88 &&
-            std::get<std::uint64_t>(dump.records.front().values[1]) == 2,
+        std::get<Moer::uint64>(dump.records.front().values[0]) == 88 &&
+            std::get<Moer::uint64>(dump.records.front().values[1]) == 2,
         "fault restart output contains the wrong worker generation"
     );
     Expect(dump.losses.empty(), "fault restart output inherited an old-generation Loss");
@@ -1814,8 +1859,8 @@ void RecoverAfterFault(const ScopedOutput& _output, RuntimeConfig _config, const
         registration.status == SchemaStatus::Registered, "schema did not register after sink-fault restart"
     );
     const std::array<FieldValueView, 3> values = {
-        FieldValueView{std::uint64_t{1}},
-        FieldValueView{std::uint64_t{2}},
+        FieldValueView{Moer::uint64{1}},
+        FieldValueView{Moer::uint64{2}},
         FieldValueView{std::string_view("recovered")},
     };
     Expect(
@@ -1829,7 +1874,7 @@ void RecoverAfterFault(const ScopedOutput& _output, RuntimeConfig _config, const
 
 void TestWriterFaultReleasesFlushWaiter(
     Testing::FaultPoint _fault_point,
-    std::uint64_t       _trigger_hit,
+    Moer::uint64        _trigger_hit,
     RuntimeFault        _expected_fault,
     std::string_view    _output_stem,
     bool                _recover
@@ -1848,8 +1893,8 @@ void TestWriterFaultReleasesFlushWaiter(
     const SchemaRegistration registration = RegisterSchema(schema);
     Expect(registration.status == SchemaStatus::Registered, "fault test schema failed to register");
     const std::array<FieldValueView, 3> values = {
-        FieldValueView{std::uint64_t{5}},
-        FieldValueView{std::uint64_t{8}},
+        FieldValueView{Moer::uint64{5}},
+        FieldValueView{Moer::uint64{8}},
         FieldValueView{std::string_view("fault")},
     };
     const EmitStatus initial_emit = Emit(registration.handle, values);
@@ -1899,7 +1944,7 @@ void TestRenameFinalFault() {
     RuntimeConfig config                        = MakeRuntimeConfig(output);
     config.replace_existing                     = true;
     config.tls_publish_records                  = 1;
-    const std::array<std::uint8_t, 8> old_final = {
+    const std::array<Moer::uint8, 8> old_final  = {
         0x4d,
         0x4f,
         0x45,
@@ -1920,14 +1965,14 @@ void TestRenameFinalFault() {
     const SchemaDescriptor schema = MakeRuntimeSchema();
     Expect(Start(config) == StartResult::Started, "rename fault runtime failed to start");
     Expect(
-        ReadBinaryFile(output.path) == std::vector<std::uint8_t>(old_final.begin(), old_final.end()),
+        ReadBinaryFile(output.path) == std::vector<Moer::uint8>(old_final.begin(), old_final.end()),
         "replacement start removed the previous valid final"
     );
     const SchemaRegistration registration = RegisterSchema(schema);
     Expect(registration.status == SchemaStatus::Registered, "rename fault schema failed to register");
     const std::array<FieldValueView, 3> values = {
-        FieldValueView{std::uint64_t{13}},
-        FieldValueView{std::uint64_t{21}},
+        FieldValueView{Moer::uint64{13}},
+        FieldValueView{Moer::uint64{21}},
         FieldValueView{std::string_view("rename")},
     };
     Expect(
@@ -1941,7 +1986,7 @@ void TestRenameFinalFault() {
         std::filesystem::exists(output.InProgressPath()), "rename fault removed forensic in-progress output"
     );
     Expect(
-        ReadBinaryFile(output.path) == std::vector<std::uint8_t>(old_final.begin(), old_final.end()),
+        ReadBinaryFile(output.path) == std::vector<Moer::uint8>(old_final.begin(), old_final.end()),
         "rename fault destroyed the previous valid final"
     );
     Expect(Shutdown() == ShutdownResult::AlreadyStopped, "rename fault shutdown was not idempotent");
@@ -1969,8 +2014,8 @@ void TestCrashFlushPublishedPrefix() {
         "crash-prefix schema failed to register"
     );
     const std::array<FieldValueView, 3> values = {
-        FieldValueView{std::uint64_t{144}},
-        FieldValueView{std::uint64_t{233}},
+        FieldValueView{Moer::uint64{144}},
+        FieldValueView{Moer::uint64{233}},
         FieldValueView{std::string_view("crash-prefix-sentinel")},
     };
     Expect(

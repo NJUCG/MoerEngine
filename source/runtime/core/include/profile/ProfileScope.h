@@ -4,14 +4,14 @@
 #include "API_Macro.h"
 #include "profile/ProfileDump.h"
 
+#include "misc/Types.h"
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <string_view>
 
 namespace Moer::ProfileDump {
 
-enum class CpuScopeActivationResult : std::uint8_t {
+enum class CpuScopeActivationResult : uint8 {
     Activated = 0,
     AlreadyActive,
     InvalidHandle,
@@ -46,10 +46,10 @@ private:
 
     std::array<char, kMaxNameBytes> name_{};
     SchemaHandle                    schema_{};
-    std::uint64_t                   thread_id_{0};
-    std::uint64_t                   begin_ns_{0};
-    std::uint32_t                   depth_{0};
-    std::uint16_t                   name_bytes_{0};
+    uint64                          thread_id_{0};
+    uint64                          begin_ns_{0};
+    uint32                          depth_{0};
+    uint16                          name_bytes_{0};
     bool                            active_{false};
 };
 

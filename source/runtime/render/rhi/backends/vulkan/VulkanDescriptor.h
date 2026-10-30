@@ -1,12 +1,13 @@
 #pragma once
 
-#include "VulkanCommon.h"
 #include "RenderAPI.h"
+#include "VulkanCommon.h"
 #include "VulkanDescriptorBufferAllocator.h"
 #include "VulkanDescriptorMode.h"
 #include "VulkanRaytracingResource.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 
 #include <memory>
 #include <mutex>
@@ -27,7 +28,7 @@ uint64 GetBindlessTextureDescriptorOffset(const VulkanDevice& device);
 // Non-owning location in the CPU cache. The resource must outlive every copy.
 struct VulkanCachedDescriptor {
     VkDescriptorType type       = VK_DESCRIPTOR_TYPE_MAX_ENUM;
-    uint             slot_index = 0;
+    uint32           slot_index = 0;
 };
 
 struct VulkanDescriptorHeapFunctions {
@@ -49,7 +50,7 @@ public:
     VulkanDescriptorHeap& operator=(VulkanDescriptorHeap&&)      = delete;
 
     // Native descriptor size and GPU storage address.
-    uint            GetDescriptorSize(VkDescriptorType _type) const;
+    uint32          GetDescriptorSize(VkDescriptorType _type) const;
     VkDeviceAddress GetDescriptorBufferAddress() const;
 
     VulkanBuffer* GetResourceHeapBuffer() const {
@@ -85,9 +86,9 @@ public:
     GetOrCreateAccelerationStructureDescriptor(VulkanAccelerationStructure* _acceleration_structure);
     VulkanCachedDescriptor GetSamplerDescriptor(Sampler _sampler) const;
 
-    void FreeBufferDescriptorSlot(uint _slot_index);
-    void FreeImageDescriptorSlot(uint _slot_index);
-    void FreeAccelerationStructureDescriptorSlot(uint _slot_index);
+    void FreeBufferDescriptorSlot(uint32 _slot_index);
+    void FreeImageDescriptorSlot(uint32 _slot_index);
+    void FreeAccelerationStructureDescriptorSlot(uint32 _slot_index);
 
     // Copy one cached descriptor to bindless update data or to a reserved GPU
     // descriptor-buffer range. The owning resource must remain alive.
@@ -107,20 +108,20 @@ public:
     uint64 GetUsedDescriptorBytes(const VulkanDescriptorBufferLease& _lease) const;
 
     RENDER_API std::optional<std::vector<VulkanDescriptorBufferAllocator::Recording>> PrepareDescriptorRecordings(
-        const VulkanDescriptorBufferLease& _lease,
-        std::span<const std::vector<uint64_t>> _requests
+        const VulkanDescriptorBufferLease&   _lease,
+        std::span<const std::vector<uint64>> _requests
     );
 
 private:
     // Fixed-size CPU slots. All mutations are protected by cache_mutex.
     struct DescriptorCache {
-        explicit DescriptorCache(uint _slot_stride);
-        uint AllocateSlot();
+        explicit DescriptorCache(uint32 _slot_stride);
+        uint32 AllocateSlot();
 
-        uint        slot_stride;
+        uint32        slot_stride;
         Array<byte> bytes;
-        Array<uint> free_slots;
-        uint        next_slot{0};
+        Array<uint32> free_slots;
+        uint32        next_slot{0};
     };
 
     void InitializeSamplerDescriptors();

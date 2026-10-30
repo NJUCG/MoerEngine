@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/Types.h"
+
 /**
  * 这个文件专门存一些编译期的常量
  * 
@@ -14,6 +16,6 @@
 namespace Moer {
 
 // 如果要修改此参数，请同步修改 shaderheaders\shared\raster\lighting_pass\ShaderParameters.h 中的 LightingData 结构体
-static constexpr uint CSM_MAX_CASCADES = 4;
+static constexpr uint32 CSM_MAX_CASCADES = 4;
 
 } // namespace Moer

@@ -1,5 +1,6 @@
 #include "taskgraph/GraphTask.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "taskgraph/Event.h"
 #include "taskgraph/TaskGraph.h"
 //class GraphEventPool {
@@ -31,10 +32,10 @@ void BaseGraphTask::QueueTask(EThread::Type currentThread, bool shouldWakeupWork
 
 void BaseGraphTask::PrerequestsComplete(
     EThread::Type currentThread,
-    int32_t       finishedCount,
+    Moer::int32   finishedCount,
     bool          unlock
 ) noexcept {
-    int32_t finished = finishedCount + (unlock ? 1 : 0);
+    Moer::int32 finished = finishedCount + (unlock ? 1 : 0);
     if (m_prerequests_count.fetch_sub(finished) == finished) {
         QueueTask(currentThread, true);
     }
@@ -47,7 +48,7 @@ void GraphEvent::TryUnlockSubsequents(EThread::Type currentThread) {
 
         //test events to wait has complete
         bool generate_empty_task = false;
-        for (int32_t i = 0; i < temp_events.size(); i++) {
+        for (Moer::int32 i = 0; i < temp_events.size(); i++) {
             GraphEvent* event = temp_events[i].Get();
             if (!event->IsComplete()) {
                 generate_empty_task = true;

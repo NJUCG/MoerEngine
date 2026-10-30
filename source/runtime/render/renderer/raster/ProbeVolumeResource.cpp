@@ -1,4 +1,5 @@
 #include "ProbeVolumeResource.h"
+#include "misc/Types.h"
 #include "renderer/common/GraphResourceBoundary.h"
 
 #include "log/LogSystem.h"
@@ -15,11 +16,11 @@
 namespace Moer::Render::Raster {
 namespace {
 
-uint ClampProbeCount(int value) {
-    return static_cast<uint>(Clamp(value, 1, 16));
+uint32 ClampProbeCount(int value) {
+    return static_cast<uint32>(Clamp(value, 1, 16));
 }
 
-void ClampProbeBudget(uint& count_x, uint& count_y, uint& count_z, uint max_count) {
+void ClampProbeBudget(uint32& count_x, uint32& count_y, uint32& count_z, uint32 max_count) {
     while (count_x * count_y * count_z > max_count) {
         if (count_z >= count_x && count_z >= count_y && count_z > 1) {
             --count_z;
@@ -52,7 +53,7 @@ bool NearlyEqual(float3 lhs, float3 rhs) {
     return NearlyEqual(lhs.x, rhs.x) && NearlyEqual(lhs.y, rhs.y) && NearlyEqual(lhs.z, rhs.z);
 }
 
-uint HashProbeRaySeed(uint value) {
+uint32 HashProbeRaySeed(uint32 value) {
     value ^= value >> 16u;
     value *= 0x7feb352du;
     value ^= value >> 15u;
@@ -61,17 +62,16 @@ uint HashProbeRaySeed(uint value) {
     return value;
 }
 
-float ProbeRayUnitSample(uint seed) {
+float ProbeRayUnitSample(uint32 seed) {
     return float(HashProbeRaySeed(seed) >> 8u) * (1.0f / 16777216.0f);
 }
 
-float4 BuildProbeRayRotation(uint64 frame_index, uint volume_index, uint brick_index) {
+float4 BuildProbeRayRotation(uint64 frame_index, uint32 volume_index, uint32 brick_index) {
     constexpr float two_pi = 6.28318530717958647692f;
-    const uint frame_seed =
-        static_cast<uint>(frame_index) ^ HashProbeRaySeed(static_cast<uint>(frame_index >> 32u));
-    const uint seed =
-        HashProbeRaySeed(frame_seed ^ HashProbeRaySeed(volume_index + 0x9e3779b9u) ^
-                         HashProbeRaySeed(brick_index + 0x85ebca6bu));
+    const uint32    frame_seed =
+        static_cast<uint32>(frame_index) ^ HashProbeRaySeed(static_cast<uint32>(frame_index >> 32u));
+    const uint32 seed =
+        HashProbeRaySeed(frame_seed ^ HashProbeRaySeed(volume_index + 0x9e3779b9u) ^ HashProbeRaySeed(brick_index + 0x85ebca6bu));
     const float u1 = ProbeRayUnitSample(seed + 0x68bc21ebu);
     const float u2 = ProbeRayUnitSample(seed + 0x02e5be93u);
     const float u3 = ProbeRayUnitSample(seed + 0x967a889bu);
@@ -97,7 +97,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     m_physical_allocation_pages.fill(RASTER_PROBE_PAGE_INVALID);
     m_gpu_completion_state = MakeShared<GpuCompletionState>();
 
-    constexpr uint buffer_byte_size = sizeof(ProbeGridProbeData) * RASTER_PROBE_MAX_COUNT;
+    constexpr uint32 buffer_byte_size = sizeof(ProbeGridProbeData) * RASTER_PROBE_MAX_COUNT;
     m_probe_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::ProbeData",
         buffer_byte_size,
@@ -105,7 +105,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_probe_buffer.hdl = bdls->AllocateBuffer(m_probe_buffer.buf->GetView());
 
-    constexpr uint volume_buffer_byte_size = sizeof(ProbeVolumeGpuDesc) * RASTER_PROBE_VOLUME_MAX_COUNT;
+    constexpr uint32 volume_buffer_byte_size = sizeof(ProbeVolumeGpuDesc) * RASTER_PROBE_VOLUME_MAX_COUNT;
     m_volume_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::VolumeDescriptors",
         volume_buffer_byte_size,
@@ -113,7 +113,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_volume_buffer.hdl = bdls->AllocateBuffer(m_volume_buffer.buf->GetView());
 
-    constexpr uint cell_buffer_byte_size = sizeof(ProbeCellGpuDesc) * RASTER_PROBE_MAX_CELL_COUNT;
+    constexpr uint32 cell_buffer_byte_size = sizeof(ProbeCellGpuDesc) * RASTER_PROBE_MAX_CELL_COUNT;
     m_cell_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::CellDescriptors",
         cell_buffer_byte_size,
@@ -121,7 +121,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_cell_buffer.hdl = bdls->AllocateBuffer(m_cell_buffer.buf->GetView());
 
-    constexpr uint brick_buffer_byte_size = sizeof(ProbeBrickGpuDesc) * RASTER_PROBE_MAX_BRICK_COUNT;
+    constexpr uint32 brick_buffer_byte_size = sizeof(ProbeBrickGpuDesc) * RASTER_PROBE_MAX_BRICK_COUNT;
     m_brick_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::BrickDescriptors",
         brick_buffer_byte_size,
@@ -129,7 +129,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_brick_buffer.hdl = bdls->AllocateBuffer(m_brick_buffer.buf->GetView());
 
-    constexpr uint page_table_byte_size = sizeof(uint) * RASTER_PROBE_MAX_PAGE_COUNT;
+    constexpr uint32 page_table_byte_size = sizeof(uint32) * RASTER_PROBE_MAX_PAGE_COUNT;
     m_page_table_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::BrickPageTable",
         page_table_byte_size,
@@ -137,7 +137,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_page_table_buffer.hdl = bdls->AllocateBuffer(m_page_table_buffer.buf->GetView());
 
-    constexpr uint visibility_atlas_byte_size =
+    constexpr uint32 visibility_atlas_byte_size =
         sizeof(ProbeGridVisibilityTexel) * RASTER_PROBE_MAX_COUNT * RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT;
     m_visibility_atlas_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::VisibilityAtlas",
@@ -146,7 +146,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_visibility_atlas_buffer.hdl = bdls->AllocateBuffer(m_visibility_atlas_buffer.buf->GetView());
 
-    constexpr uint irradiance_atlas_byte_size =
+    constexpr uint32 irradiance_atlas_byte_size =
         sizeof(ProbeGridIrradianceTexel) * RASTER_PROBE_MAX_COUNT * RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT;
     m_irradiance_atlas_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::IrradianceAtlas",
@@ -185,7 +185,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     };
     InitializeGraphicsTextures(atlas_textures);
 
-    constexpr uint scene_data_byte_size = sizeof(GBufferPassParams);
+    constexpr uint32 scene_data_byte_size = sizeof(GBufferPassParams);
     m_scene_data_buffer = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::SceneData",
         scene_data_byte_size,
@@ -353,16 +353,16 @@ void ProbeVolumeResource::RefreshSceneGeometry(
     for (const SceneGeometryInstanceSnapshot& instance : geometry.instances) {
         rebuilt_instances.push_back({instance.key, instance.bounds, instance.transform_hash});
     }
-    const uint renderable_instance_count = geometry.renderable_instance_count;
-    const uint leaf_primitive_count       = geometry.leaf_primitive_count;
-    const uint skipped_invalid_count      = geometry.skipped_invalid_count;
+    const uint32 renderable_instance_count = geometry.renderable_instance_count;
+    const uint32 leaf_primitive_count      = geometry.leaf_primitive_count;
+    const uint32 skipped_invalid_count     = geometry.skipped_invalid_count;
 
     ProbeDirtyTracker::SortByKey(rebuilt_instances);
     const bool transform_changed = tick_state.updated_transform || tick_state.created_transform;
     const bool geometry_rebuilt  = tick_state.rebuilt_mesh || tick_state.rebuilt_rt_blas;
     ProbeDirtyDiff geometry_diff;
     if (m_scene_geometry_cache_valid) {
-        uint dirty_reasons = 0u;
+        uint32 dirty_reasons = 0u;
         if (transform_changed) {
             dirty_reasons |= RASTER_PROBE_DIRTY_DYNAMIC;
         }
@@ -455,7 +455,7 @@ void ProbeVolumeResource::RefreshGlobalDirtyEvents(
 }
 
 void ProbeVolumeResource::ApplyDirtyEvents(Snapshot& snapshot) {
-    m_last_dirty_region_count = static_cast<uint>(m_frame_dirty_regions.size());
+    m_last_dirty_region_count   = static_cast<uint32>(m_frame_dirty_regions.size());
     m_last_global_dirty_reasons = m_frame_global_dirty_reasons;
     m_last_dirty_brick_count = 0u;
     if (!snapshot.dirty_tracking_enabled) {
@@ -464,7 +464,7 @@ void ProbeVolumeResource::ApplyDirtyEvents(Snapshot& snapshot) {
     }
 
     const float influence_distance = snapshot.trace_distance * snapshot.dirty_influence_scale;
-    for (uint brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
+    for (uint32 brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
         BrickSnapshot& brick = snapshot.bricks[brick_index];
         if (!brick.resident) {
             m_brick_pending_dirty_reasons[brick_index] = 0u;
@@ -472,7 +472,7 @@ void ProbeVolumeResource::ApplyDirtyEvents(Snapshot& snapshot) {
             continue;
         }
 
-        const uint event_reasons = ProbeDirtyTracker::ResolveReasons(
+        const uint32 event_reasons = ProbeDirtyTracker::ResolveReasons(
             brick.sample_bounds,
             m_frame_dirty_regions,
             m_frame_global_dirty_reasons,
@@ -570,7 +570,7 @@ void ProbeVolumeResource::TrackFrameSubmission(CommandList& cmd_list, uint64 fra
 
     const uint64 submission = frame_index + 1u;
     m_last_submitted_submission = Max(m_last_submitted_submission, submission);
-    for (uint brick_index = 0u; brick_index < m_brick_load_awaiting_submission.size(); ++brick_index) {
+    for (uint32 brick_index = 0u; brick_index < m_brick_load_awaiting_submission.size(); ++brick_index) {
         if (!m_brick_load_awaiting_submission[brick_index]) {
             continue;
         }
@@ -611,28 +611,28 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         1.0f
     );
     snapshot.adaptive_fine_primitives =
-        static_cast<uint>(Clamp(config.probe_gi_adaptive_fine_primitives, 1, 512));
+        static_cast<uint32>(Clamp(config.probe_gi_adaptive_fine_primitives, 1, 512));
     snapshot.adaptive_transition_width = Clamp(config.probe_gi_adaptive_transition_width, 0.0f, 4.0f);
     snapshot.dirty_influence_scale = Clamp(config.probe_gi_dirty_influence_scale, 0.0f, 1.0f);
     snapshot.geometry_generation =
         snapshot.adaptive_placement_enabled ? m_scene_geometry_generation : 0u;
-    snapshot.geometry_primitive_count = snapshot.adaptive_placement_enabled ?
-                                            static_cast<uint>(m_scene_geometry_bounds.size()) :
-                                            0u;
+    snapshot.geometry_primitive_count    = snapshot.adaptive_placement_enabled ?
+                                               static_cast<uint32>(m_scene_geometry_bounds.size()) :
+                                               0u;
     snapshot.brick_resident_distance   = Max(config.probe_gi_brick_resident_distance, 0.1f);
     snapshot.brick_resident_hysteresis = Max(config.probe_gi_brick_resident_hysteresis, 0.0f);
     snapshot.clipmap_anchor_hysteresis = Clamp(config.probe_gi_clipmap_anchor_hysteresis, 0.0f, 0.49f);
     snapshot.motion_prefetch_enabled = config.probe_gi_motion_prefetch_enabled;
     snapshot.motion_prefetch_threshold = Max(config.probe_gi_motion_prefetch_threshold, 0.0f);
-    snapshot.motion_prefetch_keep_frames = static_cast<uint>(Clamp(
+    snapshot.motion_prefetch_keep_frames = static_cast<uint32>(Clamp(
         config.probe_gi_motion_prefetch_keep_frames,
         1,
         120
     ));
     snapshot.update_scheduler_enabled  = config.probe_gi_update_scheduler_enabled;
     snapshot.update_brick_budget =
-        static_cast<uint>(Clamp(config.probe_gi_update_brick_budget, 1, int(RASTER_PROBE_MAX_BRICK_COUNT)));
-    const uint clamped_physical_probe_capacity = static_cast<uint>(Clamp(
+        static_cast<uint32>(Clamp(config.probe_gi_update_brick_budget, 1, int(RASTER_PROBE_MAX_BRICK_COUNT)));
+    const uint32 clamped_physical_probe_capacity = static_cast<uint32>(Clamp(
         config.probe_gi_physical_probe_capacity,
         int(RASTER_PROBE_BRICK_PROBE_CAPACITY),
         int(RASTER_PROBE_MAX_COUNT)
@@ -643,20 +643,20 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         RASTER_PROBE_BRICK_PROBE_CAPACITY
     );
     snapshot.streaming_enabled = config.probe_gi_streaming_enabled;
-    snapshot.streaming_load_budget = static_cast<uint>(Clamp(
+    snapshot.streaming_load_budget     = static_cast<uint32>(Clamp(
         config.probe_gi_streaming_load_budget,
         1,
         int(RASTER_PROBE_MAX_BRICK_COUNT)
     ));
-    snapshot.streaming_eviction_budget = static_cast<uint>(Clamp(
+    snapshot.streaming_eviction_budget = static_cast<uint32>(Clamp(
         config.probe_gi_streaming_eviction_budget,
         1,
         int(RASTER_PROBE_MAX_BRICK_COUNT)
     ));
-    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 13));
+    snapshot.debug_mode                = static_cast<uint32>(Clamp(config.probe_gi_debug_mode, 0, 13));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
-        static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
+        static_cast<uint32>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
     snapshot.visibility_bias    = Max(config.probe_gi_visibility_bias, 0.0f);
     snapshot.visibility_power   = Max(config.probe_gi_visibility_power, 0.1f);
     snapshot.visibility_min_weight = Clamp(config.probe_gi_visibility_min_weight, 0.0f, 1.0f);
@@ -669,9 +669,9 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
     snapshot.ground_color       = Max(config.probe_gi_ground_color, float3(0.0f));
     snapshot.page_table.fill(RASTER_PROBE_PAGE_INVALID);
 
-    const uint configured_volume_count =
-        static_cast<uint>(Clamp(config.probe_gi_volume_count, 1, int(RASTER_PROBE_VOLUME_MAX_COUNT)));
-    for (uint config_index = 0; config_index < configured_volume_count; ++config_index) {
+    const uint32 configured_volume_count =
+        static_cast<uint32>(Clamp(config.probe_gi_volume_count, 1, int(RASTER_PROBE_VOLUME_MAX_COUNT)));
+    for (uint32 config_index = 0; config_index < configured_volume_count; ++config_index) {
         const ProbeVolumeConfig& volume_config = config.probe_gi_volumes[config_index];
         if (!volume_config.enabled || snapshot.total_count >= RASTER_PROBE_MAX_COUNT) {
             continue;
@@ -683,8 +683,8 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         volume.count_y      = ClampProbeCount(volume_config.count_y);
         volume.count_z      = ClampProbeCount(volume_config.count_z);
 
-        const uint requested_count = volume.count_x * volume.count_y * volume.count_z;
-        const uint remaining_budget = RASTER_PROBE_MAX_COUNT - snapshot.total_count;
+        const uint32 requested_count  = volume.count_x * volume.count_y * volume.count_z;
+        const uint32 remaining_budget = RASTER_PROBE_MAX_COUNT - snapshot.total_count;
         ClampProbeBudget(
             volume.count_x,
             volume.count_y,
@@ -709,7 +709,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             uint3(volume.count_x, volume.count_y, volume.count_z)
         );
         if (m_has_snapshot) {
-            for (uint previous_volume_index = 0u;
+            for (uint32 previous_volume_index = 0u;
                  previous_volume_index < m_snapshot.volume_count;
                  ++previous_volume_index) {
                 if (m_snapshot.volumes[previous_volume_index].config_index == config_index) {
@@ -783,17 +783,17 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         const Box3D volume_bounds(volume.origin, volume.origin + volume.extent);
         const std::span<const Box3D> geometry_bounds(m_scene_geometry_bounds);
         volume.first_cell_index = snapshot.cell_count;
-        const uint volume_first_brick_index = snapshot.brick_count;
+        const uint32 volume_first_brick_index = snapshot.brick_count;
         volume.max_subdivision_level = snapshot.hierarchy_enabled ? RASTER_PROBE_MAX_SUBDIVISION_LEVEL : 0u;
         snapshot.max_subdivision_level = Max(snapshot.max_subdivision_level, volume.max_subdivision_level);
-        uint  nearest_brick_index = RASTER_PROBE_PAGE_INVALID;
+        uint32 nearest_brick_index            = RASTER_PROBE_PAGE_INVALID;
         float nearest_distance_sq = std::numeric_limits<float>::max();
 
-        auto append_brick = [&](uint subdivision_level,
-                                uint3 brick_coord,
-                                uint cell_index,
-                                bool level_requested,
-                                bool distance_gated) -> uint {
+        auto append_brick = [&](uint32 subdivision_level,
+                                uint3  brick_coord,
+                                uint32 cell_index,
+                                bool   level_requested,
+                                bool   distance_gated) -> uint32 {
             if (snapshot.brick_count >= snapshot.bricks.size()) {
                 LOG_ERROR(
                     "[ProbeGI] Brick descriptor capacity exceeded: volume={}, config_index={}, level={}, coord=({}, {}, {}).",
@@ -812,7 +812,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             const uint3 level_brick_counts =
                 ProbeAdaptiveLayout::GetLevelBrickCounts(base_probe_counts, subdivision_level);
             const float3 level_spacing = ProbeAdaptiveLayout::GetLevelSpacing(volume.extent, level_probe_counts);
-            const uint brick_index = snapshot.brick_count;
+            const uint32   brick_index   = snapshot.brick_count;
             BrickSnapshot& brick = snapshot.bricks[brick_index];
             brick.coord             = brick_coord;
             brick.volume_index      = snapshot.volume_count;
@@ -865,7 +865,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             brick.sample_bounds = Box3D(Min(brick_min, brick_max), Max(brick_min, brick_max));
 
             if (volume.previous_volume_index != RASTER_PROBE_PAGE_INVALID) {
-                for (uint previous_brick_index = 0u;
+                for (uint32 previous_brick_index = 0u;
                      previous_brick_index < m_snapshot.brick_count;
                      ++previous_brick_index) {
                     const BrickSnapshot& previous_brick = m_snapshot.bricks[previous_brick_index];
@@ -893,12 +893,12 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             }
             const bool same_brick = brick.previous_brick_index != RASTER_PROBE_PAGE_INVALID;
             const bool history_valid = same_brick && m_brick_history_valid[brick.previous_brick_index];
-            brick.update_age = history_valid ?
-                                   static_cast<uint>(std::min<uint64>(
-                                       frame_index - m_brick_last_update_frame[brick.previous_brick_index],
-                                       255u
-                                   )) :
-                                   255u;
+            brick.update_age         = history_valid ?
+                                           static_cast<uint32>(std::min<uint64>(
+                                               frame_index - m_brick_last_update_frame[brick.previous_brick_index],
+                                               255u
+                                           )) :
+                                           255u;
             brick.clipmap_reused = same_brick && brick.last_reused_frame != 0u &&
                                    frame_index >= brick.last_reused_frame &&
                                    frame_index - brick.last_reused_frame <=
@@ -932,9 +932,9 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             return brick_index;
         };
 
-        for (uint cell_z = 0; cell_z < cell_counts.z; ++cell_z) {
-            for (uint cell_y = 0; cell_y < cell_counts.y; ++cell_y) {
-                for (uint cell_x = 0; cell_x < cell_counts.x; ++cell_x) {
+        for (uint32 cell_z = 0; cell_z < cell_counts.z; ++cell_z) {
+            for (uint32 cell_y = 0; cell_y < cell_counts.y; ++cell_y) {
+                for (uint32 cell_x = 0; cell_x < cell_counts.x; ++cell_x) {
                     if (snapshot.cell_count >= snapshot.cells.size()) {
                         LOG_ERROR(
                             "[ProbeGI] Cell descriptor capacity exceeded: volume={}, config_index={}, coord=({}, {}, {}).",
@@ -946,7 +946,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                         );
                         continue;
                     }
-                    const uint cell_index = snapshot.cell_count;
+                    const uint32  cell_index = snapshot.cell_count;
                     CellSnapshot& cell = snapshot.cells[cell_index];
                     cell.coord             = uint3(cell_x, cell_y, cell_z);
                     cell.volume_index      = snapshot.volume_count;
@@ -1015,10 +1015,10 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                         0u,
                         snapshot.hierarchy_enabled
                     );
-                    for (uint brick_z = cell_brick_begin.z; brick_z < cell_brick_end.z; ++brick_z) {
-                        for (uint brick_y = cell_brick_begin.y; brick_y < cell_brick_end.y; ++brick_y) {
-                            for (uint brick_x = cell_brick_begin.x; brick_x < cell_brick_end.x; ++brick_x) {
-                                const uint brick_index = append_brick(
+                    for (uint32 brick_z = cell_brick_begin.z; brick_z < cell_brick_end.z; ++brick_z) {
+                        for (uint32 brick_y = cell_brick_begin.y; brick_y < cell_brick_end.y; ++brick_y) {
+                            for (uint32 brick_x = cell_brick_begin.x; brick_x < cell_brick_end.x; ++brick_x) {
+                                const uint32 brick_index = append_brick(
                                     0u,
                                     uint3(brick_x, brick_y, brick_z),
                                     cell_index,
@@ -1069,7 +1069,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         }
 
         bool has_requested_brick = false;
-        for (uint brick_index = volume_first_brick_index;
+        for (uint32 brick_index = volume_first_brick_index;
              brick_index < snapshot.brick_count;
              ++brick_index) {
             has_requested_brick |= snapshot.bricks[brick_index].requested_resident;
@@ -1082,7 +1082,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         }
 
         if (snapshot.sparse_bricks_enabled && snapshot.motion_prefetch_enabled) {
-            for (uint brick_index = volume_first_brick_index;
+            for (uint32 brick_index = volume_first_brick_index;
                  brick_index < snapshot.brick_count;
                  ++brick_index) {
                 BrickSnapshot& brick = snapshot.bricks[brick_index];
@@ -1111,7 +1111,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                 snapshot.motion_prefetch_threshold
             );
             if (prefetch_offset.x != 0 || prefetch_offset.y != 0 || prefetch_offset.z != 0) {
-                for (uint brick_index = volume_first_brick_index;
+                for (uint32 brick_index = volume_first_brick_index;
                      brick_index < snapshot.brick_count;
                      ++brick_index) {
                     const BrickSnapshot& source_brick = snapshot.bricks[brick_index];
@@ -1130,7 +1130,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                         continue;
                     }
 
-                    for (uint neighbor_index = volume_first_brick_index;
+                    for (uint32 neighbor_index = volume_first_brick_index;
                          neighbor_index < snapshot.brick_count;
                          ++neighbor_index) {
                         BrickSnapshot& neighbor = snapshot.bricks[neighbor_index];
@@ -1149,7 +1149,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             }
         }
 
-        for (uint brick_index = volume_first_brick_index;
+        for (uint32 brick_index = volume_first_brick_index;
              brick_index < snapshot.brick_count;
              ++brick_index) {
             const BrickSnapshot& brick = snapshot.bricks[brick_index];
@@ -1195,7 +1195,7 @@ bool ProbeVolumeResource::RequiresPhysicalAllocatorReset(const Snapshot& snapsho
         return true;
     }
 
-    for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+    for (uint32 brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
         const BrickSnapshot& previous = m_snapshot.bricks[brick_index];
         const BrickSnapshot& current  = snapshot.bricks[brick_index];
         if (previous.coord != current.coord || previous.local_counts != current.local_counts ||
@@ -1210,7 +1210,7 @@ bool ProbeVolumeResource::RequiresPhysicalAllocatorReset(const Snapshot& snapsho
     return false;
 }
 
-void ProbeVolumeResource::ResetPhysicalAllocator(uint physical_probe_capacity) {
+void ProbeVolumeResource::ResetPhysicalAllocator(uint32 physical_probe_capacity) {
     m_physical_allocations.fill({});
     m_physical_allocation_pages.fill(RASTER_PROBE_PAGE_INVALID);
     m_physical_allocation_generations.fill(0u);
@@ -1223,7 +1223,7 @@ void ProbeVolumeResource::ResetPhysicalAllocator(uint physical_probe_capacity) {
     LOG_DEBUG("[ProbeGI] Physical Probe allocator reset: capacity={}.", physical_probe_capacity);
 }
 
-uint ProbeVolumeResource::AdvancePageGeneration(uint virtual_page) {
+uint32 ProbeVolumeResource::AdvancePageGeneration(uint32 virtual_page) {
     if (virtual_page >= m_page_generations.size()) {
         return 1u;
     }
@@ -1231,7 +1231,7 @@ uint ProbeVolumeResource::AdvancePageGeneration(uint virtual_page) {
     return m_page_generations[virtual_page];
 }
 
-void ProbeVolumeResource::RetirePhysicalAllocation(uint brick_index, uint virtual_page) {
+void ProbeVolumeResource::RetirePhysicalAllocation(uint32 brick_index, uint32 virtual_page) {
     if (brick_index >= m_physical_allocations.size()) {
         return;
     }
@@ -1302,20 +1302,20 @@ void ProbeVolumeResource::CollectRetiredAllocations(Snapshot& snapshot) {
 
 void ProbeVolumeResource::RebindPhysicalAllocations(Snapshot& snapshot, bool allow_reuse) {
     StaticArray<ProbePhysicalAllocator::Allocation, RASTER_PROBE_MAX_BRICK_COUNT> next_allocations{};
-    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> next_pages{};
-    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> next_generations{};
+    StaticArray<uint32, RASTER_PROBE_MAX_BRICK_COUNT>                             next_pages{};
+    StaticArray<uint32, RASTER_PROBE_MAX_BRICK_COUNT>                             next_generations{};
     StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> next_load_submissions{};
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> next_load_awaiting_submission{};
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> next_history_valid{};
     StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> next_last_update_frame{};
-    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> next_pending_dirty_reasons{};
+    StaticArray<uint32, RASTER_PROBE_MAX_BRICK_COUNT>                             next_pending_dirty_reasons{};
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> previous_allocation_used{};
     next_pages.fill(RASTER_PROBE_PAGE_INVALID);
 
     if (allow_reuse && m_has_snapshot) {
-        for (uint brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
+        for (uint32 brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
             BrickSnapshot& brick = snapshot.bricks[brick_index];
-            const uint previous_index = brick.previous_brick_index;
+            const uint32   previous_index = brick.previous_brick_index;
             if (previous_index == RASTER_PROBE_PAGE_INVALID ||
                 previous_index >= m_snapshot.brick_count ||
                 previous_allocation_used[previous_index] ||
@@ -1375,7 +1375,7 @@ void ProbeVolumeResource::RebindPhysicalAllocations(Snapshot& snapshot, bool all
         }
     }
 
-    for (uint previous_index = 0u; previous_index < m_physical_allocations.size(); ++previous_index) {
+    for (uint32 previous_index = 0u; previous_index < m_physical_allocations.size(); ++previous_index) {
         if (!m_physical_allocations[previous_index].valid ||
             previous_allocation_used[previous_index]) {
             continue;
@@ -1408,29 +1408,29 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
     snapshot.allocated_physical_probe_count = 0;
     snapshot.physical_allocation_count = 0;
     snapshot.capacity_evicted_brick_count = 0;
-    for (uint volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
+    for (uint32 volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
         snapshot.volumes[volume_index].resident_brick_count = 0;
         snapshot.volumes[volume_index].resident_probe_count = 0;
         snapshot.volumes[volume_index].level_resident_brick_count.fill(0u);
     }
-    for (uint cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
+    for (uint32 cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
         snapshot.cells[cell_index].resident_brick_count = 0;
     }
 
     CollectRetiredAllocations(snapshot);
 
-    Array<uint> requested_candidates;
+    Array<uint32> requested_candidates;
     requested_candidates.reserve(snapshot.requested_brick_count);
-    StaticArray<uint, RASTER_PROBE_VOLUME_MAX_COUNT> fallback_anchor_brick;
+    StaticArray<uint32, RASTER_PROBE_VOLUME_MAX_COUNT> fallback_anchor_brick;
     fallback_anchor_brick.fill(RASTER_PROBE_PAGE_INVALID);
     if (snapshot.enabled) {
-        for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+        for (uint32 brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
             const BrickSnapshot& brick = snapshot.bricks[brick_index];
             if (!brick.requested_resident) {
                 continue;
             }
             requested_candidates.push_back(brick_index);
-            uint& anchor_index = fallback_anchor_brick[brick.volume_index];
+            uint32& anchor_index = fallback_anchor_brick[brick.volume_index];
             if (anchor_index == RASTER_PROBE_PAGE_INVALID ||
                 brick.subdivision_level > snapshot.bricks[anchor_index].subdivision_level ||
                 (brick.subdivision_level == snapshot.bricks[anchor_index].subdivision_level &&
@@ -1443,7 +1443,7 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
     std::sort(
         requested_candidates.begin(),
         requested_candidates.end(),
-        [&](uint lhs_index, uint rhs_index) {
+        [&](uint32 lhs_index, uint32 rhs_index) {
             const BrickSnapshot& lhs = snapshot.bricks[lhs_index];
             const BrickSnapshot& rhs = snapshot.bricks[rhs_index];
             const bool lhs_volume_anchor = fallback_anchor_brick[lhs.volume_index] == lhs_index;
@@ -1465,8 +1465,8 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
     );
 
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> selected_bricks{};
-    uint selected_physical_probe_count = 0;
-    for (uint brick_index : requested_candidates) {
+    uint32                                          selected_physical_probe_count = 0;
+    for (uint32 brick_index : requested_candidates) {
         if (selected_physical_probe_count + RASTER_PROBE_BRICK_PROBE_CAPACITY >
             snapshot.physical_probe_capacity) {
             continue;
@@ -1475,8 +1475,8 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
         selected_physical_probe_count += RASTER_PROBE_BRICK_PROBE_CAPACITY;
     }
     snapshot.capacity_evicted_brick_count =
-        static_cast<uint>(requested_candidates.size()) -
-        static_cast<uint>(std::count(selected_bricks.begin(), selected_bricks.end(), true));
+        static_cast<uint32>(requested_candidates.size()) -
+        static_cast<uint32>(std::count(selected_bricks.begin(), selected_bricks.end(), true));
 
     const bool layout_changed = RequiresPhysicalAllocatorReset(snapshot) ||
                                 snapshot.clipmap_scrolled_volume_count != 0u;
@@ -1488,7 +1488,7 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
     }
     snapshot.layout_generation = m_layout_generation;
 
-    const uint current_allocator_capacity = m_physical_allocator.GetCapacity();
+    const uint32 current_allocator_capacity = m_physical_allocator.GetCapacity();
     if (current_allocator_capacity == 0u && m_retirement_queue.Empty()) {
         ResetPhysicalAllocator(snapshot.physical_probe_capacity);
     } else if (current_allocator_capacity != snapshot.physical_probe_capacity) {
@@ -1496,8 +1496,8 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
     }
     RebindPhysicalAllocations(snapshot, m_pending_physical_capacity == 0u);
 
-    Array<uint> eviction_candidates;
-    for (uint brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
+    Array<uint32> eviction_candidates;
+    for (uint32 brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
         if (m_physical_allocations[brick_index].valid && !selected_bricks[brick_index]) {
             eviction_candidates.push_back(brick_index);
         }
@@ -1505,7 +1505,7 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
     std::sort(
         eviction_candidates.begin(),
         eviction_candidates.end(),
-        [&](uint lhs_index, uint rhs_index) {
+        [&](uint32 lhs_index, uint32 rhs_index) {
             const BrickSnapshot& lhs = snapshot.bricks[lhs_index];
             const BrickSnapshot& rhs = snapshot.bricks[rhs_index];
             if (lhs.requested_resident != rhs.requested_resident) {
@@ -1521,10 +1521,10 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
         }
     );
 
-    const uint eviction_budget = snapshot.streaming_enabled ?
-                                     snapshot.streaming_eviction_budget :
-                                     RASTER_PROBE_MAX_BRICK_COUNT;
-    for (uint brick_index : eviction_candidates) {
+    const uint32 eviction_budget = snapshot.streaming_enabled ?
+                                       snapshot.streaming_eviction_budget :
+                                       RASTER_PROBE_MAX_BRICK_COUNT;
+    for (uint32 brick_index : eviction_candidates) {
         if (snapshot.streaming_evicted_brick_count >= eviction_budget) {
             break;
         }
@@ -1541,19 +1541,19 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
             [](const ProbePhysicalAllocator::Allocation& allocation) { return allocation.valid; }
         );
         if (!has_active_allocations) {
-            const uint new_capacity = m_pending_physical_capacity;
+            const uint32 new_capacity   = m_pending_physical_capacity;
             m_pending_physical_capacity = 0u;
             ResetPhysicalAllocator(new_capacity);
         }
     }
 
-    for (uint brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
+    for (uint32 brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
         if (!m_physical_allocations[brick_index].valid ||
             !volume_history_reset[snapshot.bricks[brick_index].volume_index]) {
             continue;
         }
-        const uint virtual_page = snapshot.bricks[brick_index].page_index;
-        const uint generation = AdvancePageGeneration(virtual_page);
+        const uint32 virtual_page                      = snapshot.bricks[brick_index].page_index;
+        const uint32 generation                        = AdvancePageGeneration(virtual_page);
         m_physical_allocation_generations[brick_index] = generation;
         m_brick_load_submission[brick_index] = 0u;
         m_brick_load_awaiting_submission[brick_index] = false;
@@ -1561,11 +1561,11 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
         m_brick_last_update_frame[brick_index] = 0u;
     }
 
-    const uint load_budget = snapshot.streaming_enabled ?
-                                 snapshot.streaming_load_budget :
-                                 RASTER_PROBE_MAX_BRICK_COUNT;
+    const uint32 load_budget = snapshot.streaming_enabled ?
+                                   snapshot.streaming_load_budget :
+                                   RASTER_PROBE_MAX_BRICK_COUNT;
     if (m_pending_physical_capacity == 0u) {
-        for (uint brick_index : requested_candidates) {
+        for (uint32 brick_index : requested_candidates) {
             if (!selected_bricks[brick_index] || m_physical_allocations[brick_index].valid) {
                 continue;
             }
@@ -1606,7 +1606,7 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
                                             ) :
                                             0u;
 
-    for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+    for (uint32 brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
         BrickSnapshot& brick = snapshot.bricks[brick_index];
         const ProbePhysicalAllocator::Allocation& allocation = m_physical_allocations[brick_index];
         brick.resident = allocation.valid &&
@@ -1676,9 +1676,9 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
     snapshot.free_physical_probe_count = m_physical_allocator.GetFreeProbeCount();
     snapshot.retiring_allocation_count = m_retirement_queue.GetAllocationCount();
     snapshot.retiring_probe_count = m_retirement_queue.GetProbeCount();
-    const uint accounted_probe_count = snapshot.allocated_physical_probe_count +
-                                       snapshot.retiring_probe_count +
-                                       snapshot.free_physical_probe_count;
+    const uint32 accounted_probe_count   = snapshot.allocated_physical_probe_count +
+                                           snapshot.retiring_probe_count +
+                                           snapshot.free_physical_probe_count;
     if (accounted_probe_count != snapshot.physical_allocator_capacity) {
         LOG_ERROR(
             "[ProbeGI] Physical Probe allocator accounting mismatch: resident={}, retiring={}, free={}, accounted={}, capacity={}.",
@@ -1775,7 +1775,7 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         return true;
     }
 
-    for (uint volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
+    for (uint32 volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
         const VolumeSnapshot& lhs = m_snapshot.volumes[volume_index];
         const VolumeSnapshot& rhs = snapshot.volumes[volume_index];
         if (lhs.config_index != rhs.config_index || lhs.count_x != rhs.count_x || lhs.count_y != rhs.count_y ||
@@ -1807,7 +1807,7 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         }
     }
 
-    for (uint cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
+    for (uint32 cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
         const CellSnapshot& lhs = m_snapshot.cells[cell_index];
         const CellSnapshot& rhs = snapshot.cells[cell_index];
         if (lhs.coord != rhs.coord || lhs.volume_index != rhs.volume_index ||
@@ -1827,7 +1827,7 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         }
     }
 
-    for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+    for (uint32 brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
         const BrickSnapshot& lhs = m_snapshot.bricks[brick_index];
         const BrickSnapshot& rhs = snapshot.bricks[brick_index];
         if (lhs.coord != rhs.coord || lhs.local_counts != rhs.local_counts ||
@@ -1849,7 +1849,7 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
     return false;
 }
 
-bool ProbeVolumeResource::RequiresHistoryReset(const Snapshot& snapshot, uint volume_index) const {
+bool ProbeVolumeResource::RequiresHistoryReset(const Snapshot& snapshot, uint32 volume_index) const {
     if (!m_has_snapshot || volume_index >= m_snapshot.volume_count || !m_history_valid[volume_index]) {
         return true;
     }
@@ -1885,7 +1885,7 @@ bool ProbeVolumeResource::RequiresHistoryReset(const Snapshot& snapshot, uint vo
 
 void ProbeVolumeResource::StageVolumeUpload(const Snapshot& snapshot) {
     m_gpu_volume_descs.fill({});
-    for (uint volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
+    for (uint32 volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
         const VolumeSnapshot& volume = snapshot.volumes[volume_index];
         ProbeVolumeGpuDesc&   desc   = m_gpu_volume_descs[volume_index];
         desc.origin_bias = float4(volume.origin.x, volume.origin.y, volume.origin.z, volume.normal_bias);
@@ -1920,7 +1920,7 @@ void ProbeVolumeResource::StageVolumeUpload(const Snapshot& snapshot) {
 
 void ProbeVolumeResource::StageCellUpload(const Snapshot& snapshot) {
     m_gpu_cell_descs.fill({});
-    for (uint cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
+    for (uint32 cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
         const CellSnapshot& cell = snapshot.cells[cell_index];
         ProbeCellGpuDesc&   desc = m_gpu_cell_descs[cell_index];
         desc.origin_spacing = float4(cell.origin.x, cell.origin.y, cell.origin.z, cell.min_probe_spacing);
@@ -1952,7 +1952,7 @@ void ProbeVolumeResource::StageCellUpload(const Snapshot& snapshot) {
 
 void ProbeVolumeResource::StageBrickUpload(const Snapshot& snapshot) {
     m_gpu_brick_descs.fill({});
-    for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+    for (uint32 brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
         const BrickSnapshot& brick = snapshot.bricks[brick_index];
         ProbeBrickGpuDesc&   desc  = m_gpu_brick_descs[brick_index];
         desc.coord_volume = uint4(brick.coord.x, brick.coord.y, brick.coord.z, brick.volume_index);
@@ -1986,13 +1986,13 @@ void ProbeVolumeResource::StageBrickUpload(const Snapshot& snapshot) {
 }
 
 ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
-    const Snapshot& snapshot,
+    const Snapshot&       snapshot,
     const VolumeSnapshot& volume,
-    uint            volume_index,
-    uint            brick_index,
-    const GpuScene::Res& gpu_scene,
-    uint            light_count,
-    bool            history_valid
+    uint32                volume_index,
+    uint32                brick_index,
+    const GpuScene::Res&  gpu_scene,
+    uint32                light_count,
+    bool                  history_valid
 ) const {
     const BrickSnapshot& brick = snapshot.bricks[brick_index];
     const uint3 base_probe_counts(volume.count_x, volume.count_y, volume.count_z);
@@ -2067,11 +2067,11 @@ ProbeVolumeResource::PrepareUpdate(
 
     Snapshot snapshot = BuildSnapshot(config, camera_position, frame_index);
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_history_reset{};
-    for (uint volume_index = 0u; volume_index < snapshot.volume_count; ++volume_index) {
+    for (uint32 volume_index = 0u; volume_index < snapshot.volume_count; ++volume_index) {
         volume_history_reset[volume_index] = RequiresHistoryReset(snapshot, volume_index);
     }
     ApplyPhysicalResidency(snapshot, volume_history_reset);
-    const uint previous_prefetched_brick_count =
+    const uint32 previous_prefetched_brick_count =
         m_has_snapshot ? m_snapshot.prefetched_brick_count : 0u;
     if (snapshot.clipmap_scrolled_volume_count != 0u ||
         snapshot.clipmap_reused_brick_count != 0u ||
@@ -2108,7 +2108,7 @@ ProbeVolumeResource::PrepareUpdate(
         m_snapshot.adaptive_fine_primitives != snapshot.adaptive_fine_primitives ||
         !NearlyEqual(m_snapshot.adaptive_transition_width, snapshot.adaptive_transition_width);
     if (!adaptive_layout_changed) {
-        for (uint cell_index = 0u; cell_index < snapshot.cell_count; ++cell_index) {
+        for (uint32 cell_index = 0u; cell_index < snapshot.cell_count; ++cell_index) {
             const CellSnapshot& previous = m_snapshot.cells[cell_index];
             const CellSnapshot& current  = snapshot.cells[cell_index];
             if (previous.coord != current.coord || previous.volume_index != current.volume_index ||
@@ -2146,7 +2146,7 @@ ProbeVolumeResource::PrepareUpdate(
 
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> next_history_valid{};
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT>  next_brick_history_valid{};
-    for (uint volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
+    for (uint32 volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
         const bool volume_reset = volume_history_reset[volume_index];
         const VolumeSnapshot& volume = snapshot.volumes[volume_index];
         volume_history_reset[volume_index] = volume_reset;
@@ -2221,7 +2221,7 @@ ProbeVolumeResource::PrepareUpdate(
             snapshot.level_requested_brick_count[1],
             snapshot.level_requested_brick_count[2]
         );
-        for (uint cell_index = 0u; cell_index < snapshot.cell_count; ++cell_index) {
+        for (uint32 cell_index = 0u; cell_index < snapshot.cell_count; ++cell_index) {
             const CellSnapshot& cell = snapshot.cells[cell_index];
             LOG_DEBUG(
                 "[ProbeGI] Adaptive Cell: index={}, volume={}, coord=({}, {}, {}), primitives={}, occupied_voxels={}/{}, occupancy={}, desired_level={}.",
@@ -2239,9 +2239,9 @@ ProbeVolumeResource::PrepareUpdate(
         }
     }
 
-    Array<uint> resident_candidates;
+    Array<uint32> resident_candidates;
     resident_candidates.reserve(snapshot.resident_brick_count);
-    for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+    for (uint32 brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
         const BrickSnapshot& brick = snapshot.bricks[brick_index];
         if (!brick.resident) {
             continue;
@@ -2255,7 +2255,7 @@ ProbeVolumeResource::PrepareUpdate(
     std::sort(
         resident_candidates.begin(),
         resident_candidates.end(),
-        [&](uint lhs_index, uint rhs_index) {
+        [&](uint32 lhs_index, uint32 rhs_index) {
             const BrickSnapshot& lhs = snapshot.bricks[lhs_index];
             const BrickSnapshot& rhs = snapshot.bricks[rhs_index];
             const bool lhs_mandatory =
@@ -2288,11 +2288,11 @@ ProbeVolumeResource::PrepareUpdate(
         }
     );
 
-    for (uint brick_index : resident_candidates) {
+    for (uint32 brick_index : resident_candidates) {
         BrickSnapshot& brick = snapshot.bricks[brick_index];
         const bool mandatory =
             volume_history_reset[brick.volume_index] || !m_brick_history_valid[brick_index];
-        const uint dirty_reasons =
+        const uint32 dirty_reasons =
             m_brick_pending_dirty_reasons[brick_index] & RASTER_PROBE_DIRTY_REASON_MASK;
         if (snapshot.update_scheduler_enabled && !mandatory &&
             update_info.job_count >= snapshot.update_brick_budget) {
@@ -2439,7 +2439,7 @@ ProbeVolumeResource::PrepareUpdate(
 }
 
 void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
-    const uint enabled =
+    const uint32 enabled =
         (m_has_snapshot && m_snapshot.enabled && m_probe_buffer.hdl != 0 && m_volume_buffer.hdl != 0 &&
          m_cell_buffer.hdl != 0 && m_brick_buffer.hdl != 0 && m_page_table_buffer.hdl != 0 &&
          m_visibility_atlas_buffer.hdl != 0 &&

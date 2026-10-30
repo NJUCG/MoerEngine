@@ -1,13 +1,13 @@
 #include "rendergraph/RenderGraph.h"
-
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 #include "profile/ProfileScope.h"
 #include "rendergraph/RenderGraphCompiler.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rendergraph/RenderGraphRecordingPlan.h"
 #include "rhi/RHI.h"
-#include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIThreadOwnership.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "taskgraph/TaskGraph.h"
 
 #include <algorithm>
@@ -41,13 +41,13 @@ struct InjectedSetupDispatchFault {};
 } // namespace
 
 struct RenderGraph::SetupBatchState {
-    enum class Status : uint8_t {
+    enum class Status : uint8 {
         Pending,
         Succeeded,
         Failed,
     };
 
-    enum class JobStatus : uint8_t {
+    enum class JobStatus : uint8 {
         Pending,
         Running,
         Succeeded,
@@ -60,17 +60,17 @@ struct RenderGraph::SetupBatchState {
     };
 
     [[nodiscard]] static std::vector<JobRuntime> CreateRuntimes(
-        size_t  job_count,
-        uint8_t faults_for_testing
+        size_t job_count,
+        uint8  faults_for_testing
     ) {
         if ((faults_for_testing &
-             static_cast<uint8_t>(SetupFaultForTesting::BatchRuntimeCreate)) != 0) {
+             static_cast<uint8>(SetupFaultForTesting::BatchRuntimeCreate)) != 0) {
             throw std::bad_alloc{};
         }
         return std::vector<JobRuntime>(job_count);
     }
 
-    SetupBatchState(size_t job_count, uint8_t faults_for_testing) :
+    SetupBatchState(size_t job_count, uint8 faults_for_testing) :
         runtimes(CreateRuntimes(job_count, faults_for_testing)),
         fault_mask(faults_for_testing) {
     }
@@ -103,7 +103,7 @@ struct RenderGraph::SetupBatchState {
         for (size_t index = 0; index < jobs.size(); ++index) {
             GraphEventArray prerequisites{};
             prerequisites.reserve(jobs[index].dependencies.size());
-            for (const uint32_t dependency : jobs[index].dependencies) {
+            for (const uint32 dependency : jobs[index].dependencies) {
                 prerequisites.emplace_back(events[dependency]);
             }
             auto task = LambdaTask::Create([owner, index] {
@@ -182,7 +182,7 @@ private:
         "asynchronous RenderGraph setup failed (diagnostic unavailable)";
 
     [[nodiscard]] bool HasFault(SetupFaultForTesting fault) const noexcept {
-        return (fault_mask & static_cast<uint8_t>(fault)) != 0;
+        return (fault_mask & static_cast<uint8>(fault)) != 0;
     }
 
     void RecordExecutionFailure(size_t failed_index, const char* reason) noexcept {
@@ -236,7 +236,7 @@ private:
     }
 
     [[nodiscard]] bool DependenciesSucceeded(size_t index) const noexcept {
-        for (const uint32_t dependency : jobs[index].dependencies) {
+        for (const uint32 dependency : jobs[index].dependencies) {
             if (runtimes[dependency].status.load(std::memory_order_acquire) !=
                 JobStatus::Succeeded) {
                 return false;
@@ -435,18 +435,18 @@ private:
     std::string                       error{};
     const char*                       fallback_error = kCallbackFailed;
     Status                            status = Status::Pending;
-    uint8_t                           fault_mask = 0;
+    uint8                             fault_mask                = 0;
     bool                              diagnostic_storage_failed = false;
     std::atomic<bool>                 cancelled{false};
 };
 
 namespace {
 
-std::atomic<uint64_t> s_next_graph_id{1};
+std::atomic<uint64> s_next_graph_id{1};
 
 [[nodiscard]] bool IsValidTextureDesc(const RenderGraph::TextureDesc& desc) {
-    const auto aspect_mask = static_cast<uint8_t>(desc.aspects);
-    const auto known_mask  = static_cast<uint8_t>(RenderGraph::TextureAspect::All);
+    const auto aspect_mask = static_cast<uint8>(desc.aspects);
+    const auto known_mask  = static_cast<uint8>(RenderGraph::TextureAspect::All);
     return desc.mip_count != 0 && desc.layer_count != 0 && aspect_mask != 0 &&
            (aspect_mask & known_mask) == aspect_mask;
 }
@@ -627,10 +627,10 @@ void AppendState(std::ostringstream& stream, const RenderGraph::ResourceState& s
 }
 
 void AppendTextureAspects(std::ostringstream& stream, RenderGraph::TextureAspect aspects) {
-    const auto mask   = static_cast<uint8_t>(aspects);
+    const auto mask   = static_cast<uint8>(aspects);
     bool       wrote  = false;
     auto       append = [&](RenderGraph::TextureAspect aspect, const char* name) {
-        if ((mask & static_cast<uint8_t>(aspect)) == 0) {
+        if ((mask & static_cast<uint8>(aspect)) == 0) {
             return;
         }
         if (wrote) {
@@ -647,7 +647,7 @@ void AppendTextureAspects(std::ostringstream& stream, RenderGraph::TextureAspect
     }
 }
 
-void AppendCount(std::ostringstream& stream, uint64_t count, uint64_t remaining) {
+void AppendCount(std::ostringstream& stream, uint64 count, uint64 remaining) {
     if (count == remaining) {
         stream << "remaining";
     } else {
@@ -673,7 +673,7 @@ void AppendRange(std::ostringstream& stream, const RenderGraph::ResourceRange& r
     }
 }
 
-void AppendVersion(std::ostringstream& stream, uint32_t version) {
+void AppendVersion(std::ostringstream& stream, uint32 version) {
     if (version == RenderGraph::InvalidVersion) {
         stream << "none";
     } else {
@@ -1036,14 +1036,14 @@ RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, GpuWorkType work) {
 [[nodiscard]] RenderGraph::TextureAspect
 RaiseTextureAspects(ETextureAspectFlags aspects) {
     RenderGraph::TextureAspect result = RenderGraph::TextureAspect::None;
-    const uint32_t mask = static_cast<uint32_t>(aspects);
-    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::COLOR)) != 0) {
+    const uint32               mask   = static_cast<uint32>(aspects);
+    if ((mask & static_cast<uint32>(ETextureAspectFlags::COLOR)) != 0) {
         result = result | RenderGraph::TextureAspect::Color;
     }
-    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::DEPTH_SLICE)) != 0) {
+    if ((mask & static_cast<uint32>(ETextureAspectFlags::DEPTH_SLICE)) != 0) {
         result = result | RenderGraph::TextureAspect::Depth;
     }
-    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::STENCIL_SLICE)) != 0) {
+    if ((mask & static_cast<uint32>(ETextureAspectFlags::STENCIL_SLICE)) != 0) {
         result = result | RenderGraph::TextureAspect::Stencil;
     }
     return result;
@@ -1125,7 +1125,7 @@ bool RenderGraphLowering::MaterializeInstruction(
             error = "texture instruction has no physical binding or aspect";
             return false;
         }
-        constexpr uint32_t max_view_index = std::numeric_limits<uint8_t>::max();
+        constexpr uint32 max_view_index = std::numeric_limits<uint8>::max();
         if (range.mip_count == 0 || range.layer_count == 0 ||
             range.mip_first > max_view_index || range.mip_count > max_view_index ||
             range.layer_first > max_view_index || range.layer_count > max_view_index ||
@@ -1184,7 +1184,7 @@ bool RenderGraphLowering::MaterializeInstruction(
     return false;
 }
 
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::RecordWorkload(uint32_t units) {
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::RecordWorkload(uint32 units) {
     if (!graph.InvalidateCompile()) { return *this; }
     if (pass_index >= graph.passes.size() || units == 0) {
         graph.declaration_errors.emplace_back("recording workload requires a valid pass and positive units");
@@ -1314,8 +1314,9 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
         return {};
     }
     const auto physical = imported_resource_ids.find(physical_identity);
-    const uint32_t index = named != resource_names.end() ? named->second :
-                           physical != imported_resource_ids.end() ? physical->second : InvalidIndex;
+    const uint32 index    = named != resource_names.end()           ? named->second :
+                            physical != imported_resource_ids.end() ? physical->second :
+                                                                      InvalidIndex;
     if (index != InvalidIndex) {
         auto& resource = resources[index];
         if (!resource.imported) {
@@ -1373,7 +1374,7 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
         resource.typed_desc  = true;
     }
     resources.emplace_back(std::move(resource));
-    const auto resource_id = static_cast<uint32_t>(resources.size() - 1);
+    const auto resource_id = static_cast<uint32>(resources.size() - 1);
     resource_names.emplace(resources.back().name, resource_id);
     if (physical_identity != nullptr) {
         imported_resource_ids.emplace(physical_identity, resource_id);
@@ -1520,7 +1521,7 @@ RenderGraph::ResourceHandle RenderGraph::CreateTransientInternal(
         resource.typed_desc  = true;
     }
     resources.emplace_back(std::move(resource));
-    const auto resource_id = static_cast<uint32_t>(resources.size() - 1);
+    const auto resource_id = static_cast<uint32>(resources.size() - 1);
     resource_names.emplace(resources.back().name, resource_id);
     return ResourceHandle{resource_id, graph_id};
 }
@@ -1658,7 +1659,7 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
     pass.record          = std::move(record);
     pass.record_policy   = policy;
     passes.emplace_back(std::move(pass));
-    const uint32_t pass_index = static_cast<uint32_t>(passes.size() - 1);
+    const uint32   pass_index = static_cast<uint32>(passes.size() - 1);
     PassBuilder    builder(*this, pass_index);
     if (setup) {
         setup(builder);
@@ -1818,7 +1819,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             }
         }
         if (!compiled_plan.queue_batches.empty()) {
-            const uint32_t first_native_queue =
+            const uint32 first_native_queue =
                 compiled_plan.queue_batches.front().queue.native_queue_id;
             active_async_multiqueue = std::any_of(
                 compiled_plan.queue_batches.begin() + 1,
@@ -1918,7 +1919,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             return false;
         }
 
-        for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index) {
+        for (uint32 pass_index = 0; pass_index < passes.size(); ++pass_index) {
             const auto& state = active_pass_states[pass_index];
             if (!state.RequiresCompletionLifetime()) {
                 continue;
@@ -2092,7 +2093,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
     };
 
     const auto& units = compiled_plan.frontend_record_units;
-    std::vector<uint8_t> split_before(units.size(), 0);
+    std::vector<uint8> split_before(units.size(), 0);
     for (size_t index = 0; index < units.size(); ++index) {
         if (!IsValidPass(units[index].pass)) {
             compile_error = "frontend recording found an invalid compiled record unit";
@@ -2107,8 +2108,9 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         }
     }
     const auto dispatches = Detail::BuildRecordingDispatches(compiled_plan, parallel_recording_enabled);
-    const uint32_t worker_count = TaskGraph::IsInitialized() ?
-        TaskGraph::GetInterface().GetWorkerThreadCount() : 1;
+    const uint32 worker_count = TaskGraph::IsInitialized() ?
+                                    TaskGraph::GetInterface().GetWorkerThreadCount() :
+                                    1;
     // Keep CPU dispatch boundaries, but allocate one exclusively owned stream
     // per serial region or weighted parallel range, not one per pass.
     for (const auto& dispatch_group : dispatches) {
@@ -2152,7 +2154,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             job.passes.reserve(range.unit_count);
             Array<ExecutedPassInfo> source_passes;
             if (configure_recording_source) { source_passes.reserve(range.unit_count); }
-            for (uint32_t offset = 0; offset < range.unit_count; ++offset) {
+            for (uint32 offset = 0; offset < range.unit_count; ++offset) {
                 const auto& member_unit = units[range.first_unit + offset];
                 auto& member = passes[member_unit.pass.pass_id];
                 if (!member.record || ToRHIQueue(member_unit.target_queue.role) == EQueueType::Ignore) {
@@ -2602,8 +2604,8 @@ std::string RenderGraph::Dump() const {
 
     stream << "passes:\n";
     const bool has_execution_order = compiled_plan.execution_order.size() == passes.size();
-    for (uint32_t item_index = 0; item_index < passes.size(); ++item_index) {
-        const uint32_t pass_index =
+    for (uint32 item_index = 0; item_index < passes.size(); ++item_index) {
+        const uint32 pass_index =
             has_execution_order ? compiled_plan.execution_order[item_index].pass_id : item_index;
         const auto& pass = passes[pass_index];
         stream << "  [" << item_index << "] " << pass.name << " declared=" << pass_index
@@ -2614,7 +2616,7 @@ std::string RenderGraph::Dump() const {
                << " translate=" << ToString(pass.translate_execution_class)
 
                << " side_effect=" << (pass.side_effect ? "true" : "false") << " accesses=[";
-        for (uint32_t access_index = 0; access_index < pass.accesses.size(); ++access_index) {
+        for (uint32 access_index = 0; access_index < pass.accesses.size(); ++access_index) {
             const auto& access = pass.accesses[access_index];
             if (access_index != 0) {
                 stream << ", ";
@@ -2636,7 +2638,7 @@ std::string RenderGraph::Dump() const {
             stream << ')';
         }
         stream << "] references=[";
-        for (uint32_t reference_index = 0; reference_index < pass.references.size();
+        for (uint32 reference_index = 0; reference_index < pass.references.size();
              ++reference_index) {
             if (reference_index != 0) {
                 stream << ", ";
@@ -2648,7 +2650,7 @@ std::string RenderGraph::Dump() const {
     }
 
     stream << "resources:\n";
-    for (uint32_t index = 0; index < resources.size(); ++index) {
+    for (uint32 index = 0; index < resources.size(); ++index) {
         const auto& resource = resources[index];
         stream << "  [" << index << "] " << resource.name << " kind=" << ToString(resource.kind)
                << " lifetime=" << (resource.imported ? "imported" : "transient");
@@ -2680,8 +2682,8 @@ std::string RenderGraph::Dump() const {
         } else {
             stream << resource.last_use;
         }
-        uint32_t version_count = 0;
-        uint32_t transient_slot = InvalidIndex;
+        uint32 version_count  = 0;
+        uint32 transient_slot = InvalidIndex;
         if (index < compiled_plan.resources.size()) {
             version_count  = compiled_plan.resources[index].version_count;
             transient_slot = compiled_plan.resources[index].transient_slot;
@@ -2691,7 +2693,7 @@ std::string RenderGraph::Dump() const {
                << " aliases=[";
         auto aliases = resource.aliases;
         std::sort(aliases.begin(), aliases.end());
-        for (uint32_t alias_index = 0; alias_index < aliases.size(); ++alias_index) {
+        for (uint32 alias_index = 0; alias_index < aliases.size(); ++alias_index) {
             if (alias_index != 0) {
                 stream << ", ";
             }
@@ -2726,7 +2728,7 @@ std::string RenderGraph::Dump() const {
     for (const auto& edge : compiled_plan.edges) {
         stream << "  " << passes[edge.src.pass_id].name << " -> " << passes[edge.dst.pass_id].name
                << " reasons=[";
-        for (uint32_t reason_index = 0; reason_index < edge.reasons.size(); ++reason_index) {
+        for (uint32 reason_index = 0; reason_index < edge.reasons.size(); ++reason_index) {
             const auto& reason = edge.reasons[reason_index];
             if (reason_index != 0) {
                 stream << ", ";
@@ -2757,7 +2759,7 @@ std::string RenderGraph::Dump() const {
     };
 
     stream << "barriers:\n";
-    for (uint32_t barrier_index = 0; barrier_index < compiled_plan.barriers.size(); ++barrier_index) {
+    for (uint32 barrier_index = 0; barrier_index < compiled_plan.barriers.size(); ++barrier_index) {
         const auto& barrier = compiled_plan.barriers[barrier_index];
         stream << "  [" << barrier_index << "] " << resources[barrier.resource.resource_id].name << '@';
         AppendRange(stream, barrier.range);
@@ -2797,7 +2799,7 @@ std::string RenderGraph::Dump() const {
             stream << "none";
         }
         stream << "] sources=[";
-        for (uint32_t source_index = 0; source_index < barrier.sources.size(); ++source_index) {
+        for (uint32 source_index = 0; source_index < barrier.sources.size(); ++source_index) {
             if (source_index != 0) {
                 stream << ',';
             }
@@ -2819,7 +2821,7 @@ std::string RenderGraph::Dump() const {
                << passes[alias.primary_src_pass.pass_id].name << "->"
                << passes[alias.dst_pass.pass_id].name
                << " frontier=[";
-        for (uint32_t index = 0; index < alias.source_frontier.size(); ++index) {
+        for (uint32 index = 0; index < alias.source_frontier.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
@@ -2829,14 +2831,14 @@ std::string RenderGraph::Dump() const {
     }
 
     stream << "barrier_placements:\n  prologue=[";
-    for (uint32_t index = 0; index < compiled_plan.prologue_barriers.size(); ++index) {
+    for (uint32 index = 0; index < compiled_plan.prologue_barriers.size(); ++index) {
         if (index != 0) {
             stream << ',';
         }
         stream << compiled_plan.prologue_barriers[index];
     }
     stream << "] epilogue=[";
-    for (uint32_t index = 0; index < compiled_plan.epilogue_barriers.size(); ++index) {
+    for (uint32 index = 0; index < compiled_plan.epilogue_barriers.size(); ++index) {
         if (index != 0) {
             stream << ',';
         }
@@ -2851,35 +2853,35 @@ std::string RenderGraph::Dump() const {
                << " available=" << (batch.queue.available ? "true" : "false")
 
                << " passes=[";
-        for (uint32_t pass_index = 0; pass_index < batch.passes.size(); ++pass_index) {
+        for (uint32 pass_index = 0; pass_index < batch.passes.size(); ++pass_index) {
             if (pass_index != 0) {
                 stream << ',';
             }
             stream << passes[batch.passes[pass_index].pass_id].name;
         }
         stream << "] pre=[";
-        for (uint32_t index = 0; index < batch.pre_barriers.size(); ++index) {
+        for (uint32 index = 0; index < batch.pre_barriers.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
             stream << batch.pre_barriers[index];
         }
         stream << "] post=[";
-        for (uint32_t index = 0; index < batch.post_barriers.size(); ++index) {
+        for (uint32 index = 0; index < batch.post_barriers.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
             stream << batch.post_barriers[index];
         }
         stream << "] waits=[";
-        for (uint32_t index = 0; index < batch.wait_syncs.size(); ++index) {
+        for (uint32 index = 0; index < batch.wait_syncs.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
             stream << batch.wait_syncs[index];
         }
         stream << "] signals=[";
-        for (uint32_t index = 0; index < batch.signal_syncs.size(); ++index) {
+        for (uint32 index = 0; index < batch.signal_syncs.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
@@ -2893,14 +2895,14 @@ std::string RenderGraph::Dump() const {
         stream << "  [" << sync.id << "] batch" << sync.signal_batch << " -> batch"
                << sync.wait_batch << " mode=" << (sync.gpu_wait_required ? "gpu" : "host-fifo")
                << " edges=[";
-        for (uint32_t index = 0; index < sync.dependency_edges.size(); ++index) {
+        for (uint32 index = 0; index < sync.dependency_edges.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
             stream << sync.dependency_edges[index];
         }
         stream << "] barriers=[";
-        for (uint32_t index = 0; index < sync.barriers.size(); ++index) {
+        for (uint32 index = 0; index < sync.barriers.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
@@ -2912,7 +2914,7 @@ std::string RenderGraph::Dump() const {
     stream << "pass_barriers:\n";
     for (const auto& placement : compiled_plan.pass_barriers) {
         stream << "  " << passes[placement.pass.pass_id].name << " before=[";
-        for (uint32_t index = 0; index < placement.before.size(); ++index) {
+        for (uint32 index = 0; index < placement.before.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
@@ -2922,12 +2924,12 @@ std::string RenderGraph::Dump() const {
     }
 
     stream << "dependency_levels:\n";
-    for (uint32_t level_index = 0;
+    for (uint32 level_index = 0;
          level_index < compiled_plan.dependency_levels.size();
          ++level_index) {
         stream << "  [" << level_index << "] [";
         const auto& level = compiled_plan.dependency_levels[level_index];
-        for (uint32_t pass_index = 0;
+        for (uint32 pass_index = 0;
              pass_index < level.passes.size();
              ++pass_index) {
             if (pass_index != 0) {
@@ -2958,7 +2960,7 @@ std::string RenderGraph::Dump() const {
 }
 
 void RenderGraph::AddAccess(
-    uint32_t         pass_index,
+    uint32           pass_index,
     ResourceHandle   resource,
     AccessMode       mode,
     ResourceRange    range,
@@ -3047,7 +3049,7 @@ void RenderGraph::AddStateDeclaration(
     }
 }
 
-void RenderGraph::AddDependency(uint32_t pass_index, PassHandle dependency) {
+void RenderGraph::AddDependency(uint32 pass_index, PassHandle dependency) {
     if (!InvalidateCompile()) {
         return;
     }
@@ -3065,7 +3067,7 @@ void RenderGraph::AddDependency(uint32_t pass_index, PassHandle dependency) {
     }
 }
 
-void RenderGraph::MarkSideEffect(uint32_t pass_index) {
+void RenderGraph::MarkSideEffect(uint32 pass_index) {
     if (!InvalidateCompile()) {
         return;
     }
@@ -3077,8 +3079,8 @@ void RenderGraph::MarkSideEffect(uint32_t pass_index) {
 }
 
 void RenderGraph::SetExecutionDomain(
-    uint32_t pass_index,
-    QueueRole queue,
+    uint32      pass_index,
+    QueueRole   queue,
     GpuWorkType work
 ) {
     if (!InvalidateCompile()) {
@@ -3091,7 +3093,7 @@ void RenderGraph::SetExecutionDomain(
     passes[pass_index].domain = ExecutionDomain{queue, work};
 }
 
-void RenderGraph::AddReference(uint32_t pass_index, ResourceHandle resource) {
+void RenderGraph::AddReference(uint32 pass_index, ResourceHandle resource) {
     if (!InvalidateCompile()) {
         return;
     }
@@ -3112,7 +3114,7 @@ void RenderGraph::AddReference(uint32_t pass_index, ResourceHandle resource) {
 }
 
 void RenderGraph::SetPassTranslateExecutionClass(
-    uint32_t                    pass_index,
+    uint32                      pass_index,
     ERHITranslateExecutionClass execution_class
 ) {
     if (!InvalidateCompile()) {
@@ -3170,7 +3172,7 @@ RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
         return {};
     }
 
-    std::vector<uint32_t> dependency_indices{};
+    std::vector<uint32> dependency_indices{};
     dependency_indices.reserve(dependencies.size());
     for (const SetupPassHandle dependency : dependencies) {
         if (!dependency.IsValid() || dependency.graph_id != graph_id ||
@@ -3199,7 +3201,7 @@ RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
         .annotate_failure = std::move(annotate_failure),
     });
     return SetupPassHandle{
-        .setup_pass_id = static_cast<uint32_t>(setup_passes.size() - 1),
+        .setup_pass_id = static_cast<uint32>(setup_passes.size() - 1),
         .graph_id      = graph_id,
     };
 }
@@ -3214,7 +3216,7 @@ void RenderGraph::DispatchSetupPassesAsync() {
     // failure callbacks. Adoption and publication are then noexcept commits.
     try {
         if ((setup_faults_for_testing &
-             static_cast<uint8_t>(SetupFaultForTesting::BatchOwnerCreate)) != 0) {
+             static_cast<uint8>(SetupFaultForTesting::BatchOwnerCreate)) != 0) {
             throw std::bad_alloc{};
         }
         auto candidate = std::make_shared<SetupBatchState>(
@@ -3260,7 +3262,7 @@ void RenderGraph::DispatchSetupPassesAsync() {
     const auto batch = setup_batch;
     try {
         if ((setup_faults_for_testing &
-             static_cast<uint8_t>(SetupFaultForTesting::TaskDispatchThrows)) != 0) {
+             static_cast<uint8>(SetupFaultForTesting::TaskDispatchThrows)) != 0) {
             throw InjectedSetupDispatchFault{};
         }
         batch->DispatchAsync(batch);

@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "shader/ShaderResourceManager.h"
 
 #include "config/ConfigManager.h"
@@ -124,7 +125,7 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
 
     const std::string      shader_path       = input.relative_source_file_path;
     const std::string      entry_point       = input.entry_point;
-    const uint32_t         mutation_id       = input.mutation_id;
+    const uint32           mutation_id       = input.mutation_id;
     const std::string_view shader_type_name = GetShaderTypeName(_type);
 
     ShaderCompilerOutput output = ShaderCompiler::Compile(std::move(input));

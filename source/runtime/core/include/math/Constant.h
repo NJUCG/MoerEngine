@@ -1,5 +1,6 @@
 #pragma once
 
+#include "misc/Types.h"
 #include <cmath>
 #include <limits>
 #include <stdint.h>
@@ -10,8 +11,8 @@
 namespace Moer {
 static constexpr int      MAX_INT   = MaxValue<int>;
 static constexpr int      MIN_INT   = std::numeric_limits<int>::lowest();
-static constexpr uint64_t MAX_INT64 = MaxValue<uint64_t>;
-static constexpr uint64_t MIN_INT64 = std::numeric_limits<uint64_t>::lowest();
+static constexpr uint64   MAX_INT64 = MaxValue<uint64>;
+static constexpr uint64   MIN_INT64 = std::numeric_limits<uint64>::lowest();
 static constexpr float    MAX_FLOAT = MaxValue<float>;
 static constexpr float    MIN_FLOAT = std::numeric_limits<float>::lowest();
 static constexpr float    EPS       = 1e-5f;

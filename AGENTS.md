@@ -54,7 +54,7 @@ source/
   runtime/
     core/                        # Math, containers, platform, logging, task graph
       include/math/              #   Vector, Matrix (Base.h, Matrix.h)
-      include/misc/              #   Traits.h (C++ ↔ HLSL type aliases: float3, uint4, float4x4)
+      include/misc/              #   Types.h (fixed-width integers), Traits.h (C++ ↔ HLSL types)
     Engine.cpp/h                 # Engine init/loop
     render/
       renderer/
@@ -154,6 +154,11 @@ shaders/                                # HLSL shader sources
 
 ## Key Patterns
 
+### Fixed-Width Integer Types
+- Engine-owned C++ uses `uint8` / `uint16` / `uint32` / `uint64` and `int8` / `int16` / `int32` / `int64` from `misc/Types.h`; qualify them with `Moer::` outside the namespace. Use `std::atomic<uint32>` and corresponding fixed-width aliases for atomic integers.
+- Preserve semantic types such as `size_t`, `uintptr_t`, and `VkDeviceSize`, third-party/generated code, and CUDA interop type contracts.
+- HLSL and shared C++/HLSL headers retain `uint`; `misc/Traits.h` provides the C++ compatibility alias. New C++-only code uses `uint32`.
+
 ### Bindless Architecture
 All resources go through a unified bindless heap. Shaders declare `BINDLESS_BINDINGS(BufferSpace, TextureSpace, SamplerSpace, AccelSpace)` and access resources by uint handles via `ArrayBuffer(handle).Load<T>()` and `TextureHandle(handle).Sample2D<T>()`.
 
@@ -224,7 +229,7 @@ Vulkan push constants are limited to 128 bytes on most hardware. Keep pass param
 | `float3`  | `Vector3f` (12B, union of 3 floats) | 12 | 4 |
 | `float4`  | `Vector4f` (16B) | 16 | 4 |
 | `float4x4`| `Matrix4x4f` (64B, union of 4×Vector4f) | 64 | 4 |
-| `uint`    | `uint32_t` | 4 | 4 |
+| `uint`    | `uint32` | 4 | 4 |
 | `uint4`   | `Vector4ui` | 16 | 4 |
 
 Note: C++ side has **no implicit padding** (all 4-byte aligned). But **HLSL ConstantBuffer (std140) adds padding** to arrays of scalars — always use vector types for arrays in shared structs.

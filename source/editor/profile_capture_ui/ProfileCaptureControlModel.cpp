@@ -1,5 +1,5 @@
 #include "profile_capture_ui/ProfileCaptureControlModel.h"
-
+#include "misc/Types.h"
 #include <utility>
 
 namespace Moer {
@@ -159,7 +159,7 @@ ProfileCaptureControlModel::RequestStop() noexcept {
     }
 
     try {
-        const std::uint64_t expected_generation =
+        const uint64 expected_generation =
             snapshot_.active_generation;
         return AcceptSubmission(
             callbacks_.request_stop(expected_generation),
@@ -196,7 +196,7 @@ ProfileCaptureControlModel::PendingRequestKind() const noexcept {
     return pending_kind_;
 }
 
-std::uint64_t
+uint64
 ProfileCaptureControlModel::PendingExpectedGeneration() const noexcept {
     return pending_expected_generation_;
 }
@@ -225,7 +225,7 @@ EProfileCaptureControlActionResult
 ProfileCaptureControlModel::AcceptSubmission(
     Render::ProfileCaptureRequestSubmission submission,
     Render::ProfileCaptureRequestKind       kind,
-    std::uint64_t                           expected_generation
+    uint64                                  expected_generation
 ) noexcept {
     last_submit_result_ = submission.result;
     if (submission.result != Render::ProfileCaptureSubmitResult::Queued) {

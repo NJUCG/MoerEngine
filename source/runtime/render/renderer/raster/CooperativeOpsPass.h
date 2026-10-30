@@ -2,6 +2,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <string>
@@ -52,15 +53,15 @@ public:
     }
 
 private:
-    static constexpr uint32_t s_compute_stage_bit = 0x00000020;
-    static constexpr uint32_t s_float_e4m3_type   = 1000491002;
-    static constexpr uint32_t s_float_e5m2_type   = 1000491003;
+    static constexpr uint32 s_compute_stage_bit = 0x00000020;
+    static constexpr uint32 s_float_e4m3_type   = 1000491002;
+    static constexpr uint32 s_float_e5m2_type   = 1000491003;
 
     static const char* ToYesNo(bool _enabled) {
         return _enabled ? "Yes" : "No";
     }
 
-    static std::string ComponentTypeName(uint32_t _component_type) {
+    static std::string ComponentTypeName(uint32 _component_type) {
         switch (_component_type) {
             case 0:
                 return "float16";
@@ -93,7 +94,7 @@ private:
         }
     }
 
-    static std::string ScopeName(uint32_t _scope) {
+    static std::string ScopeName(uint32 _scope) {
         switch (_scope) {
             case 1:
                 return "Device";
@@ -164,8 +165,8 @@ private:
         _status.low_precision_supported       = m_cooperative_info.low_precision_supported;
         _status.storage_supported             = m_cooperative_info.storage_supported;
         _status.vulkan_memory_model_supported = m_cooperative_info.vulkan_memory_model_supported;
-        _status.matrix_mode_count             = static_cast<uint>(m_cooperative_info.matrix_modes.size());
-        _status.vector_mode_count             = static_cast<uint>(m_cooperative_info.vector_modes.size());
+        _status.matrix_mode_count             = static_cast<uint32>(m_cooperative_info.matrix_modes.size());
+        _status.vector_mode_count             = static_cast<uint32>(m_cooperative_info.vector_modes.size());
         _status.matrix_supported_stages       = m_cooperative_info.matrix_supported_stages;
         _status.vector_supported_stages       = m_cooperative_info.vector_supported_stages;
         _status.max_vector_components         = m_cooperative_info.max_vector_components;

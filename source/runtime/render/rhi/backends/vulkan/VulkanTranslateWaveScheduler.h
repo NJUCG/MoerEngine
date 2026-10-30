@@ -2,8 +2,8 @@
 
 #include "rhi/RHISubmissionTopology.h"
 
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <optional>
 #include <span>
@@ -17,19 +17,19 @@ namespace Moer::Render::VulkanTranslateWaveDetail {
 // earlier node in this stable input order.
 struct TranslateWaveNode {
     SubmissionKey                  key{};
-    uint32_t                       native_queue_id{0};
+    uint32                         native_queue_id{0};
     bool                           async_translate{true};
     std::span<const SubmissionKey> dependencies{};
 };
 
-enum class ETranslateWaveBuildError : uint8_t {
+enum class ETranslateWaveBuildError : uint8 {
     None = 0,
     DuplicateKey,
     UnknownDependency,
     FutureDependency,
 };
 
-enum class ETranslateWaveNodeState : uint8_t {
+enum class ETranslateWaveNodeState : uint8 {
     Pending = 0,
     Translating,
     Translated,
@@ -222,7 +222,7 @@ public:
 private:
     struct InternalNode {
         SubmissionKey           key{};
-        uint32_t                native_queue_id{0};
+        uint32                  native_queue_id{0};
         bool                    async_translate{true};
         std::vector<size_t>     dependencies{};
         size_t                  same_native_queue_predecessor{NoIndex};

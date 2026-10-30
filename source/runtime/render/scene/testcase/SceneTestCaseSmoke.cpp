@@ -1,4 +1,6 @@
 // 集中实现 Scene API 的冒烟用例，并维护用例 ID、名称和实例之间的稳定映射。
+
+#include "misc/Types.h"
 #include "scene/testcase/SceneTestCaseRegistry.h"
 
 #include "log/LogSystem.h"
@@ -68,7 +70,7 @@ struct DebugMaterialPreset {
     std::string_view name;
 };
 
-DebugMaterialPreset GetDebugMaterialPreset(uint preset_index) {
+DebugMaterialPreset GetDebugMaterialPreset(uint32 preset_index) {
     switch (preset_index % 4) {
         case 0:
             return {float4(1.f, 0.05f, 0.05f, 1.f), float3(0.2f, 0.f, 0.f), 0.15f, 0.0f, "Red Highlight"};
@@ -101,8 +103,8 @@ Array<entt::entity> FindPrimitiveReferencedMaterialEntities(Scene& scene) {
     return material_entities;
 }
 
-uint& DebugMaterialPresetCursor() {
-    static uint s_debug_material_preset_cursor = 0;
+uint32& DebugMaterialPresetCursor() {
+    static uint32 s_debug_material_preset_cursor = 0;
     return s_debug_material_preset_cursor;
 }
 
@@ -124,14 +126,14 @@ entt::entity FindRootNodeEntity(Scene& scene) {
 
 struct CreateDestroyPointLightPersistentState {
     entt::entity light_entity        = entt::null;
-    uint         initial_light_count = 0;
+    uint32       initial_light_count = 0;
 };
 
 struct CreateDestroyRenderablePersistentState {
     Array<entt::entity> clone_roots;
     Array<entt::entity> clone_renderables;
-    Array<uint>         initial_instance_counts;
-    Array<uint>         expected_instance_increments;
+    Array<uint32>       initial_instance_counts;
+    Array<uint32>       expected_instance_increments;
 };
 
 CreateDestroyPointLightPersistentState s_create_destroy_point_light_state{};
@@ -527,7 +529,7 @@ private:
     };
 
     entt::entity m_light_entity        = entt::null;
-    uint         m_initial_light_count = 0;
+    uint32       m_initial_light_count = 0;
     ERunMode     m_run_mode            = ERunMode::Create;
     bool         m_waiting_for_sync    = false;
 };
@@ -725,7 +727,7 @@ private:
     entt::entity m_child    = entt::null;
     entt::entity m_root     = entt::null;
 
-    uint  m_initial_root_child_count = 0;
+    uint32 m_initial_root_child_count = 0;
     bool  m_destroy_child_result     = false;
     bool  m_destroy_parent_a_result  = false;
     bool  m_destroy_parent_b_result  = false;
@@ -892,7 +894,7 @@ public:
         m_initial_instance_counts.resize(cpu_scene.GetPrimitiveCount(), 0);
         m_expected_instance_increments.resize(cpu_scene.GetPrimitiveCount(), 0);
 
-        for (uint primitive_id = 0; primitive_id < cpu_scene.GetPrimitiveCount(); ++primitive_id) {
+        for (uint32 primitive_id = 0; primitive_id < cpu_scene.GetPrimitiveCount(); ++primitive_id) {
             m_initial_instance_counts[primitive_id] = cpu_scene.GetInstanceCountForPrimitive(primitive_id);
         }
 
@@ -909,7 +911,7 @@ public:
 
             const auto& mesh = registry.get<ecs::CMesh>(renderable.mesh_entt);
             for (const entt::entity primitive_entt : mesh.primitive_entts) {
-                const uint primitive_id = cpu_scene.GetPrimitiveId(primitive_entt);
+                const uint32 primitive_id = cpu_scene.GetPrimitiveId(primitive_entt);
                 if (primitive_id == UINT_MAX || primitive_id >= m_expected_instance_increments.size()) {
                     continue;
                 }
@@ -1062,7 +1064,7 @@ public:
             }
 
             const auto& cpu_scene = scene.cpu_scene();
-            for (uint primitive_id = 0; primitive_id < cpu_scene.GetPrimitiveCount(); ++primitive_id) {
+            for (uint32 primitive_id = 0; primitive_id < cpu_scene.GetPrimitiveCount(); ++primitive_id) {
                 Expect(
                     cpu_scene.GetInstanceCountForPrimitive(primitive_id) ==
                         m_initial_instance_counts[primitive_id] +
@@ -1100,7 +1102,7 @@ public:
         }
 
         const auto& cpu_scene = scene.cpu_scene();
-        for (uint primitive_id = 0; primitive_id < cpu_scene.GetPrimitiveCount(); ++primitive_id) {
+        for (uint32 primitive_id = 0; primitive_id < cpu_scene.GetPrimitiveCount(); ++primitive_id) {
             Expect(
                 cpu_scene.GetInstanceCountForPrimitive(primitive_id) ==
                     m_initial_instance_counts[primitive_id],
@@ -1125,8 +1127,8 @@ private:
     Array<entt::entity> m_clone_renderables;
     Array<bool>         m_destroy_clone_results;
     Array<bool>         m_destroy_root_results;
-    Array<uint>         m_initial_instance_counts;
-    Array<uint>         m_expected_instance_increments;
+    Array<uint32>       m_initial_instance_counts;
+    Array<uint32>       m_expected_instance_increments;
     Array<float3>       m_clone_root_offsets;
 
     ERunMode m_run_mode              = ERunMode::Create;
@@ -1209,7 +1211,7 @@ public:
         );
 
         const auto& cpu_scene    = scene.cpu_scene();
-        const uint  primitive_id = cpu_scene.GetPrimitiveId(m_result.primitive_entt);
+        const uint32 primitive_id = cpu_scene.GetPrimitiveId(m_result.primitive_entt);
         Expect(primitive_id != UINT_MAX, "Procedural primitive should have a CpuScene primitive id.");
         Expect(
             cpu_scene.GetPrimitiveCount() == m_initial_primitive_count + 1,
@@ -1231,7 +1233,7 @@ public:
 
 private:
     CreateProceduralRenderableResult m_result;
-    uint                             m_initial_primitive_count = 0;
+    uint32                           m_initial_primitive_count = 0;
     size_t                           m_initial_material_count  = 0;
     bool                             m_waiting_for_sync        = false;
 };
@@ -1624,7 +1626,7 @@ private:
     entt::entity m_child_a      = entt::null;
     entt::entity m_child_b      = entt::null;
 
-    uint   m_initial_root_child_count = 0;
+    uint32 m_initial_root_child_count = 0;
     EStage m_stage                    = EStage::CreatePlainEntity;
 
     std::string m_plain_entity_name = "SceneTestCase Plain Entity";
@@ -1746,7 +1748,7 @@ private:
     entt::entity m_child      = entt::null;
     entt::entity m_grandchild = entt::null;
 
-    uint  m_initial_root_child_count = 0;
+    uint32 m_initial_root_child_count = 0;
     Stage m_stage                    = Stage::CreateHierarchy;
 
     float3 m_parent_translation     = float3(2.f, 0.f, -2.f);
@@ -1922,7 +1924,7 @@ private:
     entt::entity                     m_import_root = entt::null;
     Scene::ImportSceneFromFileResult m_import_result{};
 
-    uint   m_initial_root_child_count = 0;
+    uint32 m_initial_root_child_count = 0;
     EStage m_stage                    = EStage::ImportScene;
 };
 

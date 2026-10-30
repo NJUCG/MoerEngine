@@ -1,10 +1,11 @@
 #include "rhi/backends/metal/MetalDevice.h"
+#include "log/LogSystem.h"
+#include "misc/Types.h"
 #include "rhi/backends/metal/MetalBindless.h"
 #include "rhi/backends/metal/MetalPipeline.h"
 #include "rhi/backends/metal/MetalQueue.h"
 #include "rhi/backends/metal/MetalResource.h"
 #include "rhi/backends/metal/MetalSwapchain.h"
-#include "log/LogSystem.h"
 
 #import <Metal/Metal.h>
 
@@ -20,7 +21,7 @@ void ValidateMetalBufferInfo(const BufferInfo& info) {
     if (info.size == 0 || info.stride == 0) Unsupported("zero-sized buffers");
     const bool texel_buffer =
         (info.usage & EBufferUsageFlags::TEXTURE_BUFFER) != EBufferUsageFlags::NONE;
-    if (texel_buffer && (info.stride != sizeof(uint32_t) ||
+    if (texel_buffer && (info.stride != sizeof(uint32) ||
                          (info.format != PF_UNDEFINED && info.format != PF_R32_UINT))) {
         Unsupported("this Metal texel buffer format");
     }
@@ -41,13 +42,13 @@ MetalBufferLayout CalculateMetalBufferLayout(id<MTLDevice> device, const BufferI
     if ((info.usage & EBufferUsageFlags::TEXTURE_BUFFER) == EBufferUsageFlags::NONE) {
         return {info.size * info.stride};
     }
-    const uint count = static_cast<uint>(info.size);
+    const uint32     count = static_cast<uint32>(info.size);
     const NSUInteger linear_alignment =
         [device minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatR32Uint];
     const NSUInteger texel_width =
-        count > 4096 ? 4096 : std::max<NSUInteger>(count, linear_alignment / sizeof(uint32_t));
+        count > 4096 ? 4096 : std::max<NSUInteger>(count, linear_alignment / sizeof(uint32));
     const NSUInteger texel_height = (count + 4095) / 4096;
-    return {texel_width * texel_height * sizeof(uint32_t), texel_width, texel_height};
+    return {texel_width * texel_height * sizeof(uint32), texel_width, texel_height};
 }
 
 id<MTLTexture> CreateMetalTexelBufferTexture(id<MTLBuffer> buffer, const MetalBufferLayout& layout) {
@@ -57,8 +58,9 @@ id<MTLTexture> CreateMetalTexelBufferTexture(id<MTLBuffer> buffer, const MetalBu
                                       width:layout.texel_width height:layout.texel_height mipmapped:NO];
     descriptor.storageMode = buffer.storageMode;
     descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    id<MTLTexture> texture = [buffer newTextureWithDescriptor:descriptor offset:0
-                                                bytesPerRow:layout.texel_width * sizeof(uint32_t)];
+    id<MTLTexture> texture           = [buffer newTextureWithDescriptor:descriptor
+                                                                 offset:0
+                                                            bytesPerRow:layout.texel_width * sizeof(uint32)];
     if (texture == nil) Unsupported("this Metal texel buffer allocation");
     return texture;
 }
@@ -72,7 +74,7 @@ void ValidateMetalTextureLayout(const TextureInfo& info) {
         info.num_mips < 1 || info.num_samples != 1 || info.extent.x <= 0 || info.extent.y <= 0) {
         throw std::runtime_error(
             "Metal RHI has not implemented texture layout: dimension=" +
-            std::to_string(static_cast<uint>(info.dimension)) +
+            std::to_string(static_cast<uint32>(info.dimension)) +
             " extent=" + std::to_string(info.extent.x) + "x" + std::to_string(info.extent.y) +
             " array=" + std::to_string(info.array_size) +
             " mips=" + std::to_string(info.num_mips) +
@@ -148,7 +150,11 @@ MetalDevice::~MetalDevice() = default;
 
 FenceRef MetalDevice::CreateFence() { return FenceRef(MoerNew(MetalFence)()); }
 BufferRef MetalDevice::CreateBuffer(
-    std::string_view name, uint count, uint stride, EBufferUsageFlags usage, EPixelFormat format
+    std::string_view  name,
+    uint32            count,
+    uint32            stride,
+    EBufferUsageFlags usage,
+    EPixelFormat      format
 ) {
     const BufferInfo info(count, stride, usage, format);
     ValidateMetalBufferInfo(info);
@@ -175,7 +181,7 @@ TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& 
     result->SetName(name);
     return result;
 }
-BindlessArrayRef MetalDevice::CreateBindlessArray(uint capacity) {
+BindlessArrayRef MetalDevice::CreateBindlessArray(uint32 capacity) {
     return BindlessArrayRef(MoerNew(MetalBindlessArray)(native_->device, capacity));
 }
 RaytracingGeometryRef MetalDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo&) {
@@ -207,7 +213,7 @@ bool MetalDevice::SupportsTessellation() const {
     return [native_->device supportsFamily:MTLGPUFamilyApple3] ||
            [native_->device supportsFamily:MTLGPUFamilyMac1];
 }
-uint32_t MetalDevice::GetMaxTessellationFactor() const {
+uint32 MetalDevice::GetMaxTessellationFactor() const {
     return SupportsTessellation() ? 64 : 0;
 }
 

@@ -3,6 +3,7 @@
 
 #include "VulkanCommon.h"
 #include "VulkanFault.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 
 namespace Moer::Render {
@@ -29,10 +30,10 @@ public:
     ~VkSwapchain() override;
     [[nodiscard]] bool          Recreate(const SwapchainCreateInfo& _info) override;
     [[nodiscard]] AcquireResult AcquireNextImage(VkSemaphore _ready_semaphore, uint64 _timeout = UINT64_MAX);
-    [[nodiscard]] TextureView   GetSwapchainImage(uint _index) const;
-    [[nodiscard]] VkSemaphore   GetRenderFinishedSemaphore(uint _image_index) const;
+    [[nodiscard]] TextureView   GetSwapchainImage(uint32 _index) const;
+    [[nodiscard]] VkSemaphore   GetRenderFinishedSemaphore(uint32 _image_index) const;
     [[nodiscard]] PresentResult
-                       Present(VkQueue _queue, uint _image_index, uint64 _timeline, uint64 _work_serial);
+                       Present(VkQueue _queue, uint32 _image_index, uint64 _timeline, uint64 _work_serial);
     [[nodiscard]] bool IsPresentationReady() const noexcept override {
         return handle != VK_NULL_HANDLE && surface != VK_NULL_HANDLE && surface_info.IsValid() &&
                size.x != 0 && size.y != 0;

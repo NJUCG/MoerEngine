@@ -1,5 +1,6 @@
 #pragma once
 
+#include "misc/Types.h"
 #include "rhi/backends/metal/MetalFormat.h"
 
 #include <utility>
@@ -7,8 +8,8 @@
 
 namespace Moer::Render {
 struct MetalComputeBinding {
-    uint set{0};
-    uint binding{0};
+    uint32         set{0};
+    uint32         binding{0};
     EShaderArgType kind{SDA_Num};
     bool active{false};
     bool constant{false};
@@ -16,10 +17,10 @@ struct MetalComputeBinding {
 };
 
 struct MetalRenderBindings {
-    std::vector<std::pair<NSUInteger, uint>> bindless_sets;
+    std::vector<std::pair<NSUInteger, uint32>> bindless_sets;
     std::vector<MetalComputeBinding> scalar_bindings;
     NSUInteger constant_buffer_index{0};
-    uint constant_byte_size{0};
+    uint32                                     constant_byte_size{0};
 };
 
 class MetalPipelineState final : public PipelineState {
@@ -27,7 +28,7 @@ public:
     MetalPipelineState(
         id<MTLRenderPipelineState>  pipeline,
         std::vector<MTLPixelFormat> color_formats,
-        uint                        vertex_bindings,
+        uint32                      vertex_bindings,
         RHIRasterizeInfo            rasterizer,
         MTLPixelFormat              depth_format,
         id<MTLDepthStencilState>    depth_state,
@@ -69,7 +70,7 @@ public:
     const MetalRenderBindings& ComputeBindingsLayout() const noexcept {
         return compute_bindings_layout_;
     }
-    const std::vector<std::pair<NSUInteger, uint>>& ComputeBindlessSets() const noexcept {
+    const std::vector<std::pair<NSUInteger, uint32>>& ComputeBindlessSets() const noexcept {
         return compute_bindings_layout_.bindless_sets;
     }
     MTLSize LocalSize() const noexcept { return local_size_; }
@@ -77,7 +78,9 @@ public:
         return compute_bindings_layout_.constant_buffer_index;
     }
     const std::vector<MTLPixelFormat>& ColorFormats() const noexcept { return color_formats_; }
-    uint VertexBindingCount() const noexcept { return vertex_bindings_; }
+    uint32                             VertexBindingCount() const noexcept {
+        return vertex_bindings_;
+    }
     const RHIRasterizeInfo& Rasterizer() const noexcept { return rasterizer_; }
     MTLPixelFormat DepthFormat() const noexcept { return depth_format_; }
     id<MTLDepthStencilState> DepthState() const noexcept { return depth_state_; }
@@ -92,12 +95,13 @@ public:
     bool IsTessellation() const noexcept { return hull_pipeline_ != nil; }
     void SetTessellation(
         id<MTLComputePipelineState> vertex_pipeline,
-        id<MTLFunction> vertex_function,
+        id<MTLFunction>             vertex_function,
         id<MTLComputePipelineState> hull_pipeline,
-        id<MTLFunction> hull_function,
-        MetalRenderBindings tess_vertex_bindings,
-        MetalRenderBindings hull_bindings,
-        uint32_t patch_points, uint32_t point_stride
+        id<MTLFunction>             hull_function,
+        MetalRenderBindings         tess_vertex_bindings,
+        MetalRenderBindings         hull_bindings,
+        uint32                      patch_points,
+        uint32                      point_stride
     ) {
         tess_vertex_pipeline_ = vertex_pipeline;
         tess_vertex_function_ = vertex_function;
@@ -114,8 +118,12 @@ public:
     id<MTLFunction> HullFunction() const noexcept { return hull_function_; }
     const MetalRenderBindings& HullBindingsLayout() const noexcept { return hull_bindings_layout_; }
     const MetalRenderBindings& TessVertexBindingsLayout() const noexcept { return tess_vertex_bindings_layout_; }
-    uint32_t PatchPoints() const noexcept { return patch_points_; }
-    uint32_t PointStride() const noexcept { return point_stride_; }
+    uint32                      PatchPoints() const noexcept {
+        return patch_points_;
+    }
+    uint32 PointStride() const noexcept {
+        return point_stride_;
+    }
 
 private:
     id<MTLRenderPipelineState> render_{nil};
@@ -124,7 +132,7 @@ private:
     MetalRenderBindings compute_bindings_layout_;
     MTLSize local_size_{MTLSizeMake(0, 0, 0)};
     std::vector<MTLPixelFormat> color_formats_;
-    uint vertex_bindings_{0};
+    uint32                      vertex_bindings_{0};
     RHIRasterizeInfo rasterizer_{};
     MTLPixelFormat depth_format_{MTLPixelFormatInvalid};
     id<MTLDepthStencilState> depth_state_{nil};
@@ -138,8 +146,8 @@ private:
     id<MTLFunction> hull_function_{nil};
     MetalRenderBindings tess_vertex_bindings_layout_{};
     MetalRenderBindings hull_bindings_layout_{};
-    uint32_t patch_points_{0};
-    uint32_t point_stride_{0};
+    uint32                      patch_points_{0};
+    uint32                      point_stride_{0};
 };
 
 PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device,

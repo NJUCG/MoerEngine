@@ -1,6 +1,7 @@
 #include "rhi/backends/metal/MetalPipeline.h"
-#include "rhi/ShaderStageUtils.h"
+#include "misc/Types.h"
 #include "rhi/ShaderConstantLayout.h"
+#include "rhi/ShaderStageUtils.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -42,7 +43,7 @@ uint64 GetMetalActiveArgumentBits(const PipelineShaderInfo& shader_info) {
         Unsupported("this pipeline argument layout");
     }
     uint64 active_argument_bits = 0;
-    for (uint index = 0; index < arguments.size(); ++index) {
+    for (uint32 index = 0; index < arguments.size(); ++index) {
         for (const auto& shader : shader_info.shaders) {
             if (shader.shader_param_map == nullptr) continue;
             const auto& reflection = shader.shader_param_map->reflect_map;
@@ -94,11 +95,13 @@ MetalRenderBindings MetalRenderStageBindings(
         const auto& bindless = found->second.GetSpirvReflection().Get<ReflectParamInfo::BindlessArray>(
             ReflectParamInfo::bdls_name, "BindlessArray"
         );
-        const auto add = [&](const std::optional<ReflectParamInfo::Bindless>& resource, uint table) {
-            if (!resource || !resource->custom_flag.active) return;
+        const auto add = [&](const std::optional<ReflectParamInfo::Bindless>& resource, uint32 table) {
+            if (!resource || !resource->custom_flag.active)
+                return;
             for (const auto& [set, existing_table] : layout.bindless_sets) {
                 if (set == resource->set) {
-                    if (existing_table != table) Unsupported("overlapping Metal bindless sets");
+                    if (existing_table != table)
+                        Unsupported("overlapping Metal bindless sets");
                     return;
                 }
             }
@@ -116,7 +119,7 @@ MetalRenderBindings MetalRenderStageBindings(
         }
     }
     layout.scalar_bindings.resize(arguments.size());
-    for (uint index = 0; index < arguments.size(); ++index) {
+    for (uint32 index = 0; index < arguments.size(); ++index) {
         const EShaderArgType kind = arguments[index].cpp_info.type;
         if (kind == SDA_Constant) {
             layout.scalar_bindings[index].constant = true;
@@ -202,10 +205,10 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
         }
 
         MTLVertexDescriptor* vertex_descriptor = [MTLVertexDescriptor vertexDescriptor];
-        uint attribute_index = 0;
-        for (uint binding_index = 0; binding_index < create_info.vertex_stream.bindings.size(); ++binding_index) {
+        uint32               attribute_index   = 0;
+        for (uint32 binding_index = 0; binding_index < create_info.vertex_stream.bindings.size(); ++binding_index) {
             const VertexBinding& binding = create_info.vertex_stream.bindings[binding_index];
-            const uint metal_buffer_index = 16 + binding_index; // Reserve low slots for MSL resource sets.
+            const uint32         metal_buffer_index = 16 + binding_index; // Reserve low slots for MSL resource sets.
             if (metal_buffer_index >= 31) Unsupported("too many vertex streams");
             NSUInteger stride = 0;
             for (const VertexElement& element : binding.vertex_elements) {
@@ -224,7 +227,7 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
         }
         descriptor.vertexDescriptor = vertex_descriptor;
 
-        for (uint index = 0; index < create_info.color_attachment_count; ++index) {
+        for (uint32 index = 0; index < create_info.color_attachment_count; ++index) {
             auto* attachment = descriptor.colorAttachments[index];
             const RHIColorAttachmentInfo& info = create_info.color_attachments_info[index];
             attachment.pixelFormat = ToMetalFormat(info.pixel_format);
@@ -271,13 +274,13 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
         const uint64                active_argument_bits = GetMetalActiveArgumentBits(shader_info);
         std::vector<MTLPixelFormat> color_formats;
         color_formats.reserve(create_info.color_attachment_count);
-        for (uint index = 0; index < create_info.color_attachment_count; ++index) {
+        for (uint32 index = 0; index < create_info.color_attachment_count; ++index) {
             color_formats.push_back(ToMetalFormat(create_info.color_attachments_info[index].pixel_format));
         }
         auto* pipeline = MoerNew(MetalPipelineState)(
             native_pipeline,
             std::move(color_formats),
-            uint(create_info.vertex_stream.bindings.size()),
+            uint32(create_info.vertex_stream.bindings.size()),
             create_info.rasterizer_info,
             descriptor.depthAttachmentPixelFormat,
             depth_state,

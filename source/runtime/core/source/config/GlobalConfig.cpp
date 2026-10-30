@@ -1,6 +1,7 @@
 // 将 MoerEngine.toml 中的字段加载到强类型全局配置结构中。
-#include "config/GlobalConfig.h"
 
+#include "config/GlobalConfig.h"
+#include "misc/Types.h"
 #include <toml++/toml.hpp>
 
 namespace Moer::Config {
@@ -36,9 +37,9 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         toml_config.at_path("engine.threading.profile_logging").value_or(false);
 
     loaded_config.engine.threading.submission_batch_window =
-        toml_config.at_path("engine.threading.submission_batch_window").value_or(uint{2});
+        toml_config.at_path("engine.threading.submission_batch_window").value_or(uint32{2});
     loaded_config.engine.threading.max_frame_lag =
-        toml_config.at_path("engine.threading.max_frame_lag").value_or(uint{0});
+        toml_config.at_path("engine.threading.max_frame_lag").value_or(uint32{0});
 
     loaded_config.engine.profile_dump.enabled =
         toml_config.at_path("engine.profile_dump.enabled").value_or(false);

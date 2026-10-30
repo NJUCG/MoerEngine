@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommon.h"
 
@@ -22,9 +23,9 @@ namespace Moer::Render {
  */
 class RENDER_API RenderGraphLowering {
 public:
-    static constexpr uint32_t InvalidBarrierIndex = RenderGraph::InvalidIndex;
+    static constexpr uint32 InvalidBarrierIndex = RenderGraph::InvalidIndex;
 
-    enum class InstructionKind : uint8_t {
+    enum class InstructionKind : uint8 {
         Barrier,
         /** Source-family half emitted after the designated producer batch. */
         QueueRelease,
@@ -59,8 +60,8 @@ public:
     struct LoweredInstruction {
         InstructionKind instruction_kind = InstructionKind::Barrier;
         /** Index in RenderGraph::CompiledPlan::barriers. */
-        uint32_t correlation_id = 0;
-        uint32_t barrier_index  = InvalidBarrierIndex;
+        uint32 correlation_id = 0;
+        uint32 barrier_index  = InvalidBarrierIndex;
 
         RenderGraph::ResourceHandle resource{};
         RenderGraph::ResourceKind   resource_kind = RenderGraph::ResourceKind::Token;
@@ -94,18 +95,18 @@ public:
     };
 
     struct QueueSyncInstruction {
-        uint32_t                correlation_id = 0;
+        uint32                    correlation_id = 0;
         RenderGraph::PassHandle signal_pass{};
         RenderGraph::PassHandle wait_pass{};
         RenderGraph::QueueBinding signal_queue{};
         RenderGraph::QueueBinding wait_queue{};
-        uint32_t signal_batch = RenderGraph::InvalidIndex;
-        uint32_t wait_batch   = RenderGraph::InvalidIndex;
+        uint32                    signal_batch = RenderGraph::InvalidIndex;
+        uint32                    wait_batch   = RenderGraph::InvalidIndex;
         /** Added by lowering to join a fan-in frontier at one release owner. */
         bool synthetic_ownership_join = false;
-        std::vector<uint32_t> ownership_join_barriers{};
+        std::vector<uint32> ownership_join_barriers{};
         /** Ownership transfers whose release->acquire ordering uses this sync. */
-        std::vector<uint32_t> ownership_transfer_barriers{};
+        std::vector<uint32> ownership_transfer_barriers{};
     };
 
     struct PassInstructions {

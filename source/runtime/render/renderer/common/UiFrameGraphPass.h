@@ -2,6 +2,7 @@
 
 #include "UIRenderer.h"
 #include "UiCombinePass.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 
 #include <atomic>
@@ -19,7 +20,7 @@ class UiFrameGraphPassTestAccess;
  */
 class RENDER_API UiFrameGraphPass {
 public:
-    enum class ERecordingState : uint8_t {
+    enum class ERecordingState : uint8 {
         Prepared,
         Recording,
         Recorded,

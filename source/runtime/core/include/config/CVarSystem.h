@@ -2,9 +2,9 @@
 
 #include "API_Macro.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -16,31 +16,31 @@
 
 namespace Moer::CVar {
 
-enum class EType : std::uint8_t {
+enum class EType : uint8 {
     Bool,
     Int,
     Float,
     String,
 };
 
-enum class EFlags : std::uint32_t {
+enum class EFlags : uint32 {
     None        = 0,
     ReadOnly    = 1u << 0,
     StartupOnly = 1u << 1,
 };
 
 constexpr EFlags operator|(EFlags _lhs, EFlags _rhs) noexcept {
-    return static_cast<EFlags>(static_cast<std::uint32_t>(_lhs) | static_cast<std::uint32_t>(_rhs));
+    return static_cast<EFlags>(static_cast<uint32>(_lhs) | static_cast<uint32>(_rhs));
 }
 
 constexpr bool HasFlag(EFlags _flags, EFlags _flag) noexcept {
-    return (static_cast<std::uint32_t>(_flags) & static_cast<std::uint32_t>(_flag)) != 0;
+    return (static_cast<uint32>(_flags) & static_cast<uint32>(_flag)) != 0;
 }
 
 inline constexpr std::size_t DefaultCallbackDispatchBudget = 64;
 inline constexpr std::size_t MaxCallbackDispatchBudget     = 4096;
 
-enum class ESetSource : std::uint8_t {
+enum class ESetSource : uint8 {
     Constructor   = 0,
     StartupConfig = 10,
     Profile       = 20,
@@ -48,13 +48,13 @@ enum class ESetSource : std::uint8_t {
     Runtime       = 40,
 };
 
-enum class EApplyPhase : std::uint8_t {
+enum class EApplyPhase : uint8 {
     Immediate,
     FrameBoundary,
     StartupOnly,
 };
 
-enum class ESetStatus : std::uint8_t {
+enum class ESetStatus : uint8 {
     Changed,
     Unchanged,
     NotFound,
@@ -106,7 +106,7 @@ struct CVarDescriptorView {
 };
 
 struct CVarSnapshotView {
-    std::uint64_t         id = 0;
+    uint64                id = 0;
     std::string_view      name;
     std::string_view      helper;
     std::string_view      true_helper;
@@ -123,7 +123,7 @@ struct CVarSnapshotView {
 };
 
 struct CVarSnapshot {
-    std::uint64_t         id = 0;
+    uint64                id = 0;
     std::string           name;
     std::string           helper;
     std::string           true_helper;
@@ -139,7 +139,7 @@ struct CVarSnapshot {
     bool                  startup_sealed           = false;
 };
 
-enum class ERegistrationStatus : std::uint8_t {
+enum class ERegistrationStatus : uint8 {
     Registered,
     InvalidDescriptor,
     DuplicateName,
@@ -149,7 +149,7 @@ class Registration;
 
 namespace Detail {
 struct RegistrationAccess {
-    static Registration Create(std::uint64_t _id) noexcept;
+    static Registration Create(uint64 _id) noexcept;
 };
 } // namespace Detail
 
@@ -176,13 +176,13 @@ public:
     [[nodiscard]] bool IsValid() const noexcept {
         return id != 0;
     }
-    [[nodiscard]] std::uint64_t GetId() const noexcept {
+    [[nodiscard]] uint64 GetId() const noexcept {
         return id;
     }
     [[nodiscard]] std::optional<CVarSnapshot> GetSnapshot() const;
 
     CORE_API CVarSetResult SynchronizeOwnerValue(bool _value);
-    CORE_API CVarSetResult SynchronizeOwnerValue(std::int64_t _value);
+    CORE_API CVarSetResult SynchronizeOwnerValue(int64 _value);
     CORE_API CVarSetResult SynchronizeOwnerValue(double _value);
     CORE_API CVarSetResult SynchronizeOwnerValue(std::string_view _value);
 
@@ -197,9 +197,9 @@ public:
     CORE_API void Reset() noexcept;
 
 private:
-    explicit Registration(std::uint64_t _id) noexcept;
+    explicit Registration(uint64 _id) noexcept;
 
-    std::uint64_t id = 0;
+    uint64 id = 0;
 
     friend struct Detail::RegistrationAccess;
 };
@@ -226,7 +226,7 @@ namespace Detail {
 
 using DestroyCallback = void (*)(void* _context) noexcept;
 using BoolCallback    = bool (*)(void* _context, bool _old_value, bool _new_value) noexcept;
-using IntCallback     = bool (*)(void* _context, std::int64_t _old_value, std::int64_t _new_value) noexcept;
+using IntCallback     = bool (*)(void* _context, int64 _old_value, int64 _new_value) noexcept;
 using FloatCallback   = bool (*)(void* _context, double _old_value, double _new_value) noexcept;
 using StringCallback =
     bool (*)(void* _context, std::string_view _old_value, std::string_view _new_value) noexcept;
@@ -244,7 +244,7 @@ CORE_API RegistrationResult RegisterBoolRaw(
 );
 CORE_API RegistrationResult RegisterIntRaw(
     CVarDescriptorView _descriptor,
-    std::int64_t       _default_value,
+    int64              _default_value,
     IntCallback        _callback,
     void*              _context,
     DestroyCallback    _destroy
@@ -265,7 +265,7 @@ CORE_API RegistrationResult RegisterStringRaw(
 );
 
 CORE_API bool VisitSnapshotRaw(std::string_view _name, SnapshotVisitor _visitor, void* _context);
-CORE_API bool VisitSnapshotByIdRaw(std::uint64_t _id, SnapshotVisitor _visitor, void* _context);
+CORE_API bool VisitSnapshotByIdRaw(uint64 _id, SnapshotVisitor _visitor, void* _context);
 CORE_API std::size_t VisitAllSnapshotsRaw(std::string_view _prefix, SnapshotVisitor _visitor, void* _context);
 
 inline CVarDescriptorView ViewOf(const CVarDescriptor& _descriptor) noexcept {
@@ -299,7 +299,7 @@ bool InvokeBoolCallback(void* _context, bool _old_value, bool _new_value) noexce
 }
 
 template<typename Callback>
-bool InvokeIntCallback(void* _context, std::int64_t _old_value, std::int64_t _new_value) noexcept {
+bool InvokeIntCallback(void* _context, int64 _old_value, int64 _new_value) noexcept {
     try {
         std::invoke(*static_cast<Callback*>(_context), _old_value, _new_value);
         return true;
@@ -363,13 +363,13 @@ RegisterBool(const CVarDescriptor& _descriptor, bool _default_value, Callback&& 
         RegisterBoolRaw(Detail::ViewOf(descriptor_snapshot), _default_value, &Detail::InvokeBoolCallback<StoredCallback>, context, &Detail::DestroyOwnedCallback<StoredCallback>);
 }
 
-inline RegistrationResult RegisterInt(const CVarDescriptor& _descriptor, std::int64_t _default_value) {
+inline RegistrationResult RegisterInt(const CVarDescriptor& _descriptor, int64 _default_value) {
     return Detail::RegisterIntRaw(Detail::ViewOf(_descriptor), _default_value, nullptr, nullptr, nullptr);
 }
 
 template<typename Callback>
 RegistrationResult
-RegisterInt(const CVarDescriptor& _descriptor, std::int64_t _default_value, Callback&& _callback) {
+RegisterInt(const CVarDescriptor& _descriptor, int64 _default_value, Callback&& _callback) {
     using StoredCallback = std::decay_t<Callback>;
     CVarDescriptor descriptor_snapshot = _descriptor;
     auto*          context             = new StoredCallback(std::forward<Callback>(_callback));
@@ -418,7 +418,7 @@ inline std::optional<CVarSnapshot> Find(std::string_view _name) {
     return snapshot;
 }
 
-inline std::optional<CVarSnapshot> FindById(std::uint64_t _id) {
+inline std::optional<CVarSnapshot> FindById(uint64 _id) {
     std::optional<CVarSnapshot> snapshot;
     Detail::VisitSnapshotByIdRaw(
         _id,

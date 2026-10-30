@@ -4,11 +4,11 @@
 #include "misc/STL.h"
 #include "rhi/RHICommon.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 
 namespace Moer::Render {
 
-enum class EWindowSystemType : uint8_t {
+enum class EWindowSystemType : uint8 {
     Unknown,
     GLFW,
 };
@@ -17,7 +17,7 @@ struct WindowSurfaceIdentity {
     EWindowSystemType window_system{EWindowSystemType::Unknown};
     uintptr_t         window_system_handle{0};
     uintptr_t         platform_window_handle{0};
-    uint64_t          generation{0};
+    uint64            generation{0};
 
     [[nodiscard]] bool IsValid() const noexcept {
         return window_system != EWindowSystemType::Unknown && window_system_handle != 0 && generation != 0;
@@ -77,7 +77,7 @@ struct SwapchainSurfaceInfo {
     }
 };
 
-enum class ESwapchainSurfaceTransition : uint8_t {
+enum class ESwapchainSurfaceTransition : uint8 {
     Invalid,
     Initialize,
     Reuse,

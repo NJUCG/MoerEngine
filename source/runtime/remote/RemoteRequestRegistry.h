@@ -1,5 +1,6 @@
 #pragma once
 
+#include "misc/Types.h"
 #include "remote/RemoteApi.h"
 #include "remote/RemoteRequestRecord.h"
 
@@ -35,7 +36,7 @@ private:
 
     mutable std::mutex                                   m_mutex;
     std::unordered_map<std::string, RemoteRequestRecord> m_records;
-    std::atomic<uint64_t>                                m_next_request_index = 1;
+    std::atomic<uint64>                                  m_next_request_index = 1;
 };
 
 } // namespace Moer::remote

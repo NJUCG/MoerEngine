@@ -4,6 +4,7 @@
 #include "VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <ranges>
@@ -77,7 +78,7 @@ void InitializeNonBindlessSetBindings(
             case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
                 break;
             default:
-                LOG_CRITICAL("Unsupported descriptor type: {}", uint(vk_binding.descriptorType));
+                LOG_CRITICAL("Unsupported descriptor type: {}", uint32(vk_binding.descriptorType));
                 assert(false);
         }
     }
@@ -106,14 +107,14 @@ void InitializeBindlessSetBindings(
             );
             break;
         default:
-            LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint(vk_binding.descriptorType));
+            LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint32(vk_binding.descriptorType));
             assert(false);
     }
 }
 
 void InitializePipelineSetBindings(
-    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
-    VulkanPipelineBindingTemplate&                                 binding_template
+    const UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+    VulkanPipelineBindingTemplate&                                   binding_template
 ) {
     for (const auto& [set_index, layout_info] : set_layout_infos) {
         auto& resource_bindings = binding_template.set_bindings[set_index].resource_bindings;
@@ -148,11 +149,11 @@ void CacheDescriptorSetStorageLayout(
 }
 
 Array<VkDescriptorSetLayout> CreateDescriptorSetLayouts(
-    VulkanDevice&                                                  device,
-    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
-    VulkanPipelineBindingTemplate&                                 binding_template
+    VulkanDevice&                                                    device,
+    const UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+    VulkanPipelineBindingTemplate&                                   binding_template
 ) {
-    const uint set_layout_count =
+    const uint32 set_layout_count =
         set_layout_infos.empty() ? 0u : std::ranges::max(set_layout_infos | std::views::keys) + 1u;
     // Vulkan addresses sets by array index; gaps need layouts with this backend's flags.
     Array<VkDescriptorSetLayout> set_layouts(set_layout_count, VK_NULL_HANDLE);
@@ -233,10 +234,10 @@ void InitializeDescriptorBufferBindingTemplate(
     VulkanDevice&                  device,
     VulkanPipelineBindingTemplate& binding_template
 ) {
-    constexpr uint invalid_buffer_index         = std::numeric_limits<uint>::max();
-    uint           ordinary_buffer_index        = invalid_buffer_index;
-    uint           bindless_buffer_index        = invalid_buffer_index;
-    uint           bindless_image_sampler_index = invalid_buffer_index;
+    constexpr uint32 invalid_buffer_index         = std::numeric_limits<uint32>::max();
+    uint32           ordinary_buffer_index        = invalid_buffer_index;
+    uint32           bindless_buffer_index        = invalid_buffer_index;
+    uint32           bindless_image_sampler_index = invalid_buffer_index;
 
     auto& descriptor_buffers = binding_template.descriptor_buffers;
     descriptor_buffers.clear();
@@ -249,9 +250,9 @@ void InitializeDescriptorBufferBindingTemplate(
     const auto bindless_image_offset   = GetBindlessTextureDescriptorOffset(device);
 
     auto get_or_create_buffer_index =
-        [&](uint& buffer_index, VkDeviceAddress address, VkBufferUsageFlags usage) {
+        [&](uint32& buffer_index, VkDeviceAddress address, VkBufferUsageFlags usage) {
             if (buffer_index == invalid_buffer_index) {
-                buffer_index = static_cast<uint>(descriptor_buffers.size());
+                buffer_index = static_cast<uint32>(descriptor_buffers.size());
                 descriptor_buffers.push_back({
                     .sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
                     .address = address,
@@ -320,17 +321,17 @@ bool IsHeapPushAddress(const VulkanResourceBinding& binding) {
                                              binding.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
 }
 
-void InitializeHeapBindings(VulkanDevice& device, VulkanPipelineBindingTemplate& result, uint push_size) {
+void InitializeHeapBindings(VulkanDevice& device, VulkanPipelineBindingTemplate& result, uint32 push_size) {
     auto& storage       = device.GetGlobalDescriptorHeap();
-    auto  allocate_push = [&](uint size) {
+    auto  allocate_push = [&](uint32 size) {
         push_size   = Moer::AlignUp(push_size, size);
-        uint offset = push_size;
+        uint32 offset = push_size;
         push_size += size;
         return offset;
     };
     for (auto& [set, info] : result.set_bindings) {
         info.heap_push_offset = allocate_push(4);
-        auto make_mapping     = [&](uint binding) -> VkDescriptorSetAndBindingMappingEXT& {
+        auto make_mapping     = [&](uint32 binding) -> VkDescriptorSetAndBindingMappingEXT& {
             auto& map                           = result.heap_mappings.emplace_back();
             map.sType                           = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
             map.descriptorSet                   = set;
@@ -366,8 +367,8 @@ void InitializeHeapBindings(VulkanDevice& device, VulkanPipelineBindingTemplate&
                             resources.allocation_size =
                                 Moer::AlignUp(resources.allocation_size, storage.GetStorageAlignment());
                             binding.byte_offset = resources.allocation_size;
-                            const uint size     = storage.GetDescriptorSize(binding.descriptor_type);
-                            map.sourceData.pushIndex.heapOffset      = static_cast<uint>(binding.byte_offset);
+                            const uint32 size                        = storage.GetDescriptorSize(binding.descriptor_type);
+                            map.sourceData.pushIndex.heapOffset      = static_cast<uint32>(binding.byte_offset);
                             map.sourceData.pushIndex.heapArrayStride = size;
                             resources.allocation_size += uint64(size) * binding.descriptor_count;
                         }
@@ -390,14 +391,14 @@ void InitializeHeapBindings(VulkanDevice& device, VulkanPipelineBindingTemplate&
         );
     }
     result.heap_push_size                 = push_size;
-    result.heap_mapping_info.mappingCount = static_cast<uint>(result.heap_mappings.size());
+    result.heap_mapping_info.mappingCount = static_cast<uint32>(result.heap_mappings.size());
     result.heap_mapping_info.pMappings    = result.heap_mappings.data();
 }
 
-std::optional<uint> SelectPushUniformBufferSet(
-    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
-    VulkanDescriptorMode                                         mode,
-    const VulkanDescriptorCapabilities&                          caps
+std::optional<uint32> SelectPushUniformBufferSet(
+    const UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+    VulkanDescriptorMode                                             mode,
+    const VulkanDescriptorCapabilities&                              caps
 ) {
     if (!caps.push || mode == VulkanDescriptorMode::Heap ||
         (mode == VulkanDescriptorMode::Buffer && !caps.buffer_push)) {
@@ -407,12 +408,12 @@ std::optional<uint> SelectPushUniformBufferSet(
     // Push descriptors own transient storage only for explicit uniform-buffer
     // bindings. Mixed sets keep the backend's ordinary storage path. Vulkan allows
     // one push set; prefer the most UBs, then the lower set index.
-    std::optional<uint> candidate;
-    uint                largest = 0;
+    std::optional<uint32> candidate;
+    uint32                largest = 0;
     for (const auto& [set, layout] : set_layout_infos) {
         if (layout.is_bindless)
             continue;
-        uint count = 0;
+        uint32 count = 0;
         for (const auto& [binding, info] : layout.bindings) {
             const auto& vk_binding = info.vk_binding;
             // Reflection fills binding-number gaps with zero-count placeholders.
@@ -436,8 +437,8 @@ std::optional<uint> SelectPushUniformBufferSet(
 } // namespace
 
 UniquePtr<VulkanPipelineBindingTemplate> VulkanPipelineState::BuildPipelineBindingTemplate(
-    const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
-    const std::optional<VkPushConstantRange>&                      push_constant_range
+    const UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+    const std::optional<VkPushConstantRange>&                        push_constant_range
 ) {
     auto&       device        = *m_device;
     const auto& caps          = device.GetDescriptorCapabilities();
@@ -478,10 +479,10 @@ UniquePtr<VulkanPipelineBindingTemplate> VulkanPipelineState::BuildPipelineBindi
 }
 
 void VulkanPipelineState::InitPipelineLayout(
-    UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
-    std::optional<VkPushConstantRange>                        push_constant_range,
-    uint                                                      user_constant_byte_size,
-    std::optional<VulkanBindlessIndexAddressBinding>          bindless_index_address
+    UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
+    std::optional<VkPushConstantRange>                          push_constant_range,
+    uint32                                                      user_constant_byte_size,
+    std::optional<VulkanBindlessIndexAddressBinding>            bindless_index_address
 ) {
     binding_template = BuildPipelineBindingTemplate(set_layout_infos, push_constant_range);
 

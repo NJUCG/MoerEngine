@@ -3,12 +3,12 @@
 
 #include "API_Macro.h"
 
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 
 namespace Moer::ProfileDump::Testing {
 
-enum class FaultPoint : std::uint8_t {
+enum class FaultPoint : uint8 {
     None = 0,
     StartAllocation,
     BeforeThreadCreate,
@@ -23,7 +23,7 @@ enum class FaultPoint : std::uint8_t {
 
 // Hooks may only be changed while the runtime is stopped. The matching fault
 // is injected once, on the requested one-based hit.
-CORE_API bool ConfigureFault(FaultPoint _point, std::uint64_t _trigger_hit = 1) noexcept;
+CORE_API bool ConfigureFault(FaultPoint _point, uint64 _trigger_hit = 1) noexcept;
 
 CORE_API bool ConfigureWriterPauseBeforeTempOpen(bool _enabled) noexcept;
 CORE_API bool ConfigureWriterPauseAfterStart(bool _enabled) noexcept;
@@ -31,15 +31,15 @@ CORE_API bool ConfigureWriterPauseBeforeIdleWait(bool _enabled) noexcept;
 CORE_API bool ConfigureCrashFlushPauseBeforePublish(bool _enabled) noexcept;
 CORE_API bool ConfigureCrashFlushPauseAfterCompletionObserved(bool _enabled) noexcept;
 CORE_API bool ConfigureEmitterPauseAfterAdmission(bool _enabled) noexcept;
-CORE_API bool WaitForWriterPaused(std::uint32_t _timeout_ms) noexcept;
-CORE_API bool WaitForWriterIdleWaitPaused(std::uint32_t _timeout_ms) noexcept;
-CORE_API bool WaitForCrashFlushBeforePublishPaused(std::uint32_t _timeout_ms) noexcept;
+CORE_API bool WaitForWriterPaused(uint32 _timeout_ms) noexcept;
+CORE_API bool WaitForWriterIdleWaitPaused(uint32 _timeout_ms) noexcept;
+CORE_API bool WaitForCrashFlushBeforePublishPaused(uint32 _timeout_ms) noexcept;
 CORE_API bool WaitForCrashFlushAfterCompletionObservedPaused(
-    std::uint32_t _timeout_ms
+    uint32 _timeout_ms
 ) noexcept;
-CORE_API bool WaitForCrashFlushRequestPending(std::uint32_t _timeout_ms) noexcept;
-CORE_API bool WaitForEmitterPaused(std::uint32_t _timeout_ms) noexcept;
-CORE_API bool CreateActiveTempCollision(const std::uint8_t* _bytes, std::size_t _byte_count) noexcept;
+CORE_API bool WaitForCrashFlushRequestPending(uint32 _timeout_ms) noexcept;
+CORE_API bool WaitForEmitterPaused(uint32 _timeout_ms) noexcept;
+CORE_API bool CreateActiveTempCollision(const uint8* _bytes, std::size_t _byte_count) noexcept;
 CORE_API void ResumeWriter() noexcept;
 CORE_API void ResumeWriterIdleWait() noexcept;
 CORE_API void ResumeCrashFlushBeforePublish() noexcept;

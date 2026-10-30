@@ -2,6 +2,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "misc/Types.h"
 #include "profile/ProfileScope.h"
 #include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
@@ -140,7 +141,7 @@ public:
         if (parameters.ray_query) {
             parameters.tlas = rt_scene->GetTlas();
         }
-        for (uint job_index = 0; job_index < parameters.update.job_count; ++job_index) {
+        for (uint32 job_index = 0; job_index < parameters.update.job_count; ++job_index) {
             auto& job = parameters.update.jobs[job_index];
             job.param.probe_update_context.z = context.textures.cubemap_tex.hdl;
             job.param.probe_trace_config.w   = parameters.ray_query ? 1.0f : 0.0f;
@@ -159,17 +160,17 @@ public:
             return;
         }
 
-        for (uint job_index = 0; job_index < parameters.update.job_count; ++job_index) {
+        for (uint32 job_index = 0; job_index < parameters.update.job_count; ++job_index) {
             RecordJob(cmd_list, parameters, job_index);
         }
     }
 
-    void RecordJob(CommandList& cmd_list, const RecordParameters& parameters, uint job_index) {
+    void RecordJob(CommandList& cmd_list, const RecordParameters& parameters, uint32 job_index) {
         const auto& job = parameters.update.jobs[job_index];
         if (job.probe_count == 0) {
             return;
         }
-        const uint dispatch_count =
+        const uint32 dispatch_count =
             (job.probe_count + RASTER_PROBE_UPDATE_GROUP_SIZE - 1u) / RASTER_PROBE_UPDATE_GROUP_SIZE;
 
         if (parameters.ray_query) {

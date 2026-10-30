@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rendergraph/RenderGraphRecordingPlan.h"
@@ -363,8 +364,9 @@ private:
         Array<FrontendRecordJob>&         jobs
     ) {
         try {
-            const uint32_t worker_count = TaskGraph::IsInitialized() ?
-                TaskGraph::GetInterface().GetWorkerThreadCount() : 1;
+            const uint32 worker_count = TaskGraph::IsInitialized() ?
+                                            TaskGraph::GetInterface().GetWorkerThreadCount() :
+                                            1;
             const auto ranges = Detail::PartitionRecordingRange(
                 graph.compiled_plan.frontend_record_units, dispatch, worker_count
             );
@@ -381,12 +383,12 @@ private:
                 lifetime->callbacks.reserve(range.unit_count);
                 if (ownership == ERHIResourceStateOwnership::Compiled) {
                     size_t capacity = 0;
-                    for (uint32_t offset = 0; offset < range.unit_count; ++offset) {
+                    for (uint32 offset = 0; offset < range.unit_count; ++offset) {
                         capacity += lowered.passes[range.first_unit + offset].keepalive.size();
                     }
                     lifetime->keepalive.reserve(capacity);
                 }
-                for (uint32_t offset = 0; offset < range.unit_count; ++offset) {
+                for (uint32 offset = 0; offset < range.unit_count; ++offset) {
                     const auto pass_handle =
                         graph.compiled_plan.frontend_record_units[range.first_unit + offset].pass;
                     // Execute is one-shot. The stream lifetime now owns the callback and its captures.
@@ -438,7 +440,7 @@ private:
         try {
             RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
             CommandList& commands = *job.frontend_command_list;
-            for (uint32_t offset = 0; offset < job.range.unit_count; ++offset) {
+            for (uint32 offset = 0; offset < job.range.unit_count; ++offset) {
                 const auto handle =
                     graph.compiled_plan.frontend_record_units[job.range.first_unit + offset].pass;
                 pass_name = graph.passes[handle.pass_id].name;

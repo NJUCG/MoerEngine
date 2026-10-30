@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "rhi/backends/vulkan/VulkanFault.h"
@@ -31,13 +32,13 @@ struct VulkanSourceSubmissionObserver {
     VulkanSourceSubmissionCallback callback{nullptr};
 };
 
-enum class EVulkanSubmissionBoundaryKind : uint8_t {
+enum class EVulkanSubmissionBoundaryKind : uint8 {
     SerialControl = 0,
     PresentBridge,
     Present,
 };
 
-enum class EVulkanSubmissionBoundaryPhase : uint8_t {
+enum class EVulkanSubmissionBoundaryPhase : uint8 {
     Dispatch = 0,
     Terminal,
 };
@@ -89,7 +90,7 @@ RemoveVulkanSubmissionBoundaryObserver(
     const VulkanSubmissionBoundaryObserver* _observer
 ) noexcept;
 
-enum class EVulkanSourceTranslationPhase : uint8_t {
+enum class EVulkanSourceTranslationPhase : uint8 {
     Begin = 0,
     Recorded,
     Failed,

@@ -1,23 +1,27 @@
 #define VMA_IMPLEMENTATION 1
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+
 #include "vma_candidate.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
 
 namespace {
-std::optional<uint64_t> Align(uint64_t size, uint64_t alignment) {
-    const uint64_t padding = (alignment - size % alignment) % alignment;
-    if (size > std::numeric_limits<uint64_t>::max() - padding) return {};
+std::optional<Moer::uint64> Align(Moer::uint64 size, Moer::uint64 alignment) {
+    const Moer::uint64 padding = (alignment - size % alignment) % alignment;
+    if (size > std::numeric_limits<Moer::uint64>::max() - padding)
+        return {};
     return size + padding;
 }
-bool PowerOfTwo(uint64_t value) { return value && !(value & (value - 1)); }
+bool PowerOfTwo(Moer::uint64 value) {
+    return value && !(value & (value - 1));
+}
 }
 
-VmaDescriptorCandidate::VmaDescriptorCandidate(uint64_t size, uint64_t alignment, uint64_t reuse)
-    : capacity(size), descriptor_alignment(alignment), reuse_alignment(reuse) {
+VmaDescriptorCandidate::VmaDescriptorCandidate(Moer::uint64 size, Moer::uint64 alignment, Moer::uint64 reuse) : capacity(size), descriptor_alignment(alignment), reuse_alignment(reuse) {
     if (!capacity || !PowerOfTwo(alignment) || !PowerOfTwo(reuse) || reuse < alignment || capacity % reuse)
         throw std::invalid_argument("invalid virtual descriptor pool alignment/capacity");
     VmaVirtualBlockCreateInfo info{};
@@ -44,7 +48,7 @@ void VmaDescriptorCandidate::Validate(const LeaseState& lease) const {
     if (lease.owner != this) throw std::logic_error("retired or foreign virtual descriptor lease");
 }
 
-std::optional<uint64_t> VmaDescriptorCandidate::ReserveRange(LeaseState& lease, uint64_t bytes) {
+std::optional<Moer::uint64> VmaDescriptorCandidate::ReserveRange(LeaseState& lease, Moer::uint64 bytes) {
     std::lock_guard lock(mutex);
     Validate(lease);
     if (!bytes) return 0;
@@ -124,7 +128,7 @@ void VmaDescriptorCandidate::Release(LeaseState& lease) {
     lease.owner = nullptr;
 }
 
-uint64_t VmaDescriptorCandidate::GetAllocatedBytes() const {
+Moer::uint64 VmaDescriptorCandidate::GetAllocatedBytes() const {
     std::lock_guard lock(mutex);
     VmaStatistics statistics{};
     vmaGetVirtualBlockStatistics(block, &statistics);

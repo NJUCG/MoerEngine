@@ -1,5 +1,6 @@
-#include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
+#include "misc/Types.h"
+#include "rendergraph/RenderGraph.h"
 #include "rhi/RHIResource.h"
 
 #include <algorithm>
@@ -68,10 +69,10 @@ private:
 
 class FakeTexture final : public Texture {
 public:
-    FakeTexture(uint8_t mips, uint16_t layers, ETextureAspectFlags aspects) :
+    FakeTexture(Moer::uint8 mips, Moer::uint16 layers, ETextureAspectFlags aspects) :
         Texture(MakeInfo(mips, layers, aspects)) {}
 
-    Moer::uint GetMipByteSize(Moer::uint) const override {
+    Moer::uint32 GetMipByteSize(Moer::uint32) const override {
         return 4;
     }
 
@@ -79,7 +80,7 @@ public:
 
 private:
     static TextureInfo
-    MakeInfo(uint8_t mips, uint16_t layers, ETextureAspectFlags aspects) {
+    MakeInfo(Moer::uint8 mips, Moer::uint16 layers, ETextureAspectFlags aspects) {
         TextureInfo info{};
         info.usage = ETextureUsageFlags::SAMPLED |
                      ETextureUsageFlags::UNORDERED_ACCESS |
@@ -97,21 +98,15 @@ private:
 
 class FakeBuffer final : public Buffer {
 public:
-    explicit FakeBuffer(uint64_t byte_size) :
-        Buffer(BufferInfo{
-            byte_size,
-            1,
-            EBufferUsageFlags::UNORDERED_ACCESS |
-                EBufferUsageFlags::TRANSFER_SRC |
-                EBufferUsageFlags::TRANSFER_DST
-        }) {}
+    explicit FakeBuffer(Moer::uint64 byte_size) :
+        Buffer(BufferInfo{byte_size, 1, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST}) {}
 
     void SetName(std::string_view) override {}
 };
 
 template<typename Enum>
 [[nodiscard]] bool HasFlag(Enum value, Enum flag) {
-    return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flag)) != 0;
+    return (static_cast<Moer::uint32>(value) & static_cast<Moer::uint32>(flag)) != 0;
 }
 
 void TestKeepaliveCombinesCellsAndReferences(TestSuite& suite) {
@@ -121,7 +116,7 @@ void TestKeepaliveCombinesCellsAndReferences(TestSuite& suite) {
     {
         RenderGraph graph(name);
         std::array<RenderGraph::BufferHandle, 3> handles;
-        for (uint32_t index = 0; index < handles.size(); ++index) {
+        for (Moer::uint32 index = 0; index < handles.size(); ++index) {
             BufferRef buffer = MoerNew(FakeBuffer)(256);
             handles[index] = graph.ImportBuffer(
                 std::to_string(index), buffer, RenderGraph::BufferDesc{.byte_size = 256}
@@ -1256,8 +1251,8 @@ void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
     if (ownership_barrier == compiled.barriers.end()) {
         return;
     }
-    const uint32_t ownership_barrier_index =
-        static_cast<uint32_t>(ownership_barrier - compiled.barriers.begin());
+    const Moer::uint32 ownership_barrier_index =
+        static_cast<Moer::uint32>(ownership_barrier - compiled.barriers.begin());
 
     RenderGraphLowering::LoweredPlan lowered{};
     std::string                      error{};
@@ -1281,10 +1276,10 @@ void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
                    instruction.correlation_id == ownership_barrier_index;
         }
     );
-    uint32_t release_count = 0;
-    uint32_t acquire_count = 0;
+    Moer::uint32 release_count = 0;
+    Moer::uint32 acquire_count = 0;
     for (const auto& pass : lowered.passes) {
-        release_count += static_cast<uint32_t>(std::count_if(
+        release_count += static_cast<Moer::uint32>(std::count_if(
             pass.after.begin(),
             pass.after.end(),
             [&](const RenderGraphLowering::LoweredInstruction& instruction) {
@@ -1292,7 +1287,7 @@ void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
                        instruction.correlation_id == ownership_barrier_index;
             }
         ));
-        acquire_count += static_cast<uint32_t>(std::count_if(
+        acquire_count += static_cast<Moer::uint32>(std::count_if(
             pass.before.begin(),
             pass.before.end(),
             [&](const RenderGraphLowering::LoweredInstruction& instruction) {
@@ -1450,16 +1445,16 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
     if (ownership_barrier == compiled.barriers.end()) {
         return;
     }
-    const uint32_t ownership_barrier_index =
-        static_cast<uint32_t>(ownership_barrier - compiled.barriers.begin());
+    const Moer::uint32 ownership_barrier_index =
+        static_cast<Moer::uint32>(ownership_barrier - compiled.barriers.begin());
 
     RenderGraphLowering::LoweredPlan lowered{};
     std::string                      error{};
     suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
 
-    uint32_t release_count = 0;
+    Moer::uint32 release_count = 0;
     for (const auto& pass : lowered.passes) {
-        release_count += static_cast<uint32_t>(std::count_if(
+        release_count += static_cast<Moer::uint32>(std::count_if(
             pass.after.begin(),
             pass.after.end(),
             [&](const RenderGraphLowering::LoweredInstruction& instruction) {

@@ -4,7 +4,7 @@
 #include "Core.h"
 #include "RenderAPI.h"
 #include "misc/STL.h"
-#include <cstdint>
+#include "misc/Types.h"
 #include <functional>
 #include <optional>
 #include <type_traits>
@@ -104,8 +104,9 @@ private:
 template<typename Feedback>
 class BoundedRenderFrameQueue {
 public:
-    BoundedRenderFrameQueue(RenderThreadService& service, uint max_frame_lag) :
-        service(service), max_frame_lag(max_frame_lag) {}
+    BoundedRenderFrameQueue(RenderThreadService& service, uint32 max_frame_lag) :
+        service(service),
+        max_frame_lag(max_frame_lag) {}
 
     ~BoundedRenderFrameQueue() {
         assert(pending_frames.empty() && "Render frame queue must be flushed before destruction.");
@@ -174,7 +175,7 @@ private:
     }
 
     RenderThreadService& service;
-    uint                 max_frame_lag = 0;
+    uint32                max_frame_lag = 0;
     DEQueue<PendingFrame> pending_frames;
 };
 

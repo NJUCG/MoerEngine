@@ -5,10 +5,10 @@
 #include "log/LogSystem.h"
 #include "profile_consumer/ProfileDocument.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
@@ -37,11 +37,11 @@ constexpr std::size_t   k_track_scan_budget      = 4096;
 constexpr std::size_t   k_axis_scan_budget       = kProfileViewerGpuRenderableAxisMax;
 constexpr float         k_track_label_width      = 248.0f;
 constexpr float         k_lane_height            = 18.0f;
-constexpr std::uint32_t k_direct_depth_lanes     = 3;
-constexpr std::uint32_t k_overflow_depth_lane    = k_direct_depth_lanes;
+constexpr uint32        k_direct_depth_lanes     = 3;
+constexpr uint32        k_overflow_depth_lane    = k_direct_depth_lanes;
 constexpr float k_track_row_height = (static_cast<float>(k_direct_depth_lanes) + 1.0f) * k_lane_height + 8.0f;
 
-enum class ERangeDomain : std::uint8_t {
+enum class ERangeDomain : uint8 {
     None = 0,
     Cpu,
     Gpu,
@@ -52,9 +52,9 @@ struct RangeSelection {
     ProfileViewerGpuViewportKey gpu_key{};
     bool                        dragging{false};
     bool                        committed{false};
-    std::uint64_t               anchor{0};
-    std::uint64_t               begin{0};
-    std::uint64_t               end{0};
+    uint64                      anchor{0};
+    uint64                      begin{0};
+    uint64                      end{0};
 
     void Clear() noexcept {
         *this = {};
@@ -228,10 +228,10 @@ private:
 };
 
 [[nodiscard]] ImU32 EventColor(std::string_view _name) noexcept {
-    std::uint32_t hash    = 2166136261u;
+    uint32        hash    = 2166136261u;
     const auto    bounded = BoundedUtf8Prefix(_name, k_filter_name_byte_limit);
     for (const char value : bounded) {
-        hash ^= static_cast<std::uint8_t>(value);
+        hash ^= static_cast<uint8>(value);
         hash *= 16777619u;
     }
 
@@ -243,50 +243,50 @@ private:
     return ImGui::ColorConvertFloat4ToU32(ImVec4(red, green, blue, 0.92f));
 }
 
-[[nodiscard]] std::uint64_t SaturatingIncrement(std::uint64_t _value) noexcept {
-    return _value == std::numeric_limits<std::uint64_t>::max() ? _value : _value + 1;
+[[nodiscard]] uint64 SaturatingIncrement(uint64 _value) noexcept {
+    return _value == std::numeric_limits<uint64>::max() ? _value : _value + 1;
 }
 
-[[nodiscard]] std::uint64_t IntervalExtent(std::uint64_t _begin, std::uint64_t _end) noexcept {
+[[nodiscard]] uint64 IntervalExtent(uint64 _begin, uint64 _end) noexcept {
     return _end >= _begin ? _end - _begin : 0;
 }
 
-[[nodiscard]] std::uint64_t CpuDomainEnd(const ProfileSessionSummary& _summary) noexcept {
+[[nodiscard]] uint64 CpuDomainEnd(const ProfileSessionSummary& _summary) noexcept {
     if (!_summary.has_cpu_range || _summary.cpu_end_ns < _summary.cpu_begin_ns) {
         return 0;
     }
     return SaturatingIncrement(_summary.cpu_end_ns - _summary.cpu_begin_ns);
 }
 
-[[nodiscard]] std::uint64_t GpuDomainEnd(const GpuTimelineAxisFrame& _frame) noexcept {
+[[nodiscard]] uint64 GpuDomainEnd(const GpuTimelineAxisFrame& _frame) noexcept {
     return _frame.timing_available ? SaturatingIncrement(_frame.extent_ticks) : 0;
 }
 
 [[nodiscard]] float
-TimeToX(const ProfileViewerViewport& _viewport, std::uint64_t _time, float _x0, float _width) noexcept {
+TimeToX(const ProfileViewerViewport& _viewport, uint64 _time, float _x0, float _width) noexcept {
     if (!_viewport.valid || _viewport.view_end <= _viewport.view_begin || _width <= 0.0f) {
         return _x0;
     }
-    const std::uint64_t clamped = std::clamp(_time, _viewport.view_begin, _viewport.view_end);
+    const uint64        clamped = std::clamp(_time, _viewport.view_begin, _viewport.view_end);
     const double        ratio   = static_cast<double>(clamped - _viewport.view_begin) /
                          static_cast<double>(_viewport.view_end - _viewport.view_begin);
     return _x0 + static_cast<float>(ratio) * _width;
 }
 
-[[nodiscard]] std::uint32_t AnchorNumerator(float _mouse_x, float _x0, float _width) noexcept;
+[[nodiscard]] uint32 AnchorNumerator(float _mouse_x, float _x0, float _width) noexcept;
 
-[[nodiscard]] std::uint64_t
+[[nodiscard]] uint64
 XToTime(const ProfileViewerViewport& _viewport, float _x, float _x0, float _width) noexcept {
     if (!_viewport.valid || _viewport.view_end <= _viewport.view_begin || _width <= 0.0f) {
         return _viewport.view_begin;
     }
-    constexpr std::uint32_t denominator = 1'000'000;
+    constexpr uint32 denominator = 1'000'000;
     return ProfileViewerMapFraction(
         _viewport.view_begin, _viewport.view_end, AnchorNumerator(_x, _x0, _width), denominator
     );
 }
 
-[[nodiscard]] std::int64_t
+[[nodiscard]] int64
 PixelPanDelta(const ProfileViewerViewport& _viewport, float _pixel_delta, float _width) noexcept {
     if (!_viewport.valid || _viewport.view_end <= _viewport.view_begin || !std::isfinite(_pixel_delta) ||
         !std::isfinite(_width) || _width <= 0.0f) {
@@ -299,28 +299,28 @@ PixelPanDelta(const ProfileViewerViewport& _viewport, float _pixel_delta, float 
     if (!std::isfinite(value)) {
         return 0;
     }
-    const long double minimum = static_cast<long double>(std::numeric_limits<std::int64_t>::min());
-    const long double maximum = static_cast<long double>(std::numeric_limits<std::int64_t>::max());
-    return static_cast<std::int64_t>(std::clamp(value, minimum, maximum));
+    const long double minimum = static_cast<long double>(std::numeric_limits<int64>::min());
+    const long double maximum = static_cast<long double>(std::numeric_limits<int64>::max());
+    return static_cast<int64>(std::clamp(value, minimum, maximum));
 }
 
-[[nodiscard]] std::int64_t
+[[nodiscard]] int64
 KeyboardPanDelta(const ProfileViewerViewport& _viewport, bool _toward_end) noexcept {
     if (!_viewport.valid || _viewport.view_end <= _viewport.view_begin) {
         return 0;
     }
 
-    const std::uint64_t span      = _viewport.view_end - _viewport.view_begin;
-    const std::uint64_t magnitude = std::min<std::uint64_t>(
-        std::max<std::uint64_t>(span / 10, 1),
-        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())
+    const uint64 span      = _viewport.view_end - _viewport.view_begin;
+    const uint64 magnitude = std::min<uint64>(
+        std::max<uint64>(span / 10, 1),
+        static_cast<uint64>(std::numeric_limits<int64>::max())
     );
-    const std::int64_t signed_magnitude = static_cast<std::int64_t>(magnitude);
+    const int64 signed_magnitude = static_cast<int64>(magnitude);
     return _toward_end ? signed_magnitude : -signed_magnitude;
 }
 
-[[nodiscard]] std::uint32_t AnchorNumerator(float _mouse_x, float _x0, float _width) noexcept {
-    constexpr std::uint32_t denominator = 1'000'000;
+[[nodiscard]] uint32 AnchorNumerator(float _mouse_x, float _x0, float _width) noexcept {
+    constexpr uint32 denominator = 1'000'000;
     if (!std::isfinite(_mouse_x) || !std::isfinite(_x0) || !std::isfinite(_width) || _width <= 0.0f) {
         return denominator / 2;
     }
@@ -328,7 +328,7 @@ KeyboardPanDelta(const ProfileViewerViewport& _viewport, bool _toward_end) noexc
     const double ratio = std::clamp(
         (static_cast<double>(_mouse_x) - static_cast<double>(_x0)) / static_cast<double>(_width), 0.0, 1.0
     );
-    return static_cast<std::uint32_t>(ratio * denominator);
+    return static_cast<uint32>(ratio * denominator);
 }
 
 void DrawTimeRuler(
@@ -346,11 +346,11 @@ void DrawTimeRuler(
     for (int tick = 0; tick <= tick_count; ++tick) {
         const double        ratio    = static_cast<double>(tick) / static_cast<double>(tick_count);
         const float         x        = _x0 + static_cast<float>(ratio) * _width;
-        const std::uint64_t position = ProfileViewerMapFraction(
+        const uint64        position = ProfileViewerMapFraction(
             _viewport.view_begin,
             _viewport.view_end,
-            static_cast<std::uint32_t>(tick),
-            static_cast<std::uint32_t>(tick_count)
+            static_cast<uint32>(tick),
+            static_cast<uint32>(tick_count)
         );
         const double value_ns = static_cast<double>(position) * _unit_ns;
 
@@ -518,26 +518,26 @@ struct ProfileViewerUI::Impl {
     ProfileViewerModel     model{};
 
     struct PublicationResetState {
-        std::vector<std::uint8_t>  cpu_track_visibility{};
-        std::vector<std::uint8_t>  gpu_track_visibility{};
-        std::vector<std::uint32_t> cpu_visible_tracks{};
-        std::vector<std::uint32_t> gpu_visible_tracks{};
-        std::uint64_t              selected_gpu_frame{0};
+        std::vector<uint8>  cpu_track_visibility{};
+        std::vector<uint8>  gpu_track_visibility{};
+        std::vector<uint32> cpu_visible_tracks{};
+        std::vector<uint32> gpu_visible_tracks{};
+        uint64              selected_gpu_frame{0};
     };
 
     std::shared_ptr<const ProfileDocument> displayed_document{};
-    std::uint64_t                          publication_generation{kInvalidProfileDocumentGeneration};
-    std::uint64_t                          failed_publication_generation{kInvalidProfileDocumentGeneration};
-    std::vector<std::uint8_t>              cpu_track_visibility{};
-    std::vector<std::uint8_t>              gpu_track_visibility{};
-    std::vector<std::uint32_t>             cpu_visible_tracks{};
-    std::vector<std::uint32_t>             gpu_visible_tracks{};
+    uint64                                            publication_generation{kInvalidProfileDocumentGeneration};
+    uint64                                            failed_publication_generation{kInvalidProfileDocumentGeneration};
+    std::vector<uint8>                                cpu_track_visibility{};
+    std::vector<uint8>                                gpu_track_visibility{};
+    std::vector<uint32>                               cpu_visible_tracks{};
+    std::vector<uint32>                               gpu_visible_tracks{};
     std::array<char, k_filter_capacity>    filter{};
     NameFilterMatcher                      name_filter{};
     std::array<CpuTimelineScopeRef, k_query_capacity> cpu_query_output{};
     std::array<GpuTimelineScopeRef, k_query_capacity> gpu_query_output{};
     RangeSelection                                    range{};
-    std::uint64_t                                     selected_gpu_frame{0};
+    uint64                                            selected_gpu_frame{0};
     std::string                                       dialog_status{};
 
     [[nodiscard]] PublicationResetState PreparePublication(const ProfileDocument& _document) const {
@@ -621,7 +621,7 @@ struct ProfileViewerUI::Impl {
             std::filesystem::path selected_path;
             if (OpenProfileDump(selected_path, dialog_status)) {
                 try {
-                    const std::uint64_t generation = loader.RequestLoad(selected_path);
+                    const uint64 generation = loader.RequestLoad(selected_path);
                     if (generation == kInvalidProfileDocumentGeneration) {
                         dialog_status = "Loader rejected the request.";
                     }
@@ -738,8 +738,8 @@ struct ProfileViewerUI::Impl {
         std::span<const GpuTimelineTrackIndex> _tracks,
         const ProfileSession&                  _session,
         const ProfileTimelineIndex&            _index,
-        std::uint32_t                          _axis_index,
-        std::uint64_t                          _frame_id
+        uint32                                 _axis_index,
+        uint64                                 _frame_id
     ) {
         ImGui::SetNextItemWidth(240.0f);
         if (ImGui::InputTextWithHint(
@@ -755,7 +755,7 @@ struct ProfileViewerUI::Impl {
             const std::size_t track_count = std::min(_tracks.size(), gpu_track_visibility.size());
             for (std::size_t index = 0; index < track_count; ++index) {
                 if (_tracks[index].axis_index != _axis_index ||
-                    _index.FindGpuFrameSlice(static_cast<std::uint32_t>(index), _frame_id) == nullptr) {
+                    _index.FindGpuFrameSlice(static_cast<uint32>(index), _frame_id) == nullptr) {
                     continue;
                 }
                 const GpuTrack& source_track = _session.GpuTracks()[_tracks[index].source_track_index];
@@ -783,8 +783,8 @@ struct ProfileViewerUI::Impl {
     void DrawCpuTooltip(
         const ProfileSession& _session,
         const CpuScopeRecord& _scope,
-        std::uint64_t         _relative_begin,
-        std::uint64_t         _relative_end
+        uint64                _relative_begin,
+        uint64                _relative_end
     ) {
         ImGui::BeginTooltip();
         DrawBoundedText(_session.String(_scope.name));
@@ -805,9 +805,9 @@ struct ProfileViewerUI::Impl {
     void DrawGpuTooltip(
         const ProfileSession& _session,
         const GpuScopeRecord& _scope,
-        std::uint64_t         _frame_id,
-        std::uint64_t         _relative_begin,
-        std::uint64_t         _relative_end,
+        uint64                _frame_id,
+        uint64                _relative_begin,
+        uint64                _relative_end,
         double                _unit_period_ns
     ) {
         ImGui::BeginTooltip();
@@ -913,8 +913,8 @@ struct ProfileViewerUI::Impl {
         }
         const ImGuiIO& io = ImGui::GetIO();
         if (io.MouseWheel != 0.0f && !io.KeyShift) {
-            constexpr std::uint32_t denominator = 1'000'000;
-            const std::uint32_t     anchor = AnchorNumerator(io.MousePos.x, _timeline_x0, _timeline_width);
+            constexpr uint32 denominator = 1'000'000;
+            const uint32     anchor      = AnchorNumerator(io.MousePos.x, _timeline_x0, _timeline_width);
             if (io.MouseWheel > 0.0f) {
                 static_cast<void>(model.ZoomCpu(anchor, denominator, 4, 5));
             } else {
@@ -948,8 +948,8 @@ struct ProfileViewerUI::Impl {
         }
         const ImGuiIO& io = ImGui::GetIO();
         if (io.MouseWheel != 0.0f && !io.KeyShift) {
-            constexpr std::uint32_t denominator = 1'000'000;
-            const std::uint32_t     anchor = AnchorNumerator(io.MousePos.x, _timeline_x0, _timeline_width);
+            constexpr uint32 denominator = 1'000'000;
+            const uint32     anchor      = AnchorNumerator(io.MousePos.x, _timeline_x0, _timeline_width);
             if (io.MouseWheel > 0.0f) {
                 static_cast<void>(model.ZoomGpu(_key, anchor, denominator, 4, 5));
             } else {
@@ -1003,7 +1003,7 @@ struct ProfileViewerUI::Impl {
         const bool same_domain =
             range.domain == _domain && (_domain == ERangeDomain::Cpu || range.gpu_key == _gpu_key);
         if (same_domain && range.dragging && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            const std::uint64_t current = XToTime(_viewport, io.MousePos.x, _timeline_x0, _timeline_width);
+            const uint64 current        = XToTime(_viewport, io.MousePos.x, _timeline_x0, _timeline_width);
             range.begin                 = std::min(range.anchor, current);
             range.end                   = std::max(range.anchor, current);
         }
@@ -1037,7 +1037,7 @@ struct ProfileViewerUI::Impl {
         const ProfileSession&       session    = _document.session;
         const ProfileTimelineIndex& index      = _document.timeline_index;
         const auto                  tracks     = index.CpuTracks();
-        const std::uint64_t         domain_end = CpuDomainEnd(session.Summary());
+        const uint64                domain_end = CpuDomainEnd(session.Summary());
 
         ProfileViewerViewport viewport = model.CpuViewport();
         if ((!viewport.valid || viewport.domain_end != domain_end) && domain_end > 0) {
@@ -1069,8 +1069,8 @@ struct ProfileViewerUI::Impl {
             selection.published_generation == publication_generation &&
             ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive() &&
             ImGui::IsKeyPressed(ImGuiKey_F)) {
-            const std::uint64_t margin =
-                std::max<std::uint64_t>(IntervalExtent(selection.begin, selection.end) / 5, 1);
+            const uint64 margin =
+                std::max<uint64>(IntervalExtent(selection.begin, selection.end) / 5, 1);
             static_cast<void>(model.FocusCpu(selection.begin, selection.end, margin));
             viewport = model.CpuViewport();
         }
@@ -1083,16 +1083,16 @@ struct ProfileViewerUI::Impl {
 
         DrawOverview(viewport, timeline_x0, timeline_width, 32.0f);
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            constexpr std::uint32_t denominator = 1'000'000;
-            const std::uint64_t     target      = ProfileViewerMapFraction(
+            constexpr uint32 denominator = 1'000'000;
+            const uint64     target      = ProfileViewerMapFraction(
                 0,
                 viewport.domain_end,
                 AnchorNumerator(ImGui::GetIO().MousePos.x, timeline_x0, timeline_width),
                 denominator
             );
-            const std::uint64_t span = viewport.view_end - viewport.view_begin;
+            const uint64 span = viewport.view_end - viewport.view_begin;
             static_cast<void>(
-                model.FocusCpu(target, SaturatingIncrement(target), std::max(span / 2, std::uint64_t{1}))
+                model.FocusCpu(target, SaturatingIncrement(target), std::max(span / 2, uint64{1}))
             );
             viewport = model.CpuViewport();
         }
@@ -1101,7 +1101,7 @@ struct ProfileViewerUI::Impl {
         const std::size_t cpu_track_count = std::min(tracks.size(), cpu_track_visibility.size());
         for (std::size_t index_value = 0; index_value < cpu_track_count; ++index_value) {
             if (cpu_track_visibility[index_value] != 0) {
-                cpu_visible_tracks.emplace_back(static_cast<std::uint32_t>(index_value));
+                cpu_visible_tracks.emplace_back(static_cast<uint32>(index_value));
             }
         }
 
@@ -1121,7 +1121,7 @@ struct ProfileViewerUI::Impl {
         clipper.Begin(static_cast<int>(cpu_visible_tracks.size()), k_track_row_height);
         while (clipper.Step()) {
             for (int row_index = clipper.DisplayStart; row_index < clipper.DisplayEnd; ++row_index) {
-                const std::uint32_t timeline_track_index =
+                const uint32 timeline_track_index =
                     cpu_visible_tracks[static_cast<std::size_t>(row_index)];
                 const CpuTimelineTrackIndex& track        = tracks[timeline_track_index];
                 const CpuTrack&              source_track = session.CpuTracks()[track.source_track_index];
@@ -1180,10 +1180,10 @@ struct ProfileViewerUI::Impl {
                     filter_results_incomplete || (query.truncated && !name_filter.Empty());
                 remaining_budget -= static_cast<std::size_t>(query.written);
 
-                for (std::uint64_t result_index = 0; result_index < query.written; ++result_index) {
+                for (uint64 result_index = 0; result_index < query.written; ++result_index) {
                     const CpuTimelineScopeRef& timeline_scope =
                         cpu_query_output[static_cast<std::size_t>(result_index)];
-                    const std::uint64_t source_index = timeline_scope.source_scope_index;
+                    const uint64 source_index = timeline_scope.source_scope_index;
                     if (source_index >= session.CpuScopes().size()) {
                         continue;
                     }
@@ -1195,14 +1195,14 @@ struct ProfileViewerUI::Impl {
                     if (!name_filter.Matches(name)) {
                         continue;
                     }
-                    const std::uint64_t begin = timeline_scope.begin_ns;
-                    const std::uint64_t end   = timeline_scope.end_ns;
+                    const uint64        begin = timeline_scope.begin_ns;
+                    const uint64        end   = timeline_scope.end_ns;
                     float               x0    = TimeToX(viewport, begin, body_x0, body_timeline_width);
                     float               x1    = TimeToX(viewport, end, body_x0, body_timeline_width);
                     if (x1 - x0 < 2.0f) {
                         x1 = std::min(body_x0 + body_timeline_width, x0 + 2.0f);
                     }
-                    const std::uint32_t lane = std::min(scope.depth, k_overflow_depth_lane);
+                    const uint32        lane = std::min(scope.depth, k_overflow_depth_lane);
                     const float         y0   = row_origin.y + 3.0f + lane * k_lane_height;
                     const float         y1   = y0 + k_lane_height - 2.0f;
                     if (x1 <= body_x0 || x0 >= body_x0 + body_timeline_width) {
@@ -1279,7 +1279,7 @@ struct ProfileViewerUI::Impl {
         auto current = FindProfileViewerGpuFrameAtOrAfter(recorded_frames, axis_frames, selected_gpu_frame);
         if (!current) {
             current = FindProfileViewerGpuFrameAtOrBefore(
-                recorded_frames, axis_frames, std::numeric_limits<std::uint64_t>::max()
+                recorded_frames, axis_frames, std::numeric_limits<uint64>::max()
             );
         }
         if (!current) {
@@ -1308,7 +1308,7 @@ struct ProfileViewerUI::Impl {
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(180.0f);
-        std::uint64_t requested_frame = selected_gpu_frame;
+        uint64 requested_frame = selected_gpu_frame;
         if (ImGui::InputScalar(
                 "GPU frame",
                 ImGuiDataType_U64,
@@ -1322,7 +1322,7 @@ struct ProfileViewerUI::Impl {
                 FindProfileViewerGpuFrameAtOrAfter(recorded_frames, axis_frames, requested_frame);
             if (!requested) {
                 requested = FindProfileViewerGpuFrameAtOrBefore(
-                    recorded_frames, axis_frames, std::numeric_limits<std::uint64_t>::max()
+                    recorded_frames, axis_frames, std::numeric_limits<uint64>::max()
                 );
             }
             if (requested) {
@@ -1358,7 +1358,7 @@ struct ProfileViewerUI::Impl {
 
     void DrawGpuAxis(
         const ProfileDocument&      _document,
-        std::uint32_t               _axis_index,
+        uint32                      _axis_index,
         const GpuTimelineAxisFrame& _axis_frame
     ) {
         const ProfileSession&             session = _document.session;
@@ -1368,7 +1368,7 @@ struct ProfileViewerUI::Impl {
             .axis_index = _axis_index,
             .frame_id   = selected_gpu_frame,
         };
-        const std::uint64_t domain_end = GpuDomainEnd(_axis_frame);
+        const uint64 domain_end = GpuDomainEnd(_axis_frame);
 
         ImGui::Text(
             "Physical domain: native queue %u, family %u, valid bits %u, %.6f ns/tick",
@@ -1430,8 +1430,8 @@ struct ProfileViewerUI::Impl {
             selection.frame_id == selected_gpu_frame &&
             ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive() &&
             ImGui::IsKeyPressed(ImGuiKey_F)) {
-            const std::uint64_t margin =
-                std::max<std::uint64_t>(IntervalExtent(selection.begin, selection.end) / 5, 1);
+            const uint64 margin =
+                std::max<uint64>(IntervalExtent(selection.begin, selection.end) / 5, 1);
             static_cast<void>(model.FocusGpu(key, selection.begin, selection.end, margin));
             viewport = model.FindGpuViewport(key);
         }
@@ -1448,16 +1448,16 @@ struct ProfileViewerUI::Impl {
         ImGui::Dummy(ImVec2(available_width, 30.0f));
         DrawOverview(*viewport, timeline_x0, timeline_width, 32.0f);
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            constexpr std::uint32_t denominator = 1'000'000;
-            const std::uint64_t     target      = ProfileViewerMapFraction(
+            constexpr uint32 denominator = 1'000'000;
+            const uint64     target      = ProfileViewerMapFraction(
                 0,
                 viewport->domain_end,
                 AnchorNumerator(ImGui::GetIO().MousePos.x, timeline_x0, timeline_width),
                 denominator
             );
-            const std::uint64_t span = viewport->view_end - viewport->view_begin;
+            const uint64 span = viewport->view_end - viewport->view_begin;
             static_cast<void>(
-                model.FocusGpu(key, target, SaturatingIncrement(target), std::max(span / 2, std::uint64_t{1}))
+                model.FocusGpu(key, target, SaturatingIncrement(target), std::max(span / 2, uint64{1}))
             );
             viewport = model.FindGpuViewport(key);
         }
@@ -1470,9 +1470,9 @@ struct ProfileViewerUI::Impl {
         const std::size_t gpu_track_count = std::min(gpu_tracks.size(), gpu_track_visibility.size());
         for (std::size_t track_index = 0; track_index < gpu_track_count; ++track_index) {
             if (gpu_tracks[track_index].axis_index == _axis_index && gpu_track_visibility[track_index] != 0 &&
-                index.FindGpuFrameSlice(static_cast<std::uint32_t>(track_index), selected_gpu_frame) !=
+                index.FindGpuFrameSlice(static_cast<uint32>(track_index), selected_gpu_frame) !=
                     nullptr) {
-                gpu_visible_tracks.emplace_back(static_cast<std::uint32_t>(track_index));
+                gpu_visible_tracks.emplace_back(static_cast<uint32>(track_index));
             }
         }
 
@@ -1498,7 +1498,7 @@ struct ProfileViewerUI::Impl {
         clipper.Begin(static_cast<int>(gpu_visible_tracks.size()), k_track_row_height);
         while (clipper.Step()) {
             for (int row_index = clipper.DisplayStart; row_index < clipper.DisplayEnd; ++row_index) {
-                const std::uint32_t timeline_track_index =
+                const uint32 timeline_track_index =
                     gpu_visible_tracks[static_cast<std::size_t>(row_index)];
                 const GpuTimelineTrackIndex& track        = gpu_tracks[timeline_track_index];
                 const GpuTrack&              source_track = session.GpuTracks()[track.source_track_index];
@@ -1561,10 +1561,10 @@ struct ProfileViewerUI::Impl {
                     filter_results_incomplete || (query.truncated && !name_filter.Empty());
                 remaining_budget -= static_cast<std::size_t>(query.written);
 
-                for (std::uint64_t result_index = 0; result_index < query.written; ++result_index) {
+                for (uint64 result_index = 0; result_index < query.written; ++result_index) {
                     const GpuTimelineScopeRef& timeline_scope =
                         gpu_query_output[static_cast<std::size_t>(result_index)];
-                    const std::uint64_t source_index = timeline_scope.source_scope_index;
+                    const uint64 source_index = timeline_scope.source_scope_index;
                     if (source_index >= session.GpuScopes().size()) {
                         continue;
                     }
@@ -1576,8 +1576,8 @@ struct ProfileViewerUI::Impl {
                     if (!name_filter.Matches(name)) {
                         continue;
                     }
-                    const std::uint64_t begin = timeline_scope.begin_tick_offset;
-                    const std::uint64_t end   = timeline_scope.end_tick_offset;
+                    const uint64 begin = timeline_scope.begin_tick_offset;
+                    const uint64 end   = timeline_scope.end_tick_offset;
                     if (begin > _axis_frame.extent_ticks || end > _axis_frame.extent_ticks) {
                         continue;
                     }
@@ -1586,7 +1586,7 @@ struct ProfileViewerUI::Impl {
                     if (x1 - x0 < 2.0f) {
                         x1 = std::min(body_x0 + body_timeline_width, x0 + 2.0f);
                     }
-                    const std::uint32_t lane = std::min(scope.depth, k_overflow_depth_lane);
+                    const uint32        lane = std::min(scope.depth, k_overflow_depth_lane);
                     const float         y0   = row_origin.y + 3.0f + lane * k_lane_height;
                     const float         y1   = y0 + k_lane_height - 2.0f;
                     if (x1 <= body_x0 || x0 >= body_x0 + body_timeline_width) {
@@ -1674,7 +1674,7 @@ struct ProfileViewerUI::Impl {
         bool axis_available = false;
         if (ImGui::BeginTabBar("GpuPhysicalAxisTabs")) {
             const std::size_t axis_count = std::min(index.Axes().size(), k_axis_scan_budget + std::size_t{1});
-            for (std::uint32_t axis_index = 1; axis_index < axis_count; ++axis_index) {
+            for (uint32 axis_index = 1; axis_index < axis_count; ++axis_index) {
                 const GpuTimelineAxisFrame* axis_frame =
                     index.FindGpuAxisFrame(axis_index, selected_gpu_frame);
                 if (axis_frame == nullptr) {

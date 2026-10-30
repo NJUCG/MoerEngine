@@ -3,6 +3,7 @@
 #include "VulkanCommandContext.h"
 #include "VulkanDescriptor.h"
 #include "VulkanFault.h"
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIThreadOwnership.h"
 
@@ -37,7 +38,7 @@ struct VulkanPresentationSourceStateEvent {
     EVulkanPresentationSourceStateEventType type{EVulkanPresentationSourceStateEventType::TextureState};
     TextureRef                              texture{};
     BindlessArrayRef                        bindless_array{};
-    uint                                    bindless_slot{0};
+    uint32                                  bindless_slot{0};
     int32                                   membership_delta{0};
     bool                                    ready{false};
 };

@@ -5,11 +5,11 @@
 #include "rhi/executor/RHIExecutor.h"
 #include "rhi/executor/testing/RHIExecutorTestHooksInternal.h"
 
+#include "misc/Types.h"
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -100,27 +100,27 @@ public:
         }
     }
 
-    uint64_t GetValue() const override {
+    Moer::uint64 GetValue() const override {
         return 0;
     }
 
-    bool Wait(uint64_t _value) override {
+    bool Wait(Moer::uint64 _value) override {
         return _value == 0 && !IsRejected(_value);
     }
 
-    void MarkSubmitted(uint64_t _value) override {
+    void MarkSubmitted(Moer::uint64 _value) override {
         submitted_value.store(_value, std::memory_order_release);
     }
 
     bool WaitSubmitted(
-        uint64_t               _value,
+        Moer::uint64 _value,
         const std::atomic_bool* = nullptr
     ) override {
         return submitted_value.load(std::memory_order_acquire) >= _value &&
                !IsRejected(_value);
     }
 
-    void Reject(uint64_t _value) noexcept override {
+    void Reject(Moer::uint64 _value) noexcept override {
         rejected_value.store(_value, std::memory_order_release);
         if (on_reject) {
             try {
@@ -130,19 +130,19 @@ public:
         }
     }
 
-    bool IsRejected(uint64_t _value) const override {
+    bool IsRejected(Moer::uint64 _value) const override {
         return rejected_value.load(std::memory_order_acquire) == _value;
     }
 
-    [[nodiscard]] uint64_t RejectedValue() const {
+    [[nodiscard]] Moer::uint64 RejectedValue() const {
         return rejected_value.load(std::memory_order_acquire);
     }
 
 private:
     std::shared_ptr<std::atomic_bool> destroyed{};
     std::function<void()>             on_reject{};
-    std::atomic<uint64_t> submitted_value{0};
-    std::atomic<uint64_t> rejected_value{0};
+    std::atomic<Moer::uint64>         submitted_value{0};
+    std::atomic<Moer::uint64>         rejected_value{0};
 };
 
 struct DirectMaterializationFaultContext {
@@ -509,11 +509,11 @@ bool FenceRejectionObservesPublishedHostsAndRetainsOwnedSignals() {
 bool ExportReceiptSignalsOwnDedicatedRejectionKeepalives() {
     using Moer::Render::Raytracing::ExportSubmissionTransaction;
 
-    auto run_case = [](bool _readback, uint64_t _value) {
+    auto run_case = [](bool _readback, Moer::uint64 _value) {
         auto destroyed =
             std::make_shared<std::atomic_bool>(false);
         auto rejected_value =
-            std::make_shared<std::atomic<uint64_t>>(0);
+            std::make_shared<std::atomic<Moer::uint64>>(0);
         FenceRef receipt{
             MoerNew(RecordingFenceProbe)(
                 destroyed,

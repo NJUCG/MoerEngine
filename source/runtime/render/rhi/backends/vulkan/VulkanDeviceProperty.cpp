@@ -1,4 +1,5 @@
 #include "VulkanDeviceProperty.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 
@@ -50,10 +51,10 @@ VkPhysicalDeviceVulkan11Properties QueryVulkan11Properties(VkPhysicalDevice _gpu
 } // namespace
 
 VulkanCoreDeviceProperties
-VulkanCoreDeviceProperties::QueryGpuProperties(VkPhysicalDevice _gpu, uint32_t _api_version) {
+VulkanCoreDeviceProperties::QueryGpuProperties(VkPhysicalDevice _gpu, uint32 _api_version) {
     VulkanCoreDeviceProperties properties;
     vkGetPhysicalDeviceProperties(_gpu, &properties.core_1_0);
-    const uint32_t query_api_version = std::min(_api_version, properties.core_1_0.apiVersion);
+    const uint32 query_api_version = std::min(_api_version, properties.core_1_0.apiVersion);
 
     if (query_api_version < VK_API_VERSION_1_1) {
         return properties;

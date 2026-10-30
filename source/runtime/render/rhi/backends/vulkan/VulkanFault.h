@@ -4,12 +4,12 @@
 #include "VulkanCommon.h"
 #include "rhi/RHICommon.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <string_view>
 
 namespace Moer::Render {
 
-enum class EVulkanFaultOperation : uint8_t {
+enum class EVulkanFaultOperation : uint8 {
     None,
     QueueSubmit,
     QueueSubmitEmpty,
@@ -31,7 +31,7 @@ enum class EVulkanFaultOperation : uint8_t {
     DeviceWaitIdle
 };
 
-enum class EVulkanOperationStatus : uint8_t {
+enum class EVulkanOperationStatus : uint8 {
     Success,
     Retry,
     Recreate,
@@ -43,8 +43,8 @@ struct VulkanOperationContext {
     EVulkanFaultOperation operation{EVulkanFaultOperation::None};
     EQueueType            queue_type{EQueueType::Ignore};
     VkQueue               queue{VK_NULL_HANDLE};
-    uint64_t              timeline{0};
-    uint64_t              work_serial{0};
+    uint64                timeline{0};
+    uint64                work_serial{0};
 };
 
 // Operation classification only; accepted work and GPU completion are tracked separately.
@@ -61,10 +61,10 @@ struct VulkanFaultRecord {
     EVulkanFaultOperation operation{EVulkanFaultOperation::None};
     VkResult              result{VK_SUCCESS};
     EQueueType            queue_type{EQueueType::Ignore};
-    uint64_t              queue_handle{0};
-    uint64_t              timeline{0};
-    uint64_t              work_serial{0};
-    uint32_t              thread_id{0};
+    uint64                queue_handle{0};
+    uint64                timeline{0};
+    uint64                work_serial{0};
+    uint32                thread_id{0};
     bool                  injected{false};
     bool                  predrained{false};
 };

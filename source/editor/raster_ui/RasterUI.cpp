@@ -1,4 +1,5 @@
 #include "RasterUI.h"
+#include "misc/Types.h"
 
 // 提供 Raster 管线的功能控制项和轻量级运行时诊断信息。
 
@@ -43,7 +44,7 @@ void RasterUI::ShowConfig() {
             "Output: [%s]",
             m_frame_buffer_names[m_config.selected_frame_buffer_index].c_str()
         )) {
-        for (uint i = 0; i < m_frame_buffer_names.size(); i++) {
+        for (uint32 i = 0; i < m_frame_buffer_names.size(); i++) {
             if (ImGui::Selectable(
                     m_frame_buffer_names[i].c_str(),
                     m_config.selected_frame_buffer_index == i
@@ -106,8 +107,8 @@ void RasterUI::ShowConfig() {
                 const auto& stats = m_config.culling_stats;
 
                 // LOD 信息（独立展示，不混入剔除条形图）
-                const uint lod_active = stats.total_instances_before;
-                const uint lod_total  = lod_active + stats.lod_culled_instances;
+                const uint32 lod_active = stats.total_instances_before;
+                const uint32 lod_total  = lod_active + stats.lod_culled_instances;
                 ImGui::TextColored(ImVec4(0.51f, 0.39f, 0.82f, 1.0f),
                     "LOD active: %u / %u primitives", lod_active, lod_total);
 
@@ -316,7 +317,7 @@ void RasterUI::ShowConfig() {
 
             // NDF
             ImGui::Text("NDF:");
-            for (uint i = 0; i < s_brdf_ndf_mode_name_map.size(); i++) {
+            for (uint32 i = 0; i < s_brdf_ndf_mode_name_map.size(); i++) {
                 const auto cur_enum = static_cast<EBrdfNdfMode>(i);
                 if (ImGui::Selectable(
                         s_brdf_ndf_mode_name_map.at(cur_enum).c_str(),
@@ -332,7 +333,7 @@ void RasterUI::ShowConfig() {
 
             // Geometry Function
             ImGui::Text("Geometry Function:");
-            for (uint i = 0; i < s_brdf_geometry_mode_name_map.size(); i++) {
+            for (uint32 i = 0; i < s_brdf_geometry_mode_name_map.size(); i++) {
                 const auto cur_enum = static_cast<EBrdfGMode>(i);
                 if (ImGui::Selectable(
                         s_brdf_geometry_mode_name_map.at(cur_enum).c_str(),
@@ -763,7 +764,7 @@ void RasterUI::ShowConfig() {
 
         ImGui::Text("Only project 1st Dir.Light");
 
-        for (uint i = 0; i < s_shadow_map_mode_name_map.size(); i++) {
+        for (uint32 i = 0; i < s_shadow_map_mode_name_map.size(); i++) {
             const EShadowMapMode cur_enum = static_cast<EShadowMapMode>(i);
             if (ImGui::Selectable(
                     s_shadow_map_mode_name_map.at(cur_enum).c_str(), m_config.shadow_map_mode == cur_enum
@@ -881,7 +882,7 @@ void RasterUI::ShowConfig() {
         )) {
 
         assert(s_ao_mode_name_map.size() == static_cast<uint32>(EAoMode::NUM));
-        for (uint i = 0; i < s_ao_mode_name_map.size(); i++) {
+        for (uint32 i = 0; i < s_ao_mode_name_map.size(); i++) {
             const EAoMode cur_enum = static_cast<EAoMode>(i);
             if (ImGui::Selectable(s_ao_mode_name_map.at(cur_enum).c_str(), m_config.ao_mode == cur_enum)) {
                 m_config.ao_mode = cur_enum;
@@ -905,7 +906,7 @@ void RasterUI::ShowConfig() {
 
             ImGui::Text("RTAO Sample Mode:");
             assert(s_rtao_sample_mode_name_map.size() == static_cast<uint32>(ERtaoSampleMode::NUM));
-            for (uint i = 0; i < s_rtao_sample_mode_name_map.size(); i++) {
+            for (uint32 i = 0; i < s_rtao_sample_mode_name_map.size(); i++) {
                 const ERtaoSampleMode cur_enum = static_cast<ERtaoSampleMode>(i);
                 if (ImGui::Selectable(
                         s_rtao_sample_mode_name_map.at(cur_enum).c_str(),
@@ -1005,7 +1006,7 @@ void RasterUI::ShowConfig() {
         )) {
 
         assert(s_denoiser_mode_name_map.size() == static_cast<uint32>(EDenoiserMode::NUM));
-        for (uint i = 0; i < s_denoiser_mode_name_map.size(); i++) {
+        for (uint32 i = 0; i < s_denoiser_mode_name_map.size(); i++) {
             const EDenoiserMode cur_enum = static_cast<EDenoiserMode>(i);
             if (ImGui::Selectable(
                     s_denoiser_mode_name_map.at(cur_enum).c_str(), m_config.denoiser_mode == cur_enum
@@ -1036,7 +1037,7 @@ void RasterUI::ShowConfig() {
 
         ImGui::Text("目前需要在RasterTextures.h中编译期启用");
 
-        for (uint i = 0; i < s_upsample_mode_name_array.size(); i++) {
+        for (uint32 i = 0; i < s_upsample_mode_name_array.size(); i++) {
             if (ImGui::Selectable(
                     s_upsample_mode_name_array[i].c_str(),
                     m_config.upsample_mode == static_cast<EUpsampleMode>(i)
@@ -1060,7 +1061,7 @@ void RasterUI::ShowConfig() {
         if (ImGui::Selectable("Enable", m_config.ai_is_cuda_enabled == 1)) {
             m_config.ai_is_cuda_enabled = 1;
             // 自动选择out_final_output
-            for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
+            for (uint32 i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
                 if (strcmp(s_ai_trt_visualize_buffer_array[i].c_str(), "Engine2 out_final_output") == 0) {
                     m_config.ai_trt_visualize_buffer_idx = i;
                 }
@@ -1082,7 +1083,7 @@ void RasterUI::ShowConfig() {
         ImGui::Checkbox("Force LDR Input & Output", &m_config.ai_trt_force_ldr);
 
         if (m_config.ai_is_cuda_enabled == 1) {
-            for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
+            for (uint32 i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
                 if (ImGui::Selectable(
                         s_ai_trt_visualize_buffer_array[i].c_str(), m_config.ai_trt_visualize_buffer_idx == i
                     )) {
@@ -1103,7 +1104,7 @@ void RasterUI::ShowConfig() {
         )) {
 
         assert(s_aa_mode_name_map.size() == static_cast<uint32>(EAaMode::NUM));
-        for (uint i = 0; i < s_aa_mode_name_map.size(); i++) {
+        for (uint32 i = 0; i < s_aa_mode_name_map.size(); i++) {
             const EAaMode cur_enum = static_cast<EAaMode>(i);
             if (ImGui::Selectable(s_aa_mode_name_map.at(cur_enum).c_str(), m_config.aa_mode == cur_enum)) {
                 m_config.aa_mode = cur_enum;
@@ -1142,17 +1143,17 @@ void RasterUI::RegisterFrameBufferNames(const Array<std::string>& frame_buffer_n
     );
 }
 
-uint RasterUI::GetDefaultSelectedFrameBufferIndex() const {
+uint32 RasterUI::GetDefaultSelectedFrameBufferIndex() const {
     constexpr std::string_view k_default_frame_buffer_name = "tonemapping_output";
 
-    for (uint i = 0; i < m_frame_buffer_names.size(); ++i) {
+    for (uint32 i = 0; i < m_frame_buffer_names.size(); ++i) {
         if (m_frame_buffer_names[i] == k_default_frame_buffer_name) {
             return i;
         }
     }
 
     assert(false && "Invalid default selected frame buffer index");
-    return uint(0);
+    return uint32(0);
 }
 
 } // namespace Moer

@@ -5,6 +5,7 @@
 #include "LogicalScene.h"
 #include "RenderAPI.h"
 #include "SceneLoadInfoAsync.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 #include "scene/SceneCreateInfo.h"
 
@@ -468,9 +469,9 @@ struct SceneGeometryInstanceSnapshot {
 struct SceneGeometrySnapshot {
     Array<Box3D>                         primitive_bounds;
     Array<SceneGeometryInstanceSnapshot> instances;
-    uint                                 renderable_instance_count = 0u;
-    uint                                 leaf_primitive_count       = 0u;
-    uint                                 skipped_invalid_count      = 0u;
+    uint32                               renderable_instance_count = 0u;
+    uint32                               leaf_primitive_count      = 0u;
+    uint32                               skipped_invalid_count     = 0u;
 };
 
 struct SceneUpdateBatch {
@@ -488,7 +489,7 @@ struct SceneUpdateBatch {
     std::optional<Render::GpuSceneUpdate> update_gpu_update;
 
     Camera                                main_camera{};
-    uint                                  light_count = 0u;
+    uint32                                light_count = 0u;
     std::optional<ecs::CLightDirectional> main_directional_light;
     std::optional<ecs::CLightPoint>       main_point_light;
     std::optional<SceneGeometrySnapshot>  geometry;

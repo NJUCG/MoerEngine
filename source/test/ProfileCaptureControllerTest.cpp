@@ -4,13 +4,13 @@
 #include "profile/ProfileScope.h"
 #include "profile/RenderProfileCapture.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <barrier>
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -37,9 +37,9 @@ void Expect(bool _condition, std::string_view _message) {
 class ScopedCaptureOutput final {
 public:
     explicit ScopedCaptureOutput(std::string_view _stem) {
-        static std::atomic_uint64_t next_id{0};
-        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
-            const auto now = static_cast<std::uint64_t>(
+        static std::atomic<uint64> next_id{0};
+        for (uint32 attempt = 0; attempt < 64; ++attempt) {
+            const auto now = static_cast<uint64>(
                 std::chrono::steady_clock::now().time_since_epoch().count()
             );
             directory_ = std::filesystem::temp_directory_path() /
@@ -92,7 +92,7 @@ ProfileCaptureStartOptions LossyStartOptions(
     return options;
 }
 
-void EmitOversizedRuntimeRecord(std::uint64_t _generation) {
+void EmitOversizedRuntimeRecord(uint64 _generation) {
     const SchemaDescriptor schema = {
         .name           = "ControllerLossProbe",
         .event_type     = "contract.controller_loss_probe",
@@ -162,8 +162,8 @@ void TickUntilReady(
     Expect(_ticket.Ready(), _message);
 }
 
-std::uint64_t StartCapture(
-    ProfileCaptureController& _controller,
+uint64 StartCapture(
+    ProfileCaptureController&  _controller,
     ProfileCaptureStartOptions _options
 ) {
     ProfileCaptureRequestSubmission submission =
@@ -188,8 +188,8 @@ std::uint64_t StartCapture(
     return completion.generation;
 }
 
-std::uint64_t StartCpuOnlyCapture(
-    ProfileCaptureController& _controller,
+uint64 StartCpuOnlyCapture(
+    ProfileCaptureController&  _controller,
     ProfileCaptureStartOptions _options
 ) {
     ProfileCaptureRequestSubmission submission =
@@ -220,7 +220,7 @@ std::uint64_t StartCpuOnlyCapture(
 
 ProfileCaptureRequestCompletion StopCapture(
     ProfileCaptureController& _controller,
-    std::uint64_t             _generation
+    uint64                    _generation
 ) {
     ProfileCaptureRequestSubmission submission =
         _controller.RequestStop(_generation);
@@ -411,8 +411,8 @@ void ConcurrentSubmissionIdsAreUniqueAndQueueIsBounded() {
             ProfileCaptureLifecycleResult::Advanced,
         "shutdown did not close concurrent request admission"
     );
-    std::set<std::uint64_t> request_ids;
-    std::uint64_t           largest_accepted_request_id = 0;
+    std::set<uint64> request_ids;
+    uint64           largest_accepted_request_id = 0;
     for (const auto& per_thread : submissions) {
         for (const ProfileCaptureRequestSubmission& submission : per_thread) {
             const ProfileCaptureRequestCompletion completion =
@@ -546,7 +546,7 @@ void ExternalRuntimeIsNeverAdoptedOrShutdown() {
         Start(external_config) == StartResult::Started,
         "external ProfileDump test runtime did not start"
     );
-    const std::uint64_t external_generation = GetRuntimeGeneration();
+    const uint64 external_generation = GetRuntimeGeneration();
 
     RenderProfileCapture capture;
     {
@@ -596,7 +596,7 @@ void ExternalRuntimeIsNeverAdoptedOrShutdown() {
 void ControllerDestructorClosesOwnedRunningSession() {
     ScopedCaptureOutput      output("moer-profile-controller-destroy-running");
     RenderProfileCapture     capture;
-    std::uint64_t            generation = 0;
+    uint64                   generation = 0;
     {
         auto controller = std::make_unique<ProfileCaptureController>(&capture, 4);
         generation = StartCapture(
@@ -623,7 +623,7 @@ void ControllerDestructorClosesOwnedStoppingSession() {
     RenderProfileCapture     capture;
     RenderProfileFrameToken frame;
     ProfileCaptureRequestTicket stop_ticket;
-    std::uint64_t            generation = 0;
+    uint64                      generation = 0;
     {
         auto controller = std::make_unique<ProfileCaptureController>(&capture, 4);
         generation = StartCapture(
@@ -677,7 +677,7 @@ void ControllerDestructorClosesOwnedStoppingSession() {
 void NullFacadeRunsAndStopsCpuOnlyCapture() {
     ScopedCaptureOutput      output("moer-profile-controller-cpu-only-stop");
     ProfileCaptureController controller(nullptr, 4);
-    const std::uint64_t generation = StartCpuOnlyCapture(
+    const uint64             generation = StartCpuOnlyCapture(
         controller,
         StartOptions(output, "cpu-only-stop.mpd")
     );
@@ -713,7 +713,7 @@ void NullFacadeRunsAndStopsCpuOnlyCapture() {
 void NullFacadePreservesEngineShutdownSplit() {
     ScopedCaptureOutput      output("moer-profile-controller-cpu-only-shutdown");
     ProfileCaptureController controller(nullptr, 4);
-    const std::uint64_t generation = StartCpuOnlyCapture(
+    const uint64             generation = StartCpuOnlyCapture(
         controller,
         StartOptions(output, "cpu-only-shutdown.mpd")
     );
@@ -767,7 +767,7 @@ void NullFacadePreservesEngineShutdownSplit() {
 
 void NullFacadeDestructorClosesOwnedCpuOnlyCapture() {
     ScopedCaptureOutput output("moer-profile-controller-cpu-only-destructor");
-    std::uint64_t       generation = 0;
+    uint64              generation = 0;
     {
         ProfileCaptureController controller(nullptr, 4);
         generation = StartCpuOnlyCapture(
@@ -795,7 +795,7 @@ void RestartUsesStableFacadeAndRejectsStaleStop() {
     RenderProfileCapture* const stable_facade = &capture;
     ProfileCaptureController controller(stable_facade, 8);
 
-    const std::uint64_t first_generation =
+    const uint64 first_generation =
         StartCapture(controller, StartOptions(output, "first.mpd"));
     Expect(
         &capture == stable_facade && capture.Valid() &&
@@ -811,7 +811,7 @@ void RestartUsesStableFacadeAndRejectsStaleStop() {
         "first dynamic generation did not close cleanly"
     );
 
-    const std::uint64_t second_generation =
+    const uint64 second_generation =
         StartCapture(controller, StartOptions(output, "second.mpd"));
     Expect(
         second_generation > first_generation && &capture == stable_facade &&
@@ -861,7 +861,7 @@ void AdmittedFrameKeepsDynamicStopPendingUntilSealed() {
     ScopedCaptureOutput      output("moer-profile-controller-pending-frame");
     RenderProfileCapture     capture;
     ProfileCaptureController controller(&capture, 4);
-    const std::uint64_t generation =
+    const uint64             generation =
         StartCapture(controller, StartOptions(output, "pending-frame.mpd"));
 
     RenderProfileFrameToken frame = capture.BeginFrame();
@@ -910,7 +910,7 @@ void EngineShutdownPreservesRhiAndWorkerOwnershipBoundaries() {
     ScopedCaptureOutput      output("moer-profile-controller-shutdown-split");
     RenderProfileCapture     capture;
     ProfileCaptureController controller(&capture, 4);
-    const std::uint64_t generation =
+    const uint64             generation =
         StartCapture(controller, StartOptions(output, "shutdown-split.mpd"));
 
     Expect(
@@ -962,7 +962,7 @@ void EngineShutdownPreservesRhiAndWorkerOwnershipBoundaries() {
 void DynamicStopReportsProfileDumpRecordLoss() {
     ScopedCaptureOutput      output("moer-profile-controller-dynamic-loss");
     ProfileCaptureController controller(nullptr, 4);
-    const std::uint64_t generation = StartCpuOnlyCapture(
+    const uint64             generation = StartCpuOnlyCapture(
         controller,
         LossyStartOptions(output, "dynamic-loss.mpd")
     );
@@ -983,7 +983,7 @@ void EngineShutdownReportsProfileDumpRecordLoss() {
     ScopedCaptureOutput      output("moer-profile-controller-shutdown-loss");
     RenderProfileCapture     capture;
     ProfileCaptureController controller(&capture, 4);
-    const std::uint64_t generation = StartCapture(
+    const uint64             generation = StartCapture(
         controller,
         LossyStartOptions(output, "shutdown-loss.mpd")
     );
@@ -1047,7 +1047,7 @@ void EngineShutdownReportsProfileDumpRecordLoss() {
 void WorkerShutdownFailureAbandonsRuntimeWithoutUnsafeFinalization() {
     ScopedCaptureOutput  output("moer-profile-controller-worker-failure");
     RenderProfileCapture capture;
-    std::uint64_t        generation = 0;
+    uint64               generation = 0;
 
     {
         ProfileCaptureController controller(&capture, 4);

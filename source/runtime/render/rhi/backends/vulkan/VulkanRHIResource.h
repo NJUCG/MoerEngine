@@ -3,6 +3,7 @@
 #include "VulkanCommon.h"
 #include "VulkanDeviceObject.h"
 #include "VulkanMemoryAllocator.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 
 #include <atomic>
@@ -31,7 +32,7 @@ struct VulkanBufferDescriptorKey {
 };
 
 using VulkanBufferDescriptorCacheSlots =
-    UnorderedMap<VulkanBufferDescriptorKey, uint, VulkanBufferDescriptorKey::Hasher>;
+    UnorderedMap<VulkanBufferDescriptorKey, uint32, VulkanBufferDescriptorKey::Hasher>;
 
 // Native allocation policy used during creation; resource lifetime stays with its owner.
 struct VulkanBufferAllocationInfo {
@@ -40,7 +41,7 @@ struct VulkanBufferAllocationInfo {
     VmaMemoryUsage           memory_usage{VMA_MEMORY_USAGE_AUTO};
     bool                     needs_device_address{false};
     // Borrowed only during creation. Two or more distinct families use concurrent sharing.
-    std::span<const uint32_t> queue_family_indices{};
+    std::span<const uint32>   queue_family_indices{};
     VkDeviceSize              min_alignment = 1;
 };
 
@@ -125,18 +126,18 @@ public:
         return m_alloc.image;
     }
 
-    uint               GetMipByteSize(uint _mip_idx) const override;
+    uint32             GetMipByteSize(uint32 _mip_idx) const override;
     [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
         return true;
     }
     VkImageView GetView(
-        uint _mip_level  = 0,
-        uint _mip_cnt    = 1,
-        uint _base_layer = 0,
-        uint _layer_cnt  = VK_REMAINING_ARRAY_LAYERS
+        uint32 _mip_level  = 0,
+        uint32 _mip_cnt    = 1,
+        uint32 _base_layer = 0,
+        uint32 _layer_cnt  = VK_REMAINING_ARRAY_LAYERS
     );
     VkImageView
-    GetAttachmentView(uint _mip_level = 0, uint _mip_cnt = 1, uint _base_layer = 0, uint _layer_cnt = 1);
+    GetAttachmentView(uint32 _mip_level = 0, uint32 _mip_cnt = 1, uint32 _base_layer = 0, uint32 _layer_cnt = 1);
 
     void SetName(const std::string_view _name) override;
     bool b_present : 1             = false;
@@ -150,17 +151,17 @@ public:
 private:
     friend class VulkanDescriptorHeap;
 
-    UnorderedMap<VulkanTextureDescriptorKey, uint, VulkanTextureDescriptorKey::Hasher>
+    UnorderedMap<VulkanTextureDescriptorKey, uint32, VulkanTextureDescriptorKey::Hasher>
         m_descriptor_cache_slots;
 
     void        Destroy() override;
     VkImageView GetOrCreateView(
         UnorderedMap<uint64, VkImageView>& cache,
         VkImageViewType                    view_type,
-        uint                               mip_level,
-        uint                               mip_count,
-        uint                               base_layer,
-        uint                               layer_count
+        uint32                             mip_level,
+        uint32                             mip_count,
+        uint32                             base_layer,
+        uint32                             layer_count
     );
     struct TextureAlloc {
         VkImage       image;

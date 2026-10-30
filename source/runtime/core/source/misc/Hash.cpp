@@ -1,6 +1,7 @@
 #include "misc/Hash.h"
 #include "CityHash.h"
 #include "PicoSHA2.h"
+#include "misc/Types.h"
 #include <string>
 
 static_assert(picosha2::k_digest_size == 32);
@@ -31,27 +32,27 @@ std::string Hash64City::ToString() {
 }
 
 void Hash64City::FromString(std::string_view& src) {
-    auto* start = (uint64_t*)(&hash_code[0]);
+    auto* start = (Moer::uint64*)(&hash_code[0]);
     *start      = CityHash64(src.data(), src.size());
 }
-void Hash64City::FromData(const uint8_t* data, size_t size) {
+void Hash64City::FromData(const Moer::uint8* data, size_t size) {
 
-    auto* start = (uint64_t*)(&hash_code[0]);
+    auto* start = (Moer::uint64*)(&hash_code[0]);
     *start      = CityHash64((const char*)data, size);
 }
 void Hash64City::Update(std::string_view& src) {
-    uint64_t src_seed           = *(uint64_t*)(&hash_code[0]);
-    *(uint64_t*)(&hash_code[0]) = CityHash64WithSeed(src.data(), src.length(), src_seed);
+    Moer::uint64 src_seed           = *(Moer::uint64*)(&hash_code[0]);
+    *(Moer::uint64*)(&hash_code[0]) = CityHash64WithSeed(src.data(), src.length(), src_seed);
 }
-void Hash64City::Update(const uint8_t* data, uint32_t size) {
-    uint64_t src_seed           = *(uint64_t*)(&hash_code[0]);
-    *(uint64_t*)(&hash_code[0]) = CityHash64WithSeed(reinterpret_cast<const char*>(data), size, src_seed);
-}
-
-void Hash64City::Update(const char* data, uint32_t size) {
-    uint64_t src_seed           = *(uint64_t*)(&hash_code[0]);
-    *(uint64_t*)(&hash_code[0]) = CityHash64WithSeed(data, size, src_seed);
+void Hash64City::Update(const Moer::uint8* data, Moer::uint32 size) {
+    Moer::uint64 src_seed           = *(Moer::uint64*)(&hash_code[0]);
+    *(Moer::uint64*)(&hash_code[0]) = CityHash64WithSeed(reinterpret_cast<const char*>(data), size, src_seed);
 }
 
-std::atomic_uint32_t HashedName::s_size = 0;
+void Hash64City::Update(const char* data, Moer::uint32 size) {
+    Moer::uint64 src_seed           = *(Moer::uint64*)(&hash_code[0]);
+    *(Moer::uint64*)(&hash_code[0]) = CityHash64WithSeed(data, size, src_seed);
+}
+
+std::atomic<Moer::uint32> HashedName::s_size = 0;
 std::shared_mutex    HashedName::s_rw_mutex;

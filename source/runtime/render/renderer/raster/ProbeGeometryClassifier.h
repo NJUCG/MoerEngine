@@ -4,25 +4,25 @@
 #include "misc/BoundingBox.h"
 #include "misc/NumericLimits.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <bit>
 #include <cmath>
-#include <cstdint>
 #include <span>
 
 namespace Moer::Render::Raster {
 
 struct ProbeGeometryCellStats {
-    uint  intersecting_primitive_count = 0u;
-    uint  occupied_voxel_count         = 0u;
-    uint  desired_subdivision_level    = RASTER_PROBE_MAX_SUBDIVISION_LEVEL;
+    uint32 intersecting_primitive_count = 0u;
+    uint32 occupied_voxel_count         = 0u;
+    uint32 desired_subdivision_level    = RASTER_PROBE_MAX_SUBDIVISION_LEVEL;
     float occupancy                    = 0.0f;
 };
 
 class ProbeGeometryClassifier {
 public:
-    static constexpr uint OCCUPANCY_GRID_DIM    = RASTER_PROBE_OCCUPANCY_GRID_DIM;
-    static constexpr uint OCCUPANCY_VOXEL_COUNT = RASTER_PROBE_OCCUPANCY_VOXEL_COUNT;
+    static constexpr uint32 OCCUPANCY_GRID_DIM    = RASTER_PROBE_OCCUPANCY_GRID_DIM;
+    static constexpr uint32 OCCUPANCY_VOXEL_COUNT = RASTER_PROBE_OCCUPANCY_VOXEL_COUNT;
     static_assert(OCCUPANCY_VOXEL_COUNT > 0u && OCCUPANCY_VOXEL_COUNT <= 64u);
 
     static Box3D BuildCellInfluenceBounds(
@@ -55,11 +55,11 @@ public:
     }
 
     static ProbeGeometryCellStats Analyze(
-        const Box3D&             cell_bounds,
-        std::span<const Box3D>   primitive_bounds,
-        float                    geometry_padding,
-        float                    fine_occupancy_threshold,
-        uint                     fine_primitive_threshold
+        const Box3D&           cell_bounds,
+        std::span<const Box3D> primitive_bounds,
+        float                  geometry_padding,
+        float                  fine_occupancy_threshold,
+        uint32                 fine_primitive_threshold
     ) {
         ProbeGeometryCellStats stats{};
         if (!cell_bounds.IsValid()) {
@@ -71,9 +71,9 @@ public:
             return stats;
         }
 
-        constexpr uint64_t full_occupancy_mask = MaxValue<uint64_t> >> (64u - OCCUPANCY_VOXEL_COUNT);
+        constexpr uint64   full_occupancy_mask = MaxValue<uint64> >> (64u - OCCUPANCY_VOXEL_COUNT);
         const float        padding = std::max(geometry_padding, 0.0f);
-        uint64_t           occupancy_mask = 0u;
+        uint64             occupancy_mask      = 0u;
         for (const Box3D& primitive_bound : primitive_bounds) {
             if (!primitive_bound.IsValid()) {
                 continue;
@@ -97,18 +97,18 @@ public:
             }
             const uint3 voxel_min = ToVoxelCoord(overlap_min, cell_bounds.min, cell_extent);
             const uint3 voxel_max = ToVoxelCoord(overlap_max, cell_bounds.min, cell_extent);
-            for (uint z = voxel_min.z; z <= voxel_max.z; ++z) {
-                for (uint y = voxel_min.y; y <= voxel_max.y; ++y) {
-                    for (uint x = voxel_min.x; x <= voxel_max.x; ++x) {
-                        const uint bit_index = x + y * OCCUPANCY_GRID_DIM +
-                                               z * OCCUPANCY_GRID_DIM * OCCUPANCY_GRID_DIM;
-                        occupancy_mask |= uint64_t(1) << bit_index;
+            for (uint32 z = voxel_min.z; z <= voxel_max.z; ++z) {
+                for (uint32 y = voxel_min.y; y <= voxel_max.y; ++y) {
+                    for (uint32 x = voxel_min.x; x <= voxel_max.x; ++x) {
+                        const uint32 bit_index = x + y * OCCUPANCY_GRID_DIM +
+                                                 z * OCCUPANCY_GRID_DIM * OCCUPANCY_GRID_DIM;
+                        occupancy_mask |= uint64(1) << bit_index;
                     }
                 }
             }
         }
 
-        stats.occupied_voxel_count = static_cast<uint>(std::popcount(occupancy_mask));
+        stats.occupied_voxel_count = static_cast<uint32>(std::popcount(occupancy_mask));
         stats.occupancy = float(stats.occupied_voxel_count) / float(OCCUPANCY_VOXEL_COUNT);
         if (stats.intersecting_primitive_count == 0u) {
             stats.desired_subdivision_level = RASTER_PROBE_MAX_SUBDIVISION_LEVEL;
@@ -138,9 +138,9 @@ private:
         );
     }
 
-    static uint ToVoxelCoord(float normalized) {
+    static uint32 ToVoxelCoord(float normalized) {
         const float scaled = std::clamp(normalized, 0.0f, 1.0f) * float(OCCUPANCY_GRID_DIM);
-        return std::min(static_cast<uint>(std::floor(scaled)), OCCUPANCY_GRID_DIM - 1u);
+        return std::min(static_cast<uint32>(std::floor(scaled)), OCCUPANCY_GRID_DIM - 1u);
     }
 };
 

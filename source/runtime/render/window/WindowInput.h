@@ -5,7 +5,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 
 namespace Moer {
 
@@ -62,10 +62,10 @@ typedef enum {
 // values describe only capture_sequence; they must not be accumulated across
 // snapshots by the producer.
 struct RENDER_API WindowInputSourceSnapshot {
-    uint64_t capture_sequence = 0;
+    uint64   capture_sequence    = 0;
     float    gt_delta_time    = 0.0f;
     bool     focused          = true;
-    uint32_t focused_viewport_id = 0;
+    uint32   focused_viewport_id = 0;
 
     uint2  display_resolution = uint2(1280u, 720u);
     float2 mouse_position{};
@@ -105,12 +105,12 @@ struct RENDER_API WindowInputPolicy {
 // capture, which may have been established by an ordinary mouse drag. It can
 // start only over the active Scene/Game viewport, then survives GLFW's
 // disabled-cursor virtual position moving outside the content rectangle.
-[[nodiscard]] constexpr uint32_t ResolveFreeLookCaptureViewportId(
-    uint32_t focused_viewport_id,
-    bool     free_look_toggled,
-    bool     viewport_hovered,
-    uint32_t active_viewport_id,
-    uint32_t previous_free_look_viewport_id
+[[nodiscard]] constexpr uint32 ResolveFreeLookCaptureViewportId(
+    uint32 focused_viewport_id,
+    bool   free_look_toggled,
+    bool   viewport_hovered,
+    uint32 active_viewport_id,
+    uint32 previous_free_look_viewport_id
 ) noexcept {
     if (!free_look_toggled || active_viewport_id == 0 ||
         focused_viewport_id != active_viewport_id) {
@@ -125,13 +125,13 @@ struct RENDER_API WindowInputPolicy {
 // Mouse-drag ownership is also tied to the platform viewport where the click
 // began. An existing owner cannot move merely because focus/active ownership
 // changed; a newly focused viewport must receive its own click edge.
-[[nodiscard]] constexpr uint32_t ResolveMouseCaptureViewportId(
-    uint32_t focused_viewport_id,
-    uint32_t active_viewport_id,
-    bool     viewport_hovered,
-    bool     mouse_clicked,
-    bool     has_stale_mouse_button_down,
-    uint32_t previous_mouse_capture_viewport_id
+[[nodiscard]] constexpr uint32 ResolveMouseCaptureViewportId(
+    uint32 focused_viewport_id,
+    uint32 active_viewport_id,
+    bool   viewport_hovered,
+    bool   mouse_clicked,
+    bool   has_stale_mouse_button_down,
+    uint32 previous_mouse_capture_viewport_id
 ) noexcept {
     if (previous_mouse_capture_viewport_id != 0 &&
         previous_mouse_capture_viewport_id == focused_viewport_id &&
@@ -149,10 +149,10 @@ struct RENDER_API WindowInputPolicy {
 // source, or policy storage. Copies can be passed to camera/UI consumers and
 // across task boundaries without observing later BeginFrame calls.
 struct RENDER_API WindowInputFrameSnapshot {
-    uint64_t capture_sequence = 0;
+    uint64   capture_sequence    = 0;
     float    delta_time       = 0.0f;
     bool     focused          = false;
-    uint32_t focused_viewport_id = 0;
+    uint32   focused_viewport_id = 0;
 
     uint2 display_resolution  = uint2(0u, 0u);
     float display_aspect_ratio = 0.0f;
@@ -216,7 +216,7 @@ public:
     }
 
 private:
-    uint64_t m_last_capture_sequence = 0;
+    uint64   m_last_capture_sequence = 0;
     bool     m_has_pending_source    = false;
     bool     m_cursor_hidden         = false;
     bool     m_cursor_requires_reset = true;

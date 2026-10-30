@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "shader/ShaderResourceManager.h"
 
 #include "rhi/ShaderStageUtils.h"
@@ -20,7 +21,7 @@ void ApplyShaderConstantLayoutDefines(
     if (platform == SP_WIN_D3D_SM6 && metadata.GetConstantLayouts().size() > 1) {
         throw std::invalid_argument("D3D12 does not yet support multiple logical constant arguments");
     }
-    asset.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint32_t(1));
+    asset.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint32(1));
     asset.environment.SetDefine("MOER_PC_BYTE_SIZE", metadata.GetConstantByteSize());
     for (const ShaderConstantArgumentLayout& argument : metadata.GetConstantLayouts()) {
         const std::string_view name = metadata.GetArguments()[argument.argument_index].name;
@@ -83,7 +84,7 @@ SingleShaderInfo BuildSingleShaderInfo(ShaderManager& manager, Shader& shader) {
     return SingleShaderInfo{
         .name               = shader.shader_path,
         .entry_point        = shader.entry_name,
-        .shader_data        = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
+        .shader_data        = std::span<uint8>(entry.blob_data.data(), entry.blob_data.size()),
         .shader_type        = shader.type,
         .shader_param_map   = &shader.reflection,
         .compute_local_size = shader.reflection.compute_local_size

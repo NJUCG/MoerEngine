@@ -7,7 +7,7 @@
 #include "misc/Traits.h"
 #include "rhi/RHIResource.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <span>
 #include <string_view>
 #include <utility>
@@ -81,7 +81,7 @@ public:
     void BindPipeline(const PipelineHandle& _pipeline_handle);
     void BindShaderArguments(const PipelineHandle& _pipeline_handle, const ArrayArguments& _arguments);
     void SetDescriptorRecordingPlan(std::shared_ptr<const VulkanDescriptorRecordingPlan> _plan) {
-        descriptor_cursor = {};
+        descriptor_cursor         = {};
         descriptor_recording_plan = std::move(_plan);
     }
     void BeginDescriptorCommand(const Command* _command) {
@@ -99,7 +99,7 @@ public:
 
     // Vertex input and dynamic state.
     void SetVertexBuffers(
-        uint32_t                      _first_binding,
+        uint32                        _first_binding,
         std::span<const VkBuffer>     _buffers,
         std::span<const VkDeviceSize> _offsets
     );
@@ -109,49 +109,49 @@ public:
 
     // Draw and mesh commands.
     void DrawInstanced(
-        uint32_t _vertex_count,
-        uint32_t _instance_count,
-        uint32_t _first_vertex,
-        uint32_t _first_instance
+        uint32 _vertex_count,
+        uint32 _instance_count,
+        uint32 _first_vertex,
+        uint32 _first_instance
     );
     void DrawIndexedInstanced(
-        uint32_t _index_count,
-        uint32_t _instance_count,
-        uint32_t _first_index,
-        uint32_t _vertex_offset,
-        uint32_t _first_instance
+        uint32 _index_count,
+        uint32 _instance_count,
+        uint32 _first_index,
+        uint32 _vertex_offset,
+        uint32 _first_instance
     );
-    void DrawIndirect(VulkanBuffer* _buffer, uint64 _offset, uint32_t _draw_count, uint32_t _stride);
+    void DrawIndirect(VulkanBuffer* _buffer, uint64 _offset, uint32 _draw_count, uint32 _stride);
     void DrawIndirectCount(
         VulkanBuffer* _commands,
         uint64        _commands_offset,
         VulkanBuffer* _count_buffer,
         uint64        _count_buffer_offset,
-        uint32_t      _max_draw_count,
-        uint32_t      _stride
+        uint32        _max_draw_count,
+        uint32        _stride
     );
-    void DrawIndexedIndirect(VulkanBuffer* _buffer, uint64 _offset, uint32_t _draw_count, uint32_t _stride);
+    void DrawIndexedIndirect(VulkanBuffer* _buffer, uint64 _offset, uint32 _draw_count, uint32 _stride);
     void DrawIndexedIndirectCount(
         VulkanBuffer* _commands,
         uint64        _commands_offset,
         VulkanBuffer* _count_buffer,
         uint64        _count_buffer_offset,
-        uint32_t      _max_draw_count,
-        uint32_t      _stride
+        uint32        _max_draw_count,
+        uint32        _stride
     );
-    void DispatchMesh(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z);
-    void DispatchMeshIndirect(VulkanBuffer* _buffer, uint64 _offset, uint32_t _draw_count, uint32_t _stride);
+    void DispatchMesh(uint32 _group_count_x, uint32 _group_count_y, uint32 _group_count_z);
+    void DispatchMeshIndirect(VulkanBuffer* _buffer, uint64 _offset, uint32 _draw_count, uint32 _stride);
     void DispatchMeshIndirectCount(
         VulkanBuffer* _commands,
         uint64        _commands_offset,
         VulkanBuffer* _count_buffer,
         uint64        _count_buffer_offset,
-        uint32_t      _max_draw_count,
-        uint32_t      _stride
+        uint32        _max_draw_count,
+        uint32        _stride
     );
 
     // Compute commands.
-    void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z);
+    void Dispatch(uint32 _group_count_x, uint32 _group_count_y, uint32 _group_count_z);
     void DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset);
 
     // Transfer and clear commands.
@@ -218,27 +218,27 @@ public:
     void InsertLabel(std::string_view _label, float4 _color);
 
 private:
-    VkCommandBuffer             command_buffer{VK_NULL_HANDLE};
-    VulkanCommandPool&          command_pool;
-    VkCommandBufferLevel        level;
+    VkCommandBuffer                                      command_buffer{VK_NULL_HANDLE};
+    VulkanCommandPool&                                   command_pool;
+    VkCommandBufferLevel                                 level;
     std::shared_ptr<const VulkanDescriptorRecordingPlan> descriptor_recording_plan;
-    VulkanDescriptorBufferAllocator::Cursor descriptor_cursor;
-    uint64 used_descriptor_bytes{0};
+    VulkanDescriptorBufferAllocator::Cursor              descriptor_cursor;
+    uint64                                               used_descriptor_bytes{0};
     // Same lifetime as this command buffer. Reset only when Begin is legal again.
     struct DescriptorPoolPage {
-        VkDescriptorPool pool = VK_NULL_HANDLE;
-        uint remaining_sets = 64;
+        VkDescriptorPool            pool           = VK_NULL_HANDLE;
+        uint32                      remaining_sets = 64;
         Array<VkDescriptorPoolSize> remaining_descriptors;
     };
     Array<DescriptorPoolPage> descriptor_pools;
-    Array<VkBufferView>     descriptor_buffer_views;
-    void                    ResetTransientDescriptors();
+    Array<VkBufferView>       descriptor_buffer_views;
+    void                      ResetTransientDescriptors();
     VkDescriptorSet
          AllocateDescriptorSet(VkDescriptorSetLayout layout, std::span<const VulkanResourceBinding> bindings);
     void BindPipelineDescriptorSets(
         const class VulkanPipelineState& pipeline,
-        const ArrayArguments& arguments,
-        uint64 resource_byte_offset = 0
+        const ArrayArguments&            arguments,
+        uint64                           resource_byte_offset = 0
     );
     void BindHeapDescriptors(
         const class VulkanPipelineState& pipeline,

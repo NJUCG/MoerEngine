@@ -2,8 +2,9 @@
 // Created by 74535 on 2023/10/1.
 //
 
-#include "VulkanCommon.h"
 #include "VulkanSurfaceSupport.h"
+#include "VulkanCommon.h"
+#include "misc/Types.h"
 
 namespace Moer::Render {
 
@@ -11,9 +12,9 @@ namespace {
 
 template<typename Value, typename Query>
 VkResult EnumerateSurfaceValues(Query&& query, Moer::Array<Value>& values) {
-    constexpr uint32_t max_attempts = 4;
-    for (uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
-        uint32_t count  = 0;
+    constexpr uint32 max_attempts = 4;
+    for (uint32 attempt = 0; attempt < max_attempts; ++attempt) {
+        uint32   count  = 0;
         VkResult result = query(&count, nullptr);
         if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
             values.clear();
@@ -25,7 +26,7 @@ VkResult EnumerateSurfaceValues(Query&& query, Moer::Array<Value>& values) {
         }
 
         values.resize(count);
-        uint32_t fetched_count = count;
+        uint32 fetched_count   = count;
         result                 = query(&fetched_count, values.data());
         if (result == VK_INCOMPLETE) {
             continue;
@@ -44,7 +45,7 @@ VkResult EnumerateSurfaceValues(Query&& query, Moer::Array<Value>& values) {
 } // namespace
 
 SwapChainSupportQueryResult
-QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32_t _present_queue_family) {
+QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32 _present_queue_family) {
     SwapChainSupportQueryResult query_result{};
 
     VkBool32 present_supported = VK_FALSE;
@@ -70,7 +71,7 @@ QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32_t _pr
     }
 
     result = EnumerateSurfaceValues<VkSurfaceFormatKHR>(
-        [_gpu, _surface](uint32_t* count, VkSurfaceFormatKHR* values) {
+        [_gpu, _surface](uint32* count, VkSurfaceFormatKHR* values) {
             return vkGetPhysicalDeviceSurfaceFormatsKHR(_gpu, _surface, count, values);
         },
         query_result.details.formats
@@ -89,7 +90,7 @@ QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32_t _pr
     }
 
     result = EnumerateSurfaceValues<VkPresentModeKHR>(
-        [_gpu, _surface](uint32_t* count, VkPresentModeKHR* values) {
+        [_gpu, _surface](uint32* count, VkPresentModeKHR* values) {
             return vkGetPhysicalDeviceSurfacePresentModesKHR(_gpu, _surface, count, values);
         },
         query_result.details.present_modes

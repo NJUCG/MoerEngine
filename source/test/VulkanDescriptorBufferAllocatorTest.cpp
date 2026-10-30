@@ -1,4 +1,5 @@
 #include "rhi/backends/vulkan/VulkanDescriptorBufferAllocator.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <array>
@@ -12,8 +13,8 @@
 
 namespace {
 using Allocator        = Moer::Render::VulkanDescriptorBufferAllocator;
-constexpr uint64_t KiB = 1024;
-constexpr uint64_t MiB = 1024 * KiB;
+constexpr Moer::uint64 KiB = 1024;
+constexpr Moer::uint64 MiB = 1024 * KiB;
 
 void Check(bool _condition, const char* _message) {
     if (!_condition) {
@@ -75,7 +76,7 @@ void CheckFragmentationAndFailurePreserveState() {
     allocator.Release(*leases[2]);
     auto large = allocator.CreateLease();
     Check(!allocator.ReserveRange(*large, 128 * KiB), "fragmented storage was treated as contiguous");
-    Check(!allocator.ReserveRange(*large, std::numeric_limits<uint64_t>::max()), "size overflow accepted");
+    Check(!allocator.ReserveRange(*large, std::numeric_limits<Moer::uint64>::max()), "size overflow accepted");
     Check(allocator.GetUsage(*large).reserved_bytes == 0, "failed allocation changed lease state");
     allocator.Release(*leases[1]);
     Check(allocator.ReserveRange(*large, 128 * KiB) == 0, "adjacent free blocks were not coalesced");
@@ -132,10 +133,10 @@ void CheckConcurrentRecording() {
     auto                                            lease        = allocator.CreateLease();
     constexpr size_t                                worker_count = 8;
     constexpr size_t                                allocations_per_worker = 2048;
-    std::array<std::vector<uint64_t>, worker_count> offsets;
+    std::array<std::vector<Moer::uint64>, worker_count> offsets;
     std::array<std::exception_ptr, worker_count>    errors{};
     std::vector<std::jthread>                       workers;
-    std::vector<uint8_t>                            mapped_bytes(6 * MiB);
+    std::vector<Moer::uint8>                            mapped_bytes(6 * MiB);
     for (size_t worker = 0; worker < worker_count; ++worker) {
         workers.emplace_back([&, worker] {
             try {
@@ -143,7 +144,7 @@ void CheckConcurrentRecording() {
                     const auto offset = allocator.ReserveRange(*lease, 32);
                     Check(offset.has_value(), "parallel recording ran out of space unexpectedly");
                     offsets[worker].push_back(*offset);
-                    std::fill_n(mapped_bytes.data() + *offset, 32, static_cast<uint8_t>(worker + 1));
+                    std::fill_n(mapped_bytes.data() + *offset, 32, static_cast<Moer::uint8>(worker + 1));
                 }
             } catch (...) {
                 errors[worker] = std::current_exception();
@@ -151,17 +152,17 @@ void CheckConcurrentRecording() {
         });
     }
     workers.clear(); // Join before flushing, inspecting payloads, or releasing.
-    std::vector<uint64_t> all_offsets;
+    std::vector<Moer::uint64> all_offsets;
     for (size_t worker = 0; worker < worker_count; ++worker) {
         if (errors[worker]) {
             std::rethrow_exception(errors[worker]);
         }
-        for (uint64_t offset : offsets[worker]) {
+        for (Moer::uint64 offset : offsets[worker]) {
             Check(
                 std::all_of(
                     mapped_bytes.begin() + offset,
                     mapped_bytes.begin() + offset + 32,
-                    [=](uint8_t value) {
+                    [=](Moer::uint8 value) {
                         return value == worker + 1;
                     }
                 ),
@@ -186,7 +187,7 @@ void CheckConcurrentRecording() {
 }
 
 void CheckRandomizedLifetimes() {
-    constexpr uint64_t           block_size  = 256;
+    constexpr Moer::uint64       block_size  = 256;
     constexpr size_t             block_count = 64;
     Allocator                    allocator(block_count * block_size, block_size, 16);
     std::array<int, block_count> owners;
@@ -228,7 +229,7 @@ void CheckRandomizedLifetimes() {
 
 void CheckConcurrentLeaseRetirement() {
     constexpr size_t                          block_count  = 64;
-    constexpr uint64_t                        block_size   = 4096;
+    constexpr Moer::uint64                    block_size   = 4096;
     constexpr size_t                          worker_count = 8;
     Allocator                                 allocator(block_count * block_size, block_size, 32);
     std::array<std::atomic<int>, block_count> owners;
@@ -338,10 +339,10 @@ void CheckPreparedRecordings() {
         allocator.Release(*blockers[i]);
     }
     auto batch = allocator.CreateLease();
-    const std::vector<std::vector<uint64_t>> too_large{{128, 128, 128, 128, 16}};
+    const std::vector<std::vector<Moer::uint64>> too_large{{128, 128, 128, 128, 16}};
     Check(!allocator.PrepareRecordings(*batch, too_large), "oversized batch succeeded");
     Check(allocator.GetUsage(*batch).reserved_bytes == 0, "failed prepare leaked reservations");
-    const std::vector<std::vector<uint64_t>> requests{{64, 64, 64, 64}, {128, 128}};
+    const std::vector<std::vector<Moer::uint64>> requests{{64, 64, 64, 64}, {128, 128}};
     auto recordings = allocator.PrepareRecordings(*batch, requests);
     Check(recordings.has_value(), "fragmented recording reservation failed");
     Check((*recordings)[0].ranges.size() == 2, "recording should span two holes");
@@ -369,18 +370,18 @@ void CheckPreparedRecordings() {
 void CheckPreparedAtomIsolationAndConcurrency() {
     Allocator allocator(4096, 256, 16, 64);
     auto first = allocator.CreateLease();
-    const std::vector<std::vector<uint64_t>> requests{{1, 1}, {1}};
+    const std::vector<std::vector<Moer::uint64>> requests{{1, 1}, {1}};
     auto recordings = allocator.PrepareRecordings(*first, requests);
     Check(recordings.has_value(), "atom reservation failed");
     const auto usage = allocator.GetUsage(*first);
     Check(usage.used_bytes == 48 && usage.reserved_bytes == 64, "batch padding is not atom granular");
     auto second = allocator.CreateLease();
-    const std::vector<std::vector<uint64_t>> next{{1}};
+    const std::vector<std::vector<Moer::uint64>> next{{1}};
     auto next_recording = allocator.PrepareRecordings(*second, next);
     Allocator::Cursor next_cursor(next_recording->front());
     Check(next_cursor.Allocate(1) == 64, "leases share a flush atom");
     std::vector<std::jthread> workers;
-    std::array<uint64_t, 2> offsets{};
+    std::array<Moer::uint64, 2> offsets{};
     for (size_t i = 0; i < 2; ++i) {
         workers.emplace_back([&, i] {
             Allocator::Cursor cursor((*recordings)[i]);
@@ -390,7 +391,7 @@ void CheckPreparedAtomIsolationAndConcurrency() {
     workers.clear();
     Check(offsets[0] == 0 && offsets[1] == 32, "parallel cursors overlap");
     const auto before = allocator.GetUsage(*first);
-    const std::vector<std::vector<uint64_t>> overflow{{std::numeric_limits<uint64_t>::max()}};
+    const std::vector<std::vector<Moer::uint64>> overflow{{std::numeric_limits<Moer::uint64>::max()}};
     Check(!allocator.PrepareRecordings(*first, overflow), "overflow request succeeded");
     Check(allocator.GetUsage(*first).reserved_bytes == before.reserved_bytes, "failed append changed lease");
     allocator.Release(*second);
@@ -401,7 +402,7 @@ void CheckPreparedAtomIsolationAndConcurrency() {
 }
 
 void CheckPreparedRandomLifetimes() {
-    constexpr uint64_t capacity = 16 * KiB;
+    constexpr Moer::uint64 capacity = 16 * KiB;
     Allocator allocator(capacity, 256, 16, 64);
     struct Live {
         std::shared_ptr<Allocator::LeaseState> lease;
@@ -421,7 +422,7 @@ void CheckPreparedRandomLifetimes() {
             continue;
         }
         auto lease = allocator.CreateLease();
-        std::vector<std::vector<uint64_t>> requests(1 + random() % 5);
+        std::vector<std::vector<Moer::uint64>> requests(1 + random() % 5);
         for (auto& command : requests) {
             for (size_t bind = 0, count = 1 + random() % 7; bind < count; ++bind) {
                 command.push_back(random() % 193);
@@ -473,7 +474,7 @@ void CheckPreparedCapacityImprovement() {
     Check(legacy.ReserveRange(*old_first, 32).has_value(), "legacy allocation failed");
     Check(!legacy.ReserveRange(*old_second, 32), "legacy capacity comparison changed");
     std::vector<std::shared_ptr<Allocator::LeaseState>> leases;
-    const std::vector<std::vector<uint64_t>> request{{32}};
+    const std::vector<std::vector<Moer::uint64>>        request{{32}};
     for (size_t i = 0; i < 256; ++i) {
         auto lease = prepared.CreateLease();
         Check(prepared.PrepareRecordings(*lease, request).has_value(), "small batch wasted a whole page");

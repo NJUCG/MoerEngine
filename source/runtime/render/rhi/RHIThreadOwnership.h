@@ -2,7 +2,7 @@
 
 #include "RenderAPI.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <semaphore>
 #include <string_view>
 
@@ -11,7 +11,7 @@ namespace Moer::Render {
 // Logical ownership roles for the modern RHI pipeline. These are intentionally
 // independent from task-graph thread indices: a role describes which RHI
 // lifecycle domain the current OS thread owns while executing a scoped body.
-enum class ERHIThreadRole : uint8_t {
+enum class ERHIThreadRole : uint8 {
     Unknown,
     Executor,
     Translate,

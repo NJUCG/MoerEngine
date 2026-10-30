@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "rendergraph/RenderGraphPassParameters.h"
 #include "rendergraph/RenderGraphSetup.h"
 #include "taskgraph/TaskGraph.h"
@@ -60,7 +61,7 @@ private:
         RenderGraph&                      graph,
         RenderGraph::SetupFaultForTesting fault
     ) noexcept {
-        graph.setup_faults_for_testing |= static_cast<uint8_t>(fault);
+        graph.setup_faults_for_testing |= static_cast<uint8>(fault);
     }
 };
 
@@ -514,13 +515,13 @@ int RunNormalWorkerStarvationChild() {
     struct StartBarrier {
         std::mutex              mutex{};
         std::condition_variable cv{};
-        uint32_t                arrived = 0;
-        uint32_t                target  = 0;
+        Moer::uint32            arrived = 0;
+        Moer::uint32            target  = 0;
     };
 
     Moer::TaskSystem::Init();
     TaskGraph& task_graph = TaskGraph::GetInterface();
-    const uint32_t normal_worker_count =
+    const Moer::uint32 normal_worker_count =
         task_graph.GetWorkerThreadCount(EThread::AnyThread_NormalPri);
     if (normal_worker_count == 0) {
         Moer::TaskSystem::ShutDown();
@@ -530,11 +531,11 @@ int RunNormalWorkerStarvationChild() {
 
     auto barrier    = std::make_shared<StartBarrier>();
     barrier->target = normal_worker_count;
-    auto failures   = std::make_shared<std::atomic<uint32_t>>(0);
+    auto            failures = std::make_shared<std::atomic<Moer::uint32>>(0);
     GraphEventArray compile_events;
     compile_events.reserve(normal_worker_count);
 
-    for (uint32_t worker = 0; worker < normal_worker_count; ++worker) {
+    for (Moer::uint32 worker = 0; worker < normal_worker_count; ++worker) {
         compile_events.emplace_back(LambdaTask::Dispatch(
             [barrier, failures, worker] {
                 {
@@ -552,10 +553,12 @@ int RunNormalWorkerStarvationChild() {
 
                 try {
                     RenderGraph graph("NormalWorkerSetupStarvation");
-                    const auto prepared = graph.AddSetupPass(
+                    const auto  prepared = graph.AddSetupPass(
                         "PrepareOnSaturatedPool",
                         worker,
-                        [](const uint32_t& input) { return input + 1; }
+                        [](const Moer::uint32& input) {
+                            return input + 1;
+                        }
                     );
                     AddNoOpPass(graph);
                     if (!graph.Compile() || prepared.Get() != worker + 1) {
@@ -570,7 +573,7 @@ int RunNormalWorkerStarvationChild() {
     }
 
     task_graph.WaitUntilTasksComplete(compile_events, EThread::EMainThread);
-    const uint32_t failure_count = failures->load(std::memory_order_relaxed);
+    const Moer::uint32 failure_count = failures->load(std::memory_order_relaxed);
     Moer::TaskSystem::ShutDown();
     if (failure_count != 0) {
         std::cerr << "normal worker starvation child: " << failure_count

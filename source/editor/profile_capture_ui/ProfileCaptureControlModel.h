@@ -2,13 +2,13 @@
 
 #include "ProfileCaptureController.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <functional>
 #include <optional>
 
 namespace Moer {
 
-enum class EProfileCaptureControlActionResult : std::uint8_t {
+enum class EProfileCaptureControlActionResult : uint8 {
     None = 0,
     Submitted,
     Completed,
@@ -26,8 +26,8 @@ struct ProfileCaptureControlCallbacks {
         Render::ProfileCaptureStartOptions
     )>
         request_start;
-    std::function<Render::ProfileCaptureRequestSubmission(std::uint64_t)>
-        request_stop;
+    std::function<Render::ProfileCaptureRequestSubmission(uint64)>
+                                                              request_stop;
     std::function<Render::ProfileCaptureControllerSnapshot()> get_snapshot;
 };
 
@@ -52,7 +52,7 @@ public:
     [[nodiscard]] bool HasPendingRequest() const noexcept;
     [[nodiscard]] Render::ProfileCaptureRequestKind
     PendingRequestKind() const noexcept;
-    [[nodiscard]] std::uint64_t
+    [[nodiscard]] uint64
     PendingExpectedGeneration() const noexcept;
 
     [[nodiscard]] const Render::ProfileCaptureControllerSnapshot&
@@ -68,10 +68,10 @@ private:
     [[nodiscard]] EProfileCaptureControlActionResult AcceptSubmission(
         Render::ProfileCaptureRequestSubmission submission,
         Render::ProfileCaptureRequestKind       kind,
-        std::uint64_t                           expected_generation
+        uint64                                  expected_generation
     ) noexcept;
 
-    enum class SnapshotStatus : std::uint8_t {
+    enum class SnapshotStatus : uint8 {
         Available = 0,
         CallbackUnavailable,
         CallbackFailed,
@@ -83,7 +83,7 @@ private:
     Render::ProfileCaptureRequestKind pending_kind_{
         Render::ProfileCaptureRequestKind::Start
     };
-    std::uint64_t pending_expected_generation_{0};
+    uint64         pending_expected_generation_{0};
     bool has_pending_request_{false};
     SnapshotStatus snapshot_status_{SnapshotStatus::CallbackUnavailable};
 

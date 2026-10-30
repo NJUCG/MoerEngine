@@ -1,5 +1,6 @@
 #pragma once
 
+#include "misc/Types.h"
 #include "rhi/backends/metal/MetalFormat.h"
 
 #include <atomic>
@@ -51,7 +52,7 @@ public:
     MetalTexture(const TextureInfo& info, id<MTLTexture> texture);
 
     id<MTLTexture> Native() const noexcept;
-    uint GetMipByteSize(uint mip) const override;
+    uint32         GetMipByteSize(uint32 mip) const override;
     void SetName(const std::string_view name) override;
 
 private:

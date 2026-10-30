@@ -3,8 +3,8 @@
 
 #include "RenderAPI.h"
 
+#include "misc/Types.h"
 #include <condition_variable>
-#include <cstdint>
 #include <deque>
 #include <exception>
 #include <functional>
@@ -15,7 +15,7 @@
 
 namespace Moer::Render {
 
-enum class ExternalJoinResult : uint8_t {
+enum class ExternalJoinResult : uint8 {
     Completed,
     Failed,
     ReentrantRejected,
@@ -29,7 +29,7 @@ class RENDER_API ExternalCpuJoinPool {
 public:
     using Job = std::function<void()>;
 
-    explicit ExternalCpuJoinPool(uint32_t _worker_count);
+    explicit ExternalCpuJoinPool(uint32 _worker_count);
     ~ExternalCpuJoinPool();
 
     ExternalCpuJoinPool(const ExternalCpuJoinPool&)            = delete;
@@ -38,8 +38,8 @@ public:
     ExternalJoinResult RunAndWait(std::span<const Job> _jobs);
     void               StopAndDrain() noexcept;
 
-    uint32_t WorkerCount() const noexcept {
-        return static_cast<uint32_t>(workers.size());
+    uint32 WorkerCount() const noexcept {
+        return static_cast<uint32>(workers.size());
     }
 
 private:

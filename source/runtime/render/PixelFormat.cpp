@@ -1,5 +1,6 @@
 #include "PixelFormat.h"
 #include "Core.h"
+#include "misc/Types.h"
 #include <algorithm>
 #include <limits>
 
@@ -328,12 +329,12 @@ uint64 GetByteFromPixelFormat(EPixelFormat format) {
     MOER_ASSERT(
         info.IsDefined(),
         "Unsupported pixel format in GetByteFromPixelFormat: {}",
-        static_cast<std::uint32_t>(format)
+        static_cast<uint32>(format)
     );
     MOER_ASSERT(
         !info.IsCompressed(),
         "Compressed pixel format does not have a fixed byte count per pixel: {}",
-        static_cast<std::uint32_t>(format)
+        static_cast<uint32>(format)
     );
     return info.bytes_per_block;
 }
@@ -343,7 +344,7 @@ uint64 GetChannelFromPixelFormat(EPixelFormat format) {
     MOER_ASSERT(
         info.IsDefined(),
         "Unsupported pixel format in GetChannelFromPixelFormat: {}",
-        static_cast<std::uint32_t>(format)
+        static_cast<uint32>(format)
     );
     return info.component_count;
 }
@@ -353,7 +354,7 @@ uint64 GetSizeFromPixelFormat(EPixelFormat format, const uint3 size) {
     MOER_ASSERT(
         info.IsDefined(),
         "Unsupported pixel format in GetSizeFromPixelFormat: {}",
-        static_cast<std::uint32_t>(format)
+        static_cast<uint32>(format)
     );
 
     const uint64 block_count_x = (static_cast<uint64>(size.x) + info.block_width - 1) / info.block_width;

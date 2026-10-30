@@ -6,8 +6,8 @@
 #include "rhi/RHICommandDrawData.h"
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 
+#include "misc/Types.h"
 #include <climits>
-#include <cstdint>
 #include <string>
 
 namespace Moer::Render {
@@ -37,11 +37,11 @@ struct GpuSceneMaterialTextureRefs {
 };
 
 struct GpuSceneRtGeometryData {
-    uint vertex_offset = 0;
-    uint vertex_count  = 0;
-    uint index_offset  = 0;
-    uint index_count   = 0;
-    uint primitive_id  = UINT_MAX;
+    uint32 vertex_offset = 0;
+    uint32 vertex_count  = 0;
+    uint32 index_offset  = 0;
+    uint32 index_count   = 0;
+    uint32 primitive_id  = UINT_MAX;
 };
 
 struct GpuSceneRtMeshData {
@@ -52,8 +52,8 @@ struct GpuSceneRtMeshData {
 struct GpuSceneRtInstanceData {
     GpuSceneResourceKey mesh_key = k_invalid_gpu_scene_resource_key;
     float4x4            world_transform{};
-    uint                primitive_count    = 0;
-    uint                first_primitive_id = UINT_MAX;
+    uint32              primitive_count    = 0;
+    uint32              first_primitive_id = UINT_MAX;
 };
 
 enum class EGpuSceneRaytracingUpdate : uint8 {

@@ -1,6 +1,7 @@
 #include "ProfileDumpTesting.h"
 #include "log/LogSystem.h"
 #include "misc/Assert.h"
+#include "misc/Types.h"
 #include "platform/Platform.h"
 #include "profile/ProfileDump.h"
 #include "profile/ProfileDumpCodec.h"
@@ -52,10 +53,10 @@ void Expect(bool _condition, std::string_view _message) {
 class ScopedDirectory {
 public:
     ScopedDirectory() {
-        static std::atomic<std::uint64_t> next_id{1};
-        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
+        static std::atomic<Moer::uint64> next_id{1};
+        for (Moer::uint32 attempt = 0; attempt < 64; ++attempt) {
             const auto tick =
-                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+                static_cast<Moer::uint64>(std::chrono::steady_clock::now().time_since_epoch().count());
             const std::filesystem::path candidate =
                 std::filesystem::temp_directory_path() /
                 ("moer-fatal-diagnostics-" + std::to_string(tick) + "-" +
@@ -86,10 +87,10 @@ std::string ReadText(const std::filesystem::path& _path) {
     return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
 }
 
-std::vector<std::uint8_t> ReadBinary(const std::filesystem::path& _path) {
+std::vector<Moer::uint8> ReadBinary(const std::filesystem::path& _path) {
     std::ifstream stream(_path, std::ios::binary);
     Expect(stream.is_open(), "binary artifact could not be opened");
-    return std::vector<std::uint8_t>(
+    return std::vector<Moer::uint8>(
         std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()
     );
 }
@@ -103,8 +104,8 @@ struct DecodedPrefixSummary {
 DecodedPrefixSummary DecodeProfilePrefix(const std::filesystem::path& _path, std::string_view _sentinel) {
     using namespace Moer::ProfileDump;
 
-    const std::vector<std::uint8_t>                     bytes = ReadBinary(_path);
-    std::unordered_map<std::uint64_t, SchemaDescriptor> schemas;
+    const std::vector<Moer::uint8>                      bytes = ReadBinary(_path);
+    std::unordered_map<Moer::uint64, SchemaDescriptor>  schemas;
     DecodedPrefixSummary                                summary{
                                        .valid = true,
     };
@@ -113,7 +114,7 @@ DecodedPrefixSummary DecodeProfilePrefix(const std::filesystem::path& _path, std
         PacketView         packet{};
         std::size_t        consumed      = 0;
         const DecodeStatus packet_status = DecodePacket(
-            std::span<const std::uint8_t>(bytes).subspan(offset), CodecLimits{}, packet, consumed
+            std::span<const Moer::uint8>(bytes).subspan(offset), CodecLimits{}, packet, consumed
         );
         if (packet_status != DecodeStatus::Ok || consumed == 0) {
             summary.valid = false;
@@ -138,13 +139,13 @@ DecodedPrefixSummary DecodeProfilePrefix(const std::filesystem::path& _path, std
             continue;
         }
 
-        if (packet.payload.size() < sizeof(std::uint64_t)) {
+        if (packet.payload.size() < sizeof(Moer::uint64)) {
             summary.valid = false;
             return summary;
         }
-        std::uint64_t schema_hash = 0;
+        Moer::uint64 schema_hash = 0;
         for (std::size_t byte = 0; byte < sizeof(schema_hash); ++byte) {
-            schema_hash |= static_cast<std::uint64_t>(packet.payload[byte]) << (byte * 8);
+            schema_hash |= static_cast<Moer::uint64>(packet.payload[byte]) << (byte * 8);
         }
         const auto schema = schemas.find(schema_hash);
         if (schema == schemas.end()) {
@@ -238,9 +239,9 @@ FindArtifacts(const std::filesystem::path& _directory, std::string_view _extensi
         std::abort();
     }
 
-    std::atomic<std::uint32_t> ready{0};
+    std::atomic<Moer::uint32>  ready{0};
     std::atomic<bool>          start{false};
-    const auto                 fatal_worker = [&](std::uint32_t _index) {
+    const auto                 fatal_worker = [&](Moer::uint32 _index) {
         ready.fetch_add(1, std::memory_order_release);
         while (!start.load(std::memory_order_acquire)) {
             std::this_thread::yield();
@@ -421,7 +422,7 @@ void TestFixedMessageAndStackContract() {
     Expect(message.size == kFailureMessageCapacity - 1, "fixed fatal message did not clamp to capacity");
     Expect(message.truncated, "oversized fatal message was not marked truncated");
     FailureMessage corrupted = message;
-    corrupted.size           = std::numeric_limits<std::uint32_t>::max();
+    corrupted.size           = std::numeric_limits<Moer::uint32>::max();
     Expect(
         corrupted.View().size() == kFailureMessageCapacity - 1,
         "public failure message view trusted a corrupted size"
@@ -447,7 +448,7 @@ void TestFatalChildArtifacts() {
             metadata.back().stem() == dumps.back().stem(),
             "fatal metadata and minidump did not use one paired identity"
         );
-        const std::vector<std::uint8_t> dump = ReadBinary(dumps.back());
+        const std::vector<Moer::uint8> dump = ReadBinary(dumps.back());
         Expect(dump.size() >= sizeof(MINIDUMP_HEADER), "fatal minidump is smaller than its header");
         auto* header = reinterpret_cast<const MINIDUMP_HEADER*>(dump.data());
         Expect(header->Signature == MINIDUMP_SIGNATURE, "fatal minidump omitted the MDMP signature");
@@ -456,7 +457,7 @@ void TestFatalChildArtifacts() {
         ULONG               stream_bytes = 0;
         Expect(
             ::MiniDumpReadDumpStream(
-                const_cast<std::uint8_t*>(dump.data()), ThreadListStream, &directory, &stream, &stream_bytes
+                const_cast<Moer::uint8*>(dump.data()), ThreadListStream, &directory, &stream, &stream_bytes
             ) != FALSE &&
                 stream != nullptr && stream_bytes >= sizeof(MINIDUMP_THREAD_LIST),
             "fatal minidump omitted its thread-list stream"

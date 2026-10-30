@@ -1,6 +1,7 @@
 #ifndef MOER_ENGINE_SHADER_MUTATION_H
 #define MOER_ENGINE_SHADER_MUTATION_H
 
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
 #include "shader/ShaderCommon.h"
 #include <stdint.h>
@@ -11,32 +12,32 @@ namespace Moer::Render {
 struct ShaderMutationParameters {
 
     const EShaderPlatform platform;
-    const uint32_t        mutation_id;
+    const uint32          mutation_id;
 
-    ShaderMutationParameters(EShaderPlatform _platform, uint32_t _mutation_id) :
+    ShaderMutationParameters(EShaderPlatform _platform, uint32 _mutation_id) :
         platform(_platform),
         mutation_id(_mutation_id) {}
 };
 //shader mutation basic types
 template<typename T>
 concept TShaderMutationBasicType = requires(T) {
-    std::is_same_v<decltype(T::mutation_count), uint32_t>&& T::mutation_count > 0;
+    std::is_same_v<decltype(T::mutation_count), uint32> && T::mutation_count > 0;
     std::is_same_v<decltype(T::has_multiple_slot), bool>;
-    std::is_same_v<decltype(T::GetMutationID(std::declval<typename T::Type>())), uint32_t>;
-    std::is_same_v<decltype(T::GetMutationTypeFromID(std::declval<uint32_t>())), typename T::Type>;
+    std::is_same_v<decltype(T::GetMutationID(std::declval<typename T::Type>())), uint32>;
+    std::is_same_v<decltype(T::GetMutationTypeFromID(std::declval<uint32>())), typename T::Type>;
     std::is_same_v<decltype(T::GetMutationValueFromType(std::declval<typename T::Type>())), typename T::Type>;
 };
 
 struct ShaderMutationBool {
     using Type                                  = bool;
-    static constexpr uint32_t mutation_count    = 2;
+    static constexpr uint32   mutation_count    = 2;
     static constexpr bool     has_multiple_slot = false;
 
-    static uint32_t GetMutationID(Type _value) {
+    static uint32 GetMutationID(Type _value) {
         return _value ? 1 : 0;
     }
 
-    static Type GetMutationTypeFromID(uint32_t _id) {
+    static Type GetMutationTypeFromID(uint32 _id) {
         return _id == 1;
     }
     static bool GetMutationValueFromType(Type _value) {
@@ -44,10 +45,10 @@ struct ShaderMutationBool {
     }
 };
 
-template<uint32_t MutationCount, int32_t start_value = 0>
+template<uint32 MutationCount, int32 start_value = 0>
 struct ShaderMutationInt {
-    using Type                                  = int32_t;
-    static constexpr uint32_t mutation_count    = MutationCount;
+    using Type                                  = int32;
+    static constexpr uint32   mutation_count    = MutationCount;
     static constexpr bool     has_multiple_slot = false;
 
     static constexpr Type s_min_value = static_cast<Type>(start_value);
@@ -57,65 +58,65 @@ struct ShaderMutationInt {
         std::is_integral_v<Type> && std::is_signed_v<Type> && MutationCount > 0 && s_max_value > s_min_value
     );
 
-    static uint32_t GetMutationID(Type _value) {
-        return static_cast<uint32_t>(_value - s_min_value);
+    static uint32 GetMutationID(Type _value) {
+        return static_cast<uint32>(_value - s_min_value);
     }
 
-    static Type GetMutationTypeFromID(uint32_t _id) {
+    static Type GetMutationTypeFromID(uint32 _id) {
         return static_cast<Type>(_id + s_min_value);
     }
 
-    static uint32_t GetMutationValueFromType(Type _value) {
-        return static_cast<uint32_t>(_value);
+    static uint32 GetMutationValueFromType(Type _value) {
+        return static_cast<uint32>(_value);
     }
 };
 
-template<uint32_t... values>
+template<uint32... values>
 struct ShaderMutationSparseUInt {
-    using Type                                  = uint32_t;
-    static constexpr uint32_t mutation_count    = 0;
+    using Type                                  = uint32;
+    static constexpr uint32   mutation_count    = 0;
     static constexpr bool     has_multiple_slot = false;
 
-    static uint32_t GetMutationID(Type _value) {
+    static uint32 GetMutationID(Type _value) {
         assert(false && "no mutation id for given value");
         return 0;
     }
 
-    static Type GetMutationTypeFromID(uint32_t _id) {
+    static Type GetMutationTypeFromID(uint32 _id) {
         assert(false && "no mutation type for given id");
         return 0;
     }
 };
 
-template<uint32_t unique_value, uint32_t... values>
+template<uint32 unique_value, uint32... values>
 struct ShaderMutationSparseUInt<unique_value, values...> {
-    using Type                                  = uint32_t;
-    static constexpr uint32_t mutation_count    = ShaderMutationSparseUInt<values...>::mutation_count + 1;
+    using Type                                  = uint32;
+    static constexpr uint32   mutation_count    = ShaderMutationSparseUInt<values...>::mutation_count + 1;
     static constexpr bool     has_multiple_slot = false;
 
-    static uint32_t GetMutationID(Type _value) {
+    static uint32 GetMutationID(Type _value) {
         if (_value == unique_value) {
             return mutation_count - 1; //index of unique value
         }
         return ShaderMutationSparseUInt<values...>::GetMutationID(_value);
     }
 
-    static Type GetMutationTypeFromID(uint32_t _id) {
+    static Type GetMutationTypeFromID(uint32 _id) {
         if (_id == mutation_count - 1) {
             return unique_value;
         }
         return ShaderMutationSparseUInt<values...>::GetMutationTypeFromID(_id);
     }
 
-    static uint32_t GetMutationValueFromType(Type _value) {
+    static uint32 GetMutationValueFromType(Type _value) {
         return _value;
     }
 };
 
 // };
 
-template<class TTarget, typename TTuple, uint32_t index = 0>
-consteval uint32_t GetTypeIndex() {
+template<class TTarget, typename TTuple, uint32 index = 0>
+consteval uint32 GetTypeIndex() {
     if constexpr (std::is_same_v<TTarget, std::tuple_element_t<index, TTuple>>) {
         return index;
     } else {
@@ -129,7 +130,7 @@ struct TShaderMutationSet {
     using Type       = TShaderMutationSet<Types...>;
     using TypeSeries = std::tuple<Types...>;
 
-    static constexpr uint32_t mutation_count =
+    static constexpr uint32 mutation_count =
         std::tuple_size_v<TypeSeries> == 0 ? 1 : (1 * ... * Types::mutation_count);
 
     constexpr static bool has_multiple_slot = mutation_count > 1;
@@ -139,12 +140,11 @@ struct TShaderMutationSet {
              (std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values) = Types::GetMutationTypeFromID(0))
         );
     }
-    explicit TShaderMutationSet(uint32_t _mutation_id
-    ) // mutation_value(TMutation::GetMutationTypeFromID(_mutation_id % TMutation::mutation_count)), next_set(_mutation_id / TMutation::mutation_count)
+    explicit TShaderMutationSet(uint32 _mutation_id) // mutation_value(TMutation::GetMutationTypeFromID(_mutation_id % TMutation::mutation_count)), next_set(_mutation_id / TMutation::mutation_count)
     {
         if constexpr (mutation_count > 1) {
             assert(_mutation_id >= 0 && "invalid mutation id");
-            uint32_t temp_id = _mutation_id;
+            uint32 temp_id = _mutation_id;
 
             (...,
              (std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_values) =
@@ -175,9 +175,9 @@ struct TShaderMutationSet {
         }
     }
 
-    uint32_t GetMutationID() const {
-        uint32_t multiple   = 1;
-        uint32_t temp_count = 0;
+    uint32 GetMutationID() const {
+        uint32 multiple   = 1;
+        uint32 temp_count = 0;
         (... =
              (temp_count *= multiple,
               temp_count +=
@@ -187,7 +187,7 @@ struct TShaderMutationSet {
         return temp_count;
     }
 
-    static Type GetMutationTypeFromID(uint32_t _id) {
+    static Type GetMutationTypeFromID(uint32 _id) {
         return Type(_id);
     }
 
@@ -209,10 +209,10 @@ struct TShaderMutationSet<> {
 
     constexpr static bool has_multiple_slot = true;
 
-    constexpr static uint32_t mutation_count = 1;
+    constexpr static uint32 mutation_count = 1;
 
     TShaderMutationSet<>() {}
-    explicit TShaderMutationSet<>(uint32_t _mutation_id) {
+    explicit TShaderMutationSet<>(uint32 _mutation_id) {
         assert(_mutation_id == 0 && "invalid mutation id");
     }
 
@@ -231,11 +231,11 @@ struct TShaderMutationSet<> {
         //last set, do nothing
     }
 
-    uint32_t GetMutationID() const {
+    uint32 GetMutationID() const {
         return 0;
     }
 
-    static Type GetMutationTypeFromID(uint32_t _id) {
+    static Type GetMutationTypeFromID(uint32 _id) {
         return Type(_id);
     }
 };

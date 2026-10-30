@@ -4,6 +4,7 @@
 #include "Base.h"
 #include "Constant.h"
 #include "Matrix.h"
+#include "misc/Types.h"
 
 #include <cmath>
 #include <utility>
@@ -632,7 +633,7 @@ inline T Exp(const T& v) noexcept {
     return ret;
 }
 
-inline uint64_t RoundUpToPowerOf2(uint64_t v) noexcept {
+inline uint64 RoundUpToPowerOf2(uint64 v) noexcept {
     v--;
     v |= v >> 1u;
     v |= v >> 2u;
@@ -644,7 +645,7 @@ inline uint64_t RoundUpToPowerOf2(uint64_t v) noexcept {
     return v;
 }
 
-inline uint32_t RoundUpToPowerOf2(uint32_t v) noexcept {
+inline uint32 RoundUpToPowerOf2(uint32 v) noexcept {
     v--;
     v |= v >> 1u;
     v |= v >> 2u;
@@ -655,7 +656,7 @@ inline uint32_t RoundUpToPowerOf2(uint32_t v) noexcept {
     return v;
 }
 
-inline uint32_t RoundDownToPowerOf2(uint32_t v) noexcept {
+inline uint32 RoundDownToPowerOf2(uint32 v) noexcept {
     v |= v >> 1u;
     v |= v >> 2u;
     v |= v >> 4u;
@@ -664,7 +665,7 @@ inline uint32_t RoundDownToPowerOf2(uint32_t v) noexcept {
     return v ^ (v >> 1u);
 }
 
-inline uint64_t RoundDownToPowerOf2(uint64_t v) noexcept {
+inline uint64 RoundDownToPowerOf2(uint64 v) noexcept {
     v |= v >> 1u;
     v |= v >> 2u;
     v |= v >> 4u;

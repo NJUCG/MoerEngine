@@ -1,5 +1,5 @@
 #include "remote/transport/ws/RemoteWebSocketServer.h"
-
+#include "misc/Types.h"
 #include "remote/RemoteEventHub.h"
 
 #include "hv/WebSocketServer.h"
@@ -112,7 +112,7 @@ struct RemoteWebSocketServer::Impl {
     std::unique_ptr<hv::WebSocketServer>  server;
     std::mutex                            channels_mutex;
     std::vector<WebSocketChannelPtr>      channels;
-    uint64_t                              subscription_id = 0;
+    uint64                                subscription_id = 0;
     bool                                  running         = false;
 };
 

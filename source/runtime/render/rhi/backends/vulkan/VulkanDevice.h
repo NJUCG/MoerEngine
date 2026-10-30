@@ -8,6 +8,7 @@
 #include "VulkanFault.h"
 #include "VulkanMemoryAllocator.h"
 #include "VulkanTypeDefs.h"
+#include "misc/Types.h"
 #include "vulkanextension/VulkanExtension.h"
 
 #include "misc/LockFree.h"
@@ -31,18 +32,18 @@ class VulkanCopyQueue;
 class VulkanCommandRecorder;
 
 struct QueueFamilyIndices {
-    std::optional<uint32_t> graphics;
-    std::optional<uint32_t> present;
-    std::optional<uint32_t> transfer;
-    std::optional<uint32_t> compute;
-    std::optional<uint32_t> raytracing;
+    std::optional<uint32> graphics;
+    std::optional<uint32> present;
+    std::optional<uint32> transfer;
+    std::optional<uint32> compute;
+    std::optional<uint32> raytracing;
 
     bool IsComplete() const {
         return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value() &&
                raytracing.has_value();
     }
-    uint Size() const {
-        uint size = 0;
+    uint32 Size() const {
+        uint32 size = 0;
         if (graphics.has_value())
             size++;
         if (present.has_value())
@@ -79,20 +80,20 @@ public:
     ~VulkanDevice() override;
 
     // Shared resource limits.
-    static constexpr uint bindless_sampler_count = 256;
+    static constexpr uint32 bindless_sampler_count = 256;
 
     // RHI resource creation.
     TextureRef CreateTexture(std::string_view _name, const TextureInfo& _info) override;
 
     BufferRef CreateBuffer(
         std::string_view  _name,
-        uint              _element_cnt,
-        uint              _byte_stride,
+        uint32            _element_cnt,
+        uint32            _byte_stride,
         EBufferUsageFlags _usage,
         EPixelFormat      _format
     ) override;
 
-    BindlessArrayRef CreateBindlessArray(uint _max_size) override;
+    BindlessArrayRef      CreateBindlessArray(uint32 _max_size) override;
     FenceRef         CreateFence() override;
     RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) override;
 
@@ -118,13 +119,13 @@ public:
         return m_device_info.core_features.GetCore10Features().tessellationShader == VK_TRUE;
     }
 
-    uint32_t GetMaxTessellationFactor() const override {
+    uint32 GetMaxTessellationFactor() const override {
         return SupportsTessellation() ?
                    m_device_info.core_properties.core_1_0.limits.maxTessellationGenerationLevel :
                    0;
     }
 
-    bool SupportsMultiview(uint32_t view_count) const override {
+    bool SupportsMultiview(uint32 view_count) const override {
         return Multiview::SupportsViewCount(
             m_device_info.core_features.GetCore11Features().multiview == VK_TRUE,
             m_device_info.core_properties.core_1_1.maxMultiviewViewCount,
@@ -183,7 +184,7 @@ public:
 
     // Native queues and timestamp queries.
     // Read the family selected for an engine queue role during initialization.
-    uint GetQueueFamilyIndex(EQueueType _queue_type) const;
+    uint32 GetQueueFamilyIndex(EQueueType _queue_type) const;
 
     VkQueue GetGraphicsQueue() const {
         return m_graphics_queue_handle;
@@ -201,7 +202,7 @@ public:
         return m_raytracing_queue_handle;
     }
 
-    [[nodiscard]] RENDER_API uint32_t GetTimestampValidBits(
+    [[nodiscard]] RENDER_API uint32 GetTimestampValidBits(
         EQueueType _queue_type
     ) const;
     [[nodiscard]] RENDER_API VkQueueFlags GetQueueFamilyFlags(
@@ -210,7 +211,7 @@ public:
     [[nodiscard]] RENDER_API EVulkanTimestampQueryResetMode
     GetTimestampQueryResetMode(
         EQueueType _queue_type,
-        uint32_t   _effective_valid_bits
+        uint32     _effective_valid_bits
     ) const;
     [[nodiscard]] RENDER_API EVulkanTimestampQueryResetMode
     GetTimestampQueryResetMode(
@@ -226,7 +227,7 @@ public:
     const VulkanDescriptorHeapFunctions& GetDescriptorHeapFunctions() const {
         return descriptor_heap_functions;
     }
-    const VkSamplerCreateInfo& GetSamplerCreateInfo(uint index) const {
+    const VkSamplerCreateInfo& GetSamplerCreateInfo(uint32 index) const {
         return immutable_sampler_infos[index];
     }
 
@@ -244,18 +245,18 @@ public:
         return m_allocator;
     }
 
-    constexpr uint ImmutableSamplerCount() const {
+    constexpr uint32 ImmutableSamplerCount() const {
         return immutable_sampler_count;
     }
     const VkSampler* GetImmutableSamplers() const {
         return immutable_samplers.data();
     }
     VkSampler GetSampler(Sampler _sampler) const;
-    uint GetSamplerIndex(Sampler _sampler) const {
-        uint filter  = uint(_sampler.filter);
-        uint address = uint(_sampler.address_mode);
-        uint compare = uint(_sampler.compare_function);
-        return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
+    uint32    GetSamplerIndex(Sampler _sampler) const {
+        uint32 filter  = uint32(_sampler.filter);
+        uint32 address = uint32(_sampler.address_mode);
+        uint32 compare = uint32(_sampler.compare_function);
+        return (uint32(SF_Num) * uint32(SAM_Num)) * compare + (uint32(SF_Num)) * address + filter;
     }
     void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
     void CopyData(void* _dst, const BufferView& _src, uint64 _size);
@@ -369,7 +370,7 @@ private:
 
     // Native synchronization and fault publication.
     // Publishing closes admission before the first fault record is fully written.
-    enum class EVulkanFaultPublishState : uint8_t {
+    enum class EVulkanFaultPublishState : uint8 {
         Healthy,
         Publishing,
         Faulted
@@ -455,7 +456,7 @@ private:
     // Deferred release and immutable samplers.
     LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
 
-    static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
+    static constexpr uint32 immutable_sampler_count = uint32(SF_Num) * uint32(SAM_Num) * uint32(SCF_Num);
 
     StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
 

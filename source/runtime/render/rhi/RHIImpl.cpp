@@ -1,5 +1,6 @@
 #include "RHIImpl.h"
 #include "PixelFormat.h"
+#include "misc/Types.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -26,8 +27,8 @@ TextureRef RenderDevice::CreateTexture(
     Extent2D           _size,
     EPixelFormat       _format,
     ETextureUsageFlags _usage,
-    uint32_t           _mip_cnt,
-    uint32_t           _array_size
+    uint32             _mip_cnt,
+    uint32             _array_size
 ) {
     ValidateRHICommandAccess("RenderDevice::CreateTexture");
     ETextureDimension dim = _array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D;
@@ -39,8 +40,8 @@ TextureRef RenderDevice::CreateTexture(
     Extent3D           _size,
     EPixelFormat       _format,
     ETextureUsageFlags _usage,
-    uint32_t           _mip_cnt,
-    uint32_t           _array_size
+    uint32             _mip_cnt,
+    uint32             _array_size
 ) {
     ValidateRHICommandAccess("RenderDevice::CreateTexture");
     ETextureDimension dim =
@@ -55,8 +56,8 @@ TextureRef RenderDevice::CreateTexture(
     Extent3D           _size,
     EPixelFormat       _format,
     ETextureUsageFlags _usage,
-    uint32_t           _mip_cnt,
-    uint32_t           _array_size
+    uint32             _mip_cnt,
+    uint32             _array_size
 ) {
     ValidateRHICommandAccess("RenderDevice::CreateTexture");
     ETextureDimension dim =
@@ -77,7 +78,7 @@ TextureRef RenderDevice::CreateCubeMap(
     Extent2D           _size,
     EPixelFormat       _format,
     ETextureUsageFlags _usage,
-    uint32_t           _mip_cnt
+    uint32             _mip_cnt
 ) {
     ValidateRHICommandAccess("RenderDevice::CreateCubeMap");
     ETextureDimension dim = ETextureDimension::TEX_CUBE; // TODO:未来支持CUBE_ARRAY
@@ -88,14 +89,14 @@ DepthBufferRef RenderDevice::CreateDepthBuffer(
     std::string_view   _name,
     Extent2D           _size,
     EPixelFormat       _format,
-    uint32_t           _array_size,
+    uint32             _array_size,
     ETextureUsageFlags _usage
 ) {
     ValidateRHICommandAccess("RenderDevice::CreateDepthBuffer");
     return impl->CreateDepthBuffer(_name, _size, _format, _array_size, _usage);
 }
 
-BindlessArrayRef RenderDevice::CreateBindlessArray(uint _max_size) {
+BindlessArrayRef RenderDevice::CreateBindlessArray(uint32 _max_size) {
     ValidateRHICommandAccess("RenderDevice::CreateBindlessArray");
     return impl->CreateBindlessArray(_max_size);
 }
@@ -116,8 +117,8 @@ SwapchainRef RenderDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
 
 BufferRef RenderDevice::CreateBuffer(
     std::string_view  _name,
-    uint              _element_cnt,
-    uint              _stride,
+    uint32            _element_cnt,
+    uint32            _stride,
     EBufferUsageFlags _usage,
     EPixelFormat      _format
 ) {
@@ -126,12 +127,12 @@ BufferRef RenderDevice::CreateBuffer(
 }
 
 BufferRef RenderDevice::CreateBuffer(std::string_view _name, const BufferInfo& _info) {
-    if (_info.size > std::numeric_limits<uint>::max()) {
+    if (_info.size > std::numeric_limits<uint32>::max()) {
         throw std::out_of_range("buffer element count exceeds the current RHI limit");
     }
     return CreateBuffer(
         _name,
-        static_cast<uint>(_info.size),
+        static_cast<uint32>(_info.size),
         _info.stride,
         _info.usage,
         _info.format
@@ -155,11 +156,11 @@ bool RenderDevice::SupportsTessellation() const {
     return impl && impl->SupportsTessellation();
 }
 
-uint32_t RenderDevice::GetMaxTessellationFactor() const {
+uint32 RenderDevice::GetMaxTessellationFactor() const {
     return impl ? impl->GetMaxTessellationFactor() : 0;
 }
 
-bool RenderDevice::SupportsMultiview(uint32_t view_count) const {
+bool RenderDevice::SupportsMultiview(uint32 view_count) const {
     return impl && impl->SupportsMultiview(view_count);
 }
 

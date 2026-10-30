@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/Types.h"
+
 /**
  * GPU Culling Pass
  * 
@@ -107,13 +109,13 @@ public:
 
     // Stores the CPU-visible counters copied back from the GPU culling pass.
     struct CullStatistics {
-        uint32_t total_instances_before     = 0; // 裁剪前的总实例数
-        uint32_t total_instances_after      = 0; // 裁剪后的总实例数
-        uint32_t visible_draws              = 0; // 可见的 Draw 数量
-        uint32_t total_draws                = 0; // 总 Draw 数量
-        uint32_t frustum_culled_instances   = 0; // 被视锥剔除的实例数
-        uint32_t occlusion_culled_instances = 0; // 被Hi-Z遮挡剔除的实例数
-        uint32_t lod_culled_instances       = 0; // 被 Cluster LOD 剔除的实例数
+        uint32 total_instances_before     = 0; // 裁剪前的总实例数
+        uint32 total_instances_after      = 0; // 裁剪后的总实例数
+        uint32 visible_draws              = 0; // 可见的 Draw 数量
+        uint32 total_draws                = 0; // 总 Draw 数量
+        uint32 frustum_culled_instances   = 0; // 被视锥剔除的实例数
+        uint32 occlusion_culled_instances = 0; // 被Hi-Z遮挡剔除的实例数
+        uint32 lod_culled_instances       = 0; // 被 Cluster LOD 剔除的实例数
     };
 
     struct RecordParameters {
@@ -129,9 +131,9 @@ public:
         BindlessArrayRef bindless{};
         CullParams       shader_params{};
         CullData         cull_data{};
-        uint             dispatch_count       = 0;
-        uint             draw_command_stride  = 0;
-        uint             max_draw_count       = 0;
+        uint32           dispatch_count        = 0;
+        uint32           draw_command_stride   = 0;
+        uint32           max_draw_count        = 0;
         bool             use_hiz               = false;
         bool             update_bindless_array = false;
         std::string      profile_scope_name{};
@@ -169,7 +171,7 @@ public:
         std::string_view                  profile_scope_name = {},
         CullingOptions                    options            = {true, false, 1.0f, -1}
     ) {
-        const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
+        const uint32 draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
         CullParams params{};
         CullData   data{};
@@ -201,7 +203,7 @@ public:
         std::string_view                  profile_scope_name = {},
         CullingOptions                    options            = {true, false, 1.0f, -1}
     ) {
-        const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
+        const uint32 draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
         CullParams params{};
         CullData   data{};
@@ -231,7 +233,7 @@ public:
         std::string_view                  profile_scope_name = {},
         CullingOptions                    options            = {true, false, 1.0f, -1}
     ) {
-        const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
+        const uint32 draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
         CullParams params{};
         CullData   data{};
@@ -520,13 +522,13 @@ private:
             return;
         }
 
-        const uint  hiz_mip_count = std::min(context.hiz_data.mip_count, CULL_MAX_HIZ_MIPS);
+        const uint32 hiz_mip_count = std::min(context.hiz_data.mip_count, CULL_MAX_HIZ_MIPS);
         const uint2 hiz_size      = context.textures.hiz_previous.GetSize(0);
 
         params.flags |= CULL_FLAG_ENABLE_HIZ_OCCLUSION;
         params.hiz_mip_count = hiz_mip_count;
 
-        for (uint mip = 0; mip < hiz_mip_count; ++mip) {
+        for (uint32 mip = 0; mip < hiz_mip_count; ++mip) {
             params.hiz_mip_handles[mip] = context.textures.hiz_previous.GetMipHandle(mip);
         }
 
@@ -543,7 +545,7 @@ private:
         out_planes[4] = view_proj.r2;                // near
         out_planes[5] = view_proj.r3 - view_proj.r2; // far
 
-        for (uint i = 0; i < 6; ++i) {
+        for (uint32 i = 0; i < 6; ++i) {
             const float length = Lengthf(float3(out_planes[i]));
             out_planes[i]      = float4(Normalizef(float3(out_planes[i])), out_planes[i].w / length);
         }
@@ -621,9 +623,9 @@ private:
         std::string_view                  profile_scope_name
     ) {
         MOER_PROFILE_SCOPE("Raster.Prepare.Culling");
-        const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
-        const uint instance_count =
-            static_cast<uint>(gpu_scene_res.instance_buf.buf->GetByteSize() / sizeof(GInstance));
+        const uint32 draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
+        const uint32 instance_count =
+            static_cast<uint32>(gpu_scene_res.instance_buf.buf->GetByteSize() / sizeof(GInstance));
 
         const bool update_bindless_array = visibility_set.EnsureCapacity(
             context.device, context.bdls, "Raster::GpuCulling", draw_count, instance_count

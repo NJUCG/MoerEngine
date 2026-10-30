@@ -2,13 +2,13 @@
 #include "taskgraph/TaskSystem.h"
 #include "taskgraph/WorkStealing.h"
 
+#include "misc/Types.h"
 #include <algorithm>
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <barrier>
-#include <chrono>
 #include <cerrno>
-#include <cstdint>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -59,11 +59,11 @@ struct TestSuite {
     }
 
     bool     failed  = false;
-    uint32_t skipped = 0;
+    Moer::uint32 skipped = 0;
 };
 
 struct Item {
-    uint32_t id = 0;
+    Moer::uint32 id = 0;
 };
 
 struct ChildProcessResult {
@@ -218,7 +218,7 @@ ChildProcessResult RunNamedTargetDuringDrainProcess(
 
 class RegisteredExternalRunnable final : public Runnable {
 public:
-    uint32_t Run() override {
+    Moer::uint32 Run() override {
         while (!start.load(std::memory_order_acquire)) {
             std::this_thread::yield();
         }
@@ -246,8 +246,8 @@ public:
 
 void TestWorkerPoolTopology(TestSuite& suite) {
     struct Case {
-        int32_t workers;
-        std::array<int32_t, EThread::PriorityCount> expected;
+        Moer::int32                                     workers;
+        std::array<Moer::int32, EThread::PriorityCount> expected;
     };
     constexpr Case cases[] = {
         {3, {1, 1, 1}},
@@ -266,15 +266,15 @@ void TestWorkerPoolTopology(TestSuite& suite) {
             "priority distribution is not balanced"
         );
 
-        int32_t visited = 0;
-        for (int32_t priority = 0; priority < EThread::PriorityCount; ++priority) {
+        Moer::int32 visited = 0;
+        for (Moer::int32 priority = 0; priority < EThread::PriorityCount; ++priority) {
             suite.Check(
                 topology.counts[priority] > 0,
                 "worker topology",
                 "a priority pool has no worker"
             );
-            for (int32_t local = 0; local < topology.counts[priority]; ++local) {
-                const int32_t thread = topology.ThreadIndex(priority, local);
+            for (Moer::int32 local = 0; local < topology.counts[priority]; ++local) {
+                const Moer::int32 thread = topology.ThreadIndex(priority, local);
                 suite.Check(
                     topology.PriorityForThread(thread) == priority &&
                         topology.LocalIndex(thread, priority) == local,
@@ -303,17 +303,17 @@ void TestWorkerPoolTopology(TestSuite& suite) {
 void TestDequeOrderAndGrowth(TestSuite& suite) {
     ChaseLevDeque<Item> deque(2);
     std::vector<Item>   items(4096);
-    for (uint32_t index = 0; index < items.size(); ++index) {
+    for (Moer::uint32 index = 0; index < items.size(); ++index) {
         items[index].id = index;
         deque.PushBottom(&items[index]);
     }
 
     suite.Check(
-        deque.ApproximateSize() == static_cast<int64_t>(items.size()),
+        deque.ApproximateSize() == static_cast<Moer::int64>(items.size()),
         "deque growth",
         "grown deque reported the wrong size"
     );
-    for (uint32_t offset = 0; offset < items.size(); ++offset) {
+    for (Moer::uint32 offset = 0; offset < items.size(); ++offset) {
         Item* item = deque.PopBottom();
         suite.Check(item != nullptr, "owner LIFO", "owner lost an item after growth");
         if (item != nullptr) {
@@ -326,10 +326,10 @@ void TestDequeOrderAndGrowth(TestSuite& suite) {
     }
     suite.Check(deque.PopBottom() == nullptr, "owner LIFO", "empty deque returned an item");
 
-    for (uint32_t index = 0; index < 64; ++index) {
+    for (Moer::uint32 index = 0; index < 64; ++index) {
         deque.PushBottom(&items[index]);
     }
-    for (uint32_t index = 0; index < 64; ++index) {
+    for (Moer::uint32 index = 0; index < 64; ++index) {
         Item* item = deque.StealTop();
         suite.Check(item != nullptr, "thief FIFO", "thief lost an item");
         if (item != nullptr) {
@@ -340,7 +340,7 @@ void TestDequeOrderAndGrowth(TestSuite& suite) {
 }
 
 void TestLastItemRace(TestSuite& suite) {
-    constexpr uint32_t rounds = 20000;
+    constexpr Moer::uint32 rounds = 20000;
     ChaseLevDeque<Item> deque(2);
     std::vector<Item>   items(rounds);
     std::vector<Item*>  stolen(rounds, nullptr);
@@ -348,22 +348,22 @@ void TestLastItemRace(TestSuite& suite) {
     std::barrier        finish(2);
 
     std::jthread thief([&] {
-        for (uint32_t round = 0; round < rounds; ++round) {
+        for (Moer::uint32 round = 0; round < rounds; ++round) {
             start.arrive_and_wait();
             stolen[round] = deque.StealTop();
             finish.arrive_and_wait();
         }
     });
 
-    for (uint32_t round = 0; round < rounds; ++round) {
+    for (Moer::uint32 round = 0; round < rounds; ++round) {
         items[round].id = round;
         deque.PushBottom(&items[round]);
         start.arrive_and_wait();
         Item* popped = deque.PopBottom();
         finish.arrive_and_wait();
 
-        const uint32_t winners = static_cast<uint32_t>(popped != nullptr) +
-                                 static_cast<uint32_t>(stolen[round] != nullptr);
+        const Moer::uint32 winners = static_cast<Moer::uint32>(popped != nullptr) +
+                                     static_cast<Moer::uint32>(stolen[round] != nullptr);
         suite.Check(
             winners == 1,
             "last-item race",
@@ -379,17 +379,17 @@ void TestLastItemRace(TestSuite& suite) {
 }
 
 void TestConcurrentExactlyOnce(TestSuite& suite) {
-    constexpr uint32_t item_count   = 50000;
-    constexpr uint32_t thief_count  = 6;
+    constexpr Moer::uint32 item_count  = 50000;
+    constexpr Moer::uint32 thief_count = 6;
     ChaseLevDeque<Item> deque(2);
     std::vector<Item>   items(item_count);
-    auto seen = std::make_unique<std::atomic<uint32_t>[]>(item_count);
-    for (uint32_t index = 0; index < item_count; ++index) {
+    auto                   seen = std::make_unique<std::atomic<Moer::uint32>[]>(item_count);
+    for (Moer::uint32 index = 0; index < item_count; ++index) {
         items[index].id = index;
         seen[index].store(0, std::memory_order_relaxed);
     }
 
-    std::atomic<uint32_t> consumed{0};
+    std::atomic<Moer::uint32> consumed{0};
     std::atomic_bool      start{false};
     std::atomic_bool      stop{false};
     std::atomic_bool      invalid{false};
@@ -413,7 +413,7 @@ void TestConcurrentExactlyOnce(TestSuite& suite) {
 
     std::vector<std::jthread> thieves;
     thieves.reserve(thief_count);
-    for (uint32_t thief_index = 0; thief_index < thief_count; ++thief_index) {
+    for (Moer::uint32 thief_index = 0; thief_index < thief_count; ++thief_index) {
         thieves.emplace_back([&] {
             while (!start.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
@@ -429,7 +429,7 @@ void TestConcurrentExactlyOnce(TestSuite& suite) {
     }
 
     start.store(true, std::memory_order_release);
-    for (uint32_t index = 0; index < item_count; ++index) {
+    for (Moer::uint32 index = 0; index < item_count; ++index) {
         deque.PushBottom(&items[index]);
         if ((index & 7u) == 7u) {
             record(deque.PopBottom());
@@ -458,7 +458,7 @@ void TestConcurrentExactlyOnce(TestSuite& suite) {
         "concurrent deque",
         "an item was duplicated or a stale pointer was observed"
     );
-    for (uint32_t index = 0; index < item_count; ++index) {
+    for (Moer::uint32 index = 0; index < item_count; ++index) {
         if (seen[index].load(std::memory_order_relaxed) != 1) {
             suite.Check(false, "concurrent deque", "an item was not consumed exactly once");
             break;
@@ -506,7 +506,7 @@ void TestTaskGraphIntegration(TestSuite& suite) {
     Moer::TaskSystem::Init();
     TaskGraph& graph = TaskGraph::GetInterface();
 
-    std::atomic<uint32_t> wrong_priority{0};
+    std::atomic<Moer::uint32> wrong_priority{0};
     GraphEventArray       priority_events;
     constexpr EThread::Type priorities[] = {
         EThread::AnyThread_HighPri,
@@ -514,7 +514,7 @@ void TestTaskGraphIntegration(TestSuite& suite) {
         EThread::AnyThread_LowPri,
     };
     for (EThread::Type expected : priorities) {
-        for (uint32_t task_index = 0; task_index < 64; ++task_index) {
+        for (Moer::uint32 task_index = 0; task_index < 64; ++task_index) {
             priority_events.emplace_back(LambdaTask::Dispatch(
                 [&, expected](EThread::Type current, const GraphEventRef&) {
                     if (EThread::GetThreadPriority(current) !=
@@ -533,10 +533,10 @@ void TestTaskGraphIntegration(TestSuite& suite) {
         "a task crossed a strict priority-pool boundary"
     );
 
-    std::atomic<uint32_t> burst_count{0};
-    for (uint32_t round = 0; round < 100; ++round) {
+    std::atomic<Moer::uint32> burst_count{0};
+    for (Moer::uint32 round = 0; round < 100; ++round) {
         GraphEventArray burst;
-        for (uint32_t task_index = 0; task_index < 8; ++task_index) {
+        for (Moer::uint32 task_index = 0; task_index < 8; ++task_index) {
             burst.emplace_back(LambdaTask::Dispatch([&] {
                 burst_count.fetch_add(1, std::memory_order_relaxed);
             }));
@@ -566,28 +566,28 @@ void TestTaskGraphIntegration(TestSuite& suite) {
     MoerDelete(external_thread);
 
     EThread::Type steal_priority = EThread::AnyThread_HighPri;
-    uint32_t      steal_workers  = 0;
+    Moer::uint32  steal_workers  = 0;
     for (EThread::Type priority : priorities) {
-        const uint32_t workers = graph.GetWorkerThreadCount(priority);
+        const Moer::uint32 workers = graph.GetWorkerThreadCount(priority);
         if (workers > steal_workers) {
             steal_workers  = workers;
             steal_priority = priority;
         }
     }
 
-    auto run_local_steal_case = [&](uint32_t child_count, const char* test_name) {
+    auto run_local_steal_case = [&](Moer::uint32 child_count, const char* test_name) {
         GraphEventRef  release     = GraphEvent::CreateGraphEvent();
         GraphEventArray children;
         children.reserve(child_count);
-        std::atomic<uint32_t> completed{0};
-        std::atomic<int32_t>  owner_thread{-1};
+        std::atomic<Moer::uint32> completed{0};
+        std::atomic<Moer::int32>  owner_thread{-1};
         std::atomic_bool      owner_timed_out{false};
         std::mutex            child_threads_mutex;
-        std::set<int32_t>     child_threads;
+        std::set<Moer::int32>     child_threads;
 
-        for (uint32_t child = 0; child < child_count; ++child) {
+        for (Moer::uint32 child = 0; child < child_count; ++child) {
             std::function<void()> function = [&] {
-                const int32_t current = EThread::GetThreadIndex(graph.GetCurrentThread());
+                const Moer::int32 current = EThread::GetThreadIndex(graph.GetCurrentThread());
                 {
                     std::lock_guard lock(child_threads_mutex);
                     child_threads.insert(current);
@@ -620,7 +620,7 @@ void TestTaskGraphIntegration(TestSuite& suite) {
 
         graph.WaitUntilTaskComplete(owner, EThread::EMainThread);
         graph.WaitUntilTasksComplete(children, EThread::EMainThread);
-        const int32_t owner_index = owner_thread.load(std::memory_order_acquire);
+        const Moer::int32 owner_index = owner_thread.load(std::memory_order_acquire);
         bool          ran_on_peer = false;
         {
             std::lock_guard lock(child_threads_mutex);
@@ -635,7 +635,7 @@ void TestTaskGraphIntegration(TestSuite& suite) {
 
     if (steal_workers > 1) {
         run_local_steal_case(1, "single local continuation stealing");
-        run_local_steal_case(std::max<uint32_t>(64, steal_workers * 4), "local fan-out stealing");
+        run_local_steal_case(std::max<Moer::uint32>(64, steal_workers * 4), "local fan-out stealing");
     } else {
         suite.Skip(
             "TaskGraph local stealing integration",

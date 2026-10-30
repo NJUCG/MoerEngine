@@ -1,4 +1,5 @@
 #include "VulkanDescriptorBufferAllocator.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <cassert>
@@ -8,10 +9,10 @@
 namespace Moer::Render {
 namespace {
 
-std::optional<uint64_t> AlignSize(uint64_t _size, uint64_t _alignment) {
-    const uint64_t remainder = _size % _alignment;
-    const uint64_t padding   = remainder == 0 ? 0 : _alignment - remainder;
-    if (_size > std::numeric_limits<uint64_t>::max() - padding) {
+std::optional<uint64> AlignSize(uint64 _size, uint64 _alignment) {
+    const uint64 remainder = _size % _alignment;
+    const uint64 padding   = remainder == 0 ? 0 : _alignment - remainder;
+    if (_size > std::numeric_limits<uint64>::max() - padding) {
         return std::nullopt;
     }
     return _size + padding;
@@ -20,10 +21,10 @@ std::optional<uint64_t> AlignSize(uint64_t _size, uint64_t _alignment) {
 } // namespace
 
 VulkanDescriptorBufferAllocator::VulkanDescriptorBufferAllocator(
-    uint64_t _capacity,
-    uint64_t _block_size,
-    uint64_t _range_alignment,
-    uint64_t _allocation_alignment
+    uint64 _capacity,
+    uint64 _block_size,
+    uint64 _range_alignment,
+    uint64 _allocation_alignment
 ) :
     capacity(_capacity),
     block_size(_block_size),
@@ -51,8 +52,8 @@ void VulkanDescriptorBufferAllocator::ValidateLease(const LeaseState& _lease) co
     }
 }
 
-std::optional<uint64_t>
-VulkanDescriptorBufferAllocator::ReserveRange(LeaseState& _lease, uint64_t _byte_size) {
+std::optional<uint64>
+VulkanDescriptorBufferAllocator::ReserveRange(LeaseState& _lease, uint64 _byte_size) {
     std::lock_guard lease_lock(_lease.mutex);
     ValidateLease(_lease);
     if (_byte_size == 0) {
@@ -65,7 +66,7 @@ VulkanDescriptorBufferAllocator::ReserveRange(LeaseState& _lease, uint64_t _byte
     if (!_lease.blocks.empty()) {
         auto& block = _lease.blocks.back();
         if (*aligned_size <= block.range.byte_size - block.used_bytes) {
-            const uint64_t offset = block.range.byte_offset + block.used_bytes;
+            const uint64 offset = block.range.byte_offset + block.used_bytes;
             block.used_bytes += *aligned_size;
             return offset;
         }
@@ -87,7 +88,7 @@ VulkanDescriptorBufferAllocator::ReserveRange(LeaseState& _lease, uint64_t _byte
 }
 
 std::optional<VulkanDescriptorBufferAllocator::Range>
-VulkanDescriptorBufferAllocator::TakeRange(uint64_t _byte_size) {
+VulkanDescriptorBufferAllocator::TakeRange(uint64 _byte_size) {
     const auto it = std::find_if(free_ranges.begin(), free_ranges.end(), [=](const Range& range) {
         return range.byte_size >= _byte_size;
     });
@@ -112,7 +113,7 @@ VulkanDescriptorBufferAllocator::TakeRange(uint64_t _byte_size) {
 VulkanDescriptorBufferAllocator::Cursor::Cursor(const Recording& _recording) :
     ranges(_recording.ranges), alignment(_recording.alignment) {}
 
-std::optional<uint64_t> VulkanDescriptorBufferAllocator::Cursor::Allocate(uint64_t _byte_size) {
+std::optional<uint64> VulkanDescriptorBufferAllocator::Cursor::Allocate(uint64 _byte_size) {
     if (_byte_size == 0) {
         return 0;
     }
@@ -122,7 +123,7 @@ std::optional<uint64_t> VulkanDescriptorBufferAllocator::Cursor::Allocate(uint64
     }
     // Do not consume cursor state on failure.
     for (size_t next = index; next < ranges.size(); ++next) {
-        const uint64_t offset = next == index ? used : 0;
+        const uint64 offset = next == index ? used : 0;
         if (*size <= ranges[next].byte_size - offset) {
             index = next;
             used = offset + *size;
@@ -134,7 +135,8 @@ std::optional<uint64_t> VulkanDescriptorBufferAllocator::Cursor::Allocate(uint64
 
 std::optional<std::vector<VulkanDescriptorBufferAllocator::Recording>>
 VulkanDescriptorBufferAllocator::PrepareRecordings(
-    LeaseState& _lease, std::span<const std::vector<uint64_t>> _requests
+    LeaseState&                          _lease,
+    std::span<const std::vector<uint64>> _requests
 ) {
     std::lock_guard lease_lock(_lease.mutex);
     ValidateLease(_lease);
@@ -177,11 +179,11 @@ VulkanDescriptorBufferAllocator::PrepareRecordings(
     for (size_t index = 0; index < candidate.size(); ++index) {
         const auto& original = free_ranges[index];
         auto& remaining = candidate[index];
-        const uint64_t used = remaining.byte_offset - original.byte_offset;
+        const uint64 used      = remaining.byte_offset - original.byte_offset;
         if (used == 0) {
             continue;
         }
-        const uint64_t reserved = *AlignSize(used, allocation_alignment);
+        const uint64 reserved = *AlignSize(used, allocation_alignment);
         // Original ranges have atom-aligned boundaries, so rounding fits.
         assert(reserved <= original.byte_size);
         blocks.push_back({{original.byte_offset, reserved}, used});
@@ -201,7 +203,7 @@ void VulkanDescriptorBufferAllocator::ReturnRange(Range _range) {
     assert(live_range_count != 0);
     --live_range_count;
     auto it = std::lower_bound(
-        free_ranges.begin(), free_ranges.end(), _range.byte_offset, [](const Range& range, uint64_t offset) {
+        free_ranges.begin(), free_ranges.end(), _range.byte_offset, [](const Range& range, uint64 offset) {
             return range.byte_offset < offset;
         }
     );

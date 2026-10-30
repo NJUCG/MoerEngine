@@ -1,9 +1,9 @@
 #include "StartupSplash.h"
 
+#include "misc/Types.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -219,7 +219,7 @@ struct WindowContext final {
     std::shared_ptr<SharedSplashState> state;
     Clock::time_point                   started_at;
     UINT                                dpi            = USER_DEFAULT_SCREEN_DPI;
-    std::uint32_t                       animation_tick = 0;
+    uint32                              animation_tick   = 0;
     BYTE                                opacity        = 0;
     bool                                finish_requested = false;
     bool                                fading_out       = false;
@@ -400,7 +400,7 @@ void DrawRayframeMark(
 ) noexcept {
     const UINT dpi = context.dpi;
     const COLORREF active = failed ? kFailure : kAccent;
-    const std::uint32_t pulse_phase = context.animation_tick % 120U;
+    const uint32   pulse_phase = context.animation_tick % 120U;
     const int pulse = static_cast<int>(pulse_phase <= 60U ? pulse_phase : 120U - pulse_phase);
 
     for (int layer = 0; layer < 4; ++layer) {

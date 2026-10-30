@@ -4,11 +4,11 @@
 #include "profile/ProfileDumpTemplates.h"
 #include "profile_consumer/ProfileSession.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -27,15 +27,15 @@ namespace {
 using namespace Moer::ProfileDump;
 
 static_assert([] {
-    std::uint32_t wire_bytes = 0;
+    Moer::uint32 wire_bytes = 0;
     return Detail::TryPacketWireBytes(
-               std::numeric_limits<std::uint32_t>::max() - kPacketHeaderBytes, wire_bytes
+               std::numeric_limits<Moer::uint32>::max() - kPacketHeaderBytes, wire_bytes
            ) &&
-           wire_bytes == std::numeric_limits<std::uint32_t>::max();
+           wire_bytes == std::numeric_limits<Moer::uint32>::max();
 }());
 static_assert([] {
-    std::uint32_t wire_bytes = 0;
-    return !Detail::TryPacketWireBytes(std::numeric_limits<std::uint32_t>::max(), wire_bytes);
+    Moer::uint32 wire_bytes = 0;
+    return !Detail::TryPacketWireBytes(std::numeric_limits<Moer::uint32>::max(), wire_bytes);
 }());
 static_assert(
     SessionLimits{}.max_transient_materialization_bytes >= SessionLimits{}.max_logical_model_bytes,
@@ -55,10 +55,10 @@ struct PacketRange {
 
 class SessionBuilder {
 public:
-    explicit SessionBuilder(std::uint64_t _generation = 7) : generation(_generation) {}
+    explicit SessionBuilder(Moer::uint64 _generation = 7) : generation(_generation) {}
 
     void Begin() {
-        Moer::Array<std::uint8_t> payload;
+        Moer::Array<Moer::uint8> payload;
         EncodeSessionBeginPayload(
             {
                 .generation      = generation,
@@ -73,8 +73,8 @@ public:
         SchemaAt(_schema, next_packet_index);
     }
 
-    void SchemaAt(const SchemaDescriptor& _schema, std::uint64_t _packet_index) {
-        Moer::Array<std::uint8_t> payload;
+    void SchemaAt(const SchemaDescriptor& _schema, Moer::uint64 _packet_index) {
+        Moer::Array<Moer::uint8> payload;
         Expect(
             EncodeSchemaPayload(_schema, limits, payload) == EncodeStatus::Ok,
             "fixture schema failed to encode"
@@ -84,10 +84,10 @@ public:
 
     void Record(
         const SchemaDescriptor&         _schema,
-        std::uint64_t                   _sequence,
+        Moer::uint64                    _sequence,
         std::span<const FieldValueView> _values
     ) {
-        Moer::Array<std::uint8_t> payload;
+        Moer::Array<Moer::uint8> payload;
         Expect(
             EncodeRecordPayload(
                 ComputeSchemaHash(_schema), _sequence, _schema.fields, _values, limits, payload
@@ -99,7 +99,7 @@ public:
     }
 
     void Loss(const LossNotice& _loss) {
-        Moer::Array<std::uint8_t> payload;
+        Moer::Array<Moer::uint8> payload;
         EncodeLossPayload(_loss, payload);
         Append(PacketType::Loss, payload);
         dropped_count += _loss.record_count;
@@ -111,17 +111,17 @@ public:
                  .records_written = record_count,
                  .records_dropped = dropped_count,
         });
-        Moer::Array<std::uint8_t> payload;
+        Moer::Array<Moer::uint8>  payload;
         EncodeSessionEndPayload(end, payload);
         Append(PacketType::SessionEnd, payload);
     }
 
-    void Append(PacketType _type, std::span<const std::uint8_t> _payload) {
+    void Append(PacketType _type, std::span<const Moer::uint8> _payload) {
         AppendAt(_type, _payload, next_packet_index);
     }
 
-    void AppendAt(PacketType _type, std::span<const std::uint8_t> _payload, std::uint64_t _packet_index) {
-        Moer::Array<std::uint8_t> packet;
+    void AppendAt(PacketType _type, std::span<const Moer::uint8> _payload, Moer::uint64 _packet_index) {
+        Moer::Array<Moer::uint8> packet;
         Expect(
             WrapPacket(_type, _packet_index, _payload, limits, packet) == EncodeStatus::Ok,
             "fixture packet failed to wrap"
@@ -132,11 +132,11 @@ public:
     }
 
     CodecLimits               limits{};
-    std::uint64_t             generation{7};
-    std::uint64_t             next_packet_index{0};
-    std::uint64_t             record_count{0};
-    std::uint64_t             dropped_count{0};
-    std::vector<std::uint8_t> bytes{};
+    Moer::uint64              generation{7};
+    Moer::uint64              next_packet_index{0};
+    Moer::uint64              record_count{0};
+    Moer::uint64              dropped_count{0};
+    std::vector<Moer::uint8>  bytes{};
     std::vector<PacketRange>  ranges{};
 };
 
@@ -157,12 +157,12 @@ SchemaDescriptor UnknownSchema() {
 
 void AddCpuScope(
     SessionBuilder&  _builder,
-    std::uint64_t    _sequence,
-    std::uint64_t    _thread,
+    Moer::uint64     _sequence,
+    Moer::uint64     _thread,
     std::string_view _name,
-    std::uint64_t    _begin,
-    std::uint64_t    _end,
-    std::uint32_t    _depth
+    Moer::uint64     _begin,
+    Moer::uint64     _end,
+    Moer::uint32     _depth
 ) {
     const std::array<FieldValueView, 5> values{
         _thread,
@@ -176,18 +176,18 @@ void AddCpuScope(
 
 void AddGpuFrame(
     SessionBuilder&       _builder,
-    std::uint64_t         _sequence,
-    std::uint64_t         _frame_id,
+    Moer::uint64          _sequence,
+    Moer::uint64          _frame_id,
     ProfileGpuFrameStatus _status,
     bool                  _valid,
-    std::uint64_t         _admitted,
-    std::uint64_t         _dropped,
-    std::uint64_t         _errors,
+    Moer::uint64          _admitted,
+    Moer::uint64          _dropped,
+    Moer::uint64          _errors,
     std::string_view      _reason
 ) {
     const std::array<FieldValueView, 7> values{
         _frame_id,
-        static_cast<std::uint32_t>(_status),
+        static_cast<Moer::uint32>(_status),
         _valid,
         _admitted,
         _dropped,
@@ -199,24 +199,24 @@ void AddGpuFrame(
 
 void AddGpuScope(
     SessionBuilder&       _builder,
-    std::uint64_t         _sequence,
-    std::uint64_t         _frame_id,
-    std::uint64_t         _scope_id,
-    std::uint64_t         _parent_scope_id,
-    std::uint64_t         _source_order,
-    std::uint64_t         _local_order,
-    std::uint32_t         _logical_queue,
-    std::uint32_t         _native_queue_id,
-    std::uint32_t         _family_id,
+    Moer::uint64          _sequence,
+    Moer::uint64          _frame_id,
+    Moer::uint64          _scope_id,
+    Moer::uint64          _parent_scope_id,
+    Moer::uint64          _source_order,
+    Moer::uint64          _local_order,
+    Moer::uint32          _logical_queue,
+    Moer::uint32          _native_queue_id,
+    Moer::uint32          _family_id,
     std::string_view      _name,
     ProfileGpuScopeStatus _status,
-    std::uint64_t         _begin_tick,
-    std::uint64_t         _end_tick,
-    std::uint32_t         _valid_bits,
+    Moer::uint64          _begin_tick,
+    Moer::uint64          _end_tick,
+    Moer::uint32          _valid_bits,
     double                _tick_period_ns,
     double                _total_duration_ns,
     double                _exclusive_duration_ns,
-    std::uint32_t         _depth,
+    Moer::uint32          _depth,
     std::string_view      _error_reason
 ) {
     const std::array<FieldValueView, 18> values{
@@ -229,7 +229,7 @@ void AddGpuScope(
         _native_queue_id,
         _family_id,
         _name,
-        static_cast<std::uint32_t>(_status),
+        static_cast<Moer::uint32>(_status),
         _begin_tick,
         _end_tick,
         _valid_bits,
@@ -249,10 +249,10 @@ struct Loaded {
 };
 
 Loaded LoadChunks(
-    std::span<const std::uint8_t> _bytes,
-    std::span<const std::size_t>  _pattern = {},
-    const SessionLoadOptions&     _options = {},
-    const SessionLoadControl&     _control = {}
+    std::span<const Moer::uint8> _bytes,
+    std::span<const std::size_t> _pattern = {},
+    const SessionLoadOptions&    _options = {},
+    const SessionLoadControl&    _control = {}
 ) {
     ProfileSessionReader reader(_options, _control);
     std::size_t          offset        = 0;
@@ -282,13 +282,13 @@ Loaded LoadChunks(
     return loaded;
 }
 
-constexpr std::uint64_t TopologyLinearWorkOracle(std::size_t _count) noexcept {
-    return static_cast<std::uint64_t>(_count);
+constexpr Moer::uint64 TopologyLinearWorkOracle(std::size_t _count) noexcept {
+    return static_cast<Moer::uint64>(_count);
 }
 
-constexpr std::uint64_t TopologySortWorkOracle(std::size_t _count) noexcept {
-    const std::uint64_t count = static_cast<std::uint64_t>(_count);
-    std::uint64_t       work  = 0;
+constexpr Moer::uint64 TopologySortWorkOracle(std::size_t _count) noexcept {
+    const Moer::uint64  count = static_cast<Moer::uint64>(_count);
+    Moer::uint64        work  = 0;
     std::size_t         width = 1;
     while (width < _count) {
         work += count;
@@ -300,8 +300,8 @@ constexpr std::uint64_t TopologySortWorkOracle(std::size_t _count) noexcept {
     return work;
 }
 
-constexpr std::uint64_t TopologyBinarySearchWorkOracle(std::size_t _count) noexcept {
-    std::uint64_t work = 0;
+constexpr Moer::uint64 TopologyBinarySearchWorkOracle(std::size_t _count) noexcept {
+    Moer::uint64 work = 0;
     while (_count != 0) {
         ++work;
         _count /= 2;
@@ -309,8 +309,8 @@ constexpr std::uint64_t TopologyBinarySearchWorkOracle(std::size_t _count) noexc
     return work;
 }
 
-constexpr std::uint64_t TopologyHeapWorkOracle(std::size_t _size) noexcept {
-    std::uint64_t work = 1;
+constexpr Moer::uint64 TopologyHeapWorkOracle(std::size_t _size) noexcept {
+    Moer::uint64 work = 1;
     while (_size > 1) {
         ++work;
         _size /= 2;
@@ -318,8 +318,8 @@ constexpr std::uint64_t TopologyHeapWorkOracle(std::size_t _size) noexcept {
     return work;
 }
 
-std::uint64_t MinimumPassingTopologyBudget(std::span<const std::uint8_t> _bytes) {
-    const auto completes_with_budget = [&](std::uint64_t _budget) {
+Moer::uint64 MinimumPassingTopologyBudget(std::span<const Moer::uint8> _bytes) {
+    const auto completes_with_budget = [&](Moer::uint64 _budget) {
         SessionLoadOptions options{};
         options.limits.max_topology_work_items = _budget;
         const Loaded loaded                    = LoadChunks(_bytes, {}, options);
@@ -335,11 +335,11 @@ std::uint64_t MinimumPassingTopologyBudget(std::span<const std::uint8_t> _bytes)
         return false;
     };
 
-    std::uint64_t lower = 0;
-    std::uint64_t upper = 1;
+    Moer::uint64 lower = 0;
+    Moer::uint64 upper = 1;
     while (!completes_with_budget(upper)) {
         Expect(
-            upper <= std::numeric_limits<std::uint64_t>::max() / 2,
+            upper <= std::numeric_limits<Moer::uint64>::max() / 2,
             "topology budget search exceeded the uint64 range"
         );
         lower = upper + 1;
@@ -347,7 +347,7 @@ std::uint64_t MinimumPassingTopologyBudget(std::span<const std::uint8_t> _bytes)
     }
 
     while (lower < upper) {
-        const std::uint64_t middle = lower + (upper - lower) / 2;
+        const Moer::uint64 middle = lower + (upper - lower) / 2;
         if (completes_with_budget(middle)) {
             upper = middle;
         } else {
@@ -357,9 +357,9 @@ std::uint64_t MinimumPassingTopologyBudget(std::span<const std::uint8_t> _bytes)
     return lower;
 }
 
-std::uint64_t
-MinimumPassingTopologyFlowEdges(std::span<const std::uint8_t> _bytes, SessionLoadOptions _base_options = {}) {
-    const auto completes_with_limit = [&](std::uint64_t _limit) {
+Moer::uint64
+MinimumPassingTopologyFlowEdges(std::span<const Moer::uint8> _bytes, SessionLoadOptions _base_options = {}) {
+    const auto completes_with_limit = [&](Moer::uint64 _limit) {
         SessionLoadOptions options             = _base_options;
         options.limits.max_topology_flow_edges = _limit;
         const Loaded loaded                    = LoadChunks(_bytes, {}, options);
@@ -375,18 +375,18 @@ MinimumPassingTopologyFlowEdges(std::span<const std::uint8_t> _bytes, SessionLoa
         return false;
     };
 
-    std::uint64_t lower = 0;
-    std::uint64_t upper = 1;
+    Moer::uint64 lower = 0;
+    Moer::uint64 upper = 1;
     while (!completes_with_limit(upper)) {
         Expect(
-            upper <= std::numeric_limits<std::uint64_t>::max() / 2,
+            upper <= std::numeric_limits<Moer::uint64>::max() / 2,
             "topology flow-edge search exceeded the uint64 range"
         );
         lower = upper + 1;
         upper *= 2;
     }
     while (lower < upper) {
-        const std::uint64_t middle = lower + (upper - lower) / 2;
+        const Moer::uint64 middle = lower + (upper - lower) / 2;
         if (completes_with_limit(middle)) {
             upper = middle;
         } else {
@@ -525,7 +525,7 @@ SessionBuilder MakeGoldenSession() {
         "timestamp unavailable"
     );
     const std::array<FieldValueView, 2> unknown_values{
-        std::uint64_t{99},
+        Moer::uint64{99},
         std::string_view("future"),
     };
     builder.Record(unknown, 1, unknown_values);
@@ -537,7 +537,7 @@ SessionBuilder MakeGoldenSession() {
         .last_sequence  = 9,
         .record_count   = 2,
         .value_bytes    = 128,
-        .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
     });
     builder.End();
     return builder;
@@ -609,7 +609,7 @@ void VerifyGolden(const Loaded& _loaded) {
     );
     Expect(
         cpu_child->parent_index ==
-            static_cast<std::uint64_t>(cpu_parent - _loaded.session.CpuScopes().begin()),
+            static_cast<Moer::uint64>(cpu_parent - _loaded.session.CpuScopes().begin()),
         "CPU hierarchy was not reconstructed"
     );
 
@@ -748,7 +748,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
         builder.Schema(unknown);
         builder.Schema(unknown);
         const std::array<FieldValueView, 2> values{
-            std::uint64_t{1},
+            Moer::uint64{1},
             std::string_view("x"),
         };
         builder.Record(unknown, 1, values);
@@ -766,7 +766,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
         const SchemaDescriptor unknown = UnknownSchema();
         builder.Begin();
         const std::array<FieldValueView, 2> values{
-            std::uint64_t{1},
+            Moer::uint64{1},
             std::string_view("x"),
         };
         builder.Record(unknown, 1, values);
@@ -783,11 +783,11 @@ void TestEnvelopeSchemaAndSequenceContracts() {
         builder.Begin();
         builder.Schema(unknown);
         const std::array<FieldValueView, 2> first{
-            std::uint64_t{1},
+            Moer::uint64{1},
             std::string_view("a"),
         };
         const std::array<FieldValueView, 2> second{
-            std::uint64_t{2},
+            Moer::uint64{2},
             std::string_view("b"),
         };
         builder.Record(unknown, 5, first);
@@ -838,7 +838,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             .last_sequence  = 2,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End(SessionEndInfo{
             .generation      = builder.generation,
@@ -858,7 +858,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
         builder.Begin();
         builder.Schema(unknown);
         const std::array<FieldValueView, 2> values{
-            std::uint64_t{1},
+            Moer::uint64{1},
             std::string_view("observed"),
         };
         builder.Record(unknown, 1, values);
@@ -867,7 +867,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             .last_sequence  = 1,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -885,14 +885,14 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             .last_sequence  = 5,
             .record_count   = 3,
             .value_bytes    = 24,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.Loss({
             .first_sequence = 2,
             .last_sequence  = 4,
             .record_count   = 3,
             .value_bytes    = 24,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::Oversized),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::Oversized),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -912,10 +912,10 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             .last_sequence  = 3,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         const std::array<FieldValueView, 2> values{
-            std::uint64_t{2},
+            Moer::uint64{2},
             std::string_view("inside-loss-hull"),
         };
         builder.Record(unknown, 2, values);
@@ -935,14 +935,14 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             .last_sequence  = 3,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.Loss({
             .first_sequence = 2,
             .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::Oversized),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::Oversized),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -960,7 +960,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             .last_sequence  = 0,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -978,7 +978,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -996,7 +996,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             .last_sequence  = 100,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::Oversized),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::Oversized),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1011,7 +1011,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
         builder.Begin();
         builder.Schema(unknown);
         const std::array<FieldValueView, 2> values{
-            std::uint64_t{2},
+            Moer::uint64{2},
             std::string_view("post-validation-gap"),
         };
         builder.Record(unknown, 2, values);
@@ -1178,7 +1178,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1286,7 +1286,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1356,7 +1356,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 5,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1379,7 +1379,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 5,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1414,7 +1414,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1435,7 +1435,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 4,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1469,7 +1469,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1535,7 +1535,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1558,7 +1558,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1580,7 +1580,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1659,7 +1659,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1724,7 +1724,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 4,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1770,7 +1770,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1835,7 +1835,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 5,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1906,9 +1906,9 @@ void TestSemanticTopologyAndLossRecovery() {
         struct InvalidFrameCase {
             ProfileGpuFrameStatus status;
             bool                  valid;
-            std::uint64_t         admitted;
-            std::uint64_t         dropped;
-            std::uint64_t         errors;
+            Moer::uint64          admitted;
+            Moer::uint64          dropped;
+            Moer::uint64          errors;
         };
         const std::array<InvalidFrameCase, 3> cases{
             InvalidFrameCase{ProfileGpuFrameStatus::Complete, true, 0, 1, 0},
@@ -2538,7 +2538,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 4,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -2663,7 +2663,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -2747,7 +2747,7 @@ void TestSemanticTopologyAndLossRecovery() {
                 .last_sequence  = 3,
                 .record_count   = 1,
                 .value_bytes    = 8,
-                .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+                .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
             });
             builder.End();
         }
@@ -2801,7 +2801,7 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
-        for (std::uint64_t scope_id = 1; scope_id <= 2; ++scope_id) {
+        for (Moer::uint64 scope_id = 1; scope_id <= 2; ++scope_id) {
             AddGpuScope(
                 builder,
                 1 + scope_id,
@@ -2830,7 +2830,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 4,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -2850,7 +2850,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -2888,7 +2888,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 6,
             .record_count   = 5,
             .value_bytes    = 40,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -2985,7 +2985,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3096,16 +3096,16 @@ void TestSemanticTopologyAndLossRecovery() {
         );
     }
     const auto add_ready_scope = [](SessionBuilder&  _builder,
-                                    std::uint64_t    _sequence,
-                                    std::uint64_t    _frame_id,
-                                    std::uint64_t    _scope_id,
-                                    std::uint64_t    _parent_scope_id,
-                                    std::uint64_t    _source_order,
-                                    std::uint64_t    _local_order,
+                                    Moer::uint64     _sequence,
+                                    Moer::uint64     _frame_id,
+                                    Moer::uint64     _scope_id,
+                                    Moer::uint64     _parent_scope_id,
+                                    Moer::uint64     _source_order,
+                                    Moer::uint64     _local_order,
                                     std::string_view _name,
-                                    std::uint64_t    _begin_tick,
-                                    std::uint64_t    _end_tick,
-                                    std::uint32_t    _depth) {
+                                    Moer::uint64     _begin_tick,
+                                    Moer::uint64     _end_tick,
+                                    Moer::uint32     _depth) {
         AddGpuScope(
             _builder,
             _sequence,
@@ -3130,19 +3130,19 @@ void TestSemanticTopologyAndLossRecovery() {
         );
     };
     const auto add_ready_scope_bits = [](SessionBuilder&  _builder,
-                                         std::uint64_t    _sequence,
-                                         std::uint64_t    _frame_id,
-                                         std::uint64_t    _scope_id,
-                                         std::uint64_t    _parent_scope_id,
-                                         std::uint64_t    _source_order,
-                                         std::uint64_t    _local_order,
+                                         Moer::uint64     _sequence,
+                                         Moer::uint64     _frame_id,
+                                         Moer::uint64     _scope_id,
+                                         Moer::uint64     _parent_scope_id,
+                                         Moer::uint64     _source_order,
+                                         Moer::uint64     _local_order,
                                          std::string_view _name,
-                                         std::uint64_t    _begin_tick,
-                                         std::uint64_t    _end_tick,
-                                         std::uint32_t    _valid_bits,
+                                         Moer::uint64     _begin_tick,
+                                         Moer::uint64     _end_tick,
+                                         Moer::uint32     _valid_bits,
                                          double           _total_duration,
                                          double           _exclusive_duration,
-                                         std::uint32_t    _depth) {
+                                         Moer::uint32     _depth) {
         AddGpuScope(
             _builder,
             _sequence,
@@ -3167,13 +3167,13 @@ void TestSemanticTopologyAndLossRecovery() {
         );
     };
     const auto add_queue_loss =
-        [](SessionBuilder& _builder, std::uint64_t _first_sequence, std::uint64_t _record_count) {
+        [](SessionBuilder& _builder, Moer::uint64 _first_sequence, Moer::uint64 _record_count) {
             _builder.Loss({
                 .first_sequence = _first_sequence,
                 .last_sequence  = _first_sequence + _record_count - 1,
                 .record_count   = _record_count,
                 .value_bytes    = _record_count * 8,
-                .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+                .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
             });
         };
     {
@@ -3204,7 +3204,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3226,7 +3226,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3248,7 +3248,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3272,7 +3272,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3296,7 +3296,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3320,7 +3320,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 5,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3347,7 +3347,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 8,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3372,7 +3372,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 6,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3396,7 +3396,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 7,
             .record_count   = 4,
             .value_bytes    = 32,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3421,7 +3421,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 7,
             .record_count   = 3,
             .value_bytes    = 24,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3444,7 +3444,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3468,7 +3468,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 4,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3479,21 +3479,22 @@ void TestSemanticTopologyAndLossRecovery() {
             "a later direct missing GPU parent did not replace an earlier anonymous ancestor demand"
         );
     }
-    for (const std::uint32_t timing_case : {0u, 1u, 2u}) {
+    for (const Moer::uint32 timing_case : {0u, 1u, 2u}) {
         SessionBuilder builder;
         builder.Begin();
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
         add_ready_scope(builder, 3, 1, 2, 99, 0, 1, "missing-parent-child-a", 10, 20, 1);
-        const std::uint64_t second_begin = timing_case == 0 ? 20 : timing_case == 1 ? 15 : 5;
+        const Moer::uint64 second_begin = timing_case == 0 ? 20 : timing_case == 1 ? 15 :
+                                                                                     5;
         add_ready_scope(builder, 4, 1, 3, 99, 0, 2, "missing-parent-child-b", second_begin, 30, 1);
         builder.Loss({
             .first_sequence = 2,
             .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded       = LoadChunks(builder.bytes);
@@ -3660,10 +3661,10 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "virtual-sibling-root", 0, 100, 0);
-        const std::uint64_t first_child_order     = leave_sibling_hole ? 2 : 3;
-        const std::uint64_t second_child_order    = leave_sibling_hole ? 4 : 4;
-        const std::uint64_t first_child_sequence  = leave_sibling_hole ? 4 : 5;
-        const std::uint64_t second_child_sequence = 6;
+        const Moer::uint64 first_child_order     = leave_sibling_hole ? 2 : 3;
+        const Moer::uint64 second_child_order    = leave_sibling_hole ? 4 : 4;
+        const Moer::uint64 first_child_sequence  = leave_sibling_hole ? 4 : 5;
+        const Moer::uint64 second_child_sequence = 6;
         add_ready_scope(
             builder,
             first_child_sequence,
@@ -3695,7 +3696,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = leave_sibling_hole ? 5ull : 4ull,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3743,15 +3744,15 @@ void TestSemanticTopologyAndLossRecovery() {
             "a virtual root bypassed the serial root timestamp contract"
         );
     }
-    for (const std::uint64_t split_loss_count : {3ull, 4ull}) {
+    for (const Moer::uint64 split_loss_count : {3ull, 4ull}) {
         SessionBuilder builder;
         builder.Begin();
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2 + split_loss_count, 0, 0, "");
         add_ready_scope_bits(builder, 4, 1, 3, 101, 0, 2, "split-root-child-a", 10, 30, 8, 20.0, 20.0, 2);
-        const std::uint64_t second_child_order    = split_loss_count == 3 ? 4 : 5;
-        const std::uint64_t second_child_sequence = split_loss_count == 3 ? 6 : 7;
+        const Moer::uint64 second_child_order    = split_loss_count == 3 ? 4 : 5;
+        const Moer::uint64 second_child_sequence = split_loss_count == 3 ? 6 : 7;
         add_ready_scope_bits(
             builder,
             second_child_sequence,
@@ -3773,7 +3774,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = split_loss_count == 3 ? 5ull : 6ull,
             .record_count   = split_loss_count,
             .value_bytes    = split_loss_count * 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3799,7 +3800,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 6,
             .record_count   = 4,
             .value_bytes    = 32,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         Expect(
@@ -3821,7 +3822,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 6,
             .record_count   = 4,
             .value_bytes    = 32,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3855,7 +3856,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 8,
             .record_count   = 5,
             .value_bytes    = 40,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3885,7 +3886,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 9,
             .record_count   = 5,
             .value_bytes    = 40,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3942,7 +3943,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 7,
             .record_count   = 4,
             .value_bytes    = 32,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3972,7 +3973,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 6,
             .record_count   = 4,
             .value_bytes    = 32,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -3997,7 +3998,7 @@ void TestSemanticTopologyAndLossRecovery() {
             .last_sequence  = 4,
             .record_count   = 2,
             .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -4071,7 +4072,7 @@ void TestSemanticTopologyAndLossRecovery() {
             1,
             0,
             0,
-            std::numeric_limits<std::uint64_t>::max(),
+            std::numeric_limits<Moer::uint64>::max(),
             "overflow-local-order",
             10,
             20,
@@ -4086,17 +4087,17 @@ void TestSemanticTopologyAndLossRecovery() {
         );
     }
     {
-        constexpr std::uint64_t candidate_count = 32;
-        constexpr std::uint64_t child_count     = 32;
+        constexpr Moer::uint64 candidate_count = 32;
+        constexpr Moer::uint64 child_count     = 32;
 
-        const auto make_fixture = [](std::uint32_t _child_depth) {
+        const auto make_fixture = [](Moer::uint32 _child_depth) {
             SessionBuilder builder;
             builder.Begin();
             builder.Schema(Templates::CpuScope());
-            for (std::uint64_t index = 0; index < candidate_count; ++index) {
+            for (Moer::uint64 index = 0; index < candidate_count; ++index) {
                 AddCpuScope(builder, index + 1, 1, "ending-candidate", 10, 10, 1);
             }
-            for (std::uint64_t index = 0; index < child_count; ++index) {
+            for (Moer::uint64 index = 0; index < child_count; ++index) {
                 AddCpuScope(
                     builder, candidate_count + index + 1, 1, "unmatched-boundary-child", 10, 10, _child_depth
                 );
@@ -4107,23 +4108,23 @@ void TestSemanticTopologyAndLossRecovery() {
 
         const SessionBuilder    adversarial        = make_fixture(2);
         const SessionBuilder    control            = make_fixture(1);
-        const std::uint64_t     adversarial_budget = MinimumPassingTopologyBudget(adversarial.bytes);
-        const std::uint64_t     control_budget     = MinimumPassingTopologyBudget(control.bytes);
-        constexpr std::uint64_t scope_count        = candidate_count + child_count;
-        const std::uint64_t     expected_index_work =
+        const Moer::uint64      adversarial_budget = MinimumPassingTopologyBudget(adversarial.bytes);
+        const Moer::uint64      control_budget     = MinimumPassingTopologyBudget(control.bytes);
+        constexpr Moer::uint64  scope_count        = candidate_count + child_count;
+        const Moer::uint64      expected_index_work =
             TopologySortWorkOracle(scope_count) * 2 + TopologyLinearWorkOracle(scope_count) * 4;
-        const std::uint64_t candidate_map_work = TopologyHeapWorkOracle(1) +
-                                                 (candidate_count - 2) * TopologyHeapWorkOracle(2) +
-                                                 (candidate_count - 1) * TopologyBinarySearchWorkOracle(1);
-        const std::uint64_t control_child_map_work =
+        const Moer::uint64 candidate_map_work = TopologyHeapWorkOracle(1) +
+                                                (candidate_count - 2) * TopologyHeapWorkOracle(2) +
+                                                (candidate_count - 1) * TopologyBinarySearchWorkOracle(1);
+        const Moer::uint64 control_child_map_work =
             child_count * (TopologyHeapWorkOracle(2) + TopologyBinarySearchWorkOracle(1));
-        const std::uint64_t expected_control_budget =
+        const Moer::uint64 expected_control_budget =
             expected_index_work + candidate_map_work + control_child_map_work;
         Expect(
             control_budget == expected_control_budget,
             "CPU boundary-parent control disagreed with the independent indexing/container oracle"
         );
-        const std::uint64_t ordered_map_delta =
+        const Moer::uint64 ordered_map_delta =
             (child_count - 1) * (TopologyBinarySearchWorkOracle(2) - TopologyBinarySearchWorkOracle(1));
         Expect(
             adversarial_budget == control_budget + candidate_count * child_count + ordered_map_delta,
@@ -4152,13 +4153,13 @@ void TestSemanticTopologyAndLossRecovery() {
 
 void TestGpuProducerSequenceProofs() {
     const auto add_scope = [](SessionBuilder&  _builder,
-                              std::uint64_t    _sequence,
-                              std::uint64_t    _frame_id,
-                              std::uint64_t    _scope_id,
-                              std::uint64_t    _parent_scope_id,
-                              std::uint64_t    _source_order,
-                              std::uint64_t    _local_order,
-                              std::uint32_t    _depth,
+                              Moer::uint64     _sequence,
+                              Moer::uint64     _frame_id,
+                              Moer::uint64     _scope_id,
+                              Moer::uint64     _parent_scope_id,
+                              Moer::uint64     _source_order,
+                              Moer::uint64     _local_order,
+                              Moer::uint32     _depth,
                               std::string_view _name) {
         AddGpuScope(
             _builder,
@@ -4184,13 +4185,13 @@ void TestGpuProducerSequenceProofs() {
         );
     };
     const auto add_loss =
-        [](SessionBuilder& _builder, std::uint64_t _first, std::uint64_t _last, std::uint64_t _count) {
+        [](SessionBuilder& _builder, Moer::uint64 _first, Moer::uint64 _last, Moer::uint64 _count) {
             _builder.Loss({
                 .first_sequence = _first,
                 .last_sequence  = _last,
                 .record_count   = _count,
                 .value_bytes    = _count * 8,
-                .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+                .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
             });
         };
     const auto expect_rejected = [](const Loaded&    _loaded,
@@ -4235,7 +4236,7 @@ void TestGpuProducerSequenceProofs() {
     }
     {
         const auto add_parent_child =
-            [](SessionBuilder& _builder, std::uint64_t _parent_sequence, std::uint64_t _child_sequence) {
+            [](SessionBuilder& _builder, Moer::uint64 _parent_sequence, Moer::uint64 _child_sequence) {
                 AddGpuScope(
                     _builder,
                     _parent_sequence,
@@ -4537,7 +4538,7 @@ void TestGpuProducerSequenceProofs() {
     }
     {
         const auto make_distinct_parent_fixture =
-            [&](std::uint64_t _second_child_sequence, bool _with_loss, std::uint64_t _loss_last) {
+            [&](Moer::uint64 _second_child_sequence, bool _with_loss, Moer::uint64 _loss_last) {
                 SessionBuilder builder;
                 builder.Begin();
                 builder.Schema(Templates::GpuFrame());
@@ -4584,8 +4585,8 @@ void TestGpuProducerSequenceProofs() {
         );
     }
     {
-        const auto make_hidden_depth_fixture = [&](std::uint64_t _second_child_sequence,
-                                                   std::uint64_t _loss_last) {
+        const auto make_hidden_depth_fixture = [&](Moer::uint64 _second_child_sequence,
+                                                   Moer::uint64 _loss_last) {
             SessionBuilder builder;
             builder.Begin();
             builder.Schema(Templates::GpuFrame());
@@ -4613,10 +4614,10 @@ void TestGpuProducerSequenceProofs() {
         );
     }
     {
-        const auto make_structural_epoch_fixture = [&](std::uint64_t _orphan_sequence,
-                                                       std::uint64_t _admitted,
-                                                       std::uint64_t _loss_last,
-                                                       std::uint64_t _loss_count) {
+        const auto make_structural_epoch_fixture = [&](Moer::uint64 _orphan_sequence,
+                                                       Moer::uint64 _admitted,
+                                                       Moer::uint64 _loss_last,
+                                                       Moer::uint64 _loss_count) {
             SessionBuilder builder;
             builder.Begin();
             builder.Schema(Templates::GpuFrame());
@@ -4648,8 +4649,8 @@ void TestGpuProducerSequenceProofs() {
         );
     }
     {
-        const auto make_local_assignment_fixture = [&](std::uint64_t _second_child_sequence,
-                                                       std::uint64_t _loss_last) {
+        const auto make_local_assignment_fixture = [&](Moer::uint64 _second_child_sequence,
+                                                       Moer::uint64 _loss_last) {
             SessionBuilder builder;
             builder.Begin();
             builder.Schema(Templates::GpuFrame());
@@ -4677,7 +4678,7 @@ void TestGpuProducerSequenceProofs() {
             "local EDF assignments with compatible record-sequence segments were rejected"
         );
 
-        const std::uint64_t exact_budget = MinimumPassingTopologyBudget(control.bytes);
+        const Moer::uint64 exact_budget = MinimumPassingTopologyBudget(control.bytes);
         Expect(
             exact_budget == 718,
             "nontrusted virtual-task topology work disagreed with the independent oracle (actual=" +
@@ -4701,8 +4702,8 @@ void TestGpuProducerSequenceProofs() {
         );
     }
     {
-        const auto make_spare_hole_fixture = [&](std::uint64_t _second_child_sequence,
-                                                 std::uint64_t _loss_last) {
+        const auto make_spare_hole_fixture = [&](Moer::uint64 _second_child_sequence,
+                                                 Moer::uint64 _loss_last) {
             SessionBuilder builder;
             builder.Begin();
             builder.Schema(Templates::GpuFrame());
@@ -4732,8 +4733,8 @@ void TestGpuProducerSequenceProofs() {
         );
     }
     {
-        const auto make_joint_local_sequence_fixture = [&](std::uint64_t _last_child_local_order,
-                                                           std::uint64_t _dropped_scope_count) {
+        const auto make_joint_local_sequence_fixture = [&](Moer::uint64 _last_child_local_order,
+                                                           Moer::uint64 _dropped_scope_count) {
             SessionBuilder builder;
             builder.Begin();
             builder.Schema(Templates::GpuFrame());
@@ -4775,7 +4776,7 @@ void TestGpuProducerSequenceProofs() {
             "a virtual GPU parent in the post-C local/sequence cell was rejected"
         );
 
-        const std::uint64_t exact_flow_edges = MinimumPassingTopologyFlowEdges(joint_control.bytes);
+        const Moer::uint64 exact_flow_edges = MinimumPassingTopologyFlowEdges(joint_control.bytes);
         Expect(
             exact_flow_edges == 22,
             "joint topology flow-edge count disagreed with the independent oracle (actual=" +
@@ -4827,7 +4828,7 @@ void TestGpuProducerSequenceProofs() {
             loaded.result.status == SessionLoadStatus::Complete && loaded.session.Valid(),
             "an optional empty local/sequence cell rejected a task with a later valid cell"
         );
-        const std::uint64_t exact_flow_edges = MinimumPassingTopologyFlowEdges(builder.bytes);
+        const Moer::uint64 exact_flow_edges = MinimumPassingTopologyFlowEdges(builder.bytes);
         Expect(
             exact_flow_edges == 22,
             "optional-cell topology flow-edge count disagreed with the independent oracle (actual=" +
@@ -4857,7 +4858,7 @@ void TestGpuProducerSequenceProofs() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(
             builder,
-            std::numeric_limits<std::uint64_t>::max() - 2,
+            std::numeric_limits<Moer::uint64>::max() - 2,
             1,
             ProfileGpuFrameStatus::Incomplete,
             false,
@@ -4868,7 +4869,7 @@ void TestGpuProducerSequenceProofs() {
         );
         add_scope(
             builder,
-            std::numeric_limits<std::uint64_t>::max(),
+            std::numeric_limits<Moer::uint64>::max(),
             1,
             2,
             99,
@@ -4886,7 +4887,7 @@ void TestGpuProducerSequenceProofs() {
             "forensic joint topology rejected the UINT64_MAX-adjacent sequence hole"
         );
 
-        const std::uint64_t exact_flow_edges = MinimumPassingTopologyFlowEdges(builder.bytes, forensic);
+        const Moer::uint64 exact_flow_edges = MinimumPassingTopologyFlowEdges(builder.bytes, forensic);
         Expect(
             exact_flow_edges == 6,
             "forensic joint topology flow-edge count disagreed with the independent oracle (actual=" +
@@ -5009,7 +5010,7 @@ void TestGpuProducerSequenceProofs() {
         );
     }
 
-    const auto make_cpu_gpu_shared_hole = [&](std::uint64_t _cpu_ancestor_sequence) {
+    const auto make_cpu_gpu_shared_hole = [&](Moer::uint64 _cpu_ancestor_sequence) {
         SessionBuilder builder;
         builder.Begin();
         builder.Schema(Templates::CpuScope());
@@ -5069,7 +5070,7 @@ void TestGpuProducerSequenceProofs() {
             "compatible CPU/GPU structural and noticed-Loss sequence proofs were rejected"
         );
 
-        const std::uint64_t exact_budget = MinimumPassingTopologyBudget(control.bytes);
+        const Moer::uint64  exact_budget = MinimumPassingTopologyBudget(control.bytes);
         SessionLoadOptions  exact{};
         exact.limits.max_topology_work_items = exact_budget;
         const Loaded exact_loaded            = LoadChunks(control.bytes, {}, exact);
@@ -5094,7 +5095,7 @@ void TestGpuProducerSequenceProofs() {
         builder.Schema(Templates::GpuFrame());
         AddGpuFrame(
             builder,
-            std::numeric_limits<std::uint64_t>::max() - 1,
+            std::numeric_limits<Moer::uint64>::max() - 1,
             1,
             ProfileGpuFrameStatus::Complete,
             true,
@@ -5116,7 +5117,7 @@ void TestGpuProducerSequenceProofs() {
         exhausted.Schema(Templates::GpuFrame());
         AddGpuFrame(
             exhausted,
-            std::numeric_limits<std::uint64_t>::max(),
+            std::numeric_limits<Moer::uint64>::max(),
             1,
             ProfileGpuFrameStatus::Complete,
             true,
@@ -5132,13 +5133,13 @@ void TestGpuProducerSequenceProofs() {
         );
     }
     {
-        const auto make_upper_bound_loss_fixture = [&](std::uint64_t _loss_first) {
+        const auto make_upper_bound_loss_fixture = [&](Moer::uint64 _loss_first) {
             SessionBuilder builder;
             builder.Begin();
             builder.Schema(Templates::GpuFrame());
             AddGpuFrame(
                 builder,
-                std::numeric_limits<std::uint64_t>::max() - 2,
+                std::numeric_limits<Moer::uint64>::max() - 2,
                 1,
                 ProfileGpuFrameStatus::Complete,
                 true,
@@ -5147,20 +5148,20 @@ void TestGpuProducerSequenceProofs() {
                 0,
                 ""
             );
-            add_loss(builder, _loss_first, std::numeric_limits<std::uint64_t>::max(), 2);
+            add_loss(builder, _loss_first, std::numeric_limits<Moer::uint64>::max(), 2);
             builder.End();
             return builder;
         };
 
         SessionBuilder incompatible =
-            make_upper_bound_loss_fixture(std::numeric_limits<std::uint64_t>::max() - 3);
+            make_upper_bound_loss_fixture(std::numeric_limits<Moer::uint64>::max() - 3);
         expect_rejected(
             LoadChunks(incompatible.bytes),
             SessionErrorCode::GpuFrameTotalsMismatch,
             "Loss below a Complete frame was reused for a UINT64_MAX tail demand"
         );
 
-        SessionBuilder control = make_upper_bound_loss_fixture(std::numeric_limits<std::uint64_t>::max() - 1);
+        SessionBuilder control = make_upper_bound_loss_fixture(std::numeric_limits<Moer::uint64>::max() - 1);
         const Loaded   loaded  = LoadChunks(control.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::Complete && loaded.session.Valid(),
@@ -5174,7 +5175,7 @@ void TestReaderPublicationAndAllocatorContracts() {
     ProfileSessionReader    reader;
     const PacketRange       begin = golden.ranges.front();
     const SessionLoadResult first =
-        reader.Feed(std::span<const std::uint8_t>(golden.bytes).first(begin.size));
+        reader.Feed(std::span<const Moer::uint8>(golden.bytes).first(begin.size));
     Expect(first.status == SessionLoadStatus::Reading, "reader did not remain active after SessionBegin");
 
     const ProfileSession& unpublished        = reader.Session();
@@ -5185,7 +5186,7 @@ void TestReaderPublicationAndAllocatorContracts() {
     );
 
     const SessionLoadResult rest =
-        reader.Feed(std::span<const std::uint8_t>(golden.bytes).subspan(begin.size));
+        reader.Feed(std::span<const Moer::uint8>(golden.bytes).subspan(begin.size));
     Expect(rest.status == SessionLoadStatus::Reading, "reader published before EOF was established");
     ProfileSession early_take = reader.TakeSession();
     Expect(
@@ -5210,7 +5211,7 @@ void TestReaderPublicationAndAllocatorContracts() {
 
     bool allocator_overflow_threw = false;
     try {
-        MoerStlAllocator<std::uint64_t> allocator;
+        MoerStlAllocator<Moer::uint64>  allocator;
         [[maybe_unused]] auto*          allocation = allocator.allocate(allocator.max_size() + 1);
     } catch (const std::bad_alloc&) {
         allocator_overflow_threw = true;
@@ -5265,7 +5266,7 @@ void TestReaderCooperativeCancellation() {
         ProfileSessionReader    reader({}, control);
         const PacketRange&      begin = golden.ranges.front();
         const SessionLoadResult fed =
-            reader.Feed(std::span<const std::uint8_t>(golden.bytes).first(begin.size));
+            reader.Feed(std::span<const Moer::uint8>(golden.bytes).first(begin.size));
         Expect(
             fed.status == SessionLoadStatus::Reading && fed.packet_count == 1 &&
                 fed.valid_prefix_bytes == begin.size,
@@ -5284,7 +5285,7 @@ void TestReaderCooperativeCancellation() {
 
     {
         const SessionLoadControl control{
-            .max_work_items_before_cancel = static_cast<std::uint64_t>(golden.ranges.size()),
+            .max_work_items_before_cancel = static_cast<Moer::uint64>(golden.ranges.size()),
         };
         ProfileSessionReader    reader({}, control);
         const SessionLoadResult fed = reader.Feed(golden.bytes);
@@ -5300,7 +5301,7 @@ void TestReaderCooperativeCancellation() {
 
     {
         const SessionLoadControl control{
-            .max_work_items_before_cancel = static_cast<std::uint64_t>(golden.ranges.size()) + 1,
+            .max_work_items_before_cancel = static_cast<Moer::uint64>(golden.ranges.size()) + 1,
         };
         ProfileSessionReader    reader({}, control);
         const SessionLoadResult fed = reader.Feed(golden.bytes);
@@ -5319,9 +5320,9 @@ void TestReaderCooperativeCancellation() {
         SessionLoadOptions options{};
         options.allow_forensic_truncation = true;
         const PacketRange& session_end    = golden.ranges.back();
-        const auto         prefix = std::span<const std::uint8_t>(golden.bytes).first(session_end.offset);
+        const auto               prefix         = std::span<const Moer::uint8>(golden.bytes).first(session_end.offset);
         const SessionLoadControl control{
-            .max_work_items_before_cancel = static_cast<std::uint64_t>(golden.ranges.size()),
+            .max_work_items_before_cancel = static_cast<Moer::uint64>(golden.ranges.size()),
         };
         ProfileSessionReader    reader(options, control);
         const SessionLoadResult fed = reader.Feed(prefix);
@@ -5343,7 +5344,7 @@ void TestReaderCooperativeCancellation() {
         ProfileSessionReader reader({}, control);
         const PacketRange&   begin = golden.ranges.front();
         Expect(
-            reader.Feed(std::span<const std::uint8_t>(golden.bytes).first(begin.size)).status ==
+            reader.Feed(std::span<const Moer::uint8>(golden.bytes).first(begin.size)).status ==
                 SessionLoadStatus::Reading,
             "reader move cancellation fixture did not admit SessionBegin"
         );
@@ -5366,7 +5367,7 @@ void TestReaderCooperativeCancellation() {
         ProfileSessionReader    reader(options, control);
         const PacketRange&      begin = golden.ranges.front();
         const SessionLoadResult limited =
-            reader.Feed(std::span<const std::uint8_t>(golden.bytes).first(begin.size));
+            reader.Feed(std::span<const Moer::uint8>(golden.bytes).first(begin.size));
         Expect(
             limited.status == SessionLoadStatus::LimitExceeded &&
                 limited.error_code == SessionErrorCode::LimitExceeded &&
@@ -5382,7 +5383,7 @@ void TestReaderCooperativeCancellation() {
     }
 
     {
-        std::vector<std::uint8_t> corrupt(
+        std::vector<Moer::uint8> corrupt(
             golden.bytes.begin(),
             golden.bytes.begin() + static_cast<std::ptrdiff_t>(golden.ranges.front().size)
         );
@@ -5408,12 +5409,12 @@ void TestReaderCooperativeCancellation() {
 }
 
 void TestConcurrentMidFinishCancellation() {
-    constexpr std::uint64_t kScopeCount = 200'000;
+    constexpr Moer::uint64 kScopeCount = 200'000;
 
     SessionBuilder builder(101);
     builder.Begin();
     builder.Schema(Templates::CpuScope());
-    for (std::uint64_t index = 0; index < kScopeCount; ++index) {
+    for (Moer::uint64 index = 0; index < kScopeCount; ++index) {
         AddCpuScope(builder, index + 1, 77, "concurrent-cancel-root", index * 2, index * 2 + 1, 0);
     }
     builder.End();
@@ -5486,7 +5487,7 @@ void TestLimitsAndStickyFailure() {
         );
     }
     {
-        std::uint64_t schema_payload_bytes = 0;
+        Moer::uint64 schema_payload_bytes = 0;
         for (std::size_t index = 1; index <= 4; ++index) {
             schema_payload_bytes += golden.ranges[index].size - kPacketHeaderBytes;
         }
@@ -5761,16 +5762,16 @@ void TestLimitsAndStickyFailure() {
         );
     }
     {
-        constexpr std::uint64_t scope_count = 5;
+        constexpr Moer::uint64  scope_count = 5;
         SessionBuilder          builder;
         builder.Begin();
         builder.Schema(Templates::CpuScope());
-        for (std::uint64_t index = 0; index < scope_count; ++index) {
+        for (Moer::uint64 index = 0; index < scope_count; ++index) {
             AddCpuScope(builder, index + 1, 1, "oracle-root", index * 20, index * 20 + 10, 0);
         }
         builder.End();
 
-        const std::uint64_t expected_budget =
+        const Moer::uint64 expected_budget =
             TopologySortWorkOracle(scope_count) * 2 + TopologyLinearWorkOracle(scope_count) * 4;
         Expect(
             MinimumPassingTopologyBudget(builder.bytes) == expected_budget,
@@ -5784,7 +5785,7 @@ void TestLimitsAndStickyFailure() {
                 .last_sequence  = 5,
                 .record_count   = 2,
                 .value_bytes    = 16,
-                .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+                .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
             });
         };
         const auto make_gpu_fixture = [&](bool _with_loss, bool _two_sources = true) {
@@ -5848,7 +5849,7 @@ void TestLimitsAndStickyFailure() {
             const SchemaDescriptor unknown = UnknownSchema();
             builder.Begin();
             builder.Schema(unknown);
-            for (std::uint64_t sequence = 1; sequence <= 3; ++sequence) {
+            for (Moer::uint64 sequence = 1; sequence <= 3; ++sequence) {
                 const std::array<FieldValueView, 2> values{
                     sequence,
                     std::string_view("topology-budget-control"),
@@ -5867,34 +5868,34 @@ void TestLimitsAndStickyFailure() {
         const SessionBuilder one_source_gpu     = make_gpu_fixture(false, false);
         const SessionBuilder no_gpu             = make_no_gpu_fixture(false);
         const SessionBuilder no_gpu_with_loss   = make_no_gpu_fixture(true);
-        const std::uint64_t  combined_budget    = MinimumPassingTopologyBudget(combined.bytes);
-        const std::uint64_t  gpu_only_budget    = MinimumPassingTopologyBudget(gpu_only.bytes);
-        const std::uint64_t  one_source_budget  = MinimumPassingTopologyBudget(one_source_gpu.bytes);
-        const std::uint64_t  no_gpu_budget      = MinimumPassingTopologyBudget(no_gpu.bytes);
-        const std::uint64_t  no_gpu_loss_budget = MinimumPassingTopologyBudget(no_gpu_with_loss.bytes);
+        const Moer::uint64   combined_budget    = MinimumPassingTopologyBudget(combined.bytes);
+        const Moer::uint64   gpu_only_budget    = MinimumPassingTopologyBudget(gpu_only.bytes);
+        const Moer::uint64   one_source_budget  = MinimumPassingTopologyBudget(one_source_gpu.bytes);
+        const Moer::uint64   no_gpu_budget      = MinimumPassingTopologyBudget(no_gpu.bytes);
+        const Moer::uint64   no_gpu_loss_budget = MinimumPassingTopologyBudget(no_gpu_with_loss.bytes);
         Expect(
             no_gpu_loss_budget >= no_gpu_budget,
             "Loss topology work unexpectedly reduced the minimum passing budget"
         );
-        const std::uint64_t     loss_delta               = no_gpu_loss_budget - no_gpu_budget;
-        constexpr std::uint64_t mandatory_sequence_count = 2;
-        constexpr std::uint64_t emitted_record_count     = 3;
-        const std::uint64_t     expected_loss_delta =
+        const Moer::uint64     loss_delta               = no_gpu_loss_budget - no_gpu_budget;
+        constexpr Moer::uint64 mandatory_sequence_count = 2;
+        constexpr Moer::uint64 emitted_record_count     = 3;
+        const Moer::uint64     expected_loss_delta =
             TopologyLinearWorkOracle(1) + TopologyLinearWorkOracle(mandatory_sequence_count) +
             TopologySortWorkOracle(mandatory_sequence_count) +
             TopologyLinearWorkOracle(mandatory_sequence_count) * 2 +
             TopologyBinarySearchWorkOracle(emitted_record_count) * mandatory_sequence_count;
         Expect(loss_delta == expected_loss_delta, "Loss topology work disagreed with the independent oracle");
 
-        constexpr std::uint64_t frame_count       = 1;
-        constexpr std::uint64_t gpu_scope_count   = 2;
-        constexpr std::uint64_t domain_count      = 1;
-        constexpr std::uint64_t depth_tree_leaves = 2;
-        constexpr std::uint64_t two_source_count  = 2;
-        constexpr std::uint64_t one_source_count  = 1;
-        const std::uint64_t     record_index_work =
+        constexpr Moer::uint64 frame_count       = 1;
+        constexpr Moer::uint64 gpu_scope_count   = 2;
+        constexpr Moer::uint64 domain_count      = 1;
+        constexpr Moer::uint64 depth_tree_leaves = 2;
+        constexpr Moer::uint64 two_source_count  = 2;
+        constexpr Moer::uint64 one_source_count  = 1;
+        const Moer::uint64     record_index_work =
             TopologySortWorkOracle(emitted_record_count) + TopologyLinearWorkOracle(emitted_record_count);
-        const std::uint64_t domain_track_work =
+        const Moer::uint64 domain_track_work =
             TopologySortWorkOracle(frame_count) + TopologyLinearWorkOracle(frame_count) +
             TopologyLinearWorkOracle(gpu_scope_count) + TopologySortWorkOracle(gpu_scope_count) +
             TopologyLinearWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(domain_count) +
@@ -5902,7 +5903,7 @@ void TestLimitsAndStickyFailure() {
             gpu_scope_count *
                 (TopologyBinarySearchWorkOracle(frame_count) + TopologyBinarySearchWorkOracle(domain_count)) +
             TopologySortWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(gpu_scope_count) * 2;
-        const auto gpu_topology_work = [&](std::uint64_t _source_count) {
+        const auto gpu_topology_work = [&](Moer::uint64 _source_count) {
             return TopologyLinearWorkOracle(frame_count) * 3 + TopologyLinearWorkOracle(gpu_scope_count) +
                    TopologySortWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(gpu_scope_count) +
                    TopologyLinearWorkOracle(gpu_scope_count) * 10 +
@@ -5921,9 +5922,9 @@ void TestLimitsAndStickyFailure() {
                    TopologyLinearWorkOracle(gpu_scope_count) * 2 + TopologyLinearWorkOracle(frame_count) +
                    TopologyLinearWorkOracle(frame_count) * 3;
         };
-        const std::uint64_t expected_two_source_budget =
+        const Moer::uint64 expected_two_source_budget =
             record_index_work + domain_track_work + gpu_topology_work(two_source_count);
-        const std::uint64_t expected_one_source_budget =
+        const Moer::uint64 expected_one_source_budget =
             record_index_work + domain_track_work + gpu_topology_work(one_source_count);
         Expect(
             gpu_only_budget == expected_two_source_budget && expected_two_source_budget == 124,
@@ -5991,7 +5992,7 @@ void TestLimitsAndStickyFailure() {
         record_only.Begin();
         record_only.Schema(unknown);
         const std::array<FieldValueView, 2> unknown_values{
-            std::uint64_t{1},
+            Moer::uint64{1},
             std::string_view("gpu-index-control"),
         };
         record_only.Record(unknown, 1, unknown_values);
@@ -6025,7 +6026,7 @@ void TestLimitsAndStickyFailure() {
             .last_sequence  = 1,
             .record_count   = 1,
             .value_bytes    = 8,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
         });
         with_loss.End();
         const Loaded limited = LoadChunks(with_loss.bytes, {}, zero_budget);
@@ -6050,8 +6051,8 @@ void TestLimitsAndStickyFailure() {
         SessionBuilder builder;
         builder.Begin();
 
-        Moer::Array<std::uint8_t>       forged_header;
-        const Moer::Array<std::uint8_t> empty_payload;
+        Moer::Array<Moer::uint8>       forged_header;
+        const Moer::Array<Moer::uint8> empty_payload;
         Expect(
             WrapPacket(
                 PacketType::Schema, builder.next_packet_index, empty_payload, builder.limits, forged_header
@@ -6059,26 +6060,25 @@ void TestLimitsAndStickyFailure() {
                 forged_header.size() == kPacketHeaderBytes,
             "could not build the packet-size boundary fixture"
         );
-        const auto write_u32 = [](Moer::Array<std::uint8_t>& _bytes, std::size_t _offset, std::uint32_t _value
-                               ) {
+        const auto write_u32 = [](Moer::Array<Moer::uint8>& _bytes, std::size_t _offset, Moer::uint32 _value) {
             for (std::size_t byte = 0; byte < sizeof(_value); ++byte) {
-                _bytes[_offset + byte] = static_cast<std::uint8_t>(_value >> (byte * 8));
+                _bytes[_offset + byte] = static_cast<Moer::uint8>(_value >> (byte * 8));
             }
         };
-        write_u32(forged_header, 12, std::numeric_limits<std::uint32_t>::max());
-        const auto header_prefix = std::span<const std::uint8_t>(forged_header).first(28);
+        write_u32(forged_header, 12, std::numeric_limits<Moer::uint32>::max());
+        const auto header_prefix = std::span<const Moer::uint8>(forged_header).first(28);
         write_u32(forged_header, 28, crc32_fast(header_prefix.data(), header_prefix.size()));
         builder.bytes.insert(builder.bytes.end(), forged_header.begin(), forged_header.end());
 
         SessionLoadOptions options{};
-        options.limits.codec.max_packet_payload_bytes = std::numeric_limits<std::uint32_t>::max();
+        options.limits.codec.max_packet_payload_bytes = std::numeric_limits<Moer::uint32>::max();
         options.limits.max_input_bytes                = builder.bytes.size();
         const Loaded loaded                           = LoadChunks(builder.bytes, {}, options);
         Expect(
             loaded.result.status == SessionLoadStatus::LimitExceeded,
             "an unaddressable or input-impossible packet wire size was not rejected before reserve"
         );
-        if constexpr (sizeof(std::size_t) == sizeof(std::uint32_t)) {
+        if constexpr (sizeof(std::size_t) == sizeof(Moer::uint32)) {
             Expect(
                 loaded.result.limit_kind == SessionLimitKind::Codec &&
                     loaded.result.codec_status == DecodeStatus::PayloadTooLarge,
@@ -6141,7 +6141,7 @@ void TestLimitsAndStickyFailure() {
         const std::size_t       header_end            = schema.offset + kPacketHeaderBytes;
         ProfileSessionReader    reader(options);
         const SessionLoadResult first =
-            reader.Feed(std::span<const std::uint8_t>(builder.bytes).first(header_end));
+            reader.Feed(std::span<const Moer::uint8>(builder.bytes).first(header_end));
         Expect(
             first.status == SessionLoadStatus::LimitExceeded && first.limit_kind == SessionLimitKind::Codec,
             "oversized declared payload was not rejected from its header"
@@ -6157,8 +6157,8 @@ void TestLimitsAndStickyFailure() {
 class ScopedTempDirectory {
 public:
     ScopedTempDirectory() {
-        static std::atomic<std::uint64_t> next{0};
-        for (std::uint32_t attempt = 0; attempt < 32; ++attempt) {
+        static std::atomic<Moer::uint64> next{0};
+        for (Moer::uint32 attempt = 0; attempt < 32; ++attempt) {
             const auto                  tick = std::chrono::steady_clock::now().time_since_epoch().count();
             const std::filesystem::path candidate =
                 std::filesystem::temp_directory_path() /
@@ -6180,7 +6180,7 @@ public:
     std::filesystem::path path{};
 };
 
-void WriteBytes(const std::filesystem::path& _path, std::span<const std::uint8_t> _bytes) {
+void WriteBytes(const std::filesystem::path& _path, std::span<const Moer::uint8> _bytes) {
     std::ofstream stream(_path, std::ios::binary | std::ios::trunc);
     Expect(stream.is_open(), "could not create profile fixture file");
     stream.write(reinterpret_cast<const char*>(_bytes.data()), static_cast<std::streamsize>(_bytes.size()));
@@ -6193,7 +6193,7 @@ void TestFileWrapperAndMoveOwnership() {
     const std::filesystem::path valid_path   = temporary.path / "valid.mpds";
     const std::filesystem::path invalid_path = temporary.path / "invalid.mpds";
     WriteBytes(valid_path, golden.bytes);
-    const std::array<std::uint8_t, 3> invalid{1, 2, 3};
+    const std::array<Moer::uint8, 3> invalid{1, 2, 3};
     WriteBytes(invalid_path, invalid);
 
     ProfileSession          session;
@@ -6251,7 +6251,7 @@ void TestFileWrapperAndMoveOwnership() {
 
     {
         const SessionLoadControl control{
-            .max_work_items_before_cancel = static_cast<std::uint64_t>(golden.ranges.size()) + 1,
+            .max_work_items_before_cancel = static_cast<Moer::uint64>(golden.ranges.size()) + 1,
         };
         const SessionLoadResult cancelled = LoadProfileSessionFile(valid_path, {}, moved, control);
         ExpectCancelledResult(cancelled, "file wrapper did not cancel Finish materialization");
@@ -6266,11 +6266,11 @@ void TestFileWrapperAndMoveOwnership() {
     const SchemaDescriptor unknown = UnknownSchema();
     transient_fixture.Schema(unknown);
     const std::array<FieldValueView, 2> first_values{
-        std::uint64_t{1},
+        Moer::uint64{1},
         std::string_view("first"),
     };
     const std::array<FieldValueView, 2> second_values{
-        std::uint64_t{2},
+        Moer::uint64{2},
         std::string_view("second"),
     };
     transient_fixture.Record(unknown, 1, first_values);
@@ -6280,7 +6280,7 @@ void TestFileWrapperAndMoveOwnership() {
     WriteBytes(transient_path, transient_fixture.bytes);
 
     SessionLoadOptions transient_options{};
-    transient_options.limits.max_transient_materialization_bytes = sizeof(std::uint64_t) * 2;
+    transient_options.limits.max_transient_materialization_bytes = sizeof(Moer::uint64) * 2;
     const SessionLoadControl single_item_runs{
         .cancellation_check_interval = 1,
     };
@@ -6324,7 +6324,7 @@ void TestProducerToConsumerUnnotifiedDrop() {
     config.output_path = temporary.path / "generation-b.mpd";
     Expect(Start(config) == StartResult::Started, "producer integration could not start generation B");
     const std::array<FieldValueView, 2> stale_values{
-        std::uint64_t{1},
+        Moer::uint64{1},
         std::string_view("stale"),
     };
     Expect(
@@ -6350,18 +6350,18 @@ void TestProducerToConsumerUnnotifiedDrop() {
         "producer integration could not register generation C schema"
     );
     const std::array<FieldValueView, 1> invalid_values{
-        std::uint64_t{1},
+        Moer::uint64{1},
     };
     Expect(
         Emit(current_registration.handle, invalid_values) == EmitStatus::ValueCountMismatch,
         "producer integration did not reserve a sequence for a rejected value set"
     );
     const std::array<FieldValueView, 5> valid_values{
-        std::uint64_t{7},
+        Moer::uint64{7},
         std::string_view("sequence-two"),
-        std::uint64_t{10},
-        std::uint64_t{20},
-        std::uint32_t{0},
+        Moer::uint64{10},
+        Moer::uint64{20},
+        Moer::uint32{0},
     };
     Expect(
         Emit(current_registration.handle, valid_values) == EmitStatus::Accepted,

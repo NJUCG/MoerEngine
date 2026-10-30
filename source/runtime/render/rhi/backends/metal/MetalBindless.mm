@@ -1,4 +1,5 @@
 #include "rhi/backends/metal/MetalBindless.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <cstring>
@@ -9,8 +10,9 @@
 
 namespace Moer::Render {
 
-MetalBindlessArray::MetalBindlessArray(id<MTLDevice> device, uint capacity) :
-    device_(device), capacity_(capacity) {
+MetalBindlessArray::MetalBindlessArray(id<MTLDevice> device, uint32 capacity) :
+    device_(device),
+    capacity_(capacity) {
     if (capacity < 2 || capacity > (1u << 23)) {
         throw std::runtime_error("Metal bindless capacity is outside the shader handle range");
     }
@@ -22,16 +24,16 @@ MetalBindlessArray::MetalBindlessArray(id<MTLDevice> device, uint capacity) :
         std::memset(buffer.contents, 0, size);
         return buffer;
     };
-    indices_ = new_shared_buffer(NSUInteger(capacity) * sizeof(uint32_t));
-    buffer_arguments_ = new_shared_buffer(NSUInteger(capacity + 1) * sizeof(uint64_t));
-    texture_arguments_ = new_shared_buffer(NSUInteger(capacity) * sizeof(uint64_t));
-    sampler_arguments_ = new_shared_buffer(NSUInteger(kSamplerCount) * sizeof(uint64_t));
-    const uint64_t index_address = indices_.gpuAddress;
+    indices_                   = new_shared_buffer(NSUInteger(capacity) * sizeof(uint32));
+    buffer_arguments_          = new_shared_buffer(NSUInteger(capacity + 1) * sizeof(uint64));
+    texture_arguments_         = new_shared_buffer(NSUInteger(capacity) * sizeof(uint64));
+    sampler_arguments_         = new_shared_buffer(NSUInteger(kSamplerCount) * sizeof(uint64));
+    const uint64 index_address = indices_.gpuAddress;
     std::memcpy(buffer_arguments_.contents, &index_address, sizeof(index_address));
     free_slots_.reserve(capacity);
 }
 
-uint MetalBindlessArray::AllocateTexture(const TextureView& view, Sampler sampler) {
+uint32 MetalBindlessArray::AllocateTexture(const TextureView& view, Sampler sampler) {
     auto* texture = dynamic_cast<MetalTexture*>(view.GetTexture());
     if (texture == nullptr || view.format != texture->GetFormat() ||
         view.num_mips == 0 || view.mip_level + view.num_mips > texture->GetNumMips() ||
@@ -58,10 +60,10 @@ uint MetalBindlessArray::AllocateTexture(const TextureView& view, Sampler sample
                                    slices:NSMakeRange(view.array_layer, view.num_array)];
         if (native_view == nil) Unsupported("this Metal texture subresource view");
     }
-    const uint sampler_index = SamplerIndex(sampler);
+    const uint32 sampler_index = SamplerIndex(sampler);
     EnsureSampler(sampler, sampler_index);
     std::lock_guard lock(mutex_);
-    const uint index = NextSlot();
+    const uint32    index      = NextSlot();
     Slot& slot = slots_[index];
     const uint64 generation = NextGeneration(slot);
     TextureRef reference(view.GetTexture());
@@ -78,7 +80,7 @@ uint MetalBindlessArray::AllocateTexture(const TextureView& view, Sampler sample
     return index;
 }
 
-uint MetalBindlessArray::AllocateBuffer(BufferView view) {
+uint32 MetalBindlessArray::AllocateBuffer(BufferView view) {
     auto* buffer = dynamic_cast<MetalBuffer*>(view.GetBuffer());
     if (buffer == nullptr || view.GetByteSize() == 0 ||
         view.GetByteOffset() > buffer->GetByteSize() ||
@@ -87,7 +89,7 @@ uint MetalBindlessArray::AllocateBuffer(BufferView view) {
     }
     if (view.format != PF_UNDEFINED) Unsupported("formatted bindless buffers");
     std::lock_guard lock(mutex_);
-    const uint index = NextSlot();
+    const uint32    index      = NextSlot();
     Slot& slot = slots_[index];
     const uint64 generation = NextGeneration(slot);
     BufferRef reference(view.GetBuffer());
@@ -104,15 +106,19 @@ uint MetalBindlessArray::AllocateBuffer(BufferView view) {
     return index;
 }
 
-void MetalBindlessArray::UnbindTexture(uint index) { Unbind(index, Kind::Texture); }
+void MetalBindlessArray::UnbindTexture(uint32 index) {
+    Unbind(index, Kind::Texture);
+}
 
-void MetalBindlessArray::UnbindBuffer(uint index) { Unbind(index, Kind::Buffer); }
+void MetalBindlessArray::UnbindBuffer(uint32 index) {
+    Unbind(index, Kind::Buffer);
+}
 
 void MetalBindlessArray::Apply(const Array<UpdateCmd>& updates) {
     std::lock_guard lock(mutex_);
-    auto* indices = static_cast<uint32_t*>(indices_.contents);
-    auto* buffers = static_cast<uint64_t*>(buffer_arguments_.contents);
-    auto* textures = static_cast<uint64_t*>(texture_arguments_.contents);
+    auto*           indices  = static_cast<uint32*>(indices_.contents);
+    auto*           buffers  = static_cast<uint64*>(buffer_arguments_.contents);
+    auto*           textures = static_cast<uint64*>(texture_arguments_.contents);
     for (const UpdateCmd& update : updates) {
         std::visit([&](const auto& item) {
             using T = std::decay_t<decltype(item)>;
@@ -156,7 +162,7 @@ void MetalBindlessArray::Apply(const Array<UpdateCmd>& updates) {
                     applied.texture_view = native_view;
                     applied.buffer = {};
                     applied.generation = item.array_generation;
-                    const uint sampler_index = SamplerIndex(item.sampler);
+                    const uint32 sampler_index  = SamplerIndex(item.sampler);
                     textures[item.array_idx] = native_view.gpuResourceID._impl;
                     buffers[item.array_idx + 1] = 0;
                     indices[item.array_idx] = (item.array_idx << 8) | sampler_index;
@@ -181,7 +187,7 @@ void MetalBindlessArray::Apply(const Array<UpdateCmd>& updates) {
 
 id<MTLBuffer> MetalBindlessArray::NativeIndices() const noexcept { return indices_; }
 
-id<MTLBuffer> MetalBindlessArray::NativeArguments(uint set) const noexcept {
+id<MTLBuffer> MetalBindlessArray::NativeArguments(uint32 set) const noexcept {
     switch (set) {
         case 1: return buffer_arguments_;
         case 2: return texture_arguments_;
@@ -197,7 +203,7 @@ void MetalBindlessArray::UseRenderResources(id<MTLRenderCommandEncoder> encoder)
     [encoder useResource:buffer_arguments_ usage:MTLResourceUsageRead stages:stages];
     [encoder useResource:texture_arguments_ usage:MTLResourceUsageRead stages:stages];
     [encoder useResource:sampler_arguments_ usage:MTLResourceUsageRead stages:stages];
-    for (uint index = 1; index < next_slot_; ++index) {
+    for (uint32 index = 1; index < next_slot_; ++index) {
         const AppliedSlot& slot = applied_slots_[index];
         if (slot.texture_view != nil) {
             [encoder useResource:slot.texture_view usage:MTLResourceUsageRead stages:stages];
@@ -214,7 +220,7 @@ void MetalBindlessArray::UseComputeResources(id<MTLComputeCommandEncoder> encode
     [encoder useResource:buffer_arguments_ usage:MTLResourceUsageRead];
     [encoder useResource:texture_arguments_ usage:MTLResourceUsageRead];
     [encoder useResource:sampler_arguments_ usage:MTLResourceUsageRead];
-    for (uint index = 1; index < next_slot_; ++index) {
+    for (uint32 index = 1; index < next_slot_; ++index) {
         const AppliedSlot& slot = applied_slots_[index];
         if (slot.texture_view != nil) {
             MTLResourceUsage usage = MTLResourceUsageRead;
@@ -238,10 +244,8 @@ void MetalBindlessArray::UseComputeResources(id<MTLComputeCommandEncoder> encode
 UniquePtr<Command> MetalBindlessArray::CreateUpdateCommand() {
     std::lock_guard lock(mutex_);
     Array<UpdateCmd> snapshot = pending_;
-    auto command = MakeUnique<UpdateBindlessArrayCmd>(
-        this, std::move(snapshot), Array<byte>{}, Array<std::pair<uint, uint>>{},
-        Array<byte>{}, Array<std::pair<uint, uint>>{}, Array<byte>{},
-        Array<std::pair<uint, uint>>{}
+    auto             command  = MakeUnique<UpdateBindlessArrayCmd>(
+        this, std::move(snapshot), Array<byte>{}, Array<std::pair<uint32, uint32>>{}, Array<byte>{}, Array<std::pair<uint32, uint32>>{}, Array<byte>{}, Array<std::pair<uint32, uint32>>{}
     );
     pending_.clear();
     return command;
@@ -267,9 +271,9 @@ void MetalBindlessArray::DiscardUpdateCommand(const Array<UpdateCmd>& updates) {
     pending_ = std::move(recovered);
 }
 
-uint MetalBindlessArray::NextSlot() {
+uint32 MetalBindlessArray::NextSlot() {
     if (!free_slots_.empty()) {
-        const uint index = free_slots_.back();
+        const uint32 index = free_slots_.back();
         if (slots_[index].generation == std::numeric_limits<uint64>::max()) {
             throw std::runtime_error("Metal bindless slot generation exhausted");
         }
@@ -290,16 +294,16 @@ uint64 MetalBindlessArray::NextGeneration(Slot& slot) {
     return ++slot.generation;
 }
 
-uint MetalBindlessArray::SamplerIndex(Sampler sampler) {
+uint32 MetalBindlessArray::SamplerIndex(Sampler sampler) {
     if (sampler.filter >= SF_Num || sampler.address_mode >= SAM_Num ||
         sampler.compare_function >= SCF_Num) {
         Unsupported("this bindless sampler");
     }
-    return (uint(SF_Num) * uint(SAM_Num)) * uint(sampler.compare_function) +
-           uint(SF_Num) * uint(sampler.address_mode) + uint(sampler.filter);
+    return (uint32(SF_Num) * uint32(SAM_Num)) * uint32(sampler.compare_function) +
+           uint32(SF_Num) * uint32(sampler.address_mode) + uint32(sampler.filter);
 }
 
-void MetalBindlessArray::EnsureSampler(Sampler sampler, uint index) {
+void MetalBindlessArray::EnsureSampler(Sampler sampler, uint32 index) {
     std::lock_guard lock(mutex_);
     if (samplers_[index] != nil) return;
     MTLSamplerDescriptor* desc = [MTLSamplerDescriptor new];
@@ -333,10 +337,10 @@ void MetalBindlessArray::EnsureSampler(Sampler sampler, uint index) {
     id<MTLSamplerState> native = [device_ newSamplerStateWithDescriptor:desc];
     if (native == nil) throw std::runtime_error("Cannot create Metal bindless sampler");
     samplers_[index] = native;
-    static_cast<uint64_t*>(sampler_arguments_.contents)[index] = native.gpuResourceID._impl;
+    static_cast<uint64*>(sampler_arguments_.contents)[index] = native.gpuResourceID._impl;
 }
 
-void MetalBindlessArray::Unbind(uint index, Kind kind) {
+void MetalBindlessArray::Unbind(uint32 index, Kind kind) {
     std::lock_guard lock(mutex_);
     if (index == 0 || index >= capacity_ || !slots_[index].active ||
         slots_[index].kind != kind) {
@@ -362,7 +366,7 @@ void* GetMetalNativeBindlessIndexBuffer(BindlessArray* array) noexcept {
     return metal == nullptr ? nullptr : (__bridge void*)metal->NativeIndices();
 }
 
-void* GetMetalNativeBindlessArgumentBuffer(BindlessArray* array, uint set) noexcept {
+void* GetMetalNativeBindlessArgumentBuffer(BindlessArray* array, uint32 set) noexcept {
     auto* metal = dynamic_cast<MetalBindlessArray*>(array);
     return metal == nullptr ? nullptr : (__bridge void*)metal->NativeArguments(set);
 }

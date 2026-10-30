@@ -2,8 +2,8 @@
 
 #include "console/ConsoleSessionModel.h"
 
+#include "misc/Types.h"
 #include <array>
-#include <cstdint>
 #include <deque>
 #include <memory>
 #include <set>
@@ -26,12 +26,12 @@ public:
 
 private:
     struct OutputLineMeasurement {
-        std::uint64_t sequence = 0;
+        uint64        sequence = 0;
         float         width    = 0.0f;
     };
 
     struct OutputVisualRow {
-        std::uint64_t             sequence = 0;
+        uint64                    sequence             = 0;
         const ConsoleSessionLine* line     = nullptr;
         std::size_t               text_begin = 0;
         std::size_t               text_end   = 0;
@@ -72,7 +72,7 @@ private:
     float                                  output_measurement_font_size = 0.0f;
     float                                  output_measurement_spacing  = 0.0f;
     float                                  output_content_width        = 0.0f;
-    std::uint64_t                          observed_line_sequence = 0;
+    uint64                                 observed_line_sequence       = 0;
     bool                                   scroll_to_bottom       = false;
     bool                                   auto_scroll           = true;
     bool                                   reclaim_input_focus   = false;

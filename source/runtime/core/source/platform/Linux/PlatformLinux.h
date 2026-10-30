@@ -2,15 +2,16 @@
 #define LINUX_PLATFORM_H
 
 #include "../PlatformImplement.h"
+#include "misc/Types.h"
 #include "platform/Platform.h"
 class LinuxPlatform : public PlatformImplement {
-    virtual void SetThreadAffinityMask(void* current_thread_handle, uint64_t mask) override;
+    virtual void SetThreadAffinityMask(void* current_thread_handle, Moer::uint64 mask) override;
     virtual void
-    SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask) override;
-    virtual int32_t GetProcessorWorkGroupCount() override;
-    virtual int32_t GetProcessorCoreCountInGroup(uint32_t groupID) override;
-    virtual int32_t GetProcessorCoreCount() override;
-    uint32_t        GetCurrentThreadID() override;
+                        SetThreadGroupAffinity(void* current_thread_handle, Moer::uint16 group_mask, Moer::uint64 affinity_mask) override;
+    virtual Moer::int32 GetProcessorWorkGroupCount() override;
+    virtual Moer::int32 GetProcessorCoreCountInGroup(Moer::uint32 groupID) override;
+    virtual Moer::int32 GetProcessorCoreCount() override;
+    Moer::uint32        GetCurrentThreadID() override;
 
     virtual const PlatformMemoryInfo& GetMemoryInfo() override;
 };

@@ -2,6 +2,7 @@
 // Created by 74535 on 2023/10/10.
 //
 
+#include "misc/Types.h"
 #include <GLFW/glfw3.h>
 
 #include "rhi/RHI.h"
@@ -17,7 +18,7 @@ RHI* g_rhi = nullptr;
 // global shader
 
 #include "rhi/RHICommand.h"
-RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, uint32_t size, void* data) {
+RHIBufferRef CreateBufferFromData(const RHIBufferCreateInfo& info, Moer::uint32 size, void* data) {
     RHIBufferRef buffer     = g_rhi->RHICreateBufferInner(info);
     void*        mapped_ptr = g_rhi->RHIMapBuffer(buffer, 0, size);
     memcpy(mapped_ptr, data, size);
@@ -74,10 +75,10 @@ void Test() {
         vertex_init_list[i].binding_index   = 0;
     }
 
-    const uint16_t      indices[] = {1, 2, 3};
+    const Moer::uint16  indices[] = {1, 2, 3};
     RHIBufferCreateInfo buffer_info;
     buffer_info.SetUsage(EBufferUsageFlags::INDEX_BUFFER)
-        .SetStride(sizeof(uint16_t))
+        .SetStride(sizeof(Moer::uint16))
         .SetSize(sizeof(indices));
 
     RHIBufferRef index_buffer = CreateBufferFromData(buffer_info, sizeof(indices), (void*)indices);

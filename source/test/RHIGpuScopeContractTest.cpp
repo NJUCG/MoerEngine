@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIGpuScope.h"
 #include "rhi/RHIImpl.h"
@@ -39,8 +40,8 @@ void ExpectNear(
 
 RHIQueueBinding QueueBinding(
     EQueueType   _queue,
-    std::uint32_t _native_queue_id,
-    std::uint32_t _family_id
+    Moer::uint32 _native_queue_id,
+    Moer::uint32 _family_id
 ) {
     return RHIQueueBinding{
         .queue = _queue,
@@ -51,9 +52,9 @@ RHIQueueBinding QueueBinding(
 }
 
 TimestampQueryResult Timestamp(
-    std::uint64_t _begin_tick,
-    std::uint64_t _end_tick,
-    double        _tick_period_ns = 1.0
+    Moer::uint64 _begin_tick,
+    Moer::uint64 _end_tick,
+    double       _tick_period_ns = 1.0
 ) {
     Expect(
         _end_tick >= _begin_tick,
@@ -974,7 +975,7 @@ void SealWaitsForAdmissionsThatAlreadyStarted() {
         lists[index]->SetGpuScopeRecorder(
             frame.CreateRecorder(
                 QueueBinding(EQueueType::Graphics, 0, 0),
-                static_cast<std::uint64_t>(index)
+                static_cast<Moer::uint64>(index)
             )
         );
     }
@@ -982,7 +983,7 @@ void SealWaitsForAdmissionsThatAlreadyStarted() {
     std::array<std::exception_ptr, producer_count> errors{};
     std::array<std::thread, producer_count> producers{};
     std::atomic_bool start{false};
-    std::atomic_uint32_t admission_pause_count{0};
+    std::atomic<Moer::uint32>                      admission_pause_count{0};
     std::atomic_bool     release_admissions{false};
     GpuScopeTesting::InstallAdmissionPause(
         admission_pause_count, release_admissions
@@ -1066,8 +1067,8 @@ void SealWaitsForAdmissionsThatAlreadyStarted() {
             QueryBackendAccess::ResolveTimestamp(
                 submits[index]->query_tokens.front(),
                 Timestamp(
-                    static_cast<std::uint64_t>(index * 10),
-                    static_cast<std::uint64_t>(index * 10 + 5)
+                    static_cast<Moer::uint64>(index * 10),
+                    static_cast<Moer::uint64>(index * 10 + 5)
                 )
             );
     }

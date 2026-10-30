@@ -1,5 +1,6 @@
-#include "VulkanQueue.h"
 #include "VulkanDevice.h"
+#include "VulkanQueue.h"
+#include "misc/Types.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
 #include "vulkan/VulkanFaultInjection.h"
@@ -121,7 +122,7 @@ VulkanOperationResult VulkanNativeQueue::Submit(
     submit_info.pWaitSemaphoreInfos      = wait_infos.data();
     submit_info.signalSemaphoreInfoCount = signal_infos.size();
     submit_info.pSignalSemaphoreInfos    = signal_infos.data();
-    submit_info.commandBufferInfoCount   = static_cast<uint32_t>(cmd_infos.size());
+    submit_info.commandBufferInfoCount   = static_cast<uint32>(cmd_infos.size());
     submit_info.pCommandBufferInfos      = cmd_infos.data();
 
     if (context.operation == EVulkanFaultOperation::None) {

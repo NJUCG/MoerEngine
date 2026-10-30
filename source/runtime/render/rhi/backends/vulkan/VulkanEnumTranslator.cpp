@@ -1,10 +1,11 @@
 #include "VulkanEnumTranslator.h"
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 
 namespace Moer::Render {
 
 namespace {
-constexpr VulkanPixelFormatInfo g_platform_pixel_formats[static_cast<uint>(PF_Num)]{
+constexpr VulkanPixelFormatInfo g_platform_pixel_formats[static_cast<uint32>(PF_Num)]{
     {0, VK_FORMAT_UNDEFINED},
     {1, VK_FORMAT_R4G4_UNORM_PACK8},
     {2, VK_FORMAT_R4G4B4A4_UNORM_PACK16},
@@ -263,7 +264,7 @@ static_assert(g_platform_pixel_formats[PF_ETC2_R8G8B8A8_UNORM_BLOCK].stride == 1
 } // namespace
 
 const VulkanPixelFormatInfo& VulkanEnumTranslator::GetPixelFormatInfo(EPixelFormat format) {
-    return g_platform_pixel_formats[static_cast<uint>(format)];
+    return g_platform_pixel_formats[static_cast<uint32>(format)];
 }
 
 VkIndexType VulkanEnumTranslator::METoVKIndexType(EIndexElementType _type) {
@@ -277,15 +278,15 @@ VkIndexType VulkanEnumTranslator::METoVKIndexType(EIndexElementType _type) {
         case IET_UINT32:
             return VK_INDEX_TYPE_UINT32;
         default:
-            LOG_CRITICAL("Unsupported index element type: {}", static_cast<uint32_t>(_type));
+            LOG_CRITICAL("Unsupported index element type: {}", static_cast<uint32>(_type));
             return VK_INDEX_TYPE_MAX_ENUM;
     }
 }
 
 VkFormat VulkanEnumTranslator::METoVKFormat(EPixelFormat _format) {
-    const uint32_t format_index = static_cast<uint32_t>(_format);
-    if (format_index >= static_cast<uint32_t>(PF_Num)) {
-        LOG_CRITICAL("Unsupported pixel format: {}", static_cast<uint32_t>(_format));
+    const uint32 format_index = static_cast<uint32>(_format);
+    if (format_index >= static_cast<uint32>(PF_Num)) {
+        LOG_CRITICAL("Unsupported pixel format: {}", static_cast<uint32>(_format));
         return VK_FORMAT_MAX_ENUM;
     }
 
@@ -315,7 +316,7 @@ VkImageType VulkanEnumTranslator::METoVKImageType(ETextureDimension _dim) {
         case ETextureDimension::TEX_3D:
             return VK_IMAGE_TYPE_3D;
         default:
-            LOG_CRITICAL("Unsupported texture dimension: {}", static_cast<uint32_t>(_dim));
+            LOG_CRITICAL("Unsupported texture dimension: {}", static_cast<uint32>(_dim));
             return VK_IMAGE_TYPE_MAX_ENUM;
     }
 }
@@ -367,7 +368,7 @@ VkImageUsageFlags VulkanEnumTranslator::METoVKImageUsageFlags(ETextureUsageFlags
 }
 
 EPixelFormat VulkanEnumTranslator::VKToMEFormat(VkFormat _format) {
-    for (uint32_t format_index = 0; format_index < static_cast<uint32_t>(PF_Num); ++format_index) {
+    for (uint32 format_index = 0; format_index < static_cast<uint32>(PF_Num); ++format_index) {
         if (g_platform_pixel_formats[format_index].format == _format) {
             return static_cast<EPixelFormat>(format_index);
         }
@@ -428,7 +429,7 @@ VkBufferUsageFlags VulkanEnumTranslator::METoVKBufferUsageFlags(EBufferUsageFlag
     return vk_flags;
 }
 
-VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _me_count) {
+VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32 _me_count) {
     switch (_me_count) {
         case 1:
             return VK_SAMPLE_COUNT_1_BIT;
@@ -445,7 +446,7 @@ VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _
         case 64:
             return VK_SAMPLE_COUNT_64_BIT;
         default:
-            LOG_CRITICAL("Unsupported multisample count: {}", static_cast<uint32_t>(_me_count));
+            LOG_CRITICAL("Unsupported multisample count: {}", static_cast<uint32>(_me_count));
             return VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
     }
 }
@@ -467,7 +468,7 @@ VkImageViewType VulkanEnumTranslator::METoVKImageViewType(ETextureDimension _dim
         case ETextureDimension::TEX_CUBE_ARRAY:
             return VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
         default:
-            LOG_CRITICAL("Unsupported SRV dimension type: {}", static_cast<uint32_t>(_dim));
+            LOG_CRITICAL("Unsupported SRV dimension type: {}", static_cast<uint32>(_dim));
             return VK_IMAGE_VIEW_TYPE_MAX_ENUM;
     }
 }
@@ -529,7 +530,7 @@ VkImageLayout VulkanEnumTranslator::METoVKImageLayout(ETextureLayout _layout) {
         //        case ETextureLayout::TEXTURE_LAYOUT_QUEUE_TYPE_COMPUTE:
         //            return VK_IMAGE_LAYOUT_GENERAL;
         default:
-            LOG_CRITICAL("Unsupported texture layout: {}", static_cast<uint32_t>(_layout));
+            LOG_CRITICAL("Unsupported texture layout: {}", static_cast<uint32>(_layout));
             return VK_IMAGE_LAYOUT_MAX_ENUM;
     }
 }
@@ -543,7 +544,7 @@ VkAttachmentLoadOp VulkanEnumTranslator::METoVKAttachmentLoadOp(EAttachmentLoadO
         case EAttachmentLoadOp::NONE:
             return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         default:
-            LOG_CRITICAL("Unsupported EAttachmentLoadOp: {}", static_cast<uint32_t>(_load_op));
+            LOG_CRITICAL("Unsupported EAttachmentLoadOp: {}", static_cast<uint32>(_load_op));
             return VK_ATTACHMENT_LOAD_OP_MAX_ENUM;
     }
 }
@@ -557,7 +558,7 @@ VkAttachmentStoreOp VulkanEnumTranslator::METoVKAttachmentStoreOp(EAttachmentSto
         case EAttachmentStoreOp::MULTISAMPLE_RESOLVE:
             return VK_ATTACHMENT_STORE_OP_STORE;
         default:
-            LOG_CRITICAL("Unsupported EAttachmentStoreOp: {}", static_cast<uint32_t>(_store_op));
+            LOG_CRITICAL("Unsupported EAttachmentStoreOp: {}", static_cast<uint32>(_store_op));
             return VK_ATTACHMENT_STORE_OP_MAX_ENUM;
     }
 }
@@ -573,7 +574,7 @@ VkFilter VulkanEnumTranslator::METoVKImageFilter(ESamplerFilter _filter) {
         case SF_ANISOTROPIC_LINEAR:
             return VK_FILTER_LINEAR;
         default:
-            LOG_CRITICAL("Unsupported ESamplerFilter {}", static_cast<uint8_t>(_filter));
+            LOG_CRITICAL("Unsupported ESamplerFilter {}", static_cast<uint8>(_filter));
             return VK_FILTER_MAX_ENUM;
     }
 }
@@ -699,7 +700,7 @@ VkCullModeFlags VulkanEnumTranslator::METoVKCullModeFlags(ERasterizerCullMode _c
         case ERasterizerCullMode::RCM_FRONT_AND_BACK:
             return VK_CULL_MODE_FRONT_AND_BACK;
         default:
-            LOG_CRITICAL("Unsupported rasterizer cull mode: {}", static_cast<uint32_t>(_cull_mode));
+            LOG_CRITICAL("Unsupported rasterizer cull mode: {}", static_cast<uint32>(_cull_mode));
             return VK_CULL_MODE_FLAG_BITS_MAX_ENUM;
     }
 }
@@ -723,7 +724,7 @@ VkPrimitiveTopology VulkanEnumTranslator::METoVKPrimitiveTopology(EPrimitiveTopo
         case EPrimitiveTopology::PATCH_LIST:
             return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
         default:
-            LOG_CRITICAL("Unsupported primitive topology: {}", static_cast<uint32_t>(_primitive_type));
+            LOG_CRITICAL("Unsupported primitive topology: {}", static_cast<uint32>(_primitive_type));
             return VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
     }
 }
@@ -739,7 +740,7 @@ VkPolygonMode VulkanEnumTranslator::METoVKPolygonMode(ERasterizerFillMode _fill_
         case ERasterizerFillMode::FM_FILL_RECTANGLE_NV:
             return VK_POLYGON_MODE_FILL_RECTANGLE_NV;
         default:
-            LOG_CRITICAL("Unsupported rasterizer fill mode: {}", static_cast<uint32_t>(_fill_mode));
+            LOG_CRITICAL("Unsupported rasterizer fill mode: {}", static_cast<uint32>(_fill_mode));
             return VK_POLYGON_MODE_MAX_ENUM;
     }
 }
@@ -757,7 +758,7 @@ VkBlendOp VulkanEnumTranslator::METoVKBlendOp(EBlendOperation _blend_op) {
         case BO_MAX:
             return VK_BLEND_OP_MAX;
         default:
-            LOG_CRITICAL("Unsupported color blend operation: {}", static_cast<uint32_t>(_blend_op));
+            LOG_CRITICAL("Unsupported color blend operation: {}", static_cast<uint32>(_blend_op));
             return VK_BLEND_OP_MAX_ENUM;
     }
 }
@@ -797,7 +798,7 @@ VkBlendFactor VulkanEnumTranslator::METoVKBlendFactor(EBlendFactor _blend_factor
         case BF_ONE_MINUS_SRC1_ALPHA:
             return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
         default:
-            LOG_CRITICAL("Unsupported color blend factor: {}", static_cast<uint32_t>(_blend_factor));
+            LOG_CRITICAL("Unsupported color blend factor: {}", static_cast<uint32>(_blend_factor));
             return VK_BLEND_FACTOR_MAX_ENUM;
     }
 }
@@ -850,7 +851,7 @@ VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(
         case EShaderParameterType::BINDLESS_RESOURCE_INDEX: // MARK...
             return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         default:
-            LOG_CRITICAL("Unsupported EShaderParameterType: {}", static_cast<uint32_t>(_type));
+            LOG_CRITICAL("Unsupported EShaderParameterType: {}", static_cast<uint32>(_type));
             return VK_DESCRIPTOR_TYPE_MAX_ENUM;
     }
 }
@@ -886,7 +887,7 @@ VkShaderStageFlags VulkanEnumTranslator::METoVKShaderStageFlags(EShaderType _typ
         case EShaderType::ST_RAY_ANYHIT:
             return VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
         default:
-            LOG_CRITICAL("Unsupported EShaderType: {}", static_cast<uint32_t>(_type));
+            LOG_CRITICAL("Unsupported EShaderType: {}", static_cast<uint32>(_type));
             return VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
     }
 }
@@ -907,7 +908,7 @@ VkSamplerMipmapMode VulkanEnumTranslator::METoVKMipmapMode(ESamplerFilter _filte
         case SF_ANISOTROPIC_LINEAR:
             return VK_SAMPLER_MIPMAP_MODE_LINEAR;
         default:
-            LOG_CRITICAL("Unknown Mipmap ESamplerFilter {:d}", static_cast<uint8_t>(_filter));
+            LOG_CRITICAL("Unknown Mipmap ESamplerFilter {:d}", static_cast<uint8>(_filter));
             return VK_SAMPLER_MIPMAP_MODE_MAX_ENUM;
     }
 }
@@ -923,7 +924,7 @@ VkSamplerAddressMode VulkanEnumTranslator::METoVKWrapMode(ESamplerAddressMode _a
         case SAM_CLAMP_TO_BORDER:
             return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
         default:
-            LOG_CRITICAL("Unknown ESamplerAddressMode {:d}", static_cast<uint8_t>(_address_mode));
+            LOG_CRITICAL("Unknown ESamplerAddressMode {:d}", static_cast<uint8>(_address_mode));
             return VK_SAMPLER_ADDRESS_MODE_MAX_ENUM;
     }
 }
@@ -935,7 +936,7 @@ VkVertexInputRate VulkanEnumTranslator::METoVKVertexInputRate(EVertexInputRate _
         case EVertexInputRate::VIR_INSTANCE:
             return VK_VERTEX_INPUT_RATE_INSTANCE;
         default:
-            LOG_CRITICAL("Unsupported vertex input rate: {}", static_cast<uint32_t>(_me_rate));
+            LOG_CRITICAL("Unsupported vertex input rate: {}", static_cast<uint32>(_me_rate));
             return VK_VERTEX_INPUT_RATE_MAX_ENUM;
     }
 }
@@ -959,7 +960,7 @@ VkCompareOp VulkanEnumTranslator::METoVKCompareOp(ECompareOption _compare_op) {
         case ECompareOption::CO_ALWAYS:
             return VK_COMPARE_OP_ALWAYS;
         default:
-            LOG_CRITICAL("Unsupported depth stencil compare option: {}", static_cast<uint32_t>(_compare_op));
+            LOG_CRITICAL("Unsupported depth stencil compare option: {}", static_cast<uint32>(_compare_op));
             return VK_COMPARE_OP_MAX_ENUM;
     }
 }
@@ -983,7 +984,7 @@ VkStencilOp VulkanEnumTranslator::METoVKStencilOp(EStencilOp _stencil_op) {
         case SO_DECREMENT_AND_WRAP:
             return VK_STENCIL_OP_DECREMENT_AND_WRAP;
         default:
-            LOG_CRITICAL("Unsupported depth stencil operation: {}", static_cast<uint32_t>(_stencil_op));
+            LOG_CRITICAL("Unsupported depth stencil operation: {}", static_cast<uint32>(_stencil_op));
             return VK_STENCIL_OP_MAX_ENUM;
     };
 }
@@ -1015,7 +1016,7 @@ VkGeometryTypeKHR VulkanEnumTranslator::METoVKGeometryType(ERayTracingGeometryTy
         case RTGT_AABBS:
             return VK_GEOMETRY_TYPE_AABBS_KHR;
         default:
-            LOG_CRITICAL("Unsupported ray tracing geometry type: {}", static_cast<uint32_t>(_type));
+            LOG_CRITICAL("Unsupported ray tracing geometry type: {}", static_cast<uint32>(_type));
             return VK_GEOMETRY_TYPE_MAX_ENUM_KHR;
     }
 }

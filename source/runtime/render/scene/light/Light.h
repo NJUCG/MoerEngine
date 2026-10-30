@@ -5,11 +5,12 @@
 #include "misc/CountableRef.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "serialize/Serializer.h"
 
 namespace Moer {
 
-enum class ELightComponentType : uint8_t {
+enum class ELightComponentType : uint8 {
     NONE = 0,
     DIRECTIONAL,
     POINT,
@@ -21,7 +22,7 @@ enum class ELightComponentType : uint8_t {
 struct LightComponentData {
     Vector3f color;
     float    intensity;
-    uint32_t type;
+    uint32   type;
     Vector3f position;
     Vector3f direction;
     Vector4f info;
@@ -116,7 +117,7 @@ public:
         data.position  = Vector3f(0.0f);
         data.direction = m_direction;
         data.info      = Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
-        data.type      = static_cast<uint32_t>(GetType());
+        data.type      = static_cast<uint32>(GetType());
         return data;
     }
 
@@ -156,7 +157,7 @@ public:
         data.position  = m_position;
         data.direction = Vector3f(0.0f);
         data.info      = Vector4f(m_radius, 0.0f, 0.0f, 0.0f); // 将半径存储在 info.x 中
-        data.type      = static_cast<uint32_t>(GetType());
+        data.type      = static_cast<uint32>(GetType());
         return data;
     }
 
@@ -214,7 +215,7 @@ public:
         data.position  = m_position;
         data.direction = m_direction;
         data.info      = Vector4f(m_inner_cone_angle, m_outer_cone_angle, 0.0f, 0.0f);
-        data.type      = static_cast<uint32_t>(GetType());
+        data.type      = static_cast<uint32>(GetType());
         return data;
     }
 
@@ -249,10 +250,10 @@ public:
         data.position  = Vector3f(0.0f);
         data.direction = Vector3f(0.0f);
         data.info      = Vector4f(bdls_handle, rotation, size.x, size.y);
-        data.type      = static_cast<uint32_t>(GetType());
+        data.type      = static_cast<uint32>(GetType());
         return data;
     }
-    uint  bdls_handle;
+    uint32 bdls_handle;
     uint2 size;
     float rotation;
 };
@@ -271,7 +272,7 @@ public:
         data.position  = Vector3f(0.0f);
         data.direction = Vector3f(0.0f);
         data.info      = Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
-        data.type      = static_cast<uint32_t>(GetType());
+        data.type      = static_cast<uint32>(GetType());
         return data;
     }
 };

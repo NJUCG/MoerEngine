@@ -1,8 +1,9 @@
 // 提供 Raster 共用绘制数据、profiling 标签、限频日志和场景命令提交。
 #pragma once
 
-#include "misc/STL.h"
 #include "RasterConfig.h"
+#include "misc/STL.h"
+#include "misc/Types.h"
 #include "rhi/RHICommandDrawData.h"
 #include "scene/GpuScene.h"
 
@@ -28,17 +29,17 @@ public:
 
     static std::string_view GetGeometryDrawProfileScopeName();
 
-    static std::string_view GetCsmShadowCascadeMarkerName(uint cascade_index);
+    static std::string_view GetCsmShadowCascadeMarkerName(uint32 cascade_index);
 
-    static std::string_view GetCsmShadowCullingProfileScopeName(uint cascade_index);
+    static std::string_view GetCsmShadowCullingProfileScopeName(uint32 cascade_index);
 
-    static std::string_view GetCsmShadowDrawProfileScopeName(uint cascade_index);
+    static std::string_view GetCsmShadowDrawProfileScopeName(uint32 cascade_index);
 
-    static std::string_view GetPointShadowFaceMarkerName(uint face);
+    static std::string_view GetPointShadowFaceMarkerName(uint32 face);
 
-    static std::string_view GetPointShadowCullingProfileScopeName(uint face);
+    static std::string_view GetPointShadowCullingProfileScopeName(uint32 face);
 
-    static std::string_view GetPointShadowDrawProfileScopeName(uint face);
+    static std::string_view GetPointShadowDrawProfileScopeName(uint32 face);
 
     [[nodiscard]] static bool ShouldLogDebugEverySeconds(
         double                seconds,

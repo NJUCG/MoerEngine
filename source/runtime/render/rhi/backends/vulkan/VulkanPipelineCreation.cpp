@@ -1,9 +1,10 @@
 #include "VulkanDevice.h"
-#include "VulkanPipeline.h"
 #include "VulkanEnumTranslator.h"
 #include "VulkanMacroUtils.h"
+#include "VulkanPipeline.h"
 #include "VulkanVertexFormat.h"
 #include "misc/RAII.h"
+#include "misc/Types.h"
 #include "rhi/RHIMultiview.h"
 #include "rhi/ShaderConstantLayout.h"
 #include "rhi/ShaderStageUtils.h"
@@ -16,7 +17,7 @@ namespace Moer::Render {
 
 namespace {
 
-VkDescriptorType METoVkDescriptorType(uint _desc_type) {
+VkDescriptorType METoVkDescriptorType(uint32 _desc_type) {
     EVulkanDescriptorType desc_type = EVulkanDescriptorType(_desc_type);
     switch (desc_type) {
         case VDT_UNIFORM_BUFFER:
@@ -45,9 +46,9 @@ VkDescriptorType METoVkDescriptorType(uint _desc_type) {
 }
 
 struct VulkanPipelineBindingInfo {
-    UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo> descriptor_set_layouts;
+    UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo> descriptor_set_layouts;
     VkPushConstantRange                                     push_constant_range{};
-    uint                                                    user_constant_byte_size = 0;
+    uint32                                                    user_constant_byte_size = 0;
     std::optional<VulkanBindlessIndexAddressBinding>          bindless_index_address;
     Array<VulkanArgumentInfo>                               argument_infos;
     uint64                                                  active_argument_bits = 0;
@@ -95,7 +96,7 @@ VkPipelineStageFlags2 ToVulkanPipelineStageFlags(VkShaderStageFlagBits shader_st
 }
 
 void MarkShaderArgumentActive(
-    uint                       argument_index,
+    uint32                     argument_index,
     bool                       is_active,
     VulkanPipelineBindingInfo& out_binding_info
 ) {
@@ -105,8 +106,8 @@ void MarkShaderArgumentActive(
 }
 
 void MergeDescriptorBinding(
-    uint                                set_index,
-    uint                                argument_index,
+    uint32                              set_index,
+    uint32                              argument_index,
     const VkDescriptorSetLayoutBinding& incoming_binding,
     VulkanPipelineBindingInfo&          out_binding_info
 ) {
@@ -143,7 +144,7 @@ void MergeDescriptorBinding(
 
 void RecordResourceUsage(
     const ReflectParamInfo::Resource& resource,
-    uint                              argument_index,
+    uint32                            argument_index,
     VkShaderStageFlagBits             shader_stage,
     VulkanPipelineBindingInfo&        out_binding_info
 ) {
@@ -159,7 +160,7 @@ void RecordResourceUsage(
 void AccumulateResourceBinding(
     const ReflectParamInfo::Resource& resource,
     const ShaderArgCppInfo&           cpp_argument_info,
-    uint                              argument_index,
+    uint32                            argument_index,
     VkShaderStageFlagBits             shader_stage,
     VulkanPipelineBindingInfo&        out_binding_info
 ) {
@@ -175,7 +176,7 @@ void AccumulateResourceBinding(
 
 void RecordPushConstantUsage(
     const ReflectParamInfo::Constant& constant,
-    uint                              argument_index,
+    uint32                            argument_index,
     VkShaderStageFlagBits             shader_stage,
     VulkanPipelineBindingInfo&        out_binding_info
 ) {
@@ -188,7 +189,7 @@ void RecordPushConstantUsage(
 
 void AccumulateBindlessBindings(
     const ReflectParamInfo::BindlessArray& resources,
-    uint                                   argument_index,
+    uint32                                 argument_index,
     VkShaderStageFlagBits                  shader_stage,
     VulkanPipelineBindingInfo&             out_binding_info
 ) {
@@ -211,14 +212,14 @@ void AccumulateBindlessBindings(
         MarkShaderArgumentActive(argument_index, true, out_binding_info);
     }
 
-    constexpr uint k_resource_descriptor_count = 5000;
-    constexpr uint k_sampler_descriptor_count  = 256;
+    constexpr uint32 k_resource_descriptor_count = 5000;
+    constexpr uint32 k_sampler_descriptor_count  = 256;
 
     const auto add_table_binding = [&](const ReflectParamInfo::Bindless& table,
-                                       uint                              set_index,
-                                       uint                              binding_index,
+                                       uint32                            set_index,
+                                       uint32                            binding_index,
                                        VkDescriptorType                  descriptor_type,
-                                       uint                              descriptor_count) {
+                                       uint32                            descriptor_count) {
         if (table.binding != binding_index) {
             throw std::invalid_argument("Vulkan bindless descriptor arrays must use binding 0");
         }
@@ -272,7 +273,7 @@ void AccumulateShaderPipelineBindings(
     VulkanPipelineBindingInfo&            out_binding_info
 ) {
     const auto& reflection_map = shader.shader_param_map->reflect_map;
-    for (uint argument_index = 0; argument_index < arguments.size(); ++argument_index) {
+    for (uint32 argument_index = 0; argument_index < arguments.size(); ++argument_index) {
         const auto& argument = arguments[argument_index];
         const auto  reflection_name =
             argument.cpp_info.type == SDA_BindlessArray ? ReflectParamInfo::bdls_name : argument.name;
@@ -319,8 +320,8 @@ void AccumulateShaderPipelineBindings(
 
 VulkanPipelineBindingInfo BuildVulkanPipelineBindingInfo(
     std::span<const SingleShaderInfo* const> shaders,
-    const PipelineShaderInfo&               shader_info,
-    uint                                    max_push_constant_size
+    const PipelineShaderInfo&                shader_info,
+    uint32                                   max_push_constant_size
 ) {
     VulkanPipelineBindingInfo binding_info;
     const auto arguments = shader_info.argument_metadata.GetArguments();
@@ -348,7 +349,7 @@ VulkanPipelineBindingInfo BuildVulkanPipelineBindingInfo(
         std::max(binding_info.push_constant_range.size, binding_info.user_constant_byte_size);
     if (binding_info.bindless_index_address) {
         binding_info.push_constant_range.size =
-            std::max(binding_info.push_constant_range.size, uint(binding_info.bindless_index_address->byte_offset + sizeof(VkDeviceAddress)));
+            std::max(binding_info.push_constant_range.size, uint32(binding_info.bindless_index_address->byte_offset + sizeof(VkDeviceAddress)));
     }
     if (binding_info.push_constant_range.size > max_push_constant_size)
         throw std::invalid_argument("Declared push constant block exceeds the device limit");
@@ -363,7 +364,7 @@ CreateVulkanShaderStages(VkDevice device, std::span<const SingleShaderInfo* cons
         for (const auto* shader : shaders) {
             VkShaderModuleCreateInfo module_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             module_info.codeSize = shader->shader_data.size();
-            module_info.pCode    = reinterpret_cast<const uint32_t*>(shader->shader_data.data());
+            module_info.pCode    = reinterpret_cast<const uint32*>(shader->shader_data.data());
             VkShaderModule module;
             VK_CHECK_RESULT(vkCreateShaderModule(device, &module_info, nullptr, &module));
             VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
@@ -383,13 +384,13 @@ CreateVulkanShaderStages(VkDevice device, std::span<const SingleShaderInfo* cons
     return stages;
 }
 
-void FillMissingDescriptorBindings(UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& out_set_layouts) {
+void FillMissingDescriptorBindings(UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>& out_set_layouts) {
     for (auto& [set_id, set_layout] : out_set_layouts) {
-        uint max_binding = 0;
+        uint32 max_binding = 0;
         for (const auto& [binding_id, binding] : set_layout.bindings) {
             max_binding = std::max(max_binding, binding_id);
         }
-        for (uint binding_id = 0; binding_id <= max_binding; ++binding_id) {
+        for (uint32 binding_id = 0; binding_id <= max_binding; ++binding_id) {
             set_layout.bindings.try_emplace(
                 binding_id,
                 VulkanDescriptorBindingInfo{
@@ -418,7 +419,7 @@ bool ValidateGraphicsPipelineCreateInfo(
         LOG_ERROR("Cannot create Vulkan graphics pipeline: {}", error);
         return false;
     }
-    const uint32_t required_view_count = Multiview::RequiredViewCount(create_info.view_mask);
+    const uint32 required_view_count = Multiview::RequiredViewCount(create_info.view_mask);
     if (create_info.view_mask != 0 && !device.SupportsMultiview(required_view_count)) {
         LOG_ERROR(
             "Cannot create multiview graphics pipeline: view_mask=0x{:x} requires {} views, "
@@ -433,8 +434,8 @@ bool ValidateGraphicsPipelineCreateInfo(
 
     const bool uses_tessellation = FindShaderStage(shader_info.shaders, ST_HULL) != nullptr;
     if (uses_tessellation) {
-        const uint32_t patch_control_points = create_info.patch_control_points;
-        const uint32_t max_patch_size = device_info.core_properties.core_1_0.limits.maxTessellationPatchSize;
+        const uint32 patch_control_points = create_info.patch_control_points;
+        const uint32 max_patch_size       = device_info.core_properties.core_1_0.limits.maxTessellationPatchSize;
         if (!device.SupportsTessellation()) {
             LOG_ERROR("Cannot create tessellation pipeline: the Vulkan device does not support tessellation "
                       "shaders.");
@@ -602,10 +603,10 @@ void InitializeGraphicsAttachmentState(
     const GfxPsoCreateInfo&           create_info,
     VulkanGraphicsPipelineCreateData& create_data
 ) {
-    const uint32_t attachment_count = create_info.color_attachment_count;
+    const uint32 attachment_count = create_info.color_attachment_count;
     create_data.color_attachment_formats.resize(attachment_count);
     create_data.color_blend_attachments.resize(attachment_count);
-    for (uint32_t index = 0; index < attachment_count; ++index) {
+    for (uint32 index = 0; index < attachment_count; ++index) {
         const RHIColorAttachmentInfo& attachment = create_info.color_attachments_info[index];
         create_data.color_attachment_formats[index] = VulkanEnumTranslator::METoVKFormat(attachment.pixel_format);
         create_data.color_blend_attachments[index]  = ToVulkanBlendAttachment(attachment.blend_state_info);
@@ -638,17 +639,17 @@ void InitializeGraphicsVertexInputState(
     const GfxPsoCreateInfo&           create_info,
     VulkanGraphicsPipelineCreateData& create_data
 ) {
-    uint binding_index = 0;
+    uint32 binding_index = 0;
     create_data.vertex_bindings.reserve(create_info.vertex_stream.bindings.size());
-    uint attribute_count = 0;
+    uint32 attribute_count = 0;
     for (const VertexBinding& binding : create_info.vertex_stream.bindings) {
         attribute_count += binding.vertex_elements.size();
     }
-    uint attribute_location = 0;
+    uint32 attribute_location = 0;
     create_data.vertex_attributes.reserve(attribute_count);
     for (const VertexBinding& binding : create_info.vertex_stream.bindings) {
-        uint binding_stride   = 0;
-        uint attribute_offset = 0;
+        uint32 binding_stride   = 0;
+        uint32 attribute_offset = 0;
         for (const VertexElement& attribute : binding.vertex_elements) {
             const VkFormat format = ToVulkanVertexFormat(attribute.format);
             if (format == VK_FORMAT_UNDEFINED) {
@@ -665,9 +666,9 @@ void InitializeGraphicsVertexInputState(
         );
         ++binding_index;
     }
-    create_data.vertex_input.vertexBindingDescriptionCount   = uint(create_data.vertex_bindings.size());
+    create_data.vertex_input.vertexBindingDescriptionCount   = uint32(create_data.vertex_bindings.size());
     create_data.vertex_input.pVertexBindingDescriptions      = create_data.vertex_bindings.data();
-    create_data.vertex_input.vertexAttributeDescriptionCount = uint(create_data.vertex_attributes.size());
+    create_data.vertex_input.vertexAttributeDescriptionCount = uint32(create_data.vertex_attributes.size());
     create_data.vertex_input.pVertexAttributeDescriptions    = create_data.vertex_attributes.data();
 }
 
@@ -700,7 +701,7 @@ void InitializeGraphicsPipelineCreateData(
     VkGraphicsPipelineCreateInfo& info = create_data.vk_create_info;
     info.pNext               = &create_data.rendering;
     info.flags                         = 0;
-    info.stageCount          = static_cast<uint32_t>(shader_stages.size());
+    info.stageCount                    = static_cast<uint32>(shader_stages.size());
     info.pStages             = shader_stages.data();
     info.pVertexInputState   = &create_data.vertex_input;
     info.pInputAssemblyState = &create_data.input_assembly;

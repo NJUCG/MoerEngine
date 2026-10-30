@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 
 #include <iostream>
@@ -36,7 +37,7 @@ public:
         ++destroyed;
     }
     void SetName(std::string_view) override {}
-    uint GetMipByteSize(uint) const override {
+    uint32 GetMipByteSize(uint32) const override {
         return 16;
     }
 

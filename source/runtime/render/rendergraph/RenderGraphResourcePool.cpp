@@ -1,5 +1,5 @@
 #include "rendergraph/RenderGraphResourcePool.h"
-
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHI.h"
 
@@ -13,7 +13,7 @@ namespace Moer::Render {
 namespace {
 
 [[nodiscard]] bool HasAny(ETextureAspectFlags value, ETextureAspectFlags flags) {
-    return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flags)) != 0;
+    return (static_cast<uint32>(value) & static_cast<uint32>(flags)) != 0;
 }
 
 TextureRef CreateTexture(
@@ -45,8 +45,8 @@ TextureRef CreateTexture(
         depth_or_stencil ? EClearAttachment::DEPTH_STENCIL :
                            EClearAttachment::COLOR,
         desc.extent,
-        static_cast<uint8_t>(desc.mip_count),
-        static_cast<uint8_t>(desc.PhysicalLayerCount()),
+        static_cast<uint8>(desc.mip_count),
+        static_cast<uint8>(desc.PhysicalLayerCount()),
         1
     };
     info.aspect_flags = desc.aspect_flags;
@@ -106,34 +106,34 @@ void ValidateBufferResult(
 
 } // namespace
 
-uint32_t RGTransientTextureDesc::PhysicalLayerCount() const {
-    const uint64_t multiplier =
+uint32 RGTransientTextureDesc::PhysicalLayerCount() const {
+    const uint64 multiplier =
         dimension == ETextureDimension::TEX_CUBE ||
                 dimension == ETextureDimension::TEX_CUBE_ARRAY ?
             6u :
             1u;
-    const uint64_t layers = multiplier * array_size;
-    return layers > std::numeric_limits<uint32_t>::max() ?
+    const uint64 layers = multiplier * array_size;
+    return layers > std::numeric_limits<uint32>::max() ?
                0u :
-               static_cast<uint32_t>(layers);
+               static_cast<uint32>(layers);
 }
 
 bool RGTransientTextureDesc::IsValid() const {
-    constexpr uint32_t supported_aspects =
-        static_cast<uint32_t>(ETextureAspectFlags::COLOR) |
-        static_cast<uint32_t>(ETextureAspectFlags::DEPTH_SLICE) |
-        static_cast<uint32_t>(ETextureAspectFlags::STENCIL_SLICE);
-    const uint32_t aspect_mask = static_cast<uint32_t>(aspect_flags);
-    const uint32_t physical_layers = PhysicalLayerCount();
+    constexpr uint32 supported_aspects =
+        static_cast<uint32>(ETextureAspectFlags::COLOR) |
+        static_cast<uint32>(ETextureAspectFlags::DEPTH_SLICE) |
+        static_cast<uint32>(ETextureAspectFlags::STENCIL_SLICE);
+    const uint32 aspect_mask     = static_cast<uint32>(aspect_flags);
+    const uint32 physical_layers = PhysicalLayerCount();
     if (extent.x == 0 || extent.y == 0 || extent.z == 0 ||
         format == PF_UNDEFINED || usage == ETextureUsageFlags::UNDEFINED ||
         aspect_flags == ETextureAspectFlags::NONE || mip_count == 0 ||
         array_size == 0 || physical_layers == 0 ||
-        extent.x > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-        extent.y > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-        extent.z > std::numeric_limits<uint16_t>::max() ||
-        mip_count > std::numeric_limits<uint8_t>::max() ||
-        physical_layers > std::numeric_limits<uint8_t>::max() ||
+        extent.x > static_cast<uint32>(std::numeric_limits<int>::max()) ||
+        extent.y > static_cast<uint32>(std::numeric_limits<int>::max()) ||
+        extent.z > std::numeric_limits<uint16>::max() ||
+        mip_count > std::numeric_limits<uint8>::max() ||
+        physical_layers > std::numeric_limits<uint8>::max() ||
         (aspect_mask & ~supported_aspects) != 0) {
         return false;
     }
@@ -146,8 +146,8 @@ bool RGTransientTextureDesc::IsValid() const {
     if (depth_or_stencil && color) {
         return false;
     }
-    const uint32_t format_aspects =
-        static_cast<uint32_t>(GetPixelFormatAspectFlags(format));
+    const uint32 format_aspects =
+        static_cast<uint32>(GetPixelFormatAspectFlags(format));
     if ((aspect_mask & format_aspects) != aspect_mask) {
         return false;
     }
@@ -168,12 +168,12 @@ bool RGTransientTextureDesc::IsValid() const {
     return false;
 }
 
-uint64_t RGTransientBufferDesc::ByteSize() const {
+uint64 RGTransientBufferDesc::ByteSize() const {
     if (stride != 0 &&
-        element_count > std::numeric_limits<uint64_t>::max() / stride) {
+        element_count > std::numeric_limits<uint64>::max() / stride) {
         return 0;
     }
-    return static_cast<uint64_t>(element_count) * stride;
+    return static_cast<uint64>(element_count) * stride;
 }
 
 bool RGTransientBufferDesc::IsValid() const {
@@ -182,7 +182,7 @@ bool RGTransientBufferDesc::IsValid() const {
 }
 
 RenderGraphResourcePool::RenderGraphResourcePool(
-    uint32_t       retire_after_idle_frames,
+    uint32         retire_after_idle_frames,
     TextureFactory texture_factory,
     BufferFactory  buffer_factory
 ) :
@@ -285,19 +285,19 @@ void RenderGraphResourcePool::Reset() {
     buffers.clear();
 }
 
-uint32_t RenderGraphResourcePool::TextureCount() const {
+uint32 RenderGraphResourcePool::TextureCount() const {
     std::lock_guard lock(mutex);
-    return static_cast<uint32_t>(textures.size());
+    return static_cast<uint32>(textures.size());
 }
 
-uint32_t RenderGraphResourcePool::BufferCount() const {
+uint32 RenderGraphResourcePool::BufferCount() const {
     std::lock_guard lock(mutex);
-    return static_cast<uint32_t>(buffers.size());
+    return static_cast<uint32>(buffers.size());
 }
 
-uint32_t RenderGraphResourcePool::AvailableTextureCount() const {
+uint32 RenderGraphResourcePool::AvailableTextureCount() const {
     std::lock_guard lock(mutex);
-    return static_cast<uint32_t>(std::count_if(
+    return static_cast<uint32>(std::count_if(
         textures.begin(),
         textures.end(),
         [](const TextureEntry& entry) {
@@ -307,9 +307,9 @@ uint32_t RenderGraphResourcePool::AvailableTextureCount() const {
     ));
 }
 
-uint32_t RenderGraphResourcePool::AvailableBufferCount() const {
+uint32 RenderGraphResourcePool::AvailableBufferCount() const {
     std::lock_guard lock(mutex);
-    return static_cast<uint32_t>(std::count_if(
+    return static_cast<uint32>(std::count_if(
         buffers.begin(),
         buffers.end(),
         [](const BufferEntry& entry) {
@@ -338,11 +338,11 @@ bool RenderGraphTransientAllocator::Prepare(
         return false;
     }
 
-    std::unordered_map<uint32_t, TextureRef> texture_slots{};
-    std::unordered_map<uint32_t, BufferRef>  buffer_slots{};
-    std::unordered_map<uint32_t, RGTransientTextureDesc> texture_slot_descs{};
-    std::unordered_map<uint32_t, RGTransientBufferDesc>  buffer_slot_descs{};
-    std::unordered_map<uint32_t, RenderGraph::ResourceKind> slot_kinds{};
+    std::unordered_map<uint32, TextureRef>                texture_slots{};
+    std::unordered_map<uint32, BufferRef>                 buffer_slots{};
+    std::unordered_map<uint32, RGTransientTextureDesc>    texture_slot_descs{};
+    std::unordered_map<uint32, RGTransientBufferDesc>     buffer_slot_descs{};
+    std::unordered_map<uint32, RenderGraph::ResourceKind> slot_kinds{};
     std::vector<TextureRef> texture_bindings(graph.resources.size());
     std::vector<BufferRef>  buffer_bindings(graph.resources.size());
 
@@ -456,7 +456,7 @@ bool RenderGraphTransientAllocator::Prepare(
         return false;
     }
 
-    for (uint32_t index = 0; index < graph.resources.size(); ++index) {
+    for (uint32 index = 0; index < graph.resources.size(); ++index) {
         auto& resource = graph.resources[index];
         if (texture_bindings[index].IsValid()) {
             resource.physical_texture  = std::move(texture_bindings[index]);

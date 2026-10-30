@@ -2,9 +2,9 @@
 
 #include "RenderAPI.h"
 
+#include "misc/Types.h"
 #include <cassert>
 #include <condition_variable>
-#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -17,7 +17,7 @@
 
 namespace Moer::Render {
 
-enum class ERHIRecordingStatus : uint8_t {
+enum class ERHIRecordingStatus : uint8 {
     Pending,
     Succeeded,
     Failed,
@@ -95,7 +95,7 @@ private:
     RHIRecordingGateRef gate{};
 };
 
-enum class ERHIExecutorWorkAction : uint8_t {
+enum class ERHIExecutorWorkAction : uint8 {
     // All prerequisites succeeded; the callback may process the work normally.
     Execute,
     // Every prerequisite reached a terminal state, but at least one producer

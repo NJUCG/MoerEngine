@@ -1,5 +1,6 @@
 #include "VulkanDescriptorBufferAllocator.h"
 #include "legacy.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <array>
@@ -13,7 +14,7 @@
 #include <vector>
 
 using Allocator = Moer::Render::VulkanDescriptorBufferAllocator;
-constexpr uint64_t KiB = 1024, MiB = 1024 * KiB;
+constexpr Moer::uint64 KiB = 1024, MiB = 1024 * KiB;
 using Clock = std::chrono::steady_clock;
 
 void Check(bool ok, const char* reason) {
@@ -48,7 +49,7 @@ void CapacityCases() {
     // Deliberately larger bind layouts expose the block-tail tradeoff.
     std::array<LegacyLease, 6> old_slots;
     std::array<std::shared_ptr<Allocator::LeaseState>, 6> leases;
-    uint64_t used = 0, reserved = 0;
+    Moer::uint64                                          used = 0, reserved = 0;
     for (size_t i = 0; i < leases.size(); ++i) {
         leases[i] = allocator.CreateLease();
         for (int j = 0; j < 16; ++j) {
@@ -87,21 +88,21 @@ void CapacityCases() {
     allocator.Release(*lease);
 }
 
-double Measure(bool current, unsigned threads, uint64_t bytes, unsigned count, uint64_t& checksum) {
+double Measure(bool current, unsigned threads, Moer::uint64 bytes, unsigned count, Moer::uint64& checksum) {
     Allocator allocator(6 * MiB, 64 * KiB, 32);
     auto lease = allocator.CreateLease();
     LegacyLease old;
     std::barrier ready(static_cast<std::ptrdiff_t>(threads + 1));
     std::barrier start(static_cast<std::ptrdiff_t>(threads + 1));
     std::barrier done(static_cast<std::ptrdiff_t>(threads + 1));
-    std::vector<uint64_t> sums(threads);
+    std::vector<Moer::uint64> sums(threads);
     std::vector<unsigned> failures(threads);
     std::vector<std::jthread> workers;
     for (unsigned t = 0; t < threads; ++t) {
         workers.emplace_back([&, t] {
             ready.arrive_and_wait();
             start.arrive_and_wait();
-            uint64_t sum = 0;
+            Moer::uint64 sum    = 0;
             unsigned failed = 0;
             for (unsigned i = 0; i < count / threads; ++i) {
                 const auto offset = current ? allocator.ReserveRange(*lease, bytes) : LegacyReserve(old, bytes);
@@ -123,7 +124,7 @@ double Measure(bool current, unsigned threads, uint64_t bytes, unsigned count, u
         Check(failures[t] == 0, "timed allocation failed: incomparable workload");
         checksum += sums[t];
     }
-    const uint64_t actual = current ? allocator.GetUsage(*lease).used_bytes : old.next_byte_offset.load();
+    const Moer::uint64 actual = current ? allocator.GetUsage(*lease).used_bytes : old.next_byte_offset.load();
     Check(actual == bytes * count, "accounting mismatch in timed workload");
     allocator.Release(*lease);
     return std::chrono::duration<double, std::nano>(end - begin).count() / count;
@@ -134,8 +135,8 @@ int main() {
         CapacityCases();
         std::cout << "kind,implementation,threads,bytes,operations,sample,ns_per_op\n";
         std::mt19937 random(42);
-        uint64_t checksum = 0;
-        for (uint64_t bytes : {0ull, 32ull, 256ull}) {
+        Moer::uint64 checksum = 0;
+        for (Moer::uint64 bytes : {0ull, 32ull, 256ull}) {
             const unsigned count = bytes == 256 ? 4096 : 16384;
             for (unsigned threads : {1u, 2u, 4u, 8u}) {
                 for (int sample = -3; sample < 40; ++sample) {

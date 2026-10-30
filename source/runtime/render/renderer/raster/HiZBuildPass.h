@@ -2,6 +2,7 @@
 #pragma once
 
 #include "RasterResource.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
@@ -62,7 +63,7 @@ public:
             return parameters;
         }
 
-        const uint mip_count = context.textures.hiz_current.tex->GetNumMips();
+        const uint32 mip_count = context.textures.hiz_current.tex->GetNumMips();
         if (mip_count == 0) {
             return parameters;
         }
@@ -80,7 +81,7 @@ public:
             .is_mip0          = true,
         });
 
-        for (uint mip = 1; mip < mip_count; ++mip) {
+        for (uint32 mip = 1; mip < mip_count; ++mip) {
             parameters.dispatches.emplace_back(MipDispatch{
                 .source = parameters.destination_owner->GetView(static_cast<uint8>(mip - 1), 1),
                 .destination = parameters.destination_owner->GetView(static_cast<uint8>(mip), 1),

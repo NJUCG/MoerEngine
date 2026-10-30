@@ -1,4 +1,5 @@
 #include "AntiAliasPass.h"
+#include "misc/Types.h"
 // 实现时序解析与确定性抖动序列。
 
 #include "rhi/RHIResource.h"
@@ -316,10 +317,10 @@ void AntialiasPass::CommitAcceptedFrame() {
 
 namespace {
 
-float VanderCorput(uint _idx, uint _base) {
+float VanderCorput(uint32 _idx, uint32 _base) {
     float v = 0.f;
     float f = 1.f / _base;
-    uint  i = _idx;
+    uint32 i = _idx;
     while (i > 0) {
         v += (i % _base) * f;
         i /= _base;
@@ -347,7 +348,7 @@ float2 AntialiasPass::GetPixelOffset() const {
             return offsets[frame_idx % 8];
         }
         case EJitter::Halton: {
-            const uint idx = (frame_idx % 16) + 1;
+            const uint32 idx = (frame_idx % 16) + 1;
             return float2(VanderCorput(idx, 2), VanderCorput(idx, 3)) - 0.5f;
         }
         case EJitter::R2: {

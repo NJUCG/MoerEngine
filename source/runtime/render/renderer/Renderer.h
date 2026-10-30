@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/Types.h"
+
 // 定义渲染器公共的帧编排、窗口状态与编辑器 Hook 契约。
 
 // Runtime
@@ -144,7 +146,7 @@ protected:
     mutable std::atomic<bool> first_main_present_confirmed{false};
     std::optional<std::chrono::steady_clock::time_point> first_present_candidate_started_at;
     bool first_present_receipt_logged = false;
-    uint     max_frame_in_flight;
+    uint32                                               max_frame_in_flight;
 
     UniquePtr<FramePrepareProfileState> frame_prepare_profile_state;
 };

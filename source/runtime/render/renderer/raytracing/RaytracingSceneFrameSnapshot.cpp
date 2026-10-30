@@ -1,6 +1,6 @@
 #include "RaytracingSceneFrameSnapshot.h"
-
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 #include "scene/Scene.h"
 
 #include <algorithm>
@@ -11,7 +11,7 @@ namespace Moer::Render::Raytracing {
 
 namespace {
 
-uint LightPriority(entt::entity entity, const Scene& scene) {
+uint32 LightPriority(entt::entity entity, const Scene& scene) {
     const auto& registry = scene.r();
     if (!registry.valid(entity) || !registry.all_of<ecs::CLight>(entity)) {
         return 0;
@@ -27,33 +27,33 @@ uint LightPriority(entt::entity entity, const Scene& scene) {
     }
 }
 
-uint FloatToUInt(float value, float scale) {
-    return static_cast<uint>(std::floor(value * scale + 0.5f));
+uint32 FloatToUInt(float value, float scale) {
+    return static_cast<uint32>(std::floor(value * scale + 0.5f));
 }
 
 float Saturate(float value) {
     return std::clamp(value, 0.f, 1.f);
 }
 
-uint Float3ToR8G8B8Unorm(const float3& value) {
+uint32 Float3ToR8G8B8Unorm(const float3& value) {
     return (FloatToUInt(Saturate(value.x), 255.f) & 0xffu) |
            ((FloatToUInt(Saturate(value.y), 255.f) & 0xffu) << 8) |
            ((FloatToUInt(Saturate(value.z), 255.f) & 0xffu) << 16);
 }
 
-uint16_t Fp32ToFp16(float value) {
+uint16 Fp32ToFp16(float value) {
     static const union FloatBits {
-        uint  ui;
+        uint32 ui;
         float f;
     } multiplier = {0x07800000};
 
     FloatBits biased_float{};
     biased_float.f  = value * multiplier.f;
-    const uint bits = biased_float.ui;
+    const uint32 bits = biased_float.ui;
 
-    const uint sign = bits & 0x80000000;
-    const uint body = bits & 0x0fffffff;
-    return static_cast<uint16_t>((sign >> 16 | body >> 13) & 0xffffu);
+    const uint32 sign = bits & 0x80000000;
+    const uint32 body = bits & 0x0fffffff;
+    return static_cast<uint16>((sign >> 16 | body >> 13) & 0xffffu);
 }
 
 void PackPolyLightColor(const float3& color, PolymorphicLightInfo& info) {
@@ -68,7 +68,7 @@ void PackPolyLightColor(const float3& color, PolymorphicLightInfo& info) {
         0.f,
         1.f
     );
-    const uint  packed_radiance = std::min(static_cast<uint>(std::ceil(log_radiance * 65534.f)) + 1, 0xffffu);
+    const uint32 packed_radiance   = std::min(static_cast<uint32>(std::ceil(log_radiance * 65534.f)) + 1, 0xffffu);
     const float unpacked_radiance = std::exp2f(
         (static_cast<float>(packed_radiance - 1) / 65534.f) *
             (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance) +
@@ -92,12 +92,12 @@ float2 UnitVectorToOctahedron(const float3& value) {
     return result;
 }
 
-uint PackNormalizedVector(const float3& value) {
+uint32 PackNormalizedVector(const float3& value) {
     float2 octahedron = UnitVectorToOctahedron(value);
     octahedron.x      = octahedron.x * 0.5f + 0.5f;
     octahedron.y      = octahedron.y * 0.5f + 0.5f;
-    const uint x      = FloatToUInt(Saturate(octahedron.x), 65535.f);
-    const uint y      = FloatToUInt(Saturate(octahedron.y), 65535.f);
+    const uint32 x    = FloatToUInt(Saturate(octahedron.x), 65535.f);
+    const uint32 y    = FloatToUInt(Saturate(octahedron.y), 65535.f);
     return x | (y << 16);
 }
 
@@ -138,7 +138,7 @@ bool ConvertLight(entt::entity entity, const Scene& scene, PolymorphicLightInfo&
                 radiance = radiance / max_radiance * g_poly_morphic_light_max_radiance;
             }
 
-            info.color_type_flags = static_cast<uint>(EPolyLightType::ELDirectional)
+            info.color_type_flags = static_cast<uint32>(EPolyLightType::ELDirectional)
                                     << g_poly_morphic_light_type_shift;
             PackPolyLightColor(radiance, info);
             info.direction1 = PackNormalizedVector(Normalizef(directional.d_direction));
@@ -148,7 +148,7 @@ bool ConvertLight(entt::entity entity, const Scene& scene, PolymorphicLightInfo&
         case ELightType::Point: {
             const auto& point     = registry.get<ecs::CLightPoint>(entity);
             float3      flux      = point.color * point.intensity;
-            info.color_type_flags = static_cast<uint>(EPolyLightType::ELPoint)
+            info.color_type_flags = static_cast<uint32>(EPolyLightType::ELPoint)
                                     << g_poly_morphic_light_type_shift;
 
             const float max_flux = Max(Max(flux.x, flux.y), flux.z);
@@ -209,7 +209,7 @@ RaytracingSceneFrameSnapshot CaptureRaytracingSceneFrameSnapshot(const Scene& sc
             return;
         }
 
-        const uint primitive_id = cpu_scene.GetPrimitiveId(primitive_entity);
+        const uint32 primitive_id = cpu_scene.GetPrimitiveId(primitive_entity);
         if (primitive_id == UINT_MAX) {
             LOG_ERROR("Primitive entity {} not found in CpuScene", entt::to_integral(primitive_entity));
             return;

@@ -4,12 +4,12 @@
 #include "rhi/RHIThreadOwnership.h"
 #include "renderer/raster/CullingReadbackState.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -145,8 +145,8 @@ void NotifyPublishedCompletion(CmdSubmit& _submit) {
 }
 
 BufferView FakeBufferView(
-    std::uint64_t _byte_offset = 0,
-    std::uint64_t _byte_size = 16
+    Moer::uint64 _byte_offset = 0,
+    Moer::uint64 _byte_size   = 16
 ) {
     static CountableRef<ReadbackTestBuffer> supported_owner(MoerNew(ReadbackTestBuffer)(true));
     auto&                                   supported_buffer = *supported_owner;
@@ -191,7 +191,7 @@ void InvalidFutureIsBoundedAndExplicit() {
 }
 
 void ReadinessRequiresCompletionAndPayload() {
-    constexpr std::array<std::uint32_t, 2> expected{
+    constexpr std::array<Moer::uint32, 2> expected{
         0x12345678u, 0x90abcdefu
     };
     const auto bytes = std::as_bytes(std::span(expected));
@@ -258,7 +258,7 @@ void ReadinessRequiresCompletionAndPayload() {
 }
 
 void PayloadOutcomeIsOneShotAndImmutable() {
-    constexpr std::array<std::uint32_t, 3> expected{
+    constexpr std::array<Moer::uint32, 3> expected{
         7u, 11u, 13u
     };
     const auto bytes = std::as_bytes(std::span(expected));
@@ -291,7 +291,7 @@ void PayloadOutcomeIsOneShotAndImmutable() {
         result.status == ReadbackStatus::Ready,
         "immutable snapshot did not resolve Ready"
     );
-    const auto values = result.CopyAs<std::uint32_t>();
+    const auto values = result.CopyAs<Moer::uint32>();
     Expect(
         values.has_value() &&
             std::equal(
@@ -299,34 +299,36 @@ void PayloadOutcomeIsOneShotAndImmutable() {
             ),
         "typed readback snapshot changed its payload"
     );
-    const auto last = result.ReadValue<std::uint32_t>(
-        sizeof(std::uint32_t) * 2
+    const auto last = result.ReadValue<Moer::uint32>(
+        sizeof(Moer::uint32) * 2
     );
     Expect(
         last.has_value() && *last == expected.back(),
         "typed readback lost the last valid value"
     );
     Expect(
-        !result.ReadValue<std::uint32_t>(
-             result.ByteSize() - sizeof(std::uint32_t) + 1
-         ).has_value() &&
-            !result.ReadValue<std::uint32_t>(
-                 std::numeric_limits<std::size_t>::max()
-             ).has_value(),
+        !result.ReadValue<Moer::uint32>(
+                   result.ByteSize() - sizeof(Moer::uint32) + 1
+        )
+                .has_value() &&
+            !result.ReadValue<Moer::uint32>(
+                       std::numeric_limits<std::size_t>::max()
+            )
+                 .has_value(),
         "typed readback accepted an out-of-bounds offset"
     );
 
     harness.token = {};
     harness.future = {};
     Expect(
-        result.CopyAs<std::uint32_t>().has_value(),
+        result.CopyAs<Moer::uint32>().has_value(),
         "result did not own its immutable byte snapshot"
     );
 
     ReadbackResult error_result{};
     error_result.status = ReadbackStatus::Error;
     Expect(
-        !error_result.CopyAs<std::uint32_t>().has_value(),
+        !error_result.CopyAs<Moer::uint32>().has_value(),
         "Error result masqueraded as an empty typed payload"
     );
 }
@@ -404,9 +406,15 @@ void MaterializationFailureIsTerminal() {
 }
 
 void AsyncSnapshotCaptureOutlivesHandlesAndResult() {
-    constexpr std::array<std::uint16_t, 8> expected{
-        0x3c00u, 0x4000u, 0x4200u, 0x4400u,
-        0x4500u, 0x4600u, 0x4700u, 0x4800u,
+    constexpr std::array<Moer::uint16, 8> expected{
+        0x3c00u,
+        0x4000u,
+        0x4200u,
+        0x4400u,
+        0x4500u,
+        0x4600u,
+        0x4700u,
+        0x4800u,
     };
     const auto bytes = std::as_bytes(std::span(expected));
     ReadbackHarness harness(bytes.size_bytes(), "AsyncHdrSnapshot");
@@ -652,7 +660,7 @@ void UnsupportedBackendFailsBeforeRecording() {
     );
 }
 
-GpuCullingCounterData TestLegacyCounters(std::uint32_t _seed) {
+GpuCullingCounterData TestLegacyCounters(Moer::uint32 _seed) {
     return GpuCullingCounterData{
         .draw_count                   = _seed + 1,
         .visible_instance_count       = _seed + 2,

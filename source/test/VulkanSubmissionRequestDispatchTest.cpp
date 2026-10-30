@@ -1,4 +1,5 @@
 #include "rhi/backends/vulkan/VulkanSubmissionRequestDispatch.h"
+#include "misc/Types.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -22,9 +23,9 @@ void SubmitExceptionRejectsEveryOutstandingObligation() {
         bool present_receipt{true};
     } obligations;
 
-    uint32_t process_count  = 0;
-    uint32_t reject_count   = 0;
-    uint32_t complete_count = 0;
+    Moer::uint32                            process_count  = 0;
+    Moer::uint32                            reject_count   = 0;
+    Moer::uint32                            complete_count = 0;
     std::vector<EWorkerRequestFailurePhase> failures;
 
     const WorkerRequestDispatchResult result = DispatchWorkerRequestNoexcept(
@@ -64,7 +65,7 @@ void SubmitExceptionRejectsEveryOutstandingObligation() {
 }
 
 void SubmitExceptionPreservesTerminalizedPrefix() {
-    enum class ESourceState : uint8_t {
+    enum class ESourceState : Moer::uint8 {
         Submitted,
         Pending,
         Rejected,
@@ -103,8 +104,8 @@ void SubmitExceptionPreservesTerminalizedPrefix() {
 }
 
 void SuccessfulSyncCompletesWithoutFailure() {
-    uint32_t           complete_count = 0;
-    uint32_t           reject_count   = 0;
+    Moer::uint32                      complete_count = 0;
+    Moer::uint32                      reject_count   = 0;
     std::exception_ptr propagated_failure{};
     const WorkerRequestDispatchResult result = DispatchWorkerRequestNoexcept(
         EWorkerRequestKind::Sync,
@@ -127,8 +128,8 @@ void SuccessfulSyncCompletesWithoutFailure() {
 }
 
 void SyncExceptionReachesCompletionDespiteDiagnosticFailure() {
-    uint32_t           complete_count = 0;
-    uint32_t           reject_count   = 0;
+    Moer::uint32                            complete_count = 0;
+    Moer::uint32                            reject_count   = 0;
     std::exception_ptr propagated_failure{};
     std::vector<EWorkerRequestFailurePhase> failures;
     const std::exception_ptr injected_failure =
@@ -172,8 +173,8 @@ void SyncExceptionReachesCompletionDespiteDiagnosticFailure() {
 }
 
 void StopProcessExceptionStillCompletesShutdown() {
-    uint32_t           complete_count = 0;
-    uint32_t           reject_count   = 0;
+    Moer::uint32             complete_count = 0;
+    Moer::uint32             reject_count   = 0;
     std::exception_ptr propagated_failure{};
     const std::exception_ptr injected_failure =
         std::make_exception_ptr(std::runtime_error("injected Stop Sync failure"));
@@ -201,7 +202,7 @@ void StopProcessExceptionStillCompletesShutdown() {
 }
 
 void StopExceptionsAlwaysCompleteAndExit() {
-    uint32_t complete_count = 0;
+    Moer::uint32                            complete_count = 0;
     std::vector<EWorkerRequestFailurePhase> failures;
     const WorkerRequestDispatchResult result = DispatchWorkerRequestNoexcept(
         EWorkerRequestKind::Stop,
@@ -228,7 +229,7 @@ void StopExceptionsAlwaysCompleteAndExit() {
 }
 
 void FailureReportingCannotEscapeOrSkipRejection() {
-    uint32_t reject_count = 0;
+    Moer::uint32                      reject_count = 0;
     const WorkerRequestDispatchResult result = DispatchWorkerRequestNoexcept(
         EWorkerRequestKind::Submit,
         [] { throw std::runtime_error("injected Submit failure"); },

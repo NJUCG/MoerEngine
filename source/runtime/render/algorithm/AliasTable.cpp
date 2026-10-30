@@ -1,9 +1,10 @@
 #include "algorithm/AliasTable.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 
 namespace Moer::Render::Algo {
 AliasTable::AliasTable(std::span<const float> _src_value) {
-    uint n = _src_value.size();
+    uint32 n = _src_value.size();
     prob.resize(n);
     alias.resize(n);
     Array<float> src_value(_src_value.begin(), _src_value.end());
@@ -12,7 +13,7 @@ AliasTable::AliasTable(std::span<const float> _src_value) {
     small.reserve(n);
     large.reserve(n);
 
-    for (uint i = 0; i < n; i++) {
+    for (uint32 i = 0; i < n; i++) {
         src_value[i] *= n;
         if (src_value[i] < 1.0f) {
             small.push_back(i);

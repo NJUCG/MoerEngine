@@ -2,20 +2,21 @@
 #define VULKAN_DEVICE_FEATURE_H
 
 #include "VulkanCommon.h"
+#include "misc/Types.h"
 
 namespace Moer::Render {
 
 class VulkanDeviceFeatures {
 public:
-    explicit VulkanDeviceFeatures(uint32_t _api_version = VK_API_VERSION_1_0) noexcept;
+    explicit VulkanDeviceFeatures(uint32 _api_version = VK_API_VERSION_1_0) noexcept;
     VulkanDeviceFeatures(const VulkanDeviceFeatures& _other) noexcept;
     VulkanDeviceFeatures& operator=(const VulkanDeviceFeatures& _other) noexcept;
     VulkanDeviceFeatures(VulkanDeviceFeatures&& _other) noexcept;
     VulkanDeviceFeatures& operator=(VulkanDeviceFeatures&& _other) noexcept;
 
-    static VulkanDeviceFeatures QuerySupportedFeatures(VkPhysicalDevice _gpu, uint32_t _api_version);
+    static VulkanDeviceFeatures QuerySupportedFeatures(VkPhysicalDevice _gpu, uint32 _api_version);
 
-    static VulkanDeviceFeatures BuildRequiredFeatures(uint32_t _api_version);
+    static VulkanDeviceFeatures BuildRequiredFeatures(uint32 _api_version);
 
     bool SupportsAll(const VulkanDeviceFeatures& _required_features) const;
 
@@ -75,7 +76,7 @@ private:
     void* RebuildFeatureChain();
 
     // Copies and moves rebuild pNext links to this object's own members.
-    uint32_t                         api_version;
+    uint32                           api_version;
     VkPhysicalDeviceFeatures         core_1_0{};
     VkPhysicalDeviceVulkan11Features core_1_1{};
     VkPhysicalDeviceVulkan12Features core_1_2{};

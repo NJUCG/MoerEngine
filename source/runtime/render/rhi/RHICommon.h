@@ -9,8 +9,8 @@
 #include "misc/EnumBitOperation.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "shaderheaders/shared/ShaderParameters.h"
-#include <cstdint>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -22,7 +22,7 @@ struct OutputStream;
 } // namespace Moer
 #pragma region CommonEnums
 
-enum class ERHIType : uint8_t {
+enum class ERHIType : Moer::uint8 {
     Vulkan,
     D3D12,
     Metal
@@ -42,11 +42,11 @@ enum {
     MAX_VERTEX_ELEMENT_COUNT         = 17,
     MAX_VERTEX_ELEMENT_COUNT_NumBits = 5,
 };
-enum : uint8_t {
+enum : Moer::uint8 {
     MAX_PASS_ATTACHMENT_COUNT = 8
 };
-enum : uint64_t {
-    MAX_WAIT_TIME = std::numeric_limits<uint64_t>::max()
+enum : Moer::uint64 {
+    MAX_WAIT_TIME = std::numeric_limits<Moer::uint64>::max()
 };
 enum class ERHIZBuffer {
     // Before changing this, make sure all math & shader assumptions are correct! Also wrap your C++ assumptions with
@@ -70,7 +70,7 @@ enum {
 
 #pragma region Descriptors Regulation
 
-enum class ERHIDescriptorHeapType : uint8_t {
+enum class ERHIDescriptorHeapType : Moer::uint8 {
     STANDARD,
     SAMPLER,
     ATTACHMENT,
@@ -116,20 +116,20 @@ enum {
 };
 
 struct Offset2D {
-    int32_t x;
-    int32_t y;
+    Moer::int32 x;
+    Moer::int32 y;
     bool    operator==(const Offset2D&) const = default;
 };
 struct Extent2D {
     union {
-        uint32_t width;
-        uint32_t x;
+        Moer::uint32 width;
+        Moer::uint32 x;
     };
     union {
-        uint32_t height;
-        uint32_t y;
+        Moer::uint32 height;
+        Moer::uint32 y;
     };
-    Extent2D(uint32_t _x, uint32_t _y) : x(_x), y(_y) {}
+    Extent2D(Moer::uint32 _x, Moer::uint32 _y) : x(_x), y(_y) {}
     Extent2D() : x(0), y(0) {}
     Extent2D(const Moer::Vector2i& _v) : x(_v.x), y(_v.y) {}
     Extent2D(Moer::uint2 _v) : x(_v.x), y(_v.y) {}
@@ -146,31 +146,31 @@ struct Extent2D {
 };
 
 struct Offset3D {
-    int32_t x;
-    int32_t y;
-    int32_t z;
+    Moer::int32 x;
+    Moer::int32 y;
+    Moer::int32 z;
     bool    operator==(const Offset3D&) const = default;
 };
 struct Extent3D {
     union {
-        uint32_t width;
-        uint32_t x;
+        Moer::uint32 width;
+        Moer::uint32 x;
     };
     union {
-        uint32_t height;
-        uint32_t y;
+        Moer::uint32 height;
+        Moer::uint32 y;
     };
     union {
-        uint32_t depth;
-        uint32_t z;
+        Moer::uint32 depth;
+        Moer::uint32 z;
     };
     Extent3D(Moer::Vector3i _v) : x(_v.x), y(_v.y), z(_v.z) {}
     Extent3D() : x(0), y(0), z(0) {}
 
     Extent3D(Moer::uint3 _v) : x(_v.x), y(_v.y), z(_v.z) {}
 
-    Extent3D(Moer::uint _x, Moer::uint _y, Moer::uint _z = 0) : x(_x), y(_y), z(_z) {}
-    Extent3D(const Extent2D& _v, uint32_t _z = 1u) : x(_v.x), y(_v.y), z(_z) {}
+    Extent3D(Moer::uint32 _x, Moer::uint32 _y, Moer::uint32 _z = 0) : x(_x), y(_y), z(_z) {}
+    Extent3D(const Extent2D& _v, Moer::uint32 _z = 1u) : x(_v.x), y(_v.y), z(_z) {}
     bool operator==(const Extent3D& other) const {
         return x == other.x && y == other.y && z == other.z;
     };
@@ -179,7 +179,7 @@ struct Extent3D {
 #pragma endregion
 
 #pragma region cross -platform param types
-enum ESamplerFilter : uint8_t {
+enum ESamplerFilter : Moer::uint8 {
     SF_NEAREST,
     SF_LINEAR,
     SF_CUBIC,
@@ -189,7 +189,7 @@ enum ESamplerFilter : uint8_t {
     SF_Num,
     SF_NumBits = 3,
 };
-enum ESamplerAddressMode : uint8_t {
+enum ESamplerAddressMode : Moer::uint8 {
     SAM_REPEAT,
     SAM_MIRRORED_REPEAT,
     SAM_CLAMP_TO_EDGE,
@@ -198,7 +198,7 @@ enum ESamplerAddressMode : uint8_t {
     SAM_Num,
     SAM_NumBits = 2
 };
-enum ESamplerCompareFunction : uint8_t {
+enum ESamplerCompareFunction : Moer::uint8 {
     SCF_NEVER,
     SCF_LESS,
     SCF_EQUAL,
@@ -210,7 +210,7 @@ enum ESamplerCompareFunction : uint8_t {
     SCF_Num
 };
 
-enum ERasterizerFillMode : uint8_t {
+enum ERasterizerFillMode : Moer::uint8 {
     FM_FILL,
     FM_LINE,
     FM_POINT,
@@ -220,7 +220,7 @@ enum ERasterizerFillMode : uint8_t {
     FM_NumBits = 2,
 };
 
-enum ERasterizerCullMode : uint8_t {
+enum ERasterizerCullMode : Moer::uint8 {
     RCM_NONE,
     RCM_FRONT,
     RCM_BACK,
@@ -230,7 +230,7 @@ enum ERasterizerCullMode : uint8_t {
     RCM_NumBits = 2,
 };
 
-enum EColorWriteMask : uint8_t {
+enum EColorWriteMask : Moer::uint8 {
     CW_RED   = 0x01,
     CW_GREEN = 0x02,
     CW_BLUE  = 0x04,
@@ -245,7 +245,7 @@ enum EColorWriteMask : uint8_t {
     EColorWriteMask_NumBits = 4,
 };
 
-enum ECompareOption : uint8_t {
+enum ECompareOption : Moer::uint8 {
     CO_NEVER,
     CO_LESS,
     CO_EQUAL,
@@ -260,11 +260,15 @@ enum ECompareOption : uint8_t {
 
     // Utility enumerations
     CO_DEPTH_NEAR_OR_EQUAL =
-        (uint32_t)(ERHIZBuffer::IsInverted) != 0 ? CO_GREATER_OR_EQUAL : CO_LESS_OR_EQUAL,
-    CO_DEPTH_NEAR = (uint32_t)(ERHIZBuffer::IsInverted) != 0 ? CO_GREATER : CO_LESS,
+                (Moer::uint32)(ERHIZBuffer::IsInverted) != 0 ?
+        CO_GREATER_OR_EQUAL :
+        CO_LESS_OR_EQUAL,
+    CO_DEPTH_NEAR = (Moer::uint32)(ERHIZBuffer::IsInverted) != 0 ? CO_GREATER : CO_LESS,
     CO_DEPTH_FARTHER_OR_EQUAL =
-        (uint32_t)(ERHIZBuffer::IsInverted) != 0 ? CO_LESS_OR_EQUAL : CO_GREATER_OR_EQUAL,
-    CO_DEPTH_FARTHER = (uint32_t)(ERHIZBuffer::IsInverted) != 0 ? CO_LESS : CO_GREATER,
+                (Moer::uint32)(ERHIZBuffer::IsInverted) != 0 ?
+        CO_LESS_OR_EQUAL :
+        CO_GREATER_OR_EQUAL,
+    CO_DEPTH_FARTHER = (Moer::uint32)(ERHIZBuffer::IsInverted) != 0 ? CO_LESS : CO_GREATER,
 };
 static_assert(CO_Num <= (1 << CO_NumBits), "CO_Num will not fit on CO_NumBits");
 
@@ -282,7 +286,7 @@ enum EStencilMask {
     SM_Count
 };
 
-enum EStencilOp : uint8_t {
+enum EStencilOp : Moer::uint8 {
     SO_KEEP,
     SO_ZERO,
     SO_REPLACE,
@@ -297,7 +301,7 @@ enum EStencilOp : uint8_t {
 static_assert(SO_Num <= (1 << SO_NumBits), "EStencilOp_Num will not fit on EStencilOp_NumBits");
 
 /* more to support */
-enum EBlendOperation : uint8_t {
+enum EBlendOperation : Moer::uint8 {
     BO_ADD,
     BO_SUBTRACT,
     BO_REVERSE_SUBTRACT,
@@ -309,7 +313,7 @@ enum EBlendOperation : uint8_t {
 };
 static_assert(BO_Num <= (1 << BO_NumBits), "EBlendOperation_Num will not fit on EBlendOperation_NumBits");
 
-enum EBlendFactor : uint8_t {
+enum EBlendFactor : Moer::uint8 {
     BF_ZERO,
     BF_ONE,
     BF_SRC_COLOR,
@@ -331,7 +335,7 @@ enum EBlendFactor : uint8_t {
 };
 static_assert(BF_Num <= (1 << BF_NumBits), "EBlendFactor_Num will not fit on EBlendFactor_NumBits");
 
-enum class EPrimitiveTopology : uint8_t {
+enum class EPrimitiveTopology : Moer::uint8 {
     POINT_LIST,
     LINE_LIST,
     LINE_STRIP,
@@ -344,11 +348,11 @@ enum class EPrimitiveTopology : uint8_t {
     NumBits = 3,
 };
 static_assert(
-    (uint32_t)EPrimitiveTopology::Num <= (1 << (uint32_t)EPrimitiveTopology::NumBits),
+    (Moer::uint32)EPrimitiveTopology::Num <= (1 << (Moer::uint32)EPrimitiveTopology::NumBits),
     "EPrimitiveTopologyType::Num will not fit on EPrimitiveTopologyType::NumBits"
 );
 
-enum class EBufferUsageFlags : uint32_t {
+enum class EBufferUsageFlags : Moer::uint32 {
     NONE = 0,
 
     /** Allows an unordered access view to be created for the buffer. */
@@ -409,7 +413,7 @@ enum class EBufferUsageFlags : uint32_t {
 
 ENUM_BIT_OP_IMPL(EBufferUsageFlags, FLAG)
 
-enum class ETextureDimension : uint8_t {
+enum class ETextureDimension : Moer::uint8 {
     TEX_2D,
     TEX_2D_ARRAY,
     TEX_3D,
@@ -418,7 +422,7 @@ enum class ETextureDimension : uint8_t {
     NumBits = 5
 };
 
-enum class EParamaterType : uint8_t {
+enum class EParamaterType : Moer::uint8 {
     UNDEFINED,
     SAMPLER,
     TEXTURE,
@@ -497,7 +501,7 @@ enum ERHIResourceType {
     RRT_Num
 };
 
-enum class EAttachmentLoadOp : uint8_t {
+enum class EAttachmentLoadOp : Moer::uint8 {
     LOAD,
     CLEAR,
     NONE,
@@ -505,10 +509,10 @@ enum class EAttachmentLoadOp : uint8_t {
     NumBits = 2
 };
 static_assert(
-    (int32_t)EAttachmentLoadOp::Num <= 1 << (uint32_t)EAttachmentLoadOp::NumBits,
+    (Moer::int32)EAttachmentLoadOp::Num <= 1 << (Moer::uint32)EAttachmentLoadOp::NumBits,
     "EAttachmentLoadOp::Num will not fit on EAttachmentLoadOp::NumBits"
 );
-enum class EAttachmentStoreOp : uint8_t {
+enum class EAttachmentStoreOp : Moer::uint8 {
     STORE = 0,
     NONE,
     MULTISAMPLE_RESOLVE,
@@ -516,12 +520,12 @@ enum class EAttachmentStoreOp : uint8_t {
     NumBits = 2
 };
 static_assert(
-    (int32_t)EAttachmentStoreOp::Num <= 1 << (uint32_t)EAttachmentStoreOp::NumBits,
+    (Moer::int32)EAttachmentStoreOp::Num <= 1 << (Moer::uint32)EAttachmentStoreOp::NumBits,
     "EAttachmentStoreOp::Num will not fit on EAttachmentStoreOp::NumBits"
 );
 
 //todo: maybe get rid of some of them, cause not every frag is supported
-enum class ERHIPipelineStageFlags : uint32_t {
+enum class ERHIPipelineStageFlags : Moer::uint32 {
     PS_TOP_OF_PIPE                      = 0x00000001,
     PS_DRAW_INDIRECT                    = 0x00000002,
     PS_VERTEX_INPUT                     = 0x00000004,
@@ -557,7 +561,7 @@ ENUM_BIT_OP_IMPL(ERHIPipelineStageFlags, FLAG)
 #pragma region pixel format
 
 //temporarily only have effects in vulkan rhi
-enum class EBarrierDependencyScope : uint8_t {
+enum class EBarrierDependencyScope : Moer::uint8 {
     /* for barrier happens between stages in
      * PS_FRAGMENT_SHADER
      * PS_EARLY_FRAGMENT_TESTS
@@ -577,7 +581,7 @@ enum class EBarrierDependencyScope : uint8_t {
     // not set means device-local
     NON_DEVICE_LOCAL
 };
-enum class ERHIAccessFlags : uint32_t {
+enum class ERHIAccessFlags : Moer::uint32 {
     UNDEFINED              = 0ULL,
     INDIRECT_COMMAND_READ  = 1 << 0,
     INDEX_READ             = 1 << 1,
@@ -614,7 +618,7 @@ enum class ERHIAccessFlags : uint32_t {
 };
 ENUM_BIT_OP_IMPL(ERHIAccessFlags, FLAG)
 
-enum ETextureLayout : uint32_t {
+enum ETextureLayout : Moer::uint32 {
     TEXTURE_LAYOUT_UNDEFINED                = 1 << 0,
     TEXTURE_LAYOUT_COMMON                   = 1 << 1,
     TEXTURE_LAYOUT_COLOR_ATTACHMENT         = 1 << 2,
@@ -646,7 +650,7 @@ enum ETextureLayout : uint32_t {
     TEXTURE_LAYOUT_Num
 };
 
-enum EBufferRuntimeUsageFlags : uint32_t {
+enum EBufferRuntimeUsageFlags : Moer::uint32 {
     UNDEFINED              = 0,
     NO_CHAGNE              = 1 << 0,
     READ                   = 1 << 1,
@@ -696,12 +700,12 @@ ENUM_BIT_OP_IMPL(EBufferRuntimeUsageFlags, FLAG)
 
 #pragma region[raytracing]
 
-enum ERayTracingGeometryType : uint8_t {
+enum ERayTracingGeometryType : Moer::uint8 {
     RTGT_TRIANGLES,
     RTGT_AABBS
 };
 
-enum class ERayTracingGeometryFlags : uint8_t {
+enum class ERayTracingGeometryFlags : Moer::uint8 {
     NONE,
     GEOMETRY_OPAQUE                 = 1 << 0,
     NO_DUPLICATE_ANY_HIT_INVOCATION = 1 << 1
@@ -709,7 +713,7 @@ enum class ERayTracingGeometryFlags : uint8_t {
 
 ENUM_BIT_OP_IMPL(ERayTracingGeometryFlags, FLAG)
 
-enum class ERayTracingInstanceFlags : uint8_t {
+enum class ERayTracingInstanceFlags : Moer::uint8 {
     NONE,
     TRIANGLE_CULL_DISABLE = 1 << 0,
     //triangle flip face
@@ -720,7 +724,7 @@ enum class ERayTracingInstanceFlags : uint8_t {
 
 ENUM_BIT_OP_IMPL(ERayTracingInstanceFlags, FLAG)
 
-enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
+enum class ERayTracingAccelerationStructureBuildFlags : Moer::uint8 {
     NONE,
     ALLOW_UPDATE      = 1 << 0,
     ALLOW_COMPACTION  = 1 << 1,
@@ -731,13 +735,13 @@ enum class ERayTracingAccelerationStructureBuildFlags : uint8_t {
 
 ENUM_BIT_OP_IMPL(ERayTracingAccelerationStructureBuildFlags, FLAG)
 
-enum class ERaytracingBuildMode : uint8_t {
+enum class ERaytracingBuildMode : Moer::uint8 {
     BUILD,
     UPDATE
 };
 
 #pragma endregion
-enum EShaderType : uint8_t {
+enum EShaderType : Moer::uint8 {
     ST_NONE,
     ST_VERTEX,
     ST_GEOMETRY,
@@ -759,7 +763,7 @@ enum EShaderType : uint8_t {
     ST_NumBits = 4
 };
 static_assert(ST_Num <= (1 << ST_NumBits), "ST_Num exceeds ST_NumBits bound");
-enum EIndexElementType : uint8_t {
+enum EIndexElementType : Moer::uint8 {
     IET_NONE,
     IET_UINT8,
     IET_UINT16,
@@ -768,7 +772,7 @@ enum EIndexElementType : uint8_t {
     IET_NumBits = 2
 };
 static_assert(IET_Num <= (1 << IET_NumBits), "IET_Num will not fit on IET_NumBits");
-enum EVertexInputRate : uint8_t {
+enum EVertexInputRate : Moer::uint8 {
     VIR_VERTEX,
     VIR_INSTANCE,
     VIR_Num,
@@ -788,7 +792,7 @@ enum ECubeFace {
 
 #define ENUM_STR(Enum)
 
-enum class EShaderCodeResourceBindingType : uint8_t {
+enum class EShaderCodeResourceBindingType : Moer::uint8 {
     INVALID,
     SAMPLER,
 
@@ -839,7 +843,7 @@ ENUM_STR_ELEMENT(RW_STRUCTURED_BUFFER)
 ENUM_STR_ELEMENT(RW_BYTE_ADDRESSED_BUFFER)
 END_ENUM_STR_DEFINITION(EShaderCodeResourceBindingType)
 
-enum EShaderBindingBaseType : uint8_t {
+enum EShaderBindingBaseType : Moer::uint8 {
     SBT_INVALID,
 
     // Invalid type when trying to use bool, to have explicit error message to programmer on why
@@ -875,7 +879,7 @@ ENUM_STR_ELEMENT(SBT_SAMPLER)
 END_ENUM_STR_DEFINITION(EShaderBindingBaseType)
 static_assert(SBT_Num <= (1 << SBT_NumBits), "SBT_Num will not fit on SBT_NumBits");
 
-enum EShaderResourceType : uint8_t {
+enum EShaderResourceType : Moer::uint8 {
     SRT_INVALID,
 
     SRT_CBV,
@@ -885,7 +889,7 @@ enum EShaderResourceType : uint8_t {
     SRT_Num
 };
 
-enum EVulkanDescriptorType : uint8_t {
+enum EVulkanDescriptorType : Moer::uint8 {
     VDT_SAMPLER,
     VDT_COMBINED_IMAGE_SAMPLER,
     VDT_SAMPLED_IMAGE,
@@ -900,7 +904,7 @@ enum EVulkanDescriptorType : uint8_t {
     VDT_ACCELERATION_STRUCTURE,
     VDT_Num
 };
-enum class ED3D12ShaderVariableType : uint32_t { // ref D3D_SHADER_VARIABLE_TYPE
+enum class ED3D12ShaderVariableType : Moer::uint32 { // ref D3D_SHADER_VARIABLE_TYPE
     RootConstant, // can't get from shader reflection. get from cpp pipeline definition.
     ConstantBuffer,
     ByteAddressBuffer,
@@ -928,7 +932,7 @@ enum class ED3D12ShaderVariableType : uint32_t { // ref D3D_SHADER_VARIABLE_TYPE
     // no legacy append/consume buffer, as well as uav counter
     // TODO ROV?  e.g. RasterizerOrderedTexture2D
 };
-using GlobalBufferStaticBindingPoint = uint8_t;
+using GlobalBufferStaticBindingPoint = Moer::uint8;
 
 enum {
     /** The maximum number of static slots allowed. */
@@ -946,7 +950,7 @@ enum EGlobalBufferLifeScope {
     MULTI_FRAME
 };
 
-enum class ETextureUsageFlags : uint32_t {
+enum class ETextureUsageFlags : Moer::uint32 {
     UNDEFINED = 0ULL,
 
     CPU_VISIBLE  = 1 << 1,
@@ -980,7 +984,7 @@ enum class ETextureUsageFlags : uint32_t {
 };
 ENUM_BIT_OP_IMPL(ETextureUsageFlags, FLAG)
 
-enum ETextureStateFlags : uint32_t {
+enum ETextureStateFlags : Moer::uint32 {
     TS_UNDEFINED = 0ULL,
     // TS_ATTACHMENT_LOAD    = 1 << 0,
     // TS_ATTACHMENT_CLEAR   = 1 << 1,
@@ -998,7 +1002,7 @@ enum ETextureStateFlags : uint32_t {
 ENUM_BIT_OP_IMPL(ETextureStateFlags, FLAG)
 
 //for barriers
-enum class ETextureAspectFlags : uint32_t {
+enum class ETextureAspectFlags : Moer::uint32 {
     // no
     NONE,
     COLOR         = 1 << 0,
@@ -1044,7 +1048,7 @@ GetPixelFormatAspectFlags(EPixelFormat format) noexcept {
  * @fragment_invocation_count means fragment shading invocation per region
  * @region_size means one shading result will be used to color ${regions_size} pixels
  * */
-enum EVariousShadingRate : uint8_t {
+enum EVariousShadingRate : Moer::uint8 {
     VSR_NONE,
     VSR_16_1x1,
     VSR_8_1x1,
@@ -1058,7 +1062,7 @@ enum EVariousShadingRate : uint8_t {
     VSR_1_4x2,
     VSR_1_4x4
 };
-enum EVRSRateCombinerOp : uint8_t {
+enum EVRSRateCombinerOp : Moer::uint8 {
     VRSRB_KEEP,
     VRSRB_OVERRIDE,
     VRSRB_MIN,
@@ -1076,7 +1080,7 @@ enum ERenderQueryType {
 #pragma endregion
 
 #pragma region shader platform
-enum EShaderPlatform : uint16_t {
+enum EShaderPlatform : Moer::uint16 {
     SP_WIN_D3D_SM6,
     SP_VULKAN_SM6,
     SP_METAL_MSL,
@@ -1094,18 +1098,18 @@ END_ENUM_STR_DEFINITION(EShaderPlatform)
 static_assert(SP_Num < (1 << SP_NumBits) && "");
 
 struct ShaderTargetInfo {
-    uint16_t shader_type;
-    uint16_t shader_platform;
+    Moer::uint16 shader_type;
+    Moer::uint16 shader_platform;
     ShaderTargetInfo(const ShaderTargetInfo& _other) :
         shader_type(_other.shader_type),
         shader_platform(_other.shader_platform) {}
-    operator uint32_t() const {
-        return *(uint32_t*)this;
+    operator Moer::uint32() const {
+        return *(Moer::uint32*)this;
     }
     ShaderTargetInfo(EShaderType _type, EShaderPlatform _platform) :
         shader_type(_type),
         shader_platform(_platform) {}
-    ShaderTargetInfo(uint32_t _info) :
+    ShaderTargetInfo(Moer::uint32 _info) :
         shader_type(_info & 0xffff),
         shader_platform(static_cast<EShaderPlatform>(_info >> 16)) {}
 
@@ -1122,7 +1126,7 @@ struct ShaderTargetInfo {
  * @brief Binding Parameter Enum
  *
  */
-enum class EShaderParameterType : uint8_t {
+enum class EShaderParameterType : Moer::uint8 {
     UNKNOWN,
     CONSTANT_STRUCT,
     CBV,
@@ -1171,14 +1175,14 @@ struct ParameterInfo {
     // source pipeline stage
     ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
     // slot in dx12 while binding in Vulkan
-    int8_t slot = -1;
+    Moer::int8 slot = -1;
     // space in dx12 while set in Vulkan
-    int8_t space = -1;
+    Moer::int8 space = -1;
     // array size, invalid for root cbv
-    int8_t num = 0;
+    Moer::int8 num = 0;
     // parameter type enum
     EShaderParameterType type{EShaderParameterType::Num};
-    Moer::uint           type_flags = 0;
+    Moer::uint32         type_flags = 0;
 };
 
 #pragma endregion
@@ -1203,7 +1207,7 @@ enum class ECommandListType {
     Num
 };
 
-enum class EPrimitiveType : uint8_t {
+enum class EPrimitiveType : Moer::uint8 {
     // don't change the enums values (made to match GL)
     POINTS         = 0, //!< points
     LINES          = 1, //!< lines
@@ -1212,7 +1216,7 @@ enum class EPrimitiveType : uint8_t {
     TRIANGLE_STRIP = 5  //!< triangle strip
 };
 
-enum class ESamplerType : uint8_t {
+enum class ESamplerType : Moer::uint8 {
     SAMPLER_2D,            //!< 2D texture
     SAMPLER_2D_ARRAY,      //!< 2D array texture
     SAMPLER_CUBEMAP,       //!< Cube map texture
@@ -1226,7 +1230,7 @@ struct Rect2D {
     Offset2D offset;
     Extent2D extent;
 
-    Rect2D(int32_t offset_x = -1, int32_t offset_y = -1, uint32_t extent_x = 0, uint32_t extent_y = 0) :
+    Rect2D(Moer::int32 offset_x = -1, Moer::int32 offset_y = -1, Moer::uint32 extent_x = 0, Moer::uint32 extent_y = 0) :
         offset{offset_x, offset_y},
         extent(extent_x, extent_y) {}
 
@@ -1248,11 +1252,11 @@ struct SubpassSettings {
     bool operator==(const SubpassSettings& other) const {
         return type == other.type && index == other.index;
     }
-    enum Type : uint8_t {
+    enum Type : Moer::uint8 {
         NONE,
         DEFERRED
     } type        = NONE;
-    uint8_t index = 0;
+    Moer::uint8 index = 0;
 };
 static_assert(sizeof(SubpassSettings) == 2);
 
@@ -1302,8 +1306,8 @@ enum class EQueueType : uint8 {
  */
 struct RHIQueueBinding {
     EQueueType queue           = EQueueType::Ignore;
-    uint32_t   native_queue_id = 0;
-    uint32_t   family_id       = 0;
+    uint32     native_queue_id = 0;
+    uint32     family_id       = 0;
     /** False when the backend does not expose this logical submission role. */
     bool       available       = true;
 
@@ -1335,35 +1339,35 @@ struct RHIQueueTopology {
 
 struct ReflectParamInfo {
     struct CustomFlags {
-        uint active : 1;
-        uint padding : 31;
+        uint32 active : 1;
+        uint32 padding : 31;
     };
     struct Resource {
-        uint         set;
-        uint         binding;
-        uint         sampled;
-        uint         desc_type;
-        uint         resource_type;
-        uint         count;
+        uint32       set;
+        uint32       binding;
+        uint32       sampled;
+        uint32       desc_type;
+        uint32       resource_type;
+        uint32       count;
         CustomFlags  custom_flag;
         EPixelFormat format;
     };
     struct Constant {
-        uint        offset;
-        uint        size;
-        uint        padded_size;
+        uint32      offset;
+        uint32      size;
+        uint32      padded_size;
         CustomFlags custom_flag;
     };
     static constexpr std::string_view bdls_name = "bdls_114514";
     static constexpr std::string_view constants_name = "moer_constants";
     static constexpr std::string_view bindless_index_address_name = "moer_bindless_index_address";
     struct Bindless {
-        uint        set;
-        uint        binding;
-        uint        count;
-        uint        desc_type;
-        uint        resource_type;
-        uint        stage_bits = 0;
+        uint32      set;
+        uint32      binding;
+        uint32      count;
+        uint32      desc_type;
+        uint32      resource_type;
+        uint32      stage_bits = 0;
         CustomFlags custom_flag;
     };
     struct BindlessArray {
@@ -1377,7 +1381,7 @@ struct ReflectParamInfo {
         std::optional<Bindless> acceleration_structure;
     };
     struct SpirvParameterReflection {
-        uint                                            stage_bits = 0;
+        uint32                                          stage_bits = 0;
         std::variant<Resource, Constant, BindlessArray> data       = Resource{};
 
         const Resource* TryGetResource() const {
@@ -1403,11 +1407,11 @@ struct ReflectParamInfo {
         }
     };
     struct DxilParameterReflection {
-        uint slot;
-        uint space;
-        uint count;
-        uint type : 16;      // for common resource, see EShaderVariableType
-        uint byte_size : 16; // padded size, size for root constant
+        uint32 slot;
+        uint32 space;
+        uint32 count;
+        uint32 type : 16;      // for common resource, see EShaderVariableType
+        uint32 byte_size : 16; // padded size, size for root constant
 
         bool IsBindless() const {
             return count == 0;
@@ -1432,10 +1436,10 @@ struct ReflectParamInfo {
     RENDER_API Moer::InputStream& operator>>(Moer::InputStream& stream);
 };
 struct MeshletDesc {
-    uint32_t vertex_offset;
-    uint32_t vertex_count;
-    uint32_t primitive_offset;
-    uint32_t primitive_count;
+    uint32 vertex_offset;
+    uint32 vertex_count;
+    uint32 primitive_offset;
+    uint32 primitive_count;
 };
 
 struct MeshletBound {
@@ -1444,19 +1448,19 @@ struct MeshletBound {
     float    radius;
 
     /* normal cone axis and cutoff, stored in 8-bit SNORM format; decode using x/127.0 */
-    int8_t cone_axis_s8[3];
-    int8_t cone_cutoff; /* = cos(angle/2) */
+    int8 cone_axis_s8[3];
+    int8 cone_cutoff; /* = cos(angle/2) */
 
     /* bool reject = dot(center - camera_position, cone_axis) >= cone_cutoff* length(center - camera_position) + radius; */
-    uint32_t padding[3];
+    uint32 padding[3];
 };
 struct DrawInstanceCmd {
-    uint32_t index_count;
-    uint32_t instance_count;
-    uint32_t first_index;
-    uint32_t vertex_offset;
-    uint32_t first_instance;
-    uint32_t padding[3];
+    uint32 index_count;
+    uint32 instance_count;
+    uint32 first_index;
+    uint32 vertex_offset;
+    uint32 first_instance;
+    uint32 padding[3];
 };
 struct ShaderParametersInfoMap {
     friend class ::ShaderCompiler;

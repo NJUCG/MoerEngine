@@ -18,6 +18,7 @@
 #include "SsrPass.h"
 #include "TessellatedSurfacePass.h"
 #include "TonemappingPass.h"
+#include "misc/Types.h"
 
 #include "profile/ProfileScope.h"
 #include "renderer/common/UiCombinePass.h"
@@ -194,7 +195,7 @@ RenderGraph::PassHandle ProbeUpdatePass::AddToGraph(
         "ProbeUpdate.Upload",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
-                .RecordWorkload(std::max(1u, static_cast<uint32_t>(uploads.size())))
+                .RecordWorkload(std::max(1u, static_cast<uint32>(uploads.size())))
                 .Write(resources.probe_volume)
                 .SideEffect();
             for (auto buffer : uploads) {
@@ -232,7 +233,7 @@ RenderGraph::PassHandle ProbeUpdatePass::AddToGraph(
             ray_data.push_back(ImportRasterBuffer(graph, "ProbeUpdate.ray_data", resource->buf.Get()));
         }
     }
-    for (uint index = 0; index < parameters->update.job_count && parameters->update.scheduled_probe_count;
+    for (uint32 index = 0; index < parameters->update.job_count && parameters->update.scheduled_probe_count;
          ++index) {
         if (!parameters->update.jobs[index].probe_count) {
             continue;
@@ -320,8 +321,8 @@ void TessellatedSurfacePass::AddToGraph(
     }
     auto prepared = graph.AddSetupPass(
         "TessellatedSurface.Prepare",
-        uint8_t{0},
-        [this, &context, &config, &camera](const uint8_t&) {
+        uint8{0},
+        [this, &context, &config, &camera](const uint8&) {
             return Prepare(context, config, camera);
         }
     );
@@ -367,8 +368,10 @@ void HiZBuildPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.HiZBuildPass");
     auto prepared = graph.AddSetupPass(
         "HiZBuild.Prepare",
-        uint8_t{0},
-        [this, &context](const uint8_t&) { return Prepare(context); }
+        uint8{0},
+        [this, &context](const uint8&) {
+            return Prepare(context);
+        }
     );
     if (!prepared.IsValid()) {
         return;
@@ -399,8 +402,10 @@ void DirectionalShadowMaskPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.DirectionalShadowMaskPass");
     auto prepared = graph.AddSetupPass(
         "DirectionalShadowMask.Prepare",
-        uint8_t{0},
-        [this, &context](const uint8_t&) { return Prepare(context); },
+        uint8{0},
+        [this, &context](const uint8&) {
+            return Prepare(context);
+        },
         setup_dependencies
     );
     if (!prepared.IsValid()) {
@@ -439,8 +444,8 @@ void LightingPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.LightingPass");
     auto prepared = graph.AddSetupPass(
         "Lighting.Prepare",
-        uint8_t{0},
-        [this, &context, &ui_config](const uint8_t&) {
+        uint8{0},
+        [this, &context, &ui_config](const uint8&) {
             return Prepare(context, ui_config);
         }
     );
@@ -494,8 +499,8 @@ void SkyboxPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.SkyboxPass");
     auto prepared = graph.AddSetupPass(
         "Skybox.Prepare",
-        uint8_t{0},
-        [this, &context, &config, &camera](const uint8_t&) {
+        uint8{0},
+        [this, &context, &config, &camera](const uint8&) {
             return Prepare(context, config, camera);
         }
     );
@@ -532,8 +537,8 @@ void ProbeGizmoPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.ProbeGizmoPass");
     auto prepared = graph.AddSetupPass(
         "ProbeGizmo.Prepare",
-        uint8_t{0},
-        [this, &context, config = std::move(config), &camera](const uint8_t&) {
+        uint8{0},
+        [this, &context, config = std::move(config), &camera](const uint8&) {
             return Prepare(context, config, camera);
         },
         setup_dependencies
@@ -572,8 +577,8 @@ void AoPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.AoPass");
     auto prepared = graph.AddSetupPass(
         "AmbientOcclusion.Prepare",
-        uint8_t{0},
-        [this, &context, &ui_config, &camera, frame_index](const uint8_t&) {
+        uint8{0},
+        [this, &context, &ui_config, &camera, frame_index](const uint8&) {
             return Prepare(context, ui_config, camera, frame_index);
         }
     );
@@ -626,16 +631,16 @@ void AoPass::AddToGraph(
 }
 
 void AoPass::AddCompositeToGraph(
-    RenderGraph& graph,
-    RasterContext& context,
-    const RasterConfig& ui_config,
-    uint ao_only_handle,
+    RenderGraph&            graph,
+    RasterContext&          context,
+    const RasterConfig&     ui_config,
+    uint32                  ao_only_handle,
     CompositeGraphResources resources
 ) {
     auto prepared = graph.AddSetupPass(
         "AoComposite.Prepare",
-        uint8_t{0},
-        [this, &context, &ui_config, ao_only_handle](const uint8_t&) {
+        uint8{0},
+        [this, &context, &ui_config, ao_only_handle](const uint8&) {
             return PrepareComposite(context, ui_config, ao_only_handle);
         }
     );
@@ -663,11 +668,11 @@ void AoPass::AddCompositeToGraph(
 }
 
 void RtaoDenoiserPass::AddToGraph(
-    RenderGraph& graph,
-    RasterContext& context,
+    RenderGraph&        graph,
+    RasterContext&      context,
     const RasterConfig& ui_config,
-    uint ao_only_index,
-    GraphResources resources
+    uint32              ao_only_index,
+    GraphResources      resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.RtaoDenoiserPass");
     if (!ui_config.rtao_denoiser_enable ||
@@ -676,8 +681,8 @@ void RtaoDenoiserPass::AddToGraph(
     }
     auto prepared = graph.AddSetupPass(
         "RtaoDenoise.Prepare",
-        uint8_t{0},
-        [this, &context, &ui_config, ao_only_index](const uint8_t&) {
+        uint8{0},
+        [this, &context, &ui_config, ao_only_index](const uint8&) {
             return Prepare(context, ui_config, ao_only_index);
         }
     );
@@ -1075,8 +1080,8 @@ void CameraGizmoPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.CameraGizmoPass");
     auto prepared = graph.AddSetupPass(
         "CameraGizmo.Prepare",
-        uint8_t{0},
-        [this, &context, &scene_camera, &main_camera](const uint8_t&) {
+        uint8{0},
+        [this, &context, &scene_camera, &main_camera](const uint8&) {
             return Prepare(context, scene_camera, main_camera);
         }
     );
@@ -1112,8 +1117,8 @@ void CsmGizmoPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.CsmGizmoPass");
     auto prepared = graph.AddSetupPass(
         "CsmGizmo.Prepare",
-        uint8_t{0},
-        [this, &context, &config, &gizmos, &camera, &main_camera](const uint8_t&) {
+        uint8{0},
+        [this, &context, &config, &gizmos, &camera, &main_camera](const uint8&) {
             return Prepare(context, config, gizmos, camera, main_camera);
         },
         setup_dependencies

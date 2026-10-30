@@ -1,4 +1,5 @@
 #include "CpuScene.h"
+#include "misc/Types.h"
 
 #include "GpuSceneUpdate.h"
 #include "LogicalComponents.h"
@@ -37,7 +38,7 @@ static bool TryBuildGLight(const entt::registry& registry, entt::entity entity, 
     out_light = GLight{};
 
     if (registry.all_of<ecs::CNode>(entity) && !IsNodeEffectivelyVisibleInGame(registry, entity)) {
-        out_light.type = static_cast<uint>(ELightType::None);
+        out_light.type = static_cast<uint32>(ELightType::None);
         return true;
     }
 
@@ -45,7 +46,7 @@ static bool TryBuildGLight(const entt::registry& registry, entt::entity entity, 
         const auto& c_light = registry.get<ecs::CLightDirectional>(entity);
         out_light.color     = c_light.color;
         out_light.intensity = c_light.intensity;
-        out_light.type      = static_cast<uint>(ELightType::Directional);
+        out_light.type      = static_cast<uint32>(ELightType::Directional);
         out_light.direction = c_light.d_direction;
         return true;
     }
@@ -53,7 +54,7 @@ static bool TryBuildGLight(const entt::registry& registry, entt::entity entity, 
         const auto& c_light = registry.get<ecs::CLightPoint>(entity);
         out_light.color     = c_light.color;
         out_light.intensity = c_light.intensity;
-        out_light.type      = static_cast<uint>(ELightType::Point);
+        out_light.type      = static_cast<uint32>(ELightType::Point);
         out_light.position  = c_light.d_position;
         return true;
     }
@@ -61,7 +62,7 @@ static bool TryBuildGLight(const entt::registry& registry, entt::entity entity, 
         const auto& c_light = registry.get<ecs::CLightAmbient>(entity);
         out_light.color     = c_light.color;
         out_light.intensity = c_light.intensity;
-        out_light.type      = static_cast<uint>(ELightType::Ambient);
+        out_light.type      = static_cast<uint32>(ELightType::Ambient);
         return true;
     }
     if (registry.all_of<ecs::CLightSpot>(entity)) {
@@ -144,7 +145,7 @@ void CpuScene::Update() {
     r.clear<ecs::CTagNeedRebuildRtBlas>();
 }
 
-uint CpuScene::GetPrimitiveId(entt::entity primitive_entt) const {
+uint32 CpuScene::GetPrimitiveId(entt::entity primitive_entt) const {
     auto it = m_map_primitive_entity_to_id.find(primitive_entt);
     if (it != m_map_primitive_entity_to_id.end()) {
         return it->second;
@@ -152,7 +153,7 @@ uint CpuScene::GetPrimitiveId(entt::entity primitive_entt) const {
     return UINT_MAX; // 返回无效值
 }
 
-uint CpuScene::GetFirstInstanceIndex(uint primitive_id) const {
+uint32 CpuScene::GetFirstInstanceIndex(uint32 primitive_id) const {
     if (primitive_id >= m_primitive_id_to_first_instance_idx.size()) {
         return UINT_MAX;
     }
@@ -164,26 +165,26 @@ uint CpuScene::GetFirstInstanceIndex(uint primitive_id) const {
     return m_primitive_id_to_first_instance_idx[primitive_id];
 }
 
-uint CpuScene::GetPrimitiveCount() const {
-    return static_cast<uint>(m_primitive_buf.size());
+uint32 CpuScene::GetPrimitiveCount() const {
+    return static_cast<uint32>(m_primitive_buf.size());
 }
 
-uint CpuScene::GetInstanceCountForPrimitive(uint primitive_id) const {
+uint32 CpuScene::GetInstanceCountForPrimitive(uint32 primitive_id) const {
     if (primitive_id >= m_primitive_id_to_transform_entt_arrays.size()) {
         return 0;
     }
-    return static_cast<uint>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
+    return static_cast<uint32>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
 }
 
-const GInstance& CpuScene::GetInstanceForPrimitive(uint primitive_id, uint instance_idx) const {
+const GInstance& CpuScene::GetInstanceForPrimitive(uint32 primitive_id, uint32 instance_idx) const {
     assert(primitive_id < m_primitive_id_to_transform_entt_arrays.size());
     auto& arr = m_primitive_id_to_transform_entt_arrays[primitive_id];
     assert(instance_idx < arr.size());
     return arr[instance_idx];
 }
 
-uint CpuScene::GetLightCount() const {
-    return static_cast<uint>(m_light_buf.size());
+uint32 CpuScene::GetLightCount() const {
+    return static_cast<uint32>(m_light_buf.size());
 }
 
 void CpuScene::InitializeLights() {
@@ -201,7 +202,7 @@ void CpuScene::InitializeLights() {
             return;
         }
 
-        uint light_id = static_cast<uint>(m_light_buf.size());
+        uint32 light_id = static_cast<uint32>(m_light_buf.size());
         m_light_buf.emplace_back(light);
         m_map_light_entity_to_id[entity] = light_id;
     });
@@ -222,7 +223,7 @@ void CpuScene::CreateNeededLights() {
             return;
         }
 
-        uint light_id = static_cast<uint>(m_light_buf.size());
+        uint32 light_id = static_cast<uint32>(m_light_buf.size());
         m_light_buf.emplace_back(light);
         m_map_light_entity_to_id[entity] = light_id;
     });
@@ -251,7 +252,7 @@ void CpuScene::UpdateLights() {
             return;
         }
 
-        uint light_id         = light_id_it->second;
+        uint32 light_id       = light_id_it->second;
         m_light_buf[light_id] = light;
     });
 }
@@ -283,7 +284,7 @@ void CpuScene::RebuildLightsExcludingPendingDestroy() {
             return;
         }
 
-        uint light_id = static_cast<uint>(m_light_buf.size());
+        uint32 light_id = static_cast<uint32>(m_light_buf.size());
         m_light_buf.emplace_back(light);
         m_map_light_entity_to_id[entity] = light_id;
     });
@@ -302,7 +303,7 @@ void CpuScene::InitializeMaterials() {
     r.view<const ecs::CMaterial>().each([&](const auto entity, const ecs::CMaterial& c_material) {
         GMaterial g_material = BuildGMaterialFromComponent(c_material);
 
-        uint material_id = static_cast<uint>(m_material_buf.size());
+        uint32 material_id = static_cast<uint32>(m_material_buf.size());
         m_material_buf.emplace_back(g_material);
         m_map_material_entity_to_id[entity] = material_id; // build index cache
     });
@@ -318,7 +319,7 @@ void CpuScene::CreateNeededMaterials() {
             return;
         }
 
-        uint material_id = static_cast<uint>(m_material_buf.size());
+        uint32 material_id = static_cast<uint32>(m_material_buf.size());
         m_material_buf.emplace_back(BuildGMaterialFromComponent(c_material));
         m_map_material_entity_to_id[entity] = material_id;
     });
@@ -337,7 +338,7 @@ void CpuScene::UpdateMaterials() {
             return;
         }
 
-        const uint material_id = mat_id_it->second;
+        const uint32 material_id = mat_id_it->second;
 
         GMaterial g_material        = m_material_buf[material_id];
         g_material.albedo_factor    = c_material.albedo_factor;
@@ -395,23 +396,23 @@ void CpuScene::InitializeMeshes() {
 
             if (c_primitive.position.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::Position;
-                g_primitive.position_start_idx = static_cast<uint>(c_primitive.position.start_idx);
+                g_primitive.position_start_idx = static_cast<uint32>(c_primitive.position.start_idx);
             }
             if (c_primitive.packed_normal.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::PackedNormal;
-                g_primitive.packed_normal_start_idx = static_cast<uint>(c_primitive.packed_normal.start_idx);
+                g_primitive.packed_normal_start_idx = static_cast<uint32>(c_primitive.packed_normal.start_idx);
             }
             if (c_primitive.packed_tangent.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::PackedTangent;
                 g_primitive.packed_tangent_start_idx =
-                    static_cast<uint>(c_primitive.packed_tangent.start_idx);
+                    static_cast<uint32>(c_primitive.packed_tangent.start_idx);
             }
             if (c_primitive.texcoord0.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::Texcoord0;
-                g_primitive.texcoord0_start_idx = static_cast<uint>(c_primitive.texcoord0.start_idx);
+                g_primitive.texcoord0_start_idx = static_cast<uint32>(c_primitive.texcoord0.start_idx);
             }
             if (c_primitive.index.is_valid) {
-                g_primitive.index_start_idx = static_cast<uint>(c_primitive.index.start_idx);
+                g_primitive.index_start_idx = static_cast<uint32>(c_primitive.index.start_idx);
             } else {
                 g_primitive.index_start_idx = 0; // 默认值
             }
@@ -438,7 +439,7 @@ void CpuScene::InitializeMeshes() {
                 );
             }
 
-            uint primitive_id = static_cast<uint>(m_primitive_buf.size());
+            uint32 primitive_id = static_cast<uint32>(m_primitive_buf.size());
             m_primitive_buf.emplace_back(g_primitive);
             m_map_primitive_entity_to_id[entity] = primitive_id; // build index cache
 
@@ -482,7 +483,7 @@ void CpuScene::InitializeMeshes() {
         });
     }
 
-    uint instance_cnt = 0;
+    uint32 instance_cnt = 0;
     {
         Queue<entt::entity> node_queue;
 
@@ -517,9 +518,9 @@ void CpuScene::InitializeMeshes() {
                 // - CMesh       : CPrimitive  = 1 : N
                 // 这里冗余的CRenderable是为了在内存中去重
                 for (const entt::entity primitive_entt : c_mesh.primitive_entts) {
-                    const uint primitive_id = m_map_primitive_entity_to_id[primitive_entt];
-                    const uint instance_idx_in_primitive =
-                        static_cast<uint>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
+                    const uint32 primitive_id = m_map_primitive_entity_to_id[primitive_entt];
+                    const uint32 instance_idx_in_primitive =
+                        static_cast<uint32>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
 
                     m_primitive_id_to_transform_entt_arrays[primitive_id].emplace_back(
                         GInstance{
@@ -546,13 +547,13 @@ void CpuScene::InitializeMeshes() {
         // 构建前缀和数组：m_primitive_id_to_first_instance_idx[i] = 前 i 个 Primitive 的 Instance 总数
         m_primitive_id_to_first_instance_idx.clear();
         m_primitive_id_to_first_instance_idx.resize(m_primitive_id_to_transform_entt_arrays.size());
-        uint prefix_sum = 0;
-        for (uint i = 0; i < m_primitive_id_to_transform_entt_arrays.size(); ++i) {
+        uint32 prefix_sum = 0;
+        for (uint32 i = 0; i < m_primitive_id_to_transform_entt_arrays.size(); ++i) {
             m_primitive_id_to_first_instance_idx[i] = prefix_sum;
             for (const auto& instance : m_primitive_id_to_transform_entt_arrays[i]) {
                 m_instance_buf.emplace_back(instance);
             }
-            prefix_sum += static_cast<uint>(m_primitive_id_to_transform_entt_arrays[i].size());
+            prefix_sum += static_cast<uint32>(m_primitive_id_to_transform_entt_arrays[i].size());
         }
 
         for (auto& [_, instance_slots] : m_map_transform_entity_to_instance_slots) {
@@ -593,9 +594,9 @@ void CpuScene::InitializeMeshes() {
 
         // 再次遍历 CPrimitive，顺序与第一次遍历一致
         r.view<const ecs::CPrimitive>().each([&](const auto entity, const ecs::CPrimitive& c_primitive) {
-            const uint primitive_id = m_map_primitive_entity_to_id.at(entity);
-            const uint instance_cnt =
-                static_cast<uint>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
+            const uint32 primitive_id = m_map_primitive_entity_to_id.at(entity);
+            const uint32 instance_cnt =
+                static_cast<uint32>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
 
             Render::DrawIndexedCmdData draw_cmd_data{};
 
@@ -780,14 +781,14 @@ Render::GpuSceneUpdate CpuScene::BuildGpuSceneUpdate(
             [&](entt::entity mesh_entity, const ecs::CMesh& mesh) {
                 Render::GpuSceneRtMeshData mesh_data{};
                 mesh_data.key = to_key(mesh_entity);
-                const uint leaf_count = mesh.num_leaf_clusters > 0 ?
-                                            Min(
-                                                mesh.num_leaf_clusters,
-                                                static_cast<uint>(mesh.primitive_entts.size())
-                                            ) :
-                                            static_cast<uint>(mesh.primitive_entts.size());
+                const uint32 leaf_count = mesh.num_leaf_clusters > 0 ?
+                                              Min(
+                                                  mesh.num_leaf_clusters,
+                                                  static_cast<uint32>(mesh.primitive_entts.size())
+                                              ) :
+                                              static_cast<uint32>(mesh.primitive_entts.size());
                 mesh_data.geometries.reserve(leaf_count);
-                for (uint index = 0; index < leaf_count; ++index) {
+                for (uint32 index = 0; index < leaf_count; ++index) {
                     const entt::entity primitive_entity = mesh.primitive_entts[index];
                     const auto* primitive = registry.try_get<const ecs::CPrimitive>(primitive_entity);
                     if (primitive == nullptr || !primitive->position.is_valid ||
@@ -824,22 +825,22 @@ Render::GpuSceneUpdate CpuScene::BuildGpuSceneUpdate(
                 }
 
                 const auto& mesh = registry.get<const ecs::CMesh>(renderable.mesh_entt);
-                const uint leaf_count = mesh.num_leaf_clusters > 0 ?
-                                            Min(
-                                                mesh.num_leaf_clusters,
-                                                static_cast<uint>(mesh.primitive_entts.size())
-                                            ) :
-                                            static_cast<uint>(mesh.primitive_entts.size());
-                uint valid_primitive_count = 0;
-                uint first_primitive_id     = UINT_MAX;
-                for (uint index = 0; index < leaf_count; ++index) {
+                const uint32 leaf_count            = mesh.num_leaf_clusters > 0 ?
+                                                         Min(
+                                                             mesh.num_leaf_clusters,
+                                                             static_cast<uint32>(mesh.primitive_entts.size())
+                                                         ) :
+                                                         static_cast<uint32>(mesh.primitive_entts.size());
+                uint32       valid_primitive_count = 0;
+                uint32       first_primitive_id    = UINT_MAX;
+                for (uint32 index = 0; index < leaf_count; ++index) {
                     const entt::entity primitive_entity = mesh.primitive_entts[index];
                     const auto* primitive = registry.try_get<const ecs::CPrimitive>(primitive_entity);
                     if (primitive == nullptr || !primitive->position.is_valid ||
                         !primitive->index.is_valid) {
                         continue;
                     }
-                    const uint primitive_id = GetPrimitiveId(primitive_entity);
+                    const uint32 primitive_id = GetPrimitiveId(primitive_entity);
                     if (first_primitive_id == UINT_MAX) {
                         first_primitive_id = primitive_id;
                     }

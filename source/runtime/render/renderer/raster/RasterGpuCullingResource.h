@@ -1,5 +1,6 @@
 #pragma once
 
+#include "misc/Types.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "shaderheaders/shared/raster/culling/ShaderParameters.h"
@@ -17,12 +18,12 @@ struct GpuCullingBuffers {
         BufferWithHandle visible_instance_id_buf;
         BufferRef        counter_buf;
 
-        uint max_draw_count     = 0;
-        uint max_instance_count = 0;
+        uint32 max_draw_count     = 0;
+        uint32 max_instance_count = 0;
 
         // Returns the uint counter view consumed by counted indirect draw calls.
         BufferView GetDrawCountView() const {
-            return BufferView(counter_buf.Get(), 0, 1, sizeof(uint));
+            return BufferView(counter_buf.Get(), 0, 1, sizeof(uint32));
         }
 
         // Ensures the visibility buffers are large enough and rebound after reallocations.
@@ -30,11 +31,11 @@ struct GpuCullingBuffers {
             RenderDevice&     device,
             BindlessArrayRef& bdls,
             std::string_view  debug_name_prefix,
-            uint              draw_count,
-            uint              instance_count
+            uint32            draw_count,
+            uint32            instance_count
         ) {
-            const uint target_draw_count     = draw_count == 0 ? 1u : draw_count;
-            const uint target_instance_count = instance_count == 0 ? 1u : instance_count;
+            const uint32 target_draw_count     = draw_count == 0 ? 1u : draw_count;
+            const uint32 target_instance_count = instance_count == 0 ? 1u : instance_count;
 
             bool need_bindless_update = false;
 
@@ -53,7 +54,7 @@ struct GpuCullingBuffers {
                     visible_instance_id_buf.hdl = 0;
                 }
 
-                visible_instance_id_buf.buf = device.CreateBuffer<uint>(
+                visible_instance_id_buf.buf = device.CreateBuffer<uint32>(
                     std::string(debug_name_prefix) + "::VisibleInstanceIds",
                     target_instance_count,
                     EBufferUsageFlags::UNORDERED_ACCESS

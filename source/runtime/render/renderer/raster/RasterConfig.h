@@ -2,6 +2,7 @@
 
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 
 #include "RasterCompileTimeConstants.h"
 #include "shaderheaders/shared/raster/ShaderParameters.h"
@@ -118,12 +119,12 @@ struct CooperativeOpsStatus {
     bool storage_supported                     = false;
     bool vulkan_memory_model_supported         = false;
 
-    uint matrix_mode_count       = 0;
-    uint vector_mode_count       = 0;
-    uint matrix_supported_stages = 0;
-    uint vector_supported_stages = 0;
-    uint max_vector_components   = 0;
-    uint frames_evaluated        = 0;
+    uint32 matrix_mode_count       = 0;
+    uint32 vector_mode_count       = 0;
+    uint32 matrix_supported_stages = 0;
+    uint32 vector_supported_stages = 0;
+    uint32 max_vector_components   = 0;
+    uint32 frames_evaluated        = 0;
 
     std::string overview              = "Waiting for cooperative snapshot...";
     std::string matrix_summary        = "Waiting for cooperative snapshot...";
@@ -175,13 +176,13 @@ struct RasterConfig {
 
     // MARK: Culling Statistics (只读，由GPU更新)
     struct CullingStats {
-        uint total_instances_before     = 0;
-        uint total_instances_after      = 0;
-        uint visible_draws              = 0;
-        uint total_draws                = 0;
-        uint frustum_culled_instances   = 0;
-        uint occlusion_culled_instances = 0;
-        uint lod_culled_instances       = 0;
+        uint32 total_instances_before     = 0;
+        uint32 total_instances_after      = 0;
+        uint32 visible_draws              = 0;
+        uint32 total_draws                = 0;
+        uint32 frustum_culled_instances   = 0;
+        uint32 occlusion_culled_instances = 0;
+        uint32 lod_culled_instances       = 0;
 
         float GetCullingRatio() const {
             if (total_instances_before == 0)
@@ -412,7 +413,7 @@ struct RasterConfig {
 
     // MARK: Others
 
-    uint  selected_frame_buffer_index = 0;
+    uint32 selected_frame_buffer_index = 0;
     float frame_time                  = 1.0f / 60.0f; // default 0.0167s
 };
 

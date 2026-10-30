@@ -3,10 +3,10 @@
 
 #include "taskgraph/WorkStealing.h"
 
+#include "misc/Types.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>
-#include <cstdint>
 #include <memory>
 #include <mutex>
 
@@ -15,7 +15,7 @@ class BaseGraphTask;
 /** Core-private AnyThread backend. GraphEvent and dependency semantics stay in TaskGraph. */
 class AnyThreadScheduler {
 public:
-    using WakeWorkerFn = void (*)(void* context, int32_t thread_index) noexcept;
+    using WakeWorkerFn = void (*)(void* context, Moer::int32 thread_index) noexcept;
 
     class NamedPublicationGuard {
     public:
@@ -49,7 +49,7 @@ public:
     ) noexcept;
 
     /** Returns work or atomically registers the caller as safe to park. */
-    [[nodiscard]] BaseGraphTask* DequeueOrPrepareToPark(int32_t thread_index) noexcept;
+    [[nodiscard]] BaseGraphTask* DequeueOrPrepareToPark(Moer::int32 thread_index) noexcept;
     void                         NotifyTaskCompleted() noexcept;
     /** Stop external/named producers while allowing in-flight workers to publish continuations. */
     void                         BeginDrain() noexcept;
@@ -63,39 +63,39 @@ private:
     struct WorkerState {
         Moer::TaskGraphDetail::ChaseLevDeque<BaseGraphTask> deque{};
         std::atomic_bool idle{false};
-        uint32_t         local_pop_streak = 0;
-        uint32_t         steal_cursor     = 0;
+        Moer::uint32                                        local_pop_streak = 0;
+        Moer::uint32                                        steal_cursor     = 0;
     };
 
     struct PriorityPool {
         struct GlobalQueue;
 
-        explicit PriorityPool(int32_t worker_count);
+        explicit PriorityPool(Moer::int32 worker_count);
         ~PriorityPool();
 
-        int32_t                         worker_count = 0;
+        Moer::int32                     worker_count = 0;
         std::unique_ptr<WorkerState[]>  workers{};
         std::unique_ptr<GlobalQueue>    global_queue{};
-        std::atomic<uint32_t>           wake_cursor{0};
+        std::atomic<Moer::uint32>       wake_cursor{0};
     };
 
     [[nodiscard]] BaseGraphTask*
-    TryFindWork(PriorityPool& pool, int32_t local_worker_index) noexcept;
+                       TryFindWork(PriorityPool& pool, Moer::int32 local_worker_index) noexcept;
     [[nodiscard]] bool TryGetLocalWorker(
         EThread::Type  actual_current_thread,
         ThreadPriority target_priority,
-        int32_t&       local_worker_index
+        Moer::int32&   local_worker_index
     ) const noexcept;
     [[nodiscard]] bool IsTaskGraphWorker(EThread::Type actual_current_thread) const noexcept;
     bool WakeOneIdleWorker(ThreadPriority priority) noexcept;
 
-    static constexpr uint32_t GlobalProbeInterval = 32;
+    static constexpr Moer::uint32 GlobalProbeInterval = 32;
 
     Moer::TaskGraphDetail::WorkerPoolTopology                 m_topology{};
     std::array<std::unique_ptr<PriorityPool>, EThread::PriorityCount> m_pools{};
     WakeWorkerFn                                              m_wake_worker = nullptr;
     void*                                                     m_wake_context = nullptr;
-    std::atomic<uint64_t>                                     m_pending_tasks{0};
+    std::atomic<Moer::uint64>                                         m_pending_tasks{0};
     std::atomic_bool                                          m_draining{false};
     std::atomic_bool                                          m_waiting_for_idle{false};
     std::mutex                                                m_admission_mutex{};

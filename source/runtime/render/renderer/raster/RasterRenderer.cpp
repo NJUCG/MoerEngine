@@ -1,4 +1,5 @@
 #include "RasterGraphResourceAccess.h"
+#include "misc/Types.h"
 // 负责光栅帧编排，不在此处实现各 Pass 的具体渲染算法。
 #include "RasterRenderer.h"
 
@@ -195,7 +196,7 @@ struct LightingUploadRecordParameters {
     const RasterConfig& ui_config,
     const Camera&       camera
 ) {
-    const uint    cascade_count = ui_config.shadow_csm_num_of_cascades;
+    const uint32  cascade_count = ui_config.shadow_csm_num_of_cascades;
     LightingData  prepared_data = context.lighting_data;
     LightingData* lighting_data = &prepared_data;
 
@@ -211,7 +212,7 @@ struct LightingUploadRecordParameters {
     lighting_data->shadow_csm_visualize_cascade = ui_config.shadow_csm_visualize_cascade;
 
     // Shadow Map
-    for (uint cascade_index = 0; cascade_index < cascade_count; ++cascade_index) {
+    for (uint32 cascade_index = 0; cascade_index < cascade_count; ++cascade_index) {
         lighting_data->cascade_shadow_map[cascade_index] =
             context.csm_data.shadow_map_textures[cascade_index].hdl;
     }
@@ -220,7 +221,7 @@ struct LightingUploadRecordParameters {
     lighting_data->light_radius     = context.point_shadow_data.shadow_cubes[0].far_plane;
 
     // Shadow Transform
-    for (uint cascade_index = 0; cascade_index < cascade_count; ++cascade_index) {
+    for (uint32 cascade_index = 0; cascade_index < cascade_count; ++cascade_index) {
         lighting_data->world2shadow_clip[cascade_index] =
             Transpose(lighting_data->world2shadow_clip[cascade_index]);
     }
@@ -240,16 +241,16 @@ struct LightingUploadRecordParameters {
     lighting_data->lut_ggx_eavg_handle = context.textures.lut_ggx_eavg.hdl;
 
     lighting_data->brdf_enable_multi_scatter = ui_config.shading_brdf_enable_multi_scatter ? 1 : 0;
-    lighting_data->brdf_NDF_mode             = static_cast<uint>(ui_config.shading_brdf_NDF_mode);
-    lighting_data->brdf_G_mode               = static_cast<uint>(ui_config.shading_brdf_G_mode);
+    lighting_data->brdf_NDF_mode             = static_cast<uint32>(ui_config.shading_brdf_NDF_mode);
+    lighting_data->brdf_G_mode               = static_cast<uint32>(ui_config.shading_brdf_G_mode);
     lighting_data->brdf_G_is_ibl             = ui_config.shading_brdf_G_is_ibl ? 1 : 0;
 
     context.probe_volume.FillLightingData(*lighting_data);
 
     if (ui_config.probe_gi_enabled && RasterTool::ShouldLogDebugEverySeconds(2.0)) {
-        const uint resident_bricks  = context.probe_volume.GetResidentBrickCount();
-        const uint scheduled_bricks = context.probe_volume.GetScheduledBrickCount();
-        const uint deferred_bricks  = resident_bricks > scheduled_bricks ? resident_bricks - scheduled_bricks : 0u;
+        const uint32       resident_bricks  = context.probe_volume.GetResidentBrickCount();
+        const uint32       scheduled_bricks = context.probe_volume.GetScheduledBrickCount();
+        const uint32       deferred_bricks  = resident_bricks > scheduled_bricks ? resident_bricks - scheduled_bricks : 0u;
         std::ostringstream stream;
         stream << "[ProbeGI] Runtime lighting params: enabled=" << lighting_data->probe_system_config.x
                << " debug=" << lighting_data->probe_system_config.y
@@ -364,8 +365,8 @@ public:
     ) const {
         auto prepared = graph.AddSetupPass(
             "UploadLightingData.Prepare",
-            uint8_t{0},
-            [&context, &config, &camera](const uint8_t&) {
+            uint8{0},
+            [&context, &config, &camera](const uint8&) {
                 return PrepareGlobalLightingData(context, config, camera);
             },
             setup_dependencies
@@ -647,7 +648,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     raster_context.BeginSceneFrame(frame_packet.scene_updates);
 
     if (time == 0) {
-        const uint32_t frame_thread_id = IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
+        const uint32 frame_thread_id = IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
         LOG_INFO(
             "[Threading] Raster frames execute on {} thread id = {}",
             IsCurrentlyRenderThread() ? "Render" : "Game",
@@ -763,7 +764,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     TextureRef default_output_texture = raster_context.textures.output.tex;
     bool       raster_pipeline_recorded = false;
     Matrix4x4f raster_commit_view_proj  = Matrix4x4f::Identity();
-    uint       raster_commit_ao_index   = 0u;
+    uint32     raster_commit_ao_index   = 0u;
     uint8      raster_commit_aa_phase   = 0u;
 
     // 窗口资源就绪后再使用已准备好的场景快照。
@@ -1048,7 +1049,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     import_texture("shadow_mask", raster_context.textures.shadow_mask.tex);
                 graph_resources.lighting_output =
                     import_texture("lighting_output", raster_context.textures.lighting_output.tex);
-                const uint  next_ao_only_index = ao_pass->NextAoOnlyIndex();
+                const uint32 next_ao_only_index = ao_pass->NextAoOnlyIndex();
                 const bool  ao_half_resolution = raster_config.ao_half_resolution;
                 const auto& ao_only_texture =
                     next_ao_only_index == 0u ?

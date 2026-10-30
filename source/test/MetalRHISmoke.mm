@@ -17,13 +17,13 @@
 #include "shaderheaders/shared/test/ShaderConstants.h"
 #include "taskgraph/TaskSystem.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstdint>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -56,7 +56,7 @@ public:
     DEFINE_SHADER_TEX(color);
     DEFINE_SHADER_SAMPLER(linear);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT(uint, params);
+    DEFINE_SHADER_CONSTANT(uint32, params);
     DEFINE_SHADER_ARGS(scalar, color, linear, bdls, params);
 };
 
@@ -64,7 +64,7 @@ class ScalarComputeSmoke : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(ScalarComputeSmoke);
     DEFINE_SHADER_BUFFER(values);
-    DEFINE_SHADER_CONSTANT(uint, increment);
+    DEFINE_SHADER_CONSTANT(uint32, increment);
     DEFINE_SHADER_ARGS(values, increment);
 };
 
@@ -89,7 +89,7 @@ public:
     DEFINE_COMPUTE_PIPELINE_CLASS(BindlessComputeSmoke);
     DEFINE_SHADER_BUFFER(output);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT(uint, params);
+    DEFINE_SHADER_CONSTANT(uint32, params);
     DEFINE_SHADER_ARGS(output, bdls, params);
 };
 
@@ -120,7 +120,7 @@ void CheckMultipleConstants() {
     const auto matrix = float4x4::Identity();
     const float3 tint{0.25f, 0.5f, 0.75f};
     const ConstantTestData data{3, 4};
-    for (uint bias : {5u, 17u}) {
+    for (uint32 bias : {5u, 17u}) {
         CommandList commands(EQueueType::Graphics);
         commands.Compute(compute, 2.0f, output, data, tint, matrix, bias).Dispatch(1);
         RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit());
@@ -163,7 +163,7 @@ void CheckMultipleConstants() {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const auto* pixel = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    const auto* pixel = static_cast<const uint8*>(readback.contents) + 4 * 256 + 4 * 4;
     if (command.status != MTLCommandBufferStatusCompleted ||
         std::abs(int(pixel[0]) - 64) > 1 || std::abs(int(pixel[1]) - 128) > 1 ||
         std::abs(int(pixel[2]) - 191) > 1 || pixel[3] != 255) {
@@ -196,7 +196,7 @@ void CheckRasterTextureFormats() {
         EPixelFormat format;
         MTLPixelFormat native_format;
         ETextureUsageFlags usage;
-        uint32_t pixel_stride;
+        uint32             pixel_stride;
     };
     const FormatCase formats[] = {
         {PF_R8_UNORM, MTLPixelFormatR8Unorm, ETextureUsageFlags::COLOR_ATTACHMENT, 1},
@@ -260,7 +260,7 @@ void CheckRasterTextureFormats() {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    uint32_t first_pixel = 0;
+    uint32 first_pixel = 0;
     std::memcpy(&first_pixel, readback.contents, sizeof(first_pixel));
     if (command.status != MTLCommandBufferStatusCompleted || first_pixel != 0xfff00000u) {
         throw std::runtime_error("Metal A2R10G10B10 channel packing is incorrect");
@@ -360,7 +360,7 @@ void CheckGraphicsDraw() {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    const auto* middle = static_cast<const uint8*>(readback.contents) + 4 * 256 + 4 * 4;
     if (command.status != MTLCommandBufferStatusCompleted ||
         middle[0] != 255 || middle[1] != 0 || middle[2] != 0 || middle[3] != 255) {
         throw std::runtime_error("Metal RHI triangle draw readback is not red");
@@ -461,8 +461,8 @@ void CheckTessellationDraw() {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const auto* left = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 2 * 4;
-    const auto* right = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 6 * 4;
+    const auto* left  = static_cast<const uint8*>(readback.contents) + 4 * 256 + 2 * 4;
+    const auto* right = static_cast<const uint8*>(readback.contents) + 4 * 256 + 6 * 4;
     if (command.status != MTLCommandBufferStatusCompleted ||
         left[0] != 255 || left[1] != 0 || left[2] != 0 || left[3] != 255 ||
         right[0] != 0 || right[1] != 255 || right[2] != 0 || right[3] != 255) {
@@ -525,8 +525,8 @@ void CheckGraphicsMRT() {
     );
     RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    const uint8_t expected[3][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}};
-    for (uint index = 0; index < 3; ++index) {
+    const uint8 expected[3][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}};
+    for (uint32 index = 0; index < 3; ++index) {
         id<MTLTexture> texture = (__bridge id<MTLTexture>)GetMetalNativeTexture(targets[index].Get());
         id<MTLBuffer> readback = [texture.device
             newBufferWithLength:256 * 8 options:MTLResourceStorageModeShared];
@@ -540,7 +540,7 @@ void CheckGraphicsMRT() {
         [blit endEncoding];
         [command commit];
         [command waitUntilCompleted];
-        const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+        const auto* middle = static_cast<const uint8*>(readback.contents) + 4 * 256 + 4 * 4;
         if (command.status != MTLCommandBufferStatusCompleted ||
             std::memcmp(middle, expected[index], 4) != 0) {
             throw std::runtime_error("Metal MRT attachment readback differs from shader output");
@@ -592,7 +592,7 @@ void CheckGraphicsBindlessArguments() {
         .set = 3, .binding = 0, .custom_flag = {.active = 1}
     };
     reflection.reflect_map["params"].GetSpirvReflection().data = ReflectParamInfo::Constant{
-        .offset = 0, .size = sizeof(uint), .padded_size = sizeof(uint), .custom_flag = {.active = 1}
+        .offset = 0, .size = sizeof(uint32), .padded_size = sizeof(uint32), .custom_flag = {.active = 1}
     };
     SingleShaderInfo vertex{.entry_point = "draw_vertex", .shader_data = code,
                             .shader_type = EShaderType::ST_VERTEX,
@@ -613,18 +613,16 @@ void CheckGraphicsBindlessArguments() {
         "Metal graphics bindless smoke", BufferInfo{4, 1, EBufferUsageFlags::UNORDERED_ACCESS}
     );
     BufferRef scalar = RenderDevice::Get().CreateBuffer(
-        "Metal graphics scalar smoke", BufferInfo{
-            1, sizeof(uint32_t), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNORDERED_ACCESS
-        }
+        "Metal graphics scalar smoke", BufferInfo{1, sizeof(uint32), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNORDERED_ACCESS}
     );
     id<MTLBuffer> native_scalar = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(scalar.Get());
-    *static_cast<uint32_t*>(native_scalar.contents) = 1;
-    const uint handle = array->AllocateBuffer(buffer->GetView());
+    *static_cast<uint32*>(native_scalar.contents) = 1;
+    const uint32 handle                           = array->AllocateBuffer(buffer->GetView());
     TextureRef color = RenderDevice::Get().CreateTexture(
         Extent2D(1, 1), PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
     );
-    constexpr uint8_t red_pixel[] = {255, 0, 0, 255};
+    constexpr uint8 red_pixel[] = {255, 0, 0, 255};
     CommandList upload(EQueueType::Graphics);
     upload.CopyFrom(
         std::span<const Moer::byte>(
@@ -690,11 +688,11 @@ void CheckGraphicsBindlessArguments() {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    const auto* middle = static_cast<const uint8*>(readback.contents) + 4 * 256 + 4 * 4;
     const auto* after_middle =
-        static_cast<const uint8_t*>(after_readback.contents) + 4 * 256 + 4 * 4;
-    const uint8_t red[] = {255, 0, 0, 255};
-    const uint8_t black[] = {0, 0, 0, 0};
+        static_cast<const uint8*>(after_readback.contents) + 4 * 256 + 4 * 4;
+    const uint8 red[]   = {255, 0, 0, 255};
+    const uint8 black[] = {0, 0, 0, 0};
     if (command.status != MTLCommandBufferStatusCompleted ||
         std::memcmp(middle, red, 4) != 0 ||
         std::memcmp(after_middle, black, 4) != 0) {
@@ -747,8 +745,8 @@ void CheckIndexedGraphicsDraw(bool indirect) {
     RasterPipeline raster(RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders)));
     struct Vertex {
         float position[2];
-        uint8_t color[4];
-        uint32_t marker;
+        uint8  color[4];
+        uint32 marker;
     };
     static_assert(sizeof(Vertex) == 16);
     constexpr Vertex vertices[] = {
@@ -756,7 +754,7 @@ void CheckIndexedGraphicsDraw(bool indirect) {
         {{3.0f, -1.0f}, {64, 128, 192, 255}, 0x12345678u},
         {{-1.0f, 3.0f}, {64, 128, 192, 255}, 0x12345678u}
     };
-    constexpr uint16_t indices[] = {99, 0, 1, 2};
+    constexpr uint16 indices[]     = {99, 0, 1, 2};
     BufferRef vertex_buffer = RenderDevice::Get().CreateBuffer(
         "Metal indexed draw vertices",
         BufferInfo{sizeof(vertices), 1,
@@ -789,7 +787,7 @@ void CheckIndexedGraphicsDraw(bool indirect) {
     BufferRef argument_buffer;
     BufferRef count_buffer;
     if (indirect) {
-        constexpr uint32_t arguments[] = {3, 1, 0, 0, 0};
+        constexpr uint32 arguments[] = {3, 1, 0, 0, 0};
         argument_buffer = RenderDevice::Get().CreateBuffer(
             "Metal indexed indirect arguments",
             BufferInfo{sizeof(arguments), 1,
@@ -797,8 +795,7 @@ void CheckIndexedGraphicsDraw(bool indirect) {
         );
         count_buffer = RenderDevice::Get().CreateBuffer(
             "Metal indexed indirect count",
-            BufferInfo{sizeof(uint32_t), 1,
-                EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS}
+            BufferInfo{sizeof(uint32), 1, EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS}
         );
         CommandList arguments_upload(EQueueType::Graphics);
         arguments_upload.CopyFrom(
@@ -838,7 +835,7 @@ void CheckIndexedGraphicsDraw(bool indirect) {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    const auto* middle = static_cast<const uint8*>(readback.contents) + 4 * 256 + 4 * 4;
     if (command.status != MTLCommandBufferStatusCompleted ||
         middle[0] != 64 || middle[1] != 128 || middle[2] != 192 || middle[3] != 255) {
         throw std::runtime_error("Metal RHI mixed vertex format draw readback is incorrect");
@@ -893,7 +890,7 @@ void CheckDepthGraphicsDraw(EPixelFormat depth_format, bool depth_only_first = f
         Extent2D(8, 8), depth_format, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
     );
     CommandList draw(EQueueType::Graphics);
-    for (uint pass_index = 0; pass_index < 2; ++pass_index) {
+    for (uint32 pass_index = 0; pass_index < 2; ++pass_index) {
         Moer::Array<MeshDrawData> meshes;
         meshes.emplace_back().EmplaceDraw(3, 0, 0);
         DepthAttachment depth_attachment(depth.Get());
@@ -929,7 +926,7 @@ void CheckDepthGraphicsDraw(EPixelFormat depth_format, bool depth_only_first = f
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    const auto* middle = static_cast<const uint8*>(readback.contents) + 4 * 256 + 4 * 4;
     if (command.status != MTLCommandBufferStatusCompleted ||
         middle[0] != (depth_only_first ? 0 : 255) || middle[1] != 0 ||
         middle[2] != 0 || middle[3] != 255) {
@@ -941,7 +938,7 @@ void CheckDepthGraphicsDraw(EPixelFormat depth_format, bool depth_only_first = f
     }
     std::cout << "RHI " << (depth_only_first ? "depth-only pass" : "depth attachment")
               << " and depth test (format "
-              << static_cast<uint>(depth_format) << "): success" << std::endl;
+              << static_cast<uint32>(depth_format) << "): success" << std::endl;
 }
 
 void CheckComputePipeline() {
@@ -964,7 +961,7 @@ void CheckComputePipeline() {
     if (!pipeline.IsValid() || native == nil) {
         throw std::runtime_error("Metal compute pipeline was not created");
     }
-    uint32_t input[] = {1, 2, 3, 4};
+    uint32                       input[] = {1, 2, 3, 4};
     id<MTLBuffer> values = [native.device newBufferWithBytes:input length:sizeof(input)
                                                     options:MTLResourceStorageModeShared];
     id<MTLCommandQueue> queue = [native.device newCommandQueue];
@@ -977,7 +974,7 @@ void CheckComputePipeline() {
     [encoder endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const uint32_t expected[] = {8, 9, 10, 11};
+    const uint32 expected[] = {8, 9, 10, 11};
     if (command.status != MTLCommandBufferStatusCompleted ||
         std::memcmp(values.contents, expected, sizeof(expected)) != 0) {
         throw std::runtime_error("Metal compute pipeline dispatch returned the wrong values");
@@ -1005,9 +1002,8 @@ void CheckRHIComputeDispatch() {
         .set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}
     };
     auto& constant_info = reflection.reflect_map["increment"].GetSpirvReflection();
-    constant_info.data = ReflectParamInfo::Constant{
-        .offset = 0, .size = sizeof(uint), .padded_size = sizeof(uint),
-        .custom_flag = {.active = 1}
+    constant_info.data  = ReflectParamInfo::Constant{
+        .offset = 0, .size = sizeof(uint32), .padded_size = sizeof(uint32), .custom_flag = {.active = 1}
     };
     SingleShaderInfo compute{
         .entry_point = "compute_main", .shader_data = code,
@@ -1017,13 +1013,11 @@ void CheckRHIComputeDispatch() {
     PipelineShaderInfo shaders{.shaders = {compute}};
     shaders.argument_metadata = ScalarComputeSmoke::GetArgumentMetadata();
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
-    BufferRef buffer = RenderDevice::Get().CreateBuffer(
-        "Metal compute dispatch smoke", BufferInfo{
-            4, sizeof(uint32_t), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNORDERED_ACCESS
-        }
+    BufferRef      buffer     = RenderDevice::Get().CreateBuffer(
+        "Metal compute dispatch smoke", BufferInfo{4, sizeof(uint32), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNORDERED_ACCESS}
     );
     id<MTLBuffer> native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(buffer.Get());
-    const uint32_t input[] = {1, 2, 3, 4};
+    const uint32  input[] = {1, 2, 3, 4};
     std::memcpy(native.contents, input, sizeof(input));
     ArrayArguments args(2, 1, false);
     args.args[0] = buffer->GetView();
@@ -1034,7 +1028,7 @@ void CheckRHIComputeDispatch() {
     CmdSubmit submit(std::move(commands), {}, {}, {});
     RHIExecutor::Get().Submit(EQueueType::Graphics, std::move(submit));
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    const uint32_t expected[] = {8, 9, 10, 11};
+    const uint32 expected[] = {8, 9, 10, 11};
     if (std::memcmp(native.contents, expected, sizeof(expected)) != 0) {
         throw std::runtime_error("Metal RHI compute dispatch returned the wrong values");
     }
@@ -1154,17 +1148,13 @@ void CheckRHIComputeTexelBuffers() {
     PipelineShaderInfo shaders{.shaders = {compute}};
     shaders.argument_metadata = HistogramComputeSmoke::GetArgumentMetadata();
     PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
-    BufferRef histogram = RenderDevice::Get().CreateBuffer<uint32_t>(
-        "Metal histogram texel buffer", 256,
-        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER |
-            EBufferUsageFlags::TRANSFER_DST
+    BufferRef      histogram  = RenderDevice::Get().CreateBuffer<uint32>(
+        "Metal histogram texel buffer", 256, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER | EBufferUsageFlags::TRANSFER_DST
     );
-    BufferRef exposure = RenderDevice::Get().CreateBuffer<uint32_t>(
-        "Metal exposure texel buffer", 1,
-        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER |
-            EBufferUsageFlags::CPU_VISIBLE
+    BufferRef exposure = RenderDevice::Get().CreateBuffer<uint32>(
+        "Metal exposure texel buffer", 1, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER | EBufferUsageFlags::CPU_VISIBLE
     );
-    constexpr uint32_t input = 41;
+    constexpr uint32 input = 41;
     CommandList upload(EQueueType::Graphics);
     upload.CopyFrom(
         std::span<const Moer::byte>(
@@ -1183,7 +1173,7 @@ void CheckRHIComputeTexelBuffers() {
                               CmdSubmit(std::move(commands), {}, {}, {}));
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     id<MTLBuffer> native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(exposure.Get());
-    if (*static_cast<const uint32_t*>(native.contents) != 42) {
+    if (*static_cast<const uint32*>(native.contents) != 42) {
         throw std::runtime_error("Metal RHI texel buffer compute result was not 42");
     }
     pipeline = {};
@@ -1236,7 +1226,7 @@ void CheckRHIComputeBindlessTexture() {
         .set = 3, .binding = 0, .custom_flag = {.active = 1}
     };
     reflection.reflect_map["params"].GetSpirvReflection().data = ReflectParamInfo::Constant{
-        .offset = 0, .size = sizeof(uint), .padded_size = sizeof(uint), .custom_flag = {.active = 1}
+        .offset = 0, .size = sizeof(uint32), .padded_size = sizeof(uint32), .custom_flag = {.active = 1}
     };
     SingleShaderInfo compute{
         .entry_point = "compute_main", .shader_data = code,
@@ -1254,7 +1244,7 @@ void CheckRHIComputeBindlessTexture() {
         Extent2D(1, 1), PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
     );
-    constexpr uint8_t pixel[] = {64, 128, 192, 255};
+    constexpr uint8 pixel[] = {64, 128, 192, 255};
     CommandList upload(EQueueType::Graphics);
     upload.CopyFrom(
         std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(pixel), sizeof(pixel)),
@@ -1263,7 +1253,7 @@ void CheckRHIComputeBindlessTexture() {
     RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     BindlessArrayRef array = RenderDevice::Get().CreateBindlessArray(8);
-    const uint handle = array->AllocateTexture(color->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
+    const uint32     handle = array->AllocateTexture(color->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
     CommandList update(EQueueType::Graphics);
     update.UpdateBindlessArray(array);
     RHIExecutor::Get().Submit(EQueueType::Graphics, update.Submit());
@@ -1294,10 +1284,12 @@ void CheckGraphicsUploads() {
     using namespace Moer::Render;
     constexpr NSUInteger width = 7;
     constexpr NSUInteger height = 5;
-    std::vector<uint8_t> pixels(width * height * 4);
-    std::vector<uint8_t> values(20);
-    for (size_t i = 0; i < pixels.size(); ++i) pixels[i] = uint8_t(i * 13);
-    for (size_t i = 0; i < values.size(); ++i) values[i] = uint8_t(i * 9);
+    std::vector<uint8>   pixels(width * height * 4);
+    std::vector<uint8>   values(20);
+    for (size_t i = 0; i < pixels.size(); ++i)
+        pixels[i] = uint8(i * 13);
+    for (size_t i = 0; i < values.size(); ++i)
+        values[i] = uint8(i * 9);
     TextureRef texture = RenderDevice::Get().CreateTexture(
         Extent2D(width, height), PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
@@ -1339,15 +1331,14 @@ void CheckGraphicsUploads() {
     if (command.status != MTLCommandBufferStatusCompleted) {
         throw std::runtime_error("Metal graphics upload readback failed");
     }
-    const auto* texture_bytes = static_cast<const uint8_t*>(texture_readback.contents);
+    const auto* texture_bytes = static_cast<const uint8*>(texture_readback.contents);
     for (NSUInteger row = 0; row < height; ++row) {
         if (std::memcmp(texture_bytes + row * row_bytes, pixels.data() + row * width * 4,
                         width * 4) != 0) {
             throw std::runtime_error("Metal graphics texture upload differs from input");
         }
     }
-    if (std::memcmp(static_cast<const uint8_t*>(buffer_readback.contents) + 8,
-                    values.data(), values.size()) != 0) {
+    if (std::memcmp(static_cast<const uint8*>(buffer_readback.contents) + 8, values.data(), values.size()) != 0) {
         throw std::runtime_error("Metal graphics buffer upload differs from input");
     }
     std::cout << "graphics queue texture and buffer upload/readback: success" << std::endl;
@@ -1366,8 +1357,9 @@ void CheckMipTexture() {
     if (native.mipmapLevelCount != 4 || texture->GetMipByteSize(mip) != width * height * 4) {
         throw std::runtime_error("Metal mip texture allocation is incorrect");
     }
-    std::vector<uint8_t> pixels(width * height * 4);
-    for (size_t i = 0; i < pixels.size(); ++i) pixels[i] = uint8_t(i * 7);
+    std::vector<uint8> pixels(width * height * 4);
+    for (size_t i = 0; i < pixels.size(); ++i)
+        pixels[i] = uint8(i * 7);
     CommandList upload(EQueueType::Graphics);
     upload.CopyFrom(
         std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(pixels.data()), pixels.size()),
@@ -1388,7 +1380,7 @@ void CheckMipTexture() {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const auto* output = static_cast<const uint8_t*>(readback.contents);
+    const auto* output = static_cast<const uint8*>(readback.contents);
     if (command.status != MTLCommandBufferStatusCompleted ||
         std::memcmp(output, pixels.data(), width * 4) != 0 ||
         std::memcmp(output + 256, pixels.data() + width * 4, width * 4) != 0) {
@@ -1421,8 +1413,9 @@ void CheckLayeredTextures() {
         if (native.textureType != item.type || native.mipmapLevelCount != 2) {
             throw std::runtime_error("Metal layered texture allocation is incorrect");
         }
-        std::vector<uint8_t> pixels(width * height * 4);
-        for (size_t i = 0; i < pixels.size(); ++i) pixels[i] = uint8_t(i * 3 + item.layer);
+        std::vector<uint8> pixels(width * height * 4);
+        for (size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = uint8(i * 3 + item.layer);
         CommandList upload(EQueueType::Graphics);
         upload.CopyFrom(
             std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(pixels.data()), pixels.size()),
@@ -1446,7 +1439,7 @@ void CheckLayeredTextures() {
         if (command.status != MTLCommandBufferStatusCompleted) {
             throw std::runtime_error("Metal layered texture readback failed");
         }
-        const auto* output = static_cast<const uint8_t*>(readback.contents);
+        const auto* output = static_cast<const uint8*>(readback.contents);
         for (NSUInteger row = 0; row < height; ++row) {
             if (std::memcmp(output + row * 256, pixels.data() + row * width * 4,
                             width * 4) != 0) {
@@ -1456,16 +1449,16 @@ void CheckLayeredTextures() {
     }
     BindlessArrayRef bindless = RenderDevice::Get().CreateBindlessArray(16);
     const Sampler sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE);
-    const uint cube_base = bindless->AllocateTexture(cases[1].texture->GetView(), sampler);
-    const uint cube_mip = bindless->AllocateTexture(cases[1].texture->GetView(1), sampler);
-    const uint cube_face = bindless->AllocateTexture(cases[1].texture->GetView(1).Slice(5), sampler);
-    const uint array_layer = bindless->AllocateTexture(cases[0].texture->GetView(1).Slice(2), sampler);
+    const uint32     cube_base   = bindless->AllocateTexture(cases[1].texture->GetView(), sampler);
+    const uint32     cube_mip    = bindless->AllocateTexture(cases[1].texture->GetView(1), sampler);
+    const uint32     cube_face   = bindless->AllocateTexture(cases[1].texture->GetView(1).Slice(5), sampler);
+    const uint32     array_layer = bindless->AllocateTexture(cases[0].texture->GetView(1).Slice(2), sampler);
     CommandList update(EQueueType::Graphics);
     update.UpdateBindlessArray(bindless);
     RHIExecutor::Get().Submit(EQueueType::Graphics, update.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     id<MTLBuffer> table = (__bridge id<MTLBuffer>)GetMetalNativeBindlessArgumentBuffer(bindless.Get(), 2);
-    const auto* ids = static_cast<const uint64_t*>(table.contents);
+    const auto*   ids   = static_cast<const uint64*>(table.contents);
     if (ids[cube_base] == 0 || ids[cube_mip] == 0 || ids[cube_face] == 0 ||
         ids[array_layer] == 0 || ids[cube_base] == ids[cube_mip] ||
         ids[cube_mip] == ids[cube_face]) {
@@ -1501,7 +1494,7 @@ Moer::Render::TextureRef ClearAndCheckTexture(int width, int height) {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const auto* pixel = static_cast<const uint8_t*>(readback.contents);
+    const auto* pixel = static_cast<const uint8*>(readback.contents);
     if (command.status != MTLCommandBufferStatusCompleted ||
         pixel[0] < 15 || pixel[0] > 30 ||
         pixel[1] < 95 || pixel[1] > 110 ||
@@ -1515,10 +1508,10 @@ Moer::Render::TextureRef ClearAndCheckTexture(int width, int height) {
 }
 
 void UploadAndCheckTexture(
-    EPixelFormat format,
-    ETextureUsageFlags usage,
-    std::span<const uint8_t> input,
-    size_t pixel_stride
+    EPixelFormat           format,
+    ETextureUsageFlags     usage,
+    std::span<const uint8> input,
+    size_t                 pixel_stride
 ) {
     using namespace Moer::Render;
     constexpr int width = 7;
@@ -1528,7 +1521,7 @@ void UploadAndCheckTexture(
     }
     TextureRef texture = RenderDevice::Get().CreateTexture(Extent2D(width, height), format, usage);
     FenceRef copy_fence = RenderDevice::Get().GetCopyQueue().GetFenceHandle();
-    const uint64_t before_upload = copy_fence->GetValue();
+    const uint64 before_upload = copy_fence->GetValue();
     CommandList upload(EQueueType::Copy);
     upload.CopyFrom(
         std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(input.data()), input.size()),
@@ -1536,7 +1529,7 @@ void UploadAndCheckTexture(
     );
     RHIExecutor::Get().Submit(EQueueType::Copy, upload.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    const uint64_t after_upload = copy_fence->GetValue();
+    const uint64 after_upload = copy_fence->GetValue();
     if (after_upload <= before_upload ||
         !copy_fence->WaitSubmitted(after_upload) || copy_fence->IsRejected(after_upload)) {
         throw std::runtime_error("Metal copy fence did not complete the upload");
@@ -1547,7 +1540,7 @@ void UploadAndCheckTexture(
     copy.CopyFrom(texture->GetView(), copied->GetView());
     RHIExecutor::Get().Submit(EQueueType::Copy, copy.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    const uint64_t after_copy = copy_fence->GetValue();
+    const uint64 after_copy = copy_fence->GetValue();
     if (after_copy <= after_upload ||
         !copy_fence->WaitSubmitted(after_copy) || copy_fence->IsRejected(after_copy)) {
         throw std::runtime_error("Metal copy fence did not complete the texture copy");
@@ -1587,7 +1580,7 @@ void UploadAndCheckTexture(
     if (command.status != MTLCommandBufferStatusCompleted) {
         throw std::runtime_error("Metal upload readback failed");
     }
-    const auto* output = static_cast<const uint8_t*>(readback.contents);
+    const auto* output = static_cast<const uint8*>(readback.contents);
     for (int y = 0; y < height; ++y) {
         for (size_t x = 0; x < width * pixel_stride; ++x) {
             if (output[y * row_bytes + x] != input[y * width * pixel_stride + x]) {
@@ -1602,8 +1595,9 @@ void UploadAndCheckTexture(
 void CheckBufferUpload() {
     using namespace Moer::Render;
     constexpr size_t offset = 16;
-    std::vector<uint8_t> input(20);
-    for (size_t i = 0; i < input.size(); ++i) input[i] = static_cast<uint8_t>(i * 11);
+    std::vector<uint8> input(20);
+    for (size_t i = 0; i < input.size(); ++i)
+        input[i] = static_cast<uint8>(i * 11);
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
         "Metal smoke buffer", BufferInfo{64, 1, EBufferUsageFlags::TRANSFER_SRC}
     );
@@ -1638,7 +1632,7 @@ void CheckBufferUpload() {
     [command commit];
     [command waitUntilCompleted];
     if (command.status != MTLCommandBufferStatusCompleted ||
-        !std::equal(input.begin(), input.end(), static_cast<const uint8_t*>(readback.contents))) {
+        !std::equal(input.begin(), input.end(), static_cast<const uint8*>(readback.contents))) {
         throw std::runtime_error("Metal buffer upload readback differs from input");
     }
     std::cout << "buffer upload/copy/readback at offsets " << offset << "/"
@@ -1651,7 +1645,7 @@ void CheckCopyCompletionCallbacks() {
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
         "Metal callback smoke buffer", BufferInfo{32, 1, EBufferUsageFlags::TRANSFER_SRC}
     );
-    std::vector<uint8_t> input(32, 0x5a);
+    std::vector<uint8> input(32, 0x5a);
     CommandList upload(EQueueType::Copy);
     upload.CopyFrom(
         std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(input.data()), input.size()),
@@ -1688,7 +1682,7 @@ void CheckGraphicsCompletionCallbacks() {
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
         "Metal graphics callback buffer", BufferInfo{32, 1, EBufferUsageFlags::TRANSFER_DST}
     );
-    std::vector<uint8_t> input(32, 0x3c);
+    std::vector<uint8> input(32, 0x3c);
     CommandList upload(EQueueType::Graphics);
     upload.CopyFrom(
         std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(input.data()), input.size()),
@@ -1745,7 +1739,7 @@ void CheckGraphicsBufferClear() {
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
         "Metal clear smoke", BufferInfo{64, 1, EBufferUsageFlags::TRANSFER_SRC}
     );
-    std::vector<uint8_t> initial(64, 0xff);
+    std::vector<uint8> initial(64, 0xff);
     CommandList commands(EQueueType::Graphics);
     commands.CopyFrom(
         std::span<const Moer::byte>(
@@ -1766,17 +1760,22 @@ void CheckGraphicsBufferClear() {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    const auto* bytes = static_cast<const uint8_t*>(readback.contents);
-    const uint8_t pattern[] = {4, 3, 2, 1};
+    const auto* bytes                    = static_cast<const uint8*>(readback.contents);
+    const uint8 pattern[]                = {4, 3, 2, 1};
     bool repeated_pattern_matches = true;
     for (size_t i = 32; i < 48; ++i) {
         repeated_pattern_matches &= bytes[i] == pattern[(i - 32) % 4];
     }
     if (command.status != MTLCommandBufferStatusCompleted ||
-        !std::all_of(bytes, bytes + 16, [](uint8_t value) { return value == 0xff; }) ||
-        !std::all_of(bytes + 16, bytes + 32, [](uint8_t value) { return value == 0; }) ||
-        !repeated_pattern_matches ||
-        !std::all_of(bytes + 48, bytes + 64, [](uint8_t value) { return value == 0xff; })) {
+        !std::all_of(bytes, bytes + 16, [](uint8 value) {
+            return value == 0xff;
+        }) ||
+        !std::all_of(bytes + 16, bytes + 32, [](uint8 value) {
+            return value == 0;
+        }) ||
+        !repeated_pattern_matches || !std::all_of(bytes + 48, bytes + 64, [](uint8 value) {
+            return value == 0xff;
+        })) {
         throw std::runtime_error("Metal graphics buffer clear did not preserve its range or value");
     }
     std::cout << "graphics buffer clear ranges and uint pattern: success" << std::endl;
@@ -1787,9 +1786,10 @@ void CheckGraphicsBufferReadback() {
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
         "Metal graphics readback smoke", BufferInfo{32, 1, EBufferUsageFlags::TRANSFER_SRC}
     );
-    uint8_t input[16];
-    for (uint8_t i = 0; i < 16; ++i) input[i] = i * 7;
-    uint8_t output[16]{};
+    uint8 input[16];
+    for (uint8 i = 0; i < 16; ++i)
+        input[i] = i * 7;
+    uint8       output[16]{};
     CommandList commands(EQueueType::Graphics);
     commands.CopyFrom(
         std::span<const Moer::byte>(
@@ -1821,13 +1821,13 @@ void CheckBindlessTables() {
     id<MTLBuffer> samplers = (__bridge id<MTLBuffer>)GetMetalNativeBindlessArgumentBuffer(array.Get(), 3);
     if (indices == nil || buffers == nil || textures == nil || samplers == nil ||
         GetMetalNativeBindlessArgumentBuffer(array.Get(), 4) != nullptr ||
-        *static_cast<const uint64_t*>(buffers.contents) != indices.gpuAddress) {
+        *static_cast<const uint64*>(buffers.contents) != indices.gpuAddress) {
         throw std::runtime_error("Metal bindless argument tables are incomplete");
     }
     TextureRef texture = RenderDevice::Get().CreateTexture(
         Extent2D(2, 2), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED
     );
-    std::vector<uint8_t> pixels(2 * 2 * 4);
+    std::vector<uint8> pixels(2 * 2 * 4);
     for (size_t i = 0; i < pixels.size(); i += 4) {
         pixels[i] = 64; pixels[i + 1] = 128; pixels[i + 2] = 192; pixels[i + 3] = 255;
     }
@@ -1839,20 +1839,20 @@ void CheckBindlessTables() {
     RHIExecutor::Get().Submit(EQueueType::Copy, upload.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-    const uint handle = array->AllocateTexture(texture->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
-    if (handle != 1 || static_cast<const uint32_t*>(indices.contents)[handle] != 0 ||
-        static_cast<const uint64_t*>(textures.contents)[handle] != 0) {
+    const uint32 handle = array->AllocateTexture(texture->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
+    if (handle != 1 || static_cast<const uint32*>(indices.contents)[handle] != 0 ||
+        static_cast<const uint64*>(textures.contents)[handle] != 0) {
         throw std::runtime_error("Metal bindless allocation became visible before its update command");
     }
     CommandList update(EQueueType::Graphics);
     update.UpdateBindlessArray(array);
     RHIExecutor::Get().Submit(EQueueType::Graphics, update.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    const uint sampler_index = uint(SF_Num) * uint(SAM_CLAMP_TO_EDGE) + uint(SF_LINEAR);
-    if (static_cast<const uint32_t*>(indices.contents)[handle] != ((handle << 8) | sampler_index) ||
-        static_cast<const uint64_t*>(textures.contents)[handle] !=
+    const uint32 sampler_index = uint32(SF_Num) * uint32(SAM_CLAMP_TO_EDGE) + uint32(SF_LINEAR);
+    if (static_cast<const uint32*>(indices.contents)[handle] != ((handle << 8) | sampler_index) ||
+        static_cast<const uint64*>(textures.contents)[handle] !=
             ((__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get())).gpuResourceID._impl ||
-        static_cast<const uint64_t*>(samplers.contents)[sampler_index] == 0) {
+        static_cast<const uint64*>(samplers.contents)[sampler_index] == 0) {
         throw std::runtime_error("Metal bindless texture update did not publish the GPU descriptors");
     }
 
@@ -1930,14 +1930,14 @@ kernel void sample_bindless(
     release.UpdateBindlessArray(array);
     RHIExecutor::Get().Submit(EQueueType::Graphics, release.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (static_cast<const uint32_t*>(indices.contents)[handle] != 0 ||
-        static_cast<const uint64_t*>(textures.contents)[handle] != 0) {
+    if (static_cast<const uint32*>(indices.contents)[handle] != 0 ||
+        static_cast<const uint64*>(textures.contents)[handle] != 0) {
         throw std::runtime_error("Metal bindless texture unbind left a GPU descriptor active");
     }
     BufferRef buffer = RenderDevice::Get().CreateBuffer(
         "Metal bindless buffer smoke", BufferInfo{32, 1, EBufferUsageFlags::TRANSFER_SRC}
     );
-    const uint32_t input_value = 0x12345678u;
+    const uint32 input_value = 0x12345678u;
     CommandList fill_buffer(EQueueType::Copy);
     fill_buffer.CopyFrom(
         std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(&input_value), sizeof(input_value)),
@@ -1945,7 +1945,7 @@ kernel void sample_bindless(
     );
     RHIExecutor::Get().Submit(EQueueType::Copy, fill_buffer.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    const uint buffer_handle = array->AllocateBuffer(BufferView(buffer.Get(), 8, 8, 1));
+    const uint32 buffer_handle = array->AllocateBuffer(BufferView(buffer.Get(), 8, 8, 1));
     if (buffer_handle != handle) throw std::runtime_error("Metal bindless slot was not recycled");
     {
         CommandList dropped(EQueueType::Graphics);
@@ -1955,8 +1955,8 @@ kernel void sample_bindless(
     retry.UpdateBindlessArray(array);
     RHIExecutor::Get().Submit(EQueueType::Graphics, retry.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (static_cast<const uint32_t*>(indices.contents)[buffer_handle] != buffer_handle ||
-        static_cast<const uint64_t*>(buffers.contents)[buffer_handle + 1] !=
+    if (static_cast<const uint32*>(indices.contents)[buffer_handle] != buffer_handle ||
+        static_cast<const uint64*>(buffers.contents)[buffer_handle + 1] !=
             ((__bridge id<MTLBuffer>)GetMetalNativeBuffer(buffer.Get())).gpuAddress + 8) {
         throw std::runtime_error("Metal bindless buffer update was not recovered after a dropped command");
     }
@@ -1992,8 +1992,8 @@ kernel void read_bindless_buffer(device uint* output [[buffer(0)]],
         throw std::runtime_error("Cannot create Metal bindless buffer pipeline: " +
             std::string(shader_error.localizedDescription.UTF8String ?: "unknown error"));
     }
-    id<MTLBuffer> buffer_readback = [device newBufferWithLength:sizeof(uint32_t)
-                                                       options:MTLResourceStorageModeShared];
+    id<MTLBuffer>                buffer_readback = [device newBufferWithLength:sizeof(uint32)
+                                                                       options:MTLResourceStorageModeShared];
     id<MTLCommandBuffer> buffer_command = [native_queue commandBuffer];
     id<MTLComputeCommandEncoder> buffer_encoder = [buffer_command computeCommandEncoder];
     [buffer_encoder setComputePipelineState:buffer_pipeline];
@@ -2007,7 +2007,7 @@ kernel void read_bindless_buffer(device uint* output [[buffer(0)]],
     [buffer_command commit];
     [buffer_command waitUntilCompleted];
     if (buffer_command.status != MTLCommandBufferStatusCompleted ||
-        *static_cast<const uint32_t*>(buffer_readback.contents) != input_value) {
+        *static_cast<const uint32*>(buffer_readback.contents) != input_value) {
         throw std::runtime_error("Metal bindless GPU buffer read did not match the upload");
     }
     array->UnbindBuffer(buffer_handle);
@@ -2015,7 +2015,7 @@ kernel void read_bindless_buffer(device uint* output [[buffer(0)]],
     release_buffer.UpdateBindlessArray(array);
     RHIExecutor::Get().Submit(EQueueType::Graphics, release_buffer.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (static_cast<const uint64_t*>(buffers.contents)[buffer_handle + 1] != 0) {
+    if (static_cast<const uint64*>(buffers.contents)[buffer_handle + 1] != 0) {
         throw std::runtime_error("Metal bindless buffer unbind left a GPU descriptor active");
     }
     std::cout << "bindless texture/buffer GPU access, update, drop, and reuse: success" << std::endl;
@@ -2064,9 +2064,7 @@ int main(int argc, char** argv) {
             rejected_fence->Reject(1);
             bool rejected_dependency_failed = false;
             try {
-                RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Wait(
-                    WaitEvent{uint64_t(rejected_fence.Get()), 1}
-                );
+                RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Wait(WaitEvent{Moer::uint64(rejected_fence.Get()), 1});
             } catch (const std::runtime_error&) {
                 rejected_dependency_failed = true;
             }
@@ -2095,22 +2093,24 @@ int main(int argc, char** argv) {
             CheckGraphicsUploads();
             CheckMipTexture();
             CheckLayeredTextures();
-            std::vector<uint8_t> rgba8(7 * 5 * 4);
-            for (size_t i = 0; i < rgba8.size(); ++i) rgba8[i] = static_cast<uint8_t>(i * 17);
+            std::vector<Moer::uint8> rgba8(7 * 5 * 4);
+            for (size_t i = 0; i < rgba8.size(); ++i)
+                rgba8[i] = static_cast<Moer::uint8>(i * 17);
             UploadAndCheckTexture(PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED, rgba8, 4);
-            std::vector<uint8_t> r8(7 * 5);
-            for (size_t i = 0; i < r8.size(); ++i) r8[i] = static_cast<uint8_t>(i * 7);
+            std::vector<Moer::uint8> r8(7 * 5);
+            for (size_t i = 0; i < r8.size(); ++i)
+                r8[i] = static_cast<Moer::uint8>(i * 7);
             UploadAndCheckTexture(PF_R8_UNORM, ETextureUsageFlags::SAMPLED, r8, 1);
-            std::vector<uint8_t> rgba16f(7 * 5 * 8);
-            for (size_t i = 0; i < rgba16f.size(); ++i) rgba16f[i] = static_cast<uint8_t>(i * 3);
+            std::vector<Moer::uint8> rgba16f(7 * 5 * 8);
+            for (size_t i = 0; i < rgba16f.size(); ++i)
+                rgba16f[i] = static_cast<Moer::uint8>(i * 3);
             UploadAndCheckTexture(PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::SAMPLED, rgba16f, 8);
             std::vector<float> rgba32f(7 * 5 * 4);
             for (size_t i = 0; i < rgba32f.size(); ++i) rgba32f[i] = float(i) / 100.0f;
             UploadAndCheckTexture(
                 PF_R32G32B32A32_SFLOAT,
                 ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
-                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(rgba32f.data()),
-                                         rgba32f.size() * sizeof(float)),
+                std::span<const Moer::uint8>(reinterpret_cast<const Moer::uint8*>(rgba32f.data()), rgba32f.size() * sizeof(float)),
                 16
             );
             CheckBufferUpload();

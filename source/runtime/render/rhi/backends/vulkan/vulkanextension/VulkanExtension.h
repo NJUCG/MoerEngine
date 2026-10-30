@@ -19,7 +19,7 @@ Vulkan extension 架构
 #ifndef VULKAN_EXTENSION_H
 #define VULKAN_EXTENSION_H
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <string_view>
 
 #include "../VulkanTypeDefs.h"
@@ -31,7 +31,7 @@ class VulkanDevice;
 class VulkanOptionalDeviceExtensions;
 class VulkanDeviceExtension;
 
-enum class EVulkanExtensionKind : uint8_t {
+enum class EVulkanExtensionKind : uint8 {
     Instance,
     Device
 };

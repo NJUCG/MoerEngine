@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssetTool.h"
+#include "misc/Types.h"
 #include "renderer/common/GraphResourceBoundary.h"
 #include "rhi/RHIResource.h"
 
@@ -142,9 +143,9 @@ struct RasterTextures {
     TextureWithHandle hiz_current;
     TextureWithHandle hiz_previous;
 
-    static uint GetHiZMipCount(const uint2& size) {
-        uint max_dim   = size.x > size.y ? size.x : size.y;
-        uint mip_count = 1;
+    static uint32 GetHiZMipCount(const uint2& size) {
+        uint32 max_dim   = size.x > size.y ? size.x : size.y;
+        uint32 mip_count = 1;
 
         while (max_dim > 1) {
             max_dim >>= 1;

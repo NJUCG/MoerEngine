@@ -6,8 +6,8 @@
 
 #include "misc/STL.h"
 
+#include "misc/Types.h"
 #include <atomic>
-#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -19,7 +19,7 @@ template<typename TEnum>
 concept concept_t_is_enum = std::is_enum<TEnum>::value;
 template<typename TEnum>
 concept concept_t_enum_underlying_uint8 =
-    concept_t_is_enum<TEnum> && std::is_same_v<std::underlying_type_t<TEnum>, uint8_t>;
+    concept_t_is_enum<TEnum> && std::is_same_v<std::underlying_type_t<TEnum>, Moer::uint8>;
 template<typename TNum>
 concept concept_t_is_vec2 = requires(TNum t) {
     t.x;
@@ -45,89 +45,89 @@ concept concept_t_is_vec3 = requires(TNum t) {
 };
 
 template<typename T>
-inline void HashCombine(uint16_t& seed, const T& val) {
+inline void HashCombine(Moer::uint16& seed, const T& val) {
     seed ^= std::hash<T>{}(val) + 0x9e37U + (seed << 3) + (seed >> 1);
 }
 
 template<typename T>
-inline void HashCombine(uint32_t& seed, const T& val) {
+inline void HashCombine(Moer::uint32& seed, const T& val) {
     seed ^= std::hash<T>{}(val) + 0x9e3779b9U + (seed << 6) + (seed >> 2);
 }
 
 template<typename T>
-inline void HashCombine(uint64_t& seed, const T& val) {
+inline void HashCombine(Moer::uint64& seed, const T& val) {
     seed ^= std::hash<T>{}(val) + 0x9e3779b97f4a7c15LLU + (seed << 12) + (seed >> 4);
 }
 
 template<typename T, typename... Rest>
-inline void HashCombine(uint64_t& seed, const T& v, const Rest&... rest) {
+inline void HashCombine(Moer::uint64& seed, const T& v, const Rest&... rest) {
     seed ^= std::hash<T>{}(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     (HashCombine(seed, rest), ...);
 }
-#define MAKE_HASHABLE_64(type, ...)    \
-    CORE_API uint64_t Hash() const {   \
-        uint64_t ret = 0;              \
-        HashCombine(ret, __VA_ARGS__); \
-        return ret;                    \
+#define MAKE_HASHABLE_64(type, ...)      \
+    CORE_API Moer::uint64 Hash() const { \
+        Moer::uint64 ret = 0;            \
+        HashCombine(ret, __VA_ARGS__);   \
+        return ret;                      \
     }
 
 template<concept_t_enum_underlying_uint8 TEnum>
 class EnumInByte;
 
-inline uint32_t GetHash(uint32_t value) {
+inline Moer::uint32 GetHash(Moer::uint32 value) {
     return value;
 }
-inline uint32_t GetHash(int32_t value) {
+inline Moer::uint32 GetHash(Moer::int32 value) {
     return value;
 }
 
 /*from UE5.03*/
-FORCEINLINE uint32_t GetHash(uint64_t value) {
-    return (uint32_t)value + ((uint32_t)(value >> 32) * 23);
+FORCEINLINE Moer::uint32 GetHash(Moer::uint64 value) {
+    return (Moer::uint32)value + ((Moer::uint32)(value >> 32) * 23);
 }
 
 /*from UE5.03*/
-inline uint32_t GetHash(int64_t target) {
-    return (uint32_t)target + ((uint32_t)(target >> 32) * 23);
+inline Moer::uint32 GetHash(Moer::int64 target) {
+    return (Moer::uint32)target + ((Moer::uint32)(target >> 32) * 23);
 }
 
-inline uint32_t GetHash(float value) {
-    return *(uint32_t*)&value;
+inline Moer::uint32 GetHash(float value) {
+    return *(Moer::uint32*)&value;
 }
-inline uint32_t GetHash(double value) {
-    return GetHash(*(uint64_t*)&value);
+inline Moer::uint32 GetHash(double value) {
+    return GetHash(*(Moer::uint64*)&value);
 }
-inline uint32_t GetHash(const char* value) {
+inline Moer::uint32 GetHash(const char* value) {
     return std::hash<std::string_view>{}(std::string_view(value));
 }
 template<concept_t_is_vec2 T>
-uint32_t GetHash(const T& value) {
-    uint32_t hash = GetHash(value.x);
+Moer::uint32 GetHash(const T& value) {
+    Moer::uint32 hash = GetHash(value.x);
     HashCombine(hash, GetHash(value.y));
     return hash;
 }
 
 template<concept_t_is_vec3 T>
-uint32_t GetHash(const T& value) {
-    uint32_t hash = GetHash(value.x);
+Moer::uint32 GetHash(const T& value) {
+    Moer::uint32 hash = GetHash(value.x);
     HashCombine(hash, GetHash(value.y));
     HashCombine(hash, GetHash(value.z));
     return hash;
 }
 
 template<concept_t_is_enum T>
-uint32_t GetHash(const T& t) {
+Moer::uint32 GetHash(const T& t) {
     return GetHash((std::underlying_type_t<T>)t);
 }
 template<typename T>
-FORCEINLINE uint32_t GetHash(const EnumInByte<T>& t) {
+FORCEINLINE Moer::uint32 GetHash(const EnumInByte<T>& t) {
     return GetHash(t.value);
 }
-FORCEINLINE uint32_t GetHash(const std::string& value) {
+FORCEINLINE Moer::uint32 GetHash(const std::string& value) {
     return std::hash<std::string>{}(value);
 }
 
-FORCEINLINE uint32_t GetHash(const std::string_view& value) {
+FORCEINLINE Moer::uint32 GetHash(const std::string_view& value) {
     return std::hash<std::string_view>{}(value);
 }
 
@@ -136,10 +136,10 @@ class EnumInByte {
 public:
     EnumInByte()                        = default;
     EnumInByte(const EnumInByte& other) = default;
-    EnumInByte(TEnum _enum_value) : value(static_cast<uint8_t>(_enum_value)) {}
-    EnumInByte(uint8_t _value) : value(_value) {}
-    EnumInByte(uint32_t _value) : value(static_cast<uint8_t>(_value)) {}
-    EnumInByte(int32_t _value) : value(static_cast<uint8_t>(_value)) {}
+    EnumInByte(TEnum _enum_value) : value(static_cast<Moer::uint8>(_enum_value)) {}
+    EnumInByte(Moer::uint8 _value) : value(_value) {}
+    EnumInByte(Moer::uint32 _value) : value(static_cast<Moer::uint8>(_value)) {}
+    EnumInByte(Moer::int32 _value) : value(static_cast<Moer::uint8>(_value)) {}
     EnumInByte& operator=(const EnumInByte&) = default;
 
     operator TEnum() const {
@@ -151,23 +151,23 @@ public:
     bool operator==(TEnum other) {
         return (TEnum)value == other;
     }
-    bool operator==(uint8_t _value) {
+    bool operator==(Moer::uint8 _value) {
         return _value == value;
     }
     inline TEnum GetValue() const {
         return (TEnum)value;
     }
-    friend uint32_t inline GetHash(const EnumInByte& target) {
+    friend Moer::uint32 inline GetHash(const EnumInByte& target) {
         return GetHash(target.value);
     };
 
 private:
-    uint8_t value;
+    Moer::uint8 value;
 };
 
 struct SHA256Hash {
 public:
-    Moer::StaticArray<uint8_t, 32> hash_code{};
+    Moer::StaticArray<Moer::uint8, 32> hash_code{};
     SHA256Hash() {
         for (unsigned char& i : hash_code) {
             i = 0;
@@ -188,7 +188,7 @@ public:
 
 struct CORE_API Hash64City {
 public:
-    Moer::StaticArray<uint8_t, 8> hash_code{};
+    Moer::StaticArray<Moer::uint8, 8> hash_code{};
 
     Hash64City() {
         for (unsigned char& i : hash_code) {
@@ -198,11 +198,11 @@ public:
 
     std::string ToString();
     void        FromString(std::string_view& src);
-    void        FromData(const uint8_t* data, size_t size);
+    void        FromData(const Moer::uint8* data, size_t size);
     void        Update(std::string_view& src);
-    void        Update(const uint8_t* data, uint32_t size);
+    void        Update(const Moer::uint8* data, Moer::uint32 size);
     //todo: Update() not utterly correct
-    void        Update(const char* data, uint32_t size);
+    void        Update(const char* data, Moer::uint32 size);
     friend bool operator==(const Hash64City& lhs, const Hash64City& rhs) {
         return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) == 0;
     }
@@ -233,11 +233,11 @@ class HashedName {
     friend struct std::hash<HashedName>;
     const char* value;
 
-    static std::atomic_uint32_t s_size;
+    static std::atomic<Moer::uint32> s_size;
 
     static std::shared_mutex                 s_rw_mutex;
-    static Moer::Map<const char*, uint32_t>& GetNameToHash() {
-        static Moer::Map<const char*, uint32_t> s_name_to_hash;
+    static Moer::Map<const char*, Moer::uint32>& GetNameToHash() {
+        static Moer::Map<const char*, Moer::uint32> s_name_to_hash;
         return s_name_to_hash;
     }
 
@@ -251,7 +251,7 @@ public:
     operator const char*() const {
         return value;
     }
-    friend uint32_t GetHash(const HashedName& value) {
+    friend Moer::uint32 GetHash(const HashedName& value) {
         {
             std::shared_lock<std::shared_mutex> read_lock(s_rw_mutex);
             if (const auto& iter = GetNameToHash().find(value); iter != GetNameToHash().end()) {
@@ -263,7 +263,7 @@ public:
 
 private:
     //thread safe
-    inline uint32_t RegisterName() const {
+    inline Moer::uint32 RegisterName() const {
         {
             std::shared_lock<std::shared_mutex> read_lock(s_rw_mutex);
             if (const auto& iter = GetNameToHash().find(value); iter != GetNameToHash().end()) {
@@ -273,7 +273,7 @@ private:
         }
         {
             std::unique_lock<std::shared_mutex> write_lock(s_rw_mutex);
-            uint32_t                            index = s_size.fetch_add(1) + 1;
+            Moer::uint32                        index = s_size.fetch_add(1) + 1;
             GetNameToHash().insert({value, index});
             return index;
         }

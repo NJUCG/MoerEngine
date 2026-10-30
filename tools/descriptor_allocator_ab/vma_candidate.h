@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanCommon.h"
+#include "misc/Types.h"
 #include <vk_mem_alloc.h>
 
 #include <memory>
@@ -12,11 +13,19 @@
 // GPU completion / joined-and-discarded recording must authorize Release/Rewind.
 class VmaDescriptorCandidate {
 public:
-    struct Range { uint64_t byte_offset, byte_size; };
-    struct Usage { uint64_t used_bytes = 0, reserved_bytes = 0; };
+    struct Range {
+        Moer::uint64 byte_offset, byte_size;
+    };
+    struct Usage {
+        Moer::uint64 used_bytes = 0, reserved_bytes = 0;
+    };
     class LeaseState {
         friend class VmaDescriptorCandidate;
-        struct Allocation { VmaVirtualAllocation handle; Range written; uint64_t reserved; };
+        struct Allocation {
+            VmaVirtualAllocation handle;
+            Range                written;
+            Moer::uint64         reserved;
+        };
         const VmaDescriptorCandidate* owner = nullptr;
         std::vector<Allocation> allocations;
     };
@@ -29,18 +38,18 @@ public:
     // non-coherent memory it is max(descriptor_alignment, nonCoherentAtomSize).
     // Rounding BOTH offset and size prevents independently flushed leases
     // from sharing a memory atom, at the cost of per-request padding.
-    VmaDescriptorCandidate(uint64_t capacity, uint64_t descriptor_alignment, uint64_t reuse_alignment);
+    VmaDescriptorCandidate(Moer::uint64 capacity, Moer::uint64 descriptor_alignment, Moer::uint64 reuse_alignment);
     ~VmaDescriptorCandidate();
     VmaDescriptorCandidate(const VmaDescriptorCandidate&) = delete;
     VmaDescriptorCandidate& operator=(const VmaDescriptorCandidate&) = delete;
     std::shared_ptr<LeaseState> CreateLease() const;
-    std::optional<uint64_t> ReserveRange(LeaseState&, uint64_t bytes);
+    std::optional<Moer::uint64> ReserveRange(LeaseState&, Moer::uint64 bytes);
     Usage GetUsage(const LeaseState&) const;
     std::vector<Range> GetWrittenRanges(const LeaseState&) const;
     Checkpoint CreateCheckpoint(const LeaseState&) const;
     void Rewind(LeaseState&, const Checkpoint&);
     void Release(LeaseState&);
-    uint64_t GetAllocatedBytes() const;
+    Moer::uint64                GetAllocatedBytes() const;
 
 private:
     void Validate(const LeaseState&) const;
@@ -48,5 +57,5 @@ private:
     // blocks have no internal synchronization; removing this lock is unsafe.
     mutable std::mutex mutex;
     VmaVirtualBlock block = VK_NULL_HANDLE;
-    const uint64_t capacity, descriptor_alignment, reuse_alignment;
+    const Moer::uint64 capacity, descriptor_alignment, reuse_alignment;
 };

@@ -1,21 +1,23 @@
 ﻿#ifndef THREAD_MANAGER_H
 #define THREAD_MANAGER_H
+
 #include "API_Macro.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "platform/Platform.h"
 #include <assert.h>
 #include <string>
 #include <thread>
 #include <variant>
-typedef int32_t ThreadIndex;
-typedef int32_t QueueIndex;
-typedef int32_t ThreadPriority;
+typedef Moer::int32 ThreadIndex;
+typedef Moer::int32 QueueIndex;
+typedef Moer::int32 ThreadPriority;
 class Event;
 class EThread {
 public:
     // 0-7
-    enum Type : int32_t {
+    enum Type : Moer::int32 {
         EMainThread,
         ERenderThread,
         NamedThreadCount,
@@ -59,7 +61,7 @@ public:
         return Type((type & ~INDEX_MASK) | (INDEX_MASK & index));
     }
 };
-std::string GetPriorityStr(int32_t priority);
+std::string GetPriorityStr(Moer::int32 priority);
 //thread executing structure
 class Runnable;
 //actual thread
@@ -72,35 +74,35 @@ public:
     ~ThreadManager();
 
 private:
-    static uint32_t g_game_thread_id;
-    static uint32_t g_render_thread_id;
+    static Moer::uint32 g_game_thread_id;
+    static Moer::uint32 g_render_thread_id;
     ThreadManager() {
         Initialize();
     }
     void Initialize();
 
 public:
-    void           AddThread(uint32_t id, RunnableThread*) noexcept;
+    void               AddThread(Moer::uint32 id, RunnableThread*) noexcept;
     void           RemoveThread(RunnableThread*);
-    inline int32_t GetNum() {
+    inline Moer::int32 GetNum() {
         return m_threads.size();
     }
     void                  Tick();
     static ThreadManager& Instance();
-    static const char*    GetThreadName(uint32_t id);
-    static void           SetGameThreadID(uint32_t _game_thread_id);
-    static void           SetRenderThreadID(uint32_t _render_thread_id);
-    static uint32_t       GetRenderThreadID();
-    static uint32_t       GetGameThreadID();
-    static uint32_t       GetCurrentThreadID();
-    static uint32_t       GetCurrentThreadIndex();
+    static const char*    GetThreadName(Moer::uint32 id);
+    static void           SetGameThreadID(Moer::uint32 _game_thread_id);
+    static void           SetRenderThreadID(Moer::uint32 _render_thread_id);
+    static Moer::uint32   GetRenderThreadID();
+    static Moer::uint32   GetGameThreadID();
+    static Moer::uint32   GetCurrentThreadID();
+    static Moer::uint32   GetCurrentThreadIndex();
 
 private:
     void                                 ShutDown();
-    RunnableThread*                      GetRunnableThread(uint32_t id);
-    Moer::Map<uint32_t, RunnableThread*> m_threads;
-    Moer::Map<uint32_t, uint32_t>        m_thread_indexs;
-    const char*                          GetRunnableThreadName(uint32_t id);
+    RunnableThread*                          GetRunnableThread(Moer::uint32 id);
+    Moer::Map<Moer::uint32, RunnableThread*> m_threads;
+    Moer::Map<Moer::uint32, Moer::uint32>    m_thread_indexs;
+    const char*                              GetRunnableThreadName(Moer::uint32 id);
 };
 
 struct ThreadAttributes {
@@ -136,24 +138,24 @@ public:
     }
 
 protected:
-    void Setup(uint64_t affinity);
+    void Setup(Moer::uint64 affinity);
     void SetAffinity(Affinity&& _affinity);
     void SetName(std::string_view _name);
     RunnableThread(Runnable*, ThreadAttributes _attributes);
-    uint32_t Run();
+    Moer::uint32 Run();
 
 private:
     Runnable*    m_runnable     = nullptr;
     Event*       m_create_event = nullptr;
     Event*       m_end_event    = nullptr;
-    uint32_t     id             = 0;
+    Moer::uint32 id             = 0;
     std::string  name;
     std::thread* m_thread = nullptr;
 };
 
 class Runnable {
 public:
-    virtual uint32_t    Run()      = 0;
+    virtual Moer::uint32 Run()      = 0;
     virtual void        Init()     = 0;
     virtual void        Stop()     = 0;
     virtual void        Exit()     = 0;
@@ -165,7 +167,7 @@ protected:
 
 class TestRunnanble : public Runnable {
 public:
-    virtual uint32_t    Run() override;
+    virtual Moer::uint32 Run() override;
     virtual void        Init() override;
     virtual void        Stop() override;
     virtual void        Exit() override;

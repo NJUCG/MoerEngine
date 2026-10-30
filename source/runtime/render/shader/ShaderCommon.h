@@ -4,11 +4,11 @@
 #include "misc/STL.h"
 // #include "rhi/RHI.h"
 #include "misc/MacroUtils.h"
+#include "misc/Types.h"
 #include "resources/vertexfactory/VertexAttributes.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "serialize/Serializer.h"
-#include <cstdint>
 #include <functional>
 #include <string>
 #include <variant>
@@ -17,9 +17,9 @@
 // extern const char* g_global_shader_resource_output_dir;
 
 struct ShaderCompiledInitializer;
-using ShaderTypeKey = uint32_t;
+using ShaderTypeKey = Moer::uint32;
 
-enum class EShaderPrecisionModifier : uint8_t {
+enum class EShaderPrecisionModifier : Moer::uint8 {
     FLOAT,
     HALF,
     FIXED,
@@ -28,7 +28,7 @@ enum class EShaderPrecisionModifier : uint8_t {
 ENUM_BIT_OP_IMPL(EShaderPrecisionModifier)
 
 /** The use case of parameter struct. */
-enum class EShaderParameterUseCase : uint8_t {
+enum class EShaderParameterUseCase : Moer::uint8 {
     /** Stand alone shader parameter struct used for render passes and shader parameters. */
     SHADER_ROOT_PARAMETERS,
 
@@ -50,7 +50,7 @@ namespace Moer::Render {
 struct ShaderEntry {
     EShaderType     type;
     EShaderPlatform platform;
-    Array<uint8_t>  blob_data;
+    Array<uint8>    blob_data;
 
     OutputStream& operator<<(OutputStream& _stream) const {
         _stream << type << platform << blob_data;
@@ -103,7 +103,7 @@ struct ShaderFileDependency {
 
 struct Shader {
     ShaderParametersInfoMap            reflection;
-    uint32_t                           mutation_id;
+    uint32                             mutation_id;
     EShaderType                        type;
     Moer::StaticArray<Moer::uint64, 2> compiled_hash;
     Moer::uint64                       shader_name_hash;
@@ -156,17 +156,17 @@ struct ShaderCompilerOutput {
 
     ShaderTargetInfo target_info;
 
-    Moer::Array<uint8_t> shader_code;
+    Moer::Array<uint8>   shader_code;
     std::string          compiled_entry_name;
-    uint64_t             compiled_hash1;
-    uint64_t             compiled_hash2;
-    uint32_t             num_instructions;
-    uint32_t             num_samplers;
-    uint32_t             mutation_id;
+    uint64               compiled_hash1;
+    uint64               compiled_hash2;
+    uint32               num_instructions;
+    uint32               num_samplers;
+    uint32               mutation_id;
     double               compiled_time;
     double               preprocessing_time;
     bool                 b_succeeded;
-    uint32_t             shader_name_hash;
+    uint32               shader_name_hash;
 
     bool      cached                      = false;
     long long source_file_last_write_time = 0;
@@ -196,12 +196,12 @@ public:
         value       = _value;
     }
 
-    void SetDefine(std::string_view _key, const int32_t _value) {
+    void SetDefine(std::string_view _key, const int32 _value) {
         auto& value = defines[_key.data()];
         value       = std::to_string(_value);
     }
 
-    void SetDefine(std::string_view _key, const uint32_t _value) {
+    void SetDefine(std::string_view _key, const uint32 _value) {
         auto& value = defines[_key.data()];
         value       = std::to_string(_value);
     }
@@ -241,7 +241,7 @@ private:
 
 template<typename TMaroType>
 concept MacroType = requires(TMaroType _type) {
-    std::is_same_v<TMaroType, uint32_t> || std::is_same_v<TMaroType, int32_t> ||
+    std::is_same_v<TMaroType, uint32> || std::is_same_v<TMaroType, int32> ||
         std::is_same_v<TMaroType, bool> || std::is_same_v<TMaroType, float> ||
         std::is_same_v<TMaroType, std::string>;
 };
@@ -270,13 +270,12 @@ public:
         return macro_defines.defines;
     }
 
-    const Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>>&
+    const Moer::UnorderedMap<std::string, std::variant<uint32, int32, bool, float, std::string>>&
     GetCompilerArgs() const {
         return compiler_args;
     }
 
-    static std::wstring GetVariantWStr(const std::variant<uint32_t, int32_t, bool, float, std::string>& _value
-    ) {
+    static std::wstring GetVariantWStr(const std::variant<uint32, int32, bool, float, std::string>& _value) {
         return std::visit(
             []<typename T>(const T& e) {
                 if constexpr (std::is_same_v<T, std::string>) {
@@ -314,7 +313,7 @@ public:
 private:
     ShaderCompilerDefines macro_defines;
 
-    Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>> compiler_args;
+    Moer::UnorderedMap<std::string, std::variant<uint32, int32, bool, float, std::string>> compiler_args;
 };
 
 struct ShaderCompileJobInput {
@@ -322,8 +321,8 @@ struct ShaderCompileJobInput {
     std::string_view entry_point;
     std::string_view relative_source_file_path;
     std::string_view shader_name;
-    uint32_t         shader_name_hash;
-    uint32_t         mutation_count;
+    uint32           shader_name_hash;
+    uint32           mutation_count;
 };
 
 struct VertexFactory {
@@ -371,7 +370,7 @@ namespace std {
 template<>
 struct hash<Shader> {
     size_t operator()(const Moer::Render::Shader& _shader) const {
-        uint64_t hash = _shader.compiled_hash[0];
+        Moer::uint64 hash = _shader.compiled_hash[0];
         HashCombine(hash, _shader.compiled_hash[1]);
         return hash;
     }
@@ -407,18 +406,18 @@ private:
     std::string               shader_path;
     std::string               entry_name;
     ShaderCompilerEnvironment src_environment;
-    uint                      mutation_id = 0;
+    uint32                    mutation_id = 0;
 
     UnorderedMap<VertexFactory, Shader&> shader_map;
 };
 
 struct ShaderCompilerInput {
     ShaderTargetInfo          target_info;
-    uint32_t                  mutation_id;
+    uint32                    mutation_id;
     std::string               entry_point;
     std::string               relative_source_file_path;
     std::string               shader_name;
-    uint32_t                  shader_name_hash;
+    uint32                    shader_name_hash;
     ShaderCompilerEnvironment environment;
 
     Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
@@ -451,7 +450,7 @@ template<>
 struct hash<Moer::Render::ShaderCompilerInput> {
     size_t operator()(const Moer::Render::ShaderCompilerInput& _input) const {
         return std::hash<std::string_view>()(_input.relative_source_file_path) ^
-               std::hash<std::string_view>()(_input.entry_point) ^ std::hash<uint32_t>()(_input.mutation_id);
+               std::hash<std::string_view>()(_input.entry_point) ^ std::hash<Moer::uint32>()(_input.mutation_id);
     }
 };
 } // namespace std

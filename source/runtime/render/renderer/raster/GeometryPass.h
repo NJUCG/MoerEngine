@@ -3,10 +3,11 @@
 
 #include "math/Function.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "profile/ProfileScope.h"
+#include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
@@ -49,8 +50,8 @@ public:
         BufferView                     index_buffer{};
         BufferView                     draw_commands{};
         BufferView                     draw_count{};
-        uint                           draw_command_stride = 0;
-        uint                           max_draw_count      = 0;
+        uint32                         draw_command_stride = 0;
+        uint32                         max_draw_count      = 0;
         Rect2D                         render_area{};
         DepthBufferRef                 depth{};
         TextureRef                     base_color{};
@@ -147,7 +148,7 @@ public:
         param.alpha_test_blend_pixel_cutoff =
             raster_config.geometry_alpha_test_blend_pixel_cutoff;
         param.debug_visualization_mode =
-            static_cast<uint>(raster_config.geometry_debug_visualization);
+            static_cast<uint32>(raster_config.geometry_debug_visualization);
 
         const auto render_area = context.textures.base_color.GetRect2D();
         assert(

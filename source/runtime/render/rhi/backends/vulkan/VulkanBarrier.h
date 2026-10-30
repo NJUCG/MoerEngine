@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanCommon.h"
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 
 namespace Moer::Render {
@@ -77,8 +78,8 @@ public:
         uint64                     _offset,
         uint64                     _byte_size,
         EBarrierQueueTransferPhase _phase,
-        uint32_t                   _src_queue_family,
-        uint32_t                   _dst_queue_family,
+        uint32                     _src_queue_family,
+        uint32                     _dst_queue_family,
         VkPipelineStageFlags2      _src_stage,
         VkAccessFlags2             _src_access,
         VkPipelineStageFlags2      _dst_stage,
@@ -92,8 +93,8 @@ public:
         uint8                      _array_layer,
         uint8                      _array_count,
         EBarrierQueueTransferPhase _phase,
-        uint32_t                   _src_queue_family,
-        uint32_t                   _dst_queue_family,
+        uint32                     _src_queue_family,
+        uint32                     _dst_queue_family,
         VkPipelineStageFlags2      _src_stage,
         VkAccessFlags2             _src_access,
         VkImageLayout              _src_layout,

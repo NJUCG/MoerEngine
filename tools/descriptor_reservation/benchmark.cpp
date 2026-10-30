@@ -1,4 +1,5 @@
 #include "VulkanDescriptorBufferAllocator.h"
+#include "misc/Types.h"
 
 #include <barrier>
 #include <chrono>
@@ -11,11 +12,11 @@ using Clock = std::chrono::steady_clock;
 void Run(bool prepared, size_t workers, size_t commands, size_t binds) {
     constexpr size_t iterations = 500;
     Allocator allocator(6 * 1024 * 1024, 64 * 1024, 32, 256);
-    const std::vector<std::vector<uint64_t>> requests(commands, std::vector<uint64_t>(binds, 128));
+    const std::vector<std::vector<Moer::uint64>>     requests(commands, std::vector<Moer::uint64>(binds, 128));
     std::shared_ptr<Allocator::LeaseState> lease;
     std::optional<std::vector<Allocator::Recording>> recordings;
     std::barrier rendezvous(static_cast<std::ptrdiff_t>(workers + 1));
-    std::vector<uint64_t> checksums(workers);
+    std::vector<Moer::uint64>                        checksums(workers);
     std::vector<std::jthread> threads;
     for (size_t worker = 0; worker < workers; ++worker) {
         threads.emplace_back([&, worker] {
@@ -35,7 +36,7 @@ void Run(bool prepared, size_t workers, size_t commands, size_t binds) {
         });
     }
     double prepare_ms = 0, record_ms = 0, retire_ms = 0;
-    uint64_t reserved_bytes = 0;
+    Moer::uint64 reserved_bytes = 0;
     auto milliseconds = [](auto start, auto end) {
         return std::chrono::duration<double, std::milli>(end - start).count();
     };
@@ -59,7 +60,7 @@ void Run(bool prepared, size_t workers, size_t commands, size_t binds) {
         retire_ms += milliseconds(recorded, retired);
     }
     threads.clear();
-    uint64_t checksum = 0;
+    Moer::uint64 checksum = 0;
     for (auto value : checksums) checksum += value;
     std::cout << "{\"prepared\":" << (prepared ? "true" : "false")
               << ",\"workers\":" << workers << ",\"commands\":" << commands

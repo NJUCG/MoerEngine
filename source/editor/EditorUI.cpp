@@ -1,4 +1,5 @@
 #include "EditorUI.h"
+#include "misc/Types.h"
 
 // 构建编辑器 ImGui Dockspace，协调顶层工具，并跟踪当前活动的渲染视口。
 
@@ -56,7 +57,7 @@ std::string BuildFileMenuLabel(std::string_view scene_path) {
 }
 
 std::string BuildRenderMethodMenuLabel(ERenderMethod render_method) {
-    return "Render Method: [" + std::string(k_render_method_names[static_cast<uint>(render_method)]) + "]";
+    return "Render Method: [" + std::string(k_render_method_names[static_cast<uint32>(render_method)]) + "]";
 }
 
 } // namespace
@@ -434,7 +435,7 @@ void EditorUI::TickUI(Scene& scene) {
     SyncWindowVisibilitySettings();
 
     const auto to_extent_component = [](float value) {
-        return value > 0.f ? static_cast<uint>(value) : 0u;
+        return value > 0.f ? static_cast<uint32>(value) : 0u;
     };
     const WindowInputSourceSnapshot& pending_input_source =
         m_window_input_tracker.GetPendingSource();
@@ -797,11 +798,11 @@ void EditorUI::ShowViewportWindow(
                     ImGui::Checkbox("Bounding Spheres", &gizmos.show_csm_bounding_spheres);
 
                     if (ImGui::BeginMenu("Cascades")) {
-                        const uint active_cascade_count = Min(
-                            static_cast<uint>(m_config->raster_config.shadow_csm_num_of_cascades),
-                            static_cast<uint>(CSM_MAX_CASCADES)
+                        const uint32 active_cascade_count = Min(
+                            static_cast<uint32>(m_config->raster_config.shadow_csm_num_of_cascades),
+                            static_cast<uint32>(CSM_MAX_CASCADES)
                         );
-                        for (uint cascade_index = 0u; cascade_index < CSM_MAX_CASCADES; ++cascade_index) {
+                        for (uint32 cascade_index = 0u; cascade_index < CSM_MAX_CASCADES; ++cascade_index) {
                             ImGui::PushID(static_cast<int>(cascade_index));
                             ImGui::BeginDisabled(cascade_index >= active_cascade_count);
 

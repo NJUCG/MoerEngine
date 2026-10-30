@@ -1,8 +1,10 @@
 #ifndef TASK_GRAPH_H
 #define TASK_GRAPH_H
+
 #include "API_Macro.h"
 #include "Thread.h"
 #include "misc/CountableRef.h"
+#include "misc/Types.h"
 #include "taskgraph/WorkStealing.h"
 
 #include <memory>
@@ -40,17 +42,17 @@ public:
         bool           wake_worker    = true
     ) noexcept;
     virtual void           ReturnThread(EThread::Type index);
-    virtual BaseGraphTask* DequeueTask(int32_t threadIndex);
+    virtual BaseGraphTask* DequeueTask(Moer::int32 threadIndex);
     CORE_API virtual void  ProcessThreadUntilIdle(EThread::Type index);
     CORE_API virtual void  ProcessThreadUntilReturn(EThread::Type index);
     CORE_API bool          IsThreadProcessingTask(EThread::Type index);
-    inline uint32_t        GetWorkerThreadCount() const {
+    inline Moer::uint32    GetWorkerThreadCount() const {
         return m_worker_thread_count;
     }
-    inline uint32_t GetWorkerThreadCount(EThread::Type priority) const {
-        const int32_t priority_index = EThread::GetThreadPriority(priority);
+    inline Moer::uint32 GetWorkerThreadCount(EThread::Type priority) const {
+        const Moer::int32 priority_index = EThread::GetThreadPriority(priority);
         assert(priority_index >= 0 && priority_index < EThread::PriorityCount);
-        return static_cast<uint32_t>(m_worker_topology.counts[priority_index]);
+        return static_cast<Moer::uint32>(m_worker_topology.counts[priority_index]);
     }
     /** Returns the scheduler identity of the caller, or UNKNOWN for an external thread. */
     CORE_API EThread::Type GetCurrentThread(bool localQueue = false);
@@ -69,18 +71,18 @@ protected:
 
 private:
     TaskThreadBase& GetThread(ThreadIndex index);
-    int32_t         GetThreadPriorityFromIndex(int32_t threadIndex) const noexcept {
+    Moer::int32     GetThreadPriorityFromIndex(Moer::int32 threadIndex) const noexcept {
         return m_worker_topology.PriorityForThread(threadIndex);
     }
-    void        WakeUpWorkerThread(int32_t threadIndex, QueueIndex index) noexcept;
-    static void WakeWorkerCallback(void* context, int32_t threadIndex) noexcept;
+    void         WakeUpWorkerThread(Moer::int32 threadIndex, QueueIndex index) noexcept;
+    static void  WakeWorkerCallback(void* context, Moer::int32 threadIndex) noexcept;
     static void SetCurrentWorkerThread(EThread::Type thread) noexcept;
     static void ClearCurrentWorkerThread() noexcept;
     void        NotifyAnyThreadTaskCompleted() noexcept;
     WorkerThread m_workers[INT16_MAX];
-    int32_t      m_thread_count;
-    int32_t      m_named_thread_count;
-    int32_t      m_worker_thread_count;
+    Moer::int32  m_thread_count;
+    Moer::int32  m_named_thread_count;
+    Moer::int32  m_worker_thread_count;
 
     Moer::TaskGraphDetail::WorkerPoolTopology m_worker_topology{};
     std::unique_ptr<AnyThreadScheduler>        m_any_thread_scheduler{};
@@ -279,8 +281,8 @@ template<typename ReturnType, typename... Args>
 struct SharedFunctor {
     struct SharedFunctorStruct {
         void (*destroy_func)(void*) = nullptr;
-        uint32_t             size   = 0;
-        std::atomic_uint32_t ref_count{1};
+        Moer::uint32              size = 0;
+        std::atomic<Moer::uint32> ref_count{1};
     };
     SharedFunctorStruct* m_functor = nullptr;
     ReturnType (*m_func)(void*, Args...);
@@ -410,17 +412,17 @@ struct SharedFunctor {
 };
 
 template<typename FunctionType>
-    requires std::is_invocable_v<FunctionType, uint32_t>
-inline static void ParallelFor(uint32_t _size, FunctionType&& _func) {
-    uint32_t worker_cnt = TaskGraph::GetInterface().GetWorkerThreadCount();
+    requires std::is_invocable_v<FunctionType, Moer::uint32>
+inline static void ParallelFor(Moer::uint32 _size, FunctionType&& _func) {
+    Moer::uint32 worker_cnt = TaskGraph::GetInterface().GetWorkerThreadCount();
     if (worker_cnt == 0) {
         worker_cnt = 1;
     }
-    uint32_t chunk_size = (_size + worker_cnt - 1) / worker_cnt;
+    Moer::uint32 chunk_size = (_size + worker_cnt - 1) / worker_cnt;
     if (chunk_size == 0) {
         chunk_size = 1;
     }
-    uint32_t        chunk_count = (_size + chunk_size - 1) / chunk_size;
+    Moer::uint32    chunk_count = (_size + chunk_size - 1) / chunk_size;
     GraphEventArray events;
     events.reserve(chunk_count);
 
@@ -428,11 +430,11 @@ inline static void ParallelFor(uint32_t _size, FunctionType&& _func) {
         lambda(_i);
     });
 
-    for (uint32_t i = 0; i < chunk_count; i++) {
-        uint32_t start = i * chunk_size;
-        uint32_t end   = std::min(start + chunk_size, _size);
+    for (Moer::uint32 i = 0; i < chunk_count; i++) {
+        Moer::uint32 start = i * chunk_size;
+        Moer::uint32 end   = std::min(start + chunk_size, _size);
         events.push_back(LambdaTask::Dispatch([=](EThread::Type, const GraphEventRef&) {
-            for (uint32_t j = start; j < end; j++) {
+            for (Moer::uint32 j = start; j < end; j++) {
                 func(j);
             }
         }));
@@ -441,17 +443,17 @@ inline static void ParallelFor(uint32_t _size, FunctionType&& _func) {
 }
 
 template<typename FunctionType>
-    requires std::is_invocable_v<FunctionType, uint32_t>
-GraphEventRef ParallelForAsync(uint32_t _size, FunctionType&& _func) {
-    uint32_t worker_cnt = TaskGraph::GetInterface().GetWorkerThreadCount();
+    requires std::is_invocable_v<FunctionType, Moer::uint32>
+GraphEventRef ParallelForAsync(Moer::uint32 _size, FunctionType&& _func) {
+    Moer::uint32 worker_cnt = TaskGraph::GetInterface().GetWorkerThreadCount();
     if (worker_cnt == 0) {
         worker_cnt = 1;
     }
-    uint32_t chunk_size = (_size + worker_cnt - 1) / worker_cnt;
+    Moer::uint32 chunk_size = (_size + worker_cnt - 1) / worker_cnt;
     if (chunk_size == 0) {
         chunk_size = 1;
     }
-    uint32_t        chunk_count = (_size + chunk_size - 1) / chunk_size;
+    Moer::uint32    chunk_count = (_size + chunk_size - 1) / chunk_size;
     GraphEventArray events;
     events.reserve(chunk_count);
 
@@ -459,11 +461,11 @@ GraphEventRef ParallelForAsync(uint32_t _size, FunctionType&& _func) {
         lambda(_i);
     });
 
-    for (uint32_t i = 0; i < chunk_count; i++) {
-        uint32_t start = i * chunk_size;
-        uint32_t end   = std::min(start + chunk_size, _size);
+    for (Moer::uint32 i = 0; i < chunk_count; i++) {
+        Moer::uint32 start = i * chunk_size;
+        Moer::uint32 end   = std::min(start + chunk_size, _size);
         events.push_back(LambdaTask::Dispatch([=](EThread::Type, const GraphEventRef&) mutable {
-            for (uint32_t j = start; j < end; j++) {
+            for (Moer::uint32 j = start; j < end; j++) {
                 func(j);
             }
         }));

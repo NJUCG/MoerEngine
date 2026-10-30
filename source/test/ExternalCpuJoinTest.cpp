@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "rhi/ExternalCpuJoinPool.h"
 
 #include <atomic>
@@ -35,19 +36,19 @@ void Expect(bool _condition, const char* _message) {
 
 void ExternalCallerSingleWorker() {
     ExternalCpuJoinPool pool(1);
-    std::atomic<uint32_t> executed{0};
-    std::atomic<uint32_t> active{0};
-    std::atomic<uint32_t> max_active{0};
+    std::atomic<Moer::uint32>     executed{0};
+    std::atomic<Moer::uint32>     active{0};
+    std::atomic<Moer::uint32>     max_active{0};
     std::mutex            ids_mutex;
     std::vector<std::thread::id> worker_ids;
     std::thread::id               coordinator_id;
     ExternalJoinResult            result = ExternalJoinResult::Failed;
 
     std::vector<ExternalCpuJoinPool::Job> jobs;
-    for (uint32_t index = 0; index < 32; ++index) {
+    for (Moer::uint32 index = 0; index < 32; ++index) {
         jobs.emplace_back([&] {
-            const uint32_t now_active = active.fetch_add(1, std::memory_order_acq_rel) + 1;
-            uint32_t       observed   = max_active.load(std::memory_order_relaxed);
+            const Moer::uint32 now_active = active.fetch_add(1, std::memory_order_acq_rel) + 1;
+            Moer::uint32       observed   = max_active.load(std::memory_order_relaxed);
             while (observed < now_active &&
                    !max_active.compare_exchange_weak(observed, now_active, std::memory_order_relaxed)) {
             }
@@ -76,7 +77,7 @@ void ExternalCallerSingleWorker() {
 
 void NestedJoinRejected() {
     ExternalCpuJoinPool pool(1);
-    std::atomic<uint32_t> nested_executed{0};
+    std::atomic<Moer::uint32> nested_executed{0};
     ExternalJoinResult   nested_result = ExternalJoinResult::Completed;
 
     std::vector<ExternalCpuJoinPool::Job> outer_jobs;
@@ -99,7 +100,7 @@ void CrossPoolNestedJoinRejected() {
     ExternalCpuJoinPool first_pool(1);
     ExternalCpuJoinPool second_pool(1);
     ExternalJoinResult  nested_result = ExternalJoinResult::Completed;
-    std::atomic<uint32_t> nested_executed{0};
+    std::atomic<Moer::uint32> nested_executed{0};
 
     std::vector<ExternalCpuJoinPool::Job> outer_jobs;
     outer_jobs.emplace_back([&] {
@@ -121,7 +122,7 @@ void CrossPoolNestedJoinRejected() {
 
 void FailedJobDrainsAndPoolRemainsUsable() {
     ExternalCpuJoinPool pool(2);
-    std::atomic<uint32_t> executed{0};
+    std::atomic<Moer::uint32>             executed{0};
     std::vector<ExternalCpuJoinPool::Job> failing_jobs;
     failing_jobs.emplace_back([] { throw std::runtime_error("injected job failure"); });
     failing_jobs.emplace_back([&] { executed.fetch_add(1, std::memory_order_relaxed); });
@@ -258,13 +259,13 @@ void ConcurrentBatchesUseSingleActiveBatch() {
 
 void ShutdownWhileQueued() {
     ExternalCpuJoinPool pool(1);
-    constexpr uint32_t  job_count = 24;
+    constexpr Moer::uint32 job_count = 24;
 
     std::mutex              gate_mutex;
     std::condition_variable gate_cv;
     bool                    first_started{false};
     bool                    release_first{false};
-    std::atomic<uint32_t>    executed{0};
+    std::atomic<Moer::uint32> executed{0};
     std::atomic<bool>        stopper_entered{false};
     std::atomic<bool>        stop_finished{false};
     ExternalJoinResult       batch_result = ExternalJoinResult::Failed;
@@ -277,7 +278,7 @@ void ShutdownWhileQueued() {
         gate_cv.wait(lock, [&] { return release_first; });
         executed.fetch_add(1, std::memory_order_relaxed);
     });
-    for (uint32_t index = 1; index < job_count; ++index) {
+    for (Moer::uint32 index = 1; index < job_count; ++index) {
         jobs.emplace_back([&] { executed.fetch_add(1, std::memory_order_relaxed); });
     }
 

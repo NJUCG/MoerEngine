@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanFaultInjection.h"
 #endif
@@ -54,13 +55,13 @@ namespace {
 
 using ThreadProfileClock = std::chrono::steady_clock;
 
-constexpr std::uint64_t kProfileCaptureValidationMinGpuFrames = 4;
-constexpr std::uint64_t kProfileCaptureValidationMaxGtTicks   = 60000;
+constexpr uint64 kProfileCaptureValidationMinGpuFrames = 4;
+constexpr uint64 kProfileCaptureValidationMaxGtTicks   = 60000;
 constexpr auto kProfileCaptureValidationTimeout = std::chrono::seconds(180);
 
 [[nodiscard]] bool ProfileDumpTerminalIsClean(
     const ProfileDump::RuntimeStats& _stats,
-    std::uint64_t                    _generation
+    uint64                           _generation
 ) noexcept {
     return _stats.state == ProfileDump::RuntimeState::Stopped &&
            _stats.last_fault == ProfileDump::RuntimeFault::None &&
@@ -409,7 +410,7 @@ ERenderMethod ParseDefaultRenderMethod(std::string_view render_method_name) {
 template<typename PrepareFunction, typename RenderFunction, typename ApplyFunction, typename StopFunction>
 void RunBoundedRenderLoop(
     RenderThreadService& service,
-    uint                 max_frame_lag,
+    uint32               max_frame_lag,
     bool                 profile_logging,
     PrepareFunction      prepare_frame,
     RenderFunction       render_frame,
@@ -886,7 +887,7 @@ void Engine::TickProfileCaptureLifecycleValidation(Render::ProfileCaptureTickRes
         const auto live_generation_matches = [this](
                                                  const Render::ProfileCaptureControllerSnapshot& snapshot,
                                                  const Render::RenderProfileCaptureStats&        stats,
-                                                 std::uint64_t                                   generation
+                                                 uint64                                          generation
                                              ) noexcept {
             return generation != 0 && snapshot.state == Render::ProfileCaptureControllerState::Running &&
                    snapshot.owns_runtime && snapshot.cpu_producer_active && snapshot.gpu_session_active &&
@@ -1217,7 +1218,7 @@ void Engine::Init(
         .debug_dump         = startup_config.raytracing_rdg_debug_dump,
         .parallel_recording = startup_config.raytracing_rdg_parallel_recording,
     };
-    const uint submission_batch_window = RHISubmissionPipelinePolicy::ClampBatchWindow(
+    const uint32 submission_batch_window = RHISubmissionPipelinePolicy::ClampBatchWindow(
         startup_config.configured_submission_batch_window
     );
     if (submission_batch_window != startup_config.configured_submission_batch_window) {
@@ -1319,7 +1320,7 @@ void Engine::Init(
 
     if (startup_config.render_thread) {
         report_startup("Starting render thread", "Creating the configured render-thread service");
-        m_max_frame_lag = std::min(startup_config.max_frame_lag, uint{1});
+        m_max_frame_lag = std::min(startup_config.max_frame_lag, uint32{1});
         if (startup_config.max_frame_lag > 1) {
             LOG_WARNING(
                 "[Threading] max_frame_lag={} exceeds the validated range; clamping to 1.",
@@ -1542,7 +1543,7 @@ void Engine::Run(const EngineHooks& hooks) {
 
         LOG_INFO(
             "Selecting Render Method : {}",
-            k_render_method_names[static_cast<uint>(selected_render_method)]
+            k_render_method_names[static_cast<uint32>(selected_render_method)]
         );
 
         auto create_renderer = [this, runtime_hooks, selected_render_method]() {
@@ -1569,7 +1570,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 MOER_ASSERT(
                     false,
                     "Unknown render method during renderer creation: {}",
-                    static_cast<std::uint32_t>(
+                    static_cast<uint32>(
                         m_editor_config->selected_render_method
                     )
                 );
@@ -1658,7 +1659,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 MOER_ASSERT(
                     false,
                     "Unknown render method during renderer shutdown: {}",
-                    static_cast<std::uint32_t>(
+                    static_cast<uint32>(
                         m_editor_config->selected_render_method
                     )
                 );
@@ -1717,7 +1718,7 @@ void Engine::Run(const EngineHooks& hooks) {
 void Engine::TickRendererSwitchValidation(Scene& scene) {
     assert(IsCurrentlyGameThread());
 
-    constexpr uint k_stable_ready_gt_frames = 12;
+    constexpr uint32 k_stable_ready_gt_frames = 12;
 
     ERenderMethod expected_render_method = ERenderMethod::Raster;
     switch (m_renderer_switch_validation_stage) {
@@ -1738,8 +1739,8 @@ void Engine::TickRendererSwitchValidation(Scene& scene) {
     if (m_editor_config->selected_render_method != expected_render_method) {
         LOG_ERROR(
             "[ThreadingValidation][RendererSwitch][Error] Expected renderer {}, observed {}.",
-            k_render_method_names[static_cast<uint>(expected_render_method)],
-            k_render_method_names[static_cast<uint>(m_editor_config->selected_render_method)]
+            k_render_method_names[static_cast<uint32>(expected_render_method)],
+            k_render_method_names[static_cast<uint32>(m_editor_config->selected_render_method)]
         );
         m_renderer_switch_validation_stage = ERendererSwitchValidationStage::Failed;
         m_renderer_switch_validation_reload_requested = false;
@@ -1806,7 +1807,7 @@ void Engine::TickRendererSwitchValidation(Scene& scene) {
 
 void Engine::TickRasterLifecycleValidation(Scene& scene) {
     assert(IsCurrentlyGameThread());
-    constexpr uint k_stable_ready_gt_frames = 12;
+    constexpr uint32 k_stable_ready_gt_frames = 12;
 
     if (!m_raster_lifecycle_validation_enabled) {
         return;
@@ -1871,7 +1872,7 @@ Engine::RequestProfileCaptureStart(Render::ProfileCaptureStartOptions options) n
 }
 
 Render::ProfileCaptureRequestSubmission
-Engine::RequestProfileCaptureStop(std::uint64_t expected_generation) noexcept {
+Engine::RequestProfileCaptureStop(uint64 expected_generation) noexcept {
     if (!m_profile_capture_controller) {
         return {
             .result = Render::ProfileCaptureSubmitResult::AdmissionClosed,

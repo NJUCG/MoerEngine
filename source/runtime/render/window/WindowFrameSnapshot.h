@@ -2,7 +2,7 @@
 
 #include "rhi/RHIWindowSurface.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 
 namespace Moer::Render {
 
@@ -12,7 +12,7 @@ struct WindowFrameMetrics {
     bool     valid{false};
 };
 
-enum class EWindowFrameTransition : uint8_t {
+enum class EWindowFrameTransition : uint8 {
     Invalid,
     Initial,
     Stable,
@@ -28,8 +28,8 @@ struct WindowFrameSnapshot {
     Extent2D                logical_extent{};
     Extent2D                drawable_extent{};
     Extent2D                last_drawable_extent{};
-    uint64_t                capture_sequence{0};
-    uint64_t                drawable_generation{0};
+    uint64                  capture_sequence{0};
+    uint64                  drawable_generation{0};
     EWindowFrameTransition  transition{EWindowFrameTransition::Invalid};
 
     [[nodiscard]] bool IsValid() const noexcept {
@@ -56,7 +56,7 @@ class WindowFrameSnapshotTracker {
 public:
     [[nodiscard]] WindowFrameSnapshot
     Advance(const WindowSurfaceIdentity& surface_identity, const WindowFrameMetrics& metrics) noexcept {
-        const uint64_t capture_sequence = ++capture_sequence_;
+        const uint64 capture_sequence = ++capture_sequence_;
         if (!surface_identity.IsValid() || !metrics.valid) {
             WindowFrameSnapshot invalid_snapshot = last_valid_snapshot_;
             invalid_snapshot.capture_sequence    = capture_sequence;
@@ -125,7 +125,7 @@ private:
     }
 
     WindowFrameSnapshot last_valid_snapshot_{};
-    uint64_t            capture_sequence_{0};
+    uint64              capture_sequence_{0};
     bool                has_valid_snapshot_{false};
 };
 

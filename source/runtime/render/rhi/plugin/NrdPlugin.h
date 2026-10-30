@@ -1,6 +1,8 @@
 #ifndef MOER_NRD_PLUGIN_H
 #define MOER_NRD_PLUGIN_H
 
+#include "misc/Types.h"
+
 /**
  * 因为NVIDIA的NRD为闭源协议，所以MoerEngine无法直接引入NRD相关头文件和库文件，只能以插件的形式提供NRD支持。
  * 
@@ -57,7 +59,7 @@ inline void nriDestroyDevice(Device&) {}
 
 namespace nrd {
 
-enum class Denoiser : uint32_t {
+enum class Denoiser : Moer::uint32 {
     REBLUR_DIFFUSE_SPECULAR,
     REBLUR_DIFFUSE,
     REBLUR_SPECULAR,
@@ -79,7 +81,7 @@ struct Integration {};
 
 struct UserPool {};
 
-typedef uint32_t Identifier;
+typedef Moer::uint32 Identifier;
 
 } // namespace nrd
 

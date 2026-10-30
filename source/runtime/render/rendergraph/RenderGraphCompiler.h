@@ -1,5 +1,6 @@
 #pragma once
 
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 
 #include <memory_resource>
@@ -36,12 +37,12 @@ private:
     struct AtomicCell {
         RenderGraph::ResourceRange range{};
         std::vector<RenderGraph::CompiledBarrierSource> readers{};
-        uint32_t                   last_writer = RenderGraph::InvalidIndex;
+        uint32                                          last_writer = RenderGraph::InvalidIndex;
         RenderGraph::CompiledBarrierSource last_writer_source{};
-        uint32_t                   last_access = RenderGraph::InvalidIndex;
-        uint32_t                   availability_established_pass = RenderGraph::InvalidIndex;
-        uint32_t                   ownership_established_pass = RenderGraph::InvalidIndex;
-        uint32_t                   version     = RenderGraph::InvalidVersion;
+        uint32                                          last_access                   = RenderGraph::InvalidIndex;
+        uint32                                          availability_established_pass = RenderGraph::InvalidIndex;
+        uint32                                          ownership_established_pass    = RenderGraph::InvalidIndex;
+        uint32                                          version                       = RenderGraph::InvalidVersion;
         RenderGraph::ResourceState state{};
         RenderGraph::ExecutionDomain last_domain{
             RenderGraph::QueueRole::None,
@@ -68,8 +69,8 @@ private:
     void AuditStatePlanCompleteness();
     bool BuildExecutionOrder();
     void BuildQueuePlan();
-    std::pmr::vector<uint32_t> BuildDependencyLevels();
-    void BuildFrontendRecordUnits(std::span<const uint32_t> dependency_levels);
+    std::pmr::vector<uint32> BuildDependencyLevels();
+    void                     BuildFrontendRecordUnits(std::span<const uint32> dependency_levels);
     void BuildFrontendDispatchGroups();
     void BuildLifetimes();
     void BuildTransientAliasPlan();
@@ -80,37 +81,37 @@ private:
         const RenderGraph::ResourceRange&       requested,
         RenderGraph::ResourceRange&             normalized
     );
-    bool ValidateExecutionDomain(uint32_t pass_index);
+    bool ValidateExecutionDomain(uint32 pass_index);
     bool ValidateAccessState(
-        uint32_t                          pass_index,
+        uint32                                  pass_index,
         const RenderGraph::ResourceDeclaration& resource,
-        const RenderGraph::ResourceRange& range,
-        RenderGraph::AccessMode           mode,
-        const RenderGraph::ResourceState& state,
-        bool                              explicit_state
+        const RenderGraph::ResourceRange&       range,
+        RenderGraph::AccessMode                 mode,
+        const RenderGraph::ResourceState&       state,
+        bool                                    explicit_state
     );
     bool MergeCellState(
-        uint32_t                          pass_index,
+        uint32                                  pass_index,
         const RenderGraph::ResourceDeclaration& resource,
-        CellUsage&                        usage,
-        const NormalizedAccess&           access
+        CellUsage&                              usage,
+        const NormalizedAccess&                 access
     );
     void AddBarrier(
-        uint32_t                         resource_index,
-        const AtomicCell&                cell,
-        RenderGraph::PassHandle          dst_pass,
-        RenderGraph::ResourceState       next_state,
-        RenderGraph::ExecutionDomain     next_domain,
-        RenderGraph::AccessMode          next_mode,
-        bool                             state_transition,
-        bool                             memory_dependency,
-        bool                             queue_ownership,
-        bool                             import_boundary,
-        bool                             export_boundary,
-        bool                             source_state_unknown,
+        uint32                                          resource_index,
+        const AtomicCell&                               cell,
+        RenderGraph::PassHandle                         dst_pass,
+        RenderGraph::ResourceState                      next_state,
+        RenderGraph::ExecutionDomain                    next_domain,
+        RenderGraph::AccessMode                         next_mode,
+        bool                                            state_transition,
+        bool                                            memory_dependency,
+        bool                                            queue_ownership,
+        bool                                            import_boundary,
+        bool                                            export_boundary,
+        bool                                            source_state_unknown,
         std::vector<RenderGraph::CompiledBarrierSource> sources
     );
-    void AddEdge(uint32_t src, uint32_t dst, RenderGraph::CompiledEdgeReason reason);
+    void AddEdge(uint32 src, uint32 dst, RenderGraph::CompiledEdgeReason reason);
     void SortEdges();
     bool Fail(std::string message);
 
@@ -121,15 +122,15 @@ private:
     // Compiler-only storage dies after Compile; CompiledPlan owns its allocations separately.
     // Declared first so all scratch containers are destroyed before their memory resource.
     std::pmr::monotonic_buffer_resource scratch_memory;
-    std::pmr::unordered_map<uint64_t, size_t> edge_indices{&scratch_memory};
+    std::pmr::unordered_map<uint64, size_t> edge_indices{&scratch_memory};
     // Rank in the selected execution order, shared by lifetime and alias analysis.
-    std::pmr::vector<uint32_t> execution_position{&scratch_memory};
+    std::pmr::vector<uint32> execution_position{&scratch_memory};
     // polymorphic_allocator propagates this resource to the nested PMR vectors.
     std::pmr::vector<std::pmr::vector<NormalizedAccess>> normalized_accesses{&scratch_memory};
     std::pmr::vector<std::pmr::vector<NormalizedStateDeclaration>> normalized_initial_states{&scratch_memory};
     std::pmr::vector<std::pmr::vector<NormalizedStateDeclaration>> normalized_final_states{&scratch_memory};
     std::pmr::vector<std::pmr::vector<AtomicCell>> resource_cells{&scratch_memory};
-    std::pmr::vector<uint32_t> resource_version_counts{&scratch_memory};
+    std::pmr::vector<uint32>                                       resource_version_counts{&scratch_memory};
     std::pmr::vector<bool> resource_ever_written{std::pmr::polymorphic_allocator<bool>{&scratch_memory}};
 };
 

@@ -6,9 +6,9 @@
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/executor/RHIExecutor.h"
 
+#include "misc/Types.h"
 #include <compare>
 #include <concepts>
-#include <cstdint>
 #include <functional>
 #include <optional>
 #include <span>
@@ -55,19 +55,19 @@ concept RGParameterAccessProvider =
  */
 class RENDER_API RenderGraph {
 public:
-    static constexpr uint32_t InvalidIndex          = MaxValue<uint32_t>;
-    static constexpr uint64_t InvalidGraphId        = MaxValue<uint64_t>;
-    static constexpr uint32_t RemainingTextureRange = MaxValue<uint32_t>;
-    static constexpr uint64_t RemainingBufferRange  = MaxValue<uint64_t>;
-    static constexpr uint32_t InvalidVersion        = InvalidIndex;
+    static constexpr uint32 InvalidIndex          = MaxValue<uint32>;
+    static constexpr uint64 InvalidGraphId        = MaxValue<uint64>;
+    static constexpr uint32 RemainingTextureRange = MaxValue<uint32>;
+    static constexpr uint64 RemainingBufferRange  = MaxValue<uint64>;
+    static constexpr uint32 InvalidVersion        = InvalidIndex;
 
-    enum class ResourceKind : uint8_t {
+    enum class ResourceKind : uint8 {
         Texture,
         Buffer,
         Token,
     };
 
-    enum class TextureAspect : uint8_t {
+    enum class TextureAspect : uint8 {
         None    = 0,
         Color   = 1 << 0,
         Depth   = 1 << 1,
@@ -76,21 +76,21 @@ public:
     };
 
     friend constexpr TextureAspect operator|(TextureAspect lhs, TextureAspect rhs) {
-        return static_cast<TextureAspect>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
+        return static_cast<TextureAspect>(static_cast<uint8>(lhs) | static_cast<uint8>(rhs));
     }
 
     friend constexpr TextureAspect operator&(TextureAspect lhs, TextureAspect rhs) {
-        return static_cast<TextureAspect>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
+        return static_cast<TextureAspect>(static_cast<uint8>(lhs) & static_cast<uint8>(rhs));
     }
 
-    enum class SharingMode : uint8_t {
+    enum class SharingMode : uint8 {
         Exclusive,
         Concurrent,
     };
 
     struct TextureDesc {
-        uint32_t      mip_count   = 1;
-        uint32_t      layer_count = 1;
+        uint32        mip_count   = 1;
+        uint32        layer_count = 1;
         TextureAspect aspects     = TextureAspect::Color;
         SharingMode sharing_mode=SharingMode::Exclusive;
 
@@ -98,7 +98,7 @@ public:
     };
 
     struct BufferDesc {
-        uint64_t byte_size = 0;
+        uint64      byte_size    = 0;
         SharingMode sharing_mode = SharingMode::Exclusive;
 
         friend bool operator==(const BufferDesc&, const BufferDesc&) = default;
@@ -106,23 +106,23 @@ public:
 
     struct TextureRange {
         TextureAspect aspects     = TextureAspect::All;
-        uint32_t      mip_first   = 0;
-        uint32_t      mip_count   = RemainingTextureRange;
-        uint32_t      layer_first = 0;
-        uint32_t      layer_count = RemainingTextureRange;
+        uint32        mip_first   = 0;
+        uint32        mip_count   = RemainingTextureRange;
+        uint32        layer_first = 0;
+        uint32        layer_count = RemainingTextureRange;
 
         [[nodiscard]] static constexpr TextureRange Whole() {
             return {};
         }
 
-        [[nodiscard]] static constexpr TextureRange Mips(uint32_t first, uint32_t count) {
+        [[nodiscard]] static constexpr TextureRange Mips(uint32 first, uint32 count) {
             TextureRange range{};
             range.mip_first = first;
             range.mip_count = count;
             return range;
         }
 
-        [[nodiscard]] static constexpr TextureRange Layers(uint32_t first, uint32_t count) {
+        [[nodiscard]] static constexpr TextureRange Layers(uint32 first, uint32 count) {
             TextureRange range{};
             range.layer_first = first;
             range.layer_count = count;
@@ -133,8 +133,8 @@ public:
     };
 
     struct BufferRange {
-        uint64_t offset = 0;
-        uint64_t size   = RemainingBufferRange;
+        uint64 offset = 0;
+        uint64 size   = RemainingBufferRange;
 
         [[nodiscard]] static constexpr BufferRange Whole() {
             return {};
@@ -169,8 +169,8 @@ public:
     }
 
     struct ResourceHandle {
-        uint32_t resource_id = InvalidIndex;
-        uint64_t graph_id    = InvalidGraphId;
+        uint32 resource_id = InvalidIndex;
+        uint64 graph_id    = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
             return resource_id != InvalidIndex && graph_id != InvalidGraphId;
@@ -202,8 +202,8 @@ public:
     using TokenHandle = TypedResourceHandle<ResourceKind::Token>;
 
     struct PassHandle {
-        uint32_t pass_id  = InvalidIndex;
-        uint64_t graph_id = InvalidGraphId;
+        uint32 pass_id  = InvalidIndex;
+        uint64 graph_id = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
             return pass_id != InvalidIndex && graph_id != InvalidGraphId;
@@ -216,8 +216,8 @@ public:
 
     /** Stable identity for one graph-owned CPU setup task. */
     struct SetupPassHandle {
-        uint32_t setup_pass_id = InvalidIndex;
-        uint64_t graph_id      = InvalidGraphId;
+        uint32 setup_pass_id = InvalidIndex;
+        uint64 graph_id      = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
             return setup_pass_id != InvalidIndex && graph_id != InvalidGraphId;
@@ -228,12 +228,12 @@ public:
         }
     };
 
-    enum class SetupPassSafety : uint8_t {
+    enum class SetupPassSafety : uint8 {
         Restricted,
         Unsafe,
     };
 
-    enum class AccessMode : uint8_t {
+    enum class AccessMode : uint8 {
         Unknown,
         None,
         Read,
@@ -242,7 +242,7 @@ public:
     };
 
     /** Logical queue role. It is deliberately separate from a native queue and queue family. */
-    enum class QueueRole : uint8_t {
+    enum class QueueRole : uint8 {
         None,
         Graphics,
         Compute,
@@ -253,7 +253,7 @@ public:
      * GPU work category used to validate pass resource declarations and derive
      * shader access stage scopes. Transfer stages come from resource states.
      */
-    enum class GpuWorkType : uint8_t {
+    enum class GpuWorkType : uint8 {
         None,
         Graphics,
         Compute,
@@ -263,8 +263,8 @@ public:
 
     struct QueueBinding {
         QueueRole role            = QueueRole::None;
-        uint32_t  native_queue_id = 0;
-        uint32_t  family_id       = 0;
+        uint32    native_queue_id = 0;
+        uint32    family_id       = 0;
         bool      available       = true;
 
         friend bool operator==(const QueueBinding&, const QueueBinding&) = default;
@@ -319,7 +319,7 @@ public:
     };
 
     /** CPU recording policy; independent of GPU dependencies and native translation. */
-    enum class PassRecordPolicy : uint8_t {
+    enum class PassRecordPolicy : uint8 {
         /** Join earlier recording in compiled order, run on the caller, then allow the next group. */
         Serial,
         /** May record concurrently into an exclusively owned CommandList. */
@@ -327,7 +327,7 @@ public:
     };
 
     /** Per-access purpose, independent of creation capabilities and read/write mode. */
-    enum class TextureAccessType : uint8_t {
+    enum class TextureAccessType : uint8 {
         /** Logical-only declarations may omit a type; physical lowering rejects it. */
         Unspecified,
         TransferSource,
@@ -338,7 +338,7 @@ public:
         DepthStencilAttachment,
     };
 
-    enum class BufferAccessType : uint8_t {
+    enum class BufferAccessType : uint8 {
         Unspecified,
         TransferSource,
         TransferDestination,
@@ -353,13 +353,13 @@ public:
     };
 
     /** Special graph boundaries, never ordinary pass accesses. */
-    enum class TextureBoundary : uint8_t {
+    enum class TextureBoundary : uint8 {
         Undefined,
         /** Presentation-copy source in GENERAL with transfer-read visibility. */
         PresentationSource,
     };
 
-    enum class BufferBoundary : uint8_t {
+    enum class BufferBoundary : uint8 {
         Undefined,
     };
 
@@ -422,7 +422,7 @@ public:
         return boundary && *boundary == TextureBoundary::PresentationSource;
     }
 
-    enum class EdgeReasonKind : uint8_t {
+    enum class EdgeReasonKind : uint8 {
         Explicit,
         ReadAfterWrite,
         WriteAfterRead,
@@ -446,16 +446,16 @@ public:
         ResourceRange  range{};
         ResourceState  state{};
         ExecutionDomain domain{};
-        uint32_t       input_version  = InvalidVersion;
-        uint32_t       output_version = InvalidVersion;
+        uint32          input_version  = InvalidVersion;
+        uint32          output_version = InvalidVersion;
     };
 
     struct CompiledEdgeReason {
         EdgeReasonKind kind = EdgeReasonKind::Explicit;
         ResourceHandle resource{};
         ResourceRange  range{};
-        uint32_t       input_version  = InvalidVersion;
-        uint32_t       output_version = InvalidVersion;
+        uint32         input_version  = InvalidVersion;
+        uint32         output_version = InvalidVersion;
 
         friend bool operator==(const CompiledEdgeReason&, const CompiledEdgeReason&) = default;
     };
@@ -468,11 +468,11 @@ public:
 
     struct CompiledResource {
         ResourceHandle resource{};
-        uint32_t       first_use     = InvalidIndex;
-        uint32_t       last_use      = InvalidIndex;
-        uint32_t       version_count = 0;
+        uint32         first_use     = InvalidIndex;
+        uint32         last_use      = InvalidIndex;
+        uint32         version_count = 0;
         /** Compiler-assigned whole-object transient allocation slot. */
-        uint32_t       transient_slot = InvalidIndex;
+        uint32         transient_slot = InvalidIndex;
         bool           imported      = false;
         bool           exported      = false;
     };
@@ -486,16 +486,16 @@ public:
      * units in one frontend stream; native translation batching remains separate.
      */
     struct CompiledFrontendRecordUnit {
-        uint32_t                source_index = 0;
+        uint32                      source_index = 0;
         QueueBinding            target_queue{};
         PassHandle              pass{};
         PassRecordPolicy        record_policy = PassRecordPolicy::Serial;
-        uint32_t                recording_workload = 1;
+        uint32                      recording_workload = 1;
         ERHITranslateExecutionClass native_translate_class{
             ERHITranslateExecutionClass::Parallel
         };
 
-        uint32_t                dependency_level_index = InvalidIndex;
+        uint32 dependency_level_index = InvalidIndex;
     };
 
     /**
@@ -506,8 +506,8 @@ public:
      * GPU graph edges to communicate between recording callbacks.
      */
     struct CompiledFrontendDispatchGroup {
-        uint32_t           first_unit = 0;
-        uint32_t           unit_count = 0;
+        uint32           first_unit    = 0;
+        uint32           unit_count    = 0;
         PassRecordPolicy record_policy = PassRecordPolicy::Serial;
     };
 
@@ -561,36 +561,36 @@ public:
      * placed-resource / shared-heap aliasing.
      */
     struct CompiledAliasBoundary {
-        uint32_t       transient_slot = InvalidIndex;
+        uint32         transient_slot = InvalidIndex;
         ResourceHandle predecessor_resource{};
         ResourceHandle successor_resource{};
         /** Latest source for compact diagnostics; source_frontier is authoritative. */
         PassHandle     primary_src_pass{};
         std::vector<PassHandle> source_frontier{};
         PassHandle     dst_pass{};
-        uint32_t       barrier_index = InvalidIndex;
+        uint32                  barrier_index = InvalidIndex;
     };
 
     struct CompiledQueueSync {
-        uint32_t     id = 0;
+        uint32              id = 0;
         PassHandle   signal_pass{};
         PassHandle   wait_pass{};
         QueueBinding signal_queue{};
         QueueBinding wait_queue{};
-        uint32_t     signal_batch = InvalidIndex;
-        uint32_t     wait_batch   = InvalidIndex;
+        uint32              signal_batch      = InvalidIndex;
+        uint32              wait_batch        = InvalidIndex;
         bool         gpu_wait_required = false;
-        std::vector<uint32_t> dependency_edges{};
-        std::vector<uint32_t> barriers{};
+        std::vector<uint32> dependency_edges{};
+        std::vector<uint32> barriers{};
     };
 
     struct CompiledPassBarriers {
         PassHandle            pass{};
-        std::vector<uint32_t> before{};
+        std::vector<uint32>   before{};
     };
 
     struct CompiledQueueBatch {
-        uint32_t                id = 0;
+        uint32                  id = 0;
         QueueBinding            queue{};
         std::vector<PassHandle> passes{};
         /**
@@ -604,10 +604,10 @@ public:
          * full CompiledBarrier should be emitted again; pass_barriers and prologue/epilogue remain the
          * canonical boundaries. Export transitions are deliberately epilogue-only.
          */
-        std::vector<uint32_t>   pre_barriers{};
-        std::vector<uint32_t>   post_barriers{};
-        std::vector<uint32_t>   wait_syncs{};
-        std::vector<uint32_t>   signal_syncs{};
+        std::vector<uint32> pre_barriers{};
+        std::vector<uint32> post_barriers{};
+        std::vector<uint32> wait_syncs{};
+        std::vector<uint32> signal_syncs{};
     };
 
     /**
@@ -640,8 +640,8 @@ public:
         std::vector<CompiledQueueSync>  queue_syncs{};
         std::vector<CompiledPassBarriers> pass_barriers{};
         /** Boundary requirements only; active lowering must bind external synchronization first. */
-        std::vector<uint32_t> prologue_barriers{};
-        std::vector<uint32_t> epilogue_barriers{};
+        std::vector<uint32> prologue_barriers{};
+        std::vector<uint32> epilogue_barriers{};
         /**
          * False when a participating physical cell has no logical state. True only means the
          * shadow state model is complete; it does not mean this plan can be lowered or submitted.
@@ -739,7 +739,7 @@ public:
         PassBuilder& SideEffect();
         PassBuilder& ExecuteOn(QueueRole queue, GpuWorkType work);
         /** Relative CPU recording work (default 1), typically draw/dispatch count; must be positive. */
-        PassBuilder& RecordWorkload(uint32_t units);
+        PassBuilder& RecordWorkload(uint32 units);
         /**
          * Makes backend translation of this recorded source a stable CPU
          * frontier. The callback still owns an ordinary graph CommandList;
@@ -749,10 +749,10 @@ public:
         PassBuilder& TranslateSerialControl();
 
     private:
-        PassBuilder(RenderGraph& graph, uint32_t pass_index) : graph(graph), pass_index(pass_index) {}
+        PassBuilder(RenderGraph& graph, uint32 pass_index) : graph(graph), pass_index(pass_index) {}
 
         RenderGraph& graph;
-        uint32_t     pass_index;
+        uint32       pass_index;
 
         friend class RenderGraph;
     };
@@ -1078,7 +1078,7 @@ private:
     friend class RenderGraphTransientAllocator;
     friend class RenderGraphAsyncSetupTestAccess;
 
-    enum class SetupFaultForTesting : uint8_t {
+    enum class SetupFaultForTesting : uint8 {
         None                 = 0,
         BatchOwnerCreate     = 1 << 0,
         BatchRuntimeCreate   = 1 << 1,
@@ -1086,7 +1086,7 @@ private:
         FailureDiagnostic    = 1 << 3,
     };
 
-    enum class GpuProfileBindOutcome : uint8_t {
+    enum class GpuProfileBindOutcome : uint8 {
         Bound,
         Dropped,
         Failed,
@@ -1128,8 +1128,8 @@ private:
         bool                     whole_resource_exported = false;
         std::vector<StateDeclaration> initial_states{};
         std::vector<StateDeclaration> final_states{};
-        uint32_t                 first_use  = InvalidIndex;
-        uint32_t                 last_use   = InvalidIndex;
+        uint32                                first_use = InvalidIndex;
+        uint32                                last_use  = InvalidIndex;
     };
 
     struct PassDeclaration {
@@ -1141,7 +1141,7 @@ private:
         ExecutionDomain               domain{};
         bool                           side_effect = false;
         PassRecordPolicy               record_policy = PassRecordPolicy::Serial;
-        uint32_t                       recording_workload = 1;
+        uint32                          recording_workload = 1;
         ERHITranslateExecutionClass     translate_execution_class{
             ERHITranslateExecutionClass::Parallel
         };
@@ -1149,7 +1149,7 @@ private:
 
     struct SetupPassDeclaration {
         std::string                              name{};
-        std::vector<uint32_t>                    dependencies{};
+        std::vector<uint32>                      dependencies{};
         SetupPassSafety                          safety = SetupPassSafety::Restricted;
         std::function<void()>                    execute{};
         std::function<void(std::string_view)>    fail{};
@@ -1173,7 +1173,7 @@ private:
         const BufferDesc*  buffer_desc
     );
     void AddAccess(
-        uint32_t         pass_index,
+        uint32           pass_index,
         ResourceHandle   resource,
         AccessMode       mode,
         ResourceRange    range,
@@ -1192,12 +1192,12 @@ private:
     );
     bool MarkExported(ResourceHandle resource, bool whole_resource);
     void ReleaseNonExportedTransientBindings() noexcept;
-    void AddDependency(uint32_t pass_index, PassHandle dependency);
-    void AddReference(uint32_t pass_index, ResourceHandle resource);
-    void MarkSideEffect(uint32_t pass_index);
-    void SetExecutionDomain(uint32_t pass_index, QueueRole queue, GpuWorkType work);
+    void AddDependency(uint32 pass_index, PassHandle dependency);
+    void AddReference(uint32 pass_index, ResourceHandle resource);
+    void MarkSideEffect(uint32 pass_index);
+    void SetExecutionDomain(uint32 pass_index, QueueRole queue, GpuWorkType work);
     void SetPassTranslateExecutionClass(
-        uint32_t                    pass_index,
+        uint32                      pass_index,
         ERHITranslateExecutionClass execution_class
     );
     SetupPassHandle RegisterSetupPass(
@@ -1240,21 +1240,21 @@ private:
     std::vector<ResourceDeclaration> resources{};
     // Graph-local declaration indexes. Names include aliases; only imports
     // have a physical identity while declarations remain mutable.
-    std::unordered_map<std::string, uint32_t, ResourceNameHash, std::equal_to<>> resource_names{};
-    std::unordered_map<const void*, uint32_t> imported_resource_ids{};
+    std::unordered_map<std::string, uint32, ResourceNameHash, std::equal_to<>> resource_names{};
+    std::unordered_map<const void*, uint32>                                    imported_resource_ids{};
     std::vector<PassDeclaration>     passes{};
     std::vector<SetupPassDeclaration> setup_passes{};
     SharedPtr<SetupBatchState>        setup_batch{};
     CompiledPlan                     compiled_plan{};
     std::vector<std::string>         declaration_errors{};
     std::string                      compile_error{};
-    uint64_t                         graph_id = InvalidGraphId;
+    uint64                                                                     graph_id = InvalidGraphId;
     QueueTopology                    queue_topology{};
     bool                             compiled = false;
     bool                             executed = false;
     bool                             setup_dispatched = false;
     bool                             setup_failed_before_batch = false;
-    uint8_t                          setup_faults_for_testing = 0;
+    uint8                                                                      setup_faults_for_testing  = 0;
 };
 
 } // namespace Moer::Render

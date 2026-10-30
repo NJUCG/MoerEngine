@@ -1,5 +1,6 @@
 #pragma once
 
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 
 #include <optional>
@@ -7,16 +8,16 @@
 
 namespace Moer::Render {
 
-enum class ERHIExecSubmitFlags : uint8_t {
+enum class ERHIExecSubmitFlags : uint8 {
     None     = 0,
     FlushGPU = 1 << 0,
 };
 
 constexpr bool HasRHIExecSubmitFlag(ERHIExecSubmitFlags _flags, ERHIExecSubmitFlags _flag) noexcept {
-    return (static_cast<uint8_t>(_flags) & static_cast<uint8_t>(_flag)) != 0;
+    return (static_cast<uint8>(_flags) & static_cast<uint8>(_flag)) != 0;
 }
 
-enum class ERHISyncDepth : uint8_t {
+enum class ERHISyncDepth : uint8 {
     RHI     = 0,
     Present = 1,
 };

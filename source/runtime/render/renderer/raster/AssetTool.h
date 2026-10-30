@@ -1,5 +1,6 @@
 #pragma once
 
+#include "misc/Types.h"
 #include "rendergraph/RenderGraphUpload.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
@@ -30,8 +31,8 @@ struct TexConfig {
     ETextureDimension  dim  = ETextureDimension::TEX_2D;
     Sampler            sampler{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_REPEAT};
     Extent3D           size       = {0, 0, 1};
-    uint               mip_cnt    = 1;
-    uint               array_size = 1;
+    uint32             mip_cnt    = 1;
+    uint32             array_size = 1;
 
     std::string asset_path_relative;
     void*       alias_ptr          = nullptr;
@@ -88,7 +89,7 @@ struct TexConfig {
     }
 
     //设定Mip层级数量
-    TexConfig& Mips(uint m) {
+    TexConfig& Mips(uint32 m) {
         mip_cnt = m;
         return *this;
     }
@@ -282,7 +283,7 @@ public:
         // Mip Handles
         if (cfg.b_create_mip_views) {
             target.mip_handles.resize(cfg.mip_cnt);
-            for (uint mip = 0; mip < cfg.mip_cnt; ++mip) {
+            for (uint32 mip = 0; mip < cfg.mip_cnt; ++mip) {
                 target.mip_handles[mip] = bindless_array->AllocateTexture(
                     target.tex->GetView(static_cast<uint8>(mip), 1), cfg.sampler
                 );
@@ -321,7 +322,7 @@ public:
         }
 
         // Mip Handles
-        for (uint& hdl : target.mip_handles) {
+        for (uint32& hdl : target.mip_handles) {
             if (hdl != 0) {
                 bindless_array->UnbindTexture(hdl);
                 hdl = 0;

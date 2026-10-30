@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "rhi/backends/vulkan/VulkanDeviceProperty.h"
 
 #include <algorithm>
@@ -22,12 +23,12 @@ void Check(bool _condition, const char* _message) {
 
 const VkPhysicalDeviceVulkan11Properties expected_core11 = [] {
     VkPhysicalDeviceVulkan11Properties properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
-    for (uint32_t index = 0; index < VK_UUID_SIZE; ++index) {
-        properties.deviceUUID[index] = static_cast<uint8_t>(index + 1);
-        properties.driverUUID[index] = static_cast<uint8_t>(index + 33);
+    for (Moer::uint32 index = 0; index < VK_UUID_SIZE; ++index) {
+        properties.deviceUUID[index] = static_cast<Moer::uint8>(index + 1);
+        properties.driverUUID[index] = static_cast<Moer::uint8>(index + 33);
     }
-    for (uint32_t index = 0; index < VK_LUID_SIZE; ++index) {
-        properties.deviceLUID[index] = static_cast<uint8_t>(index + 65);
+    for (Moer::uint32 index = 0; index < VK_LUID_SIZE; ++index) {
+        properties.deviceLUID[index] = static_cast<Moer::uint8>(index + 65);
     }
     properties.deviceNodeMask              = 3;
     properties.deviceLUIDValid             = VK_TRUE;
@@ -44,10 +45,10 @@ const VkPhysicalDeviceVulkan11Properties expected_core11 = [] {
     return properties;
 }();
 
-uint32_t physical_api_version = VK_API_VERSION_1_0;
-uint32_t query_api_version    = VK_API_VERSION_1_0;
-uint32_t base_query_count     = 0;
-uint32_t chain_query_count    = 0;
+Moer::uint32 physical_api_version = VK_API_VERSION_1_0;
+Moer::uint32 query_api_version    = VK_API_VERSION_1_0;
+Moer::uint32 base_query_count     = 0;
+Moer::uint32 chain_query_count    = 0;
 
 VKAPI_ATTR void VKAPI_CALL MockGetProperties(VkPhysicalDevice, VkPhysicalDeviceProperties* _properties) {
     ++base_query_count;
@@ -145,7 +146,7 @@ VKAPI_ATTR void VKAPI_CALL MockGetProperties2(VkPhysicalDevice, VkPhysicalDevice
     Check(expected_types.empty(), "query omitted a required property structure");
 }
 
-void CheckSnapshot(const VulkanCoreDeviceProperties& _properties, uint32_t _version) {
+void CheckSnapshot(const VulkanCoreDeviceProperties& _properties, Moer::uint32 _version) {
     Check(
         _properties.core_1_1.pNext == nullptr && _properties.core_1_2.pNext == nullptr &&
             _properties.core_1_3.pNext == nullptr,
@@ -208,7 +209,7 @@ void CheckSnapshot(const VulkanCoreDeviceProperties& _properties, uint32_t _vers
     );
 }
 
-void CheckQueryAndCopies(uint32_t _requested_version, uint32_t _physical_version) {
+void CheckQueryAndCopies(Moer::uint32 _requested_version, Moer::uint32 _physical_version) {
     physical_api_version = _physical_version;
     query_api_version    = std::min(_requested_version, _physical_version);
     base_query_count     = 0;
@@ -251,15 +252,15 @@ int main() {
     int result                          = 0;
     try {
         CheckSnapshot(VulkanCoreDeviceProperties{}, VK_API_VERSION_1_0);
-        const uint32_t versions[] = {
+        const Moer::uint32 versions[] = {
             VK_API_VERSION_1_0,
             VK_MAKE_API_VERSION(0, 1, 1, 7),
             VK_MAKE_API_VERSION(0, 1, 2, 13),
             VK_MAKE_API_VERSION(0, 1, 3, 22),
             VK_MAKE_API_VERSION(0, 1, 4, 1)
         };
-        for (uint32_t requested : versions) {
-            for (uint32_t physical : versions) {
+        for (Moer::uint32 requested : versions) {
+            for (Moer::uint32 physical : versions) {
                 CheckQueryAndCopies(requested, physical);
             }
         }

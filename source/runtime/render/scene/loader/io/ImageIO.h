@@ -1,5 +1,7 @@
 #pragma once
+
 #include "PixelFormat.h"
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
 
 #include <filesystem>
@@ -29,7 +31,7 @@ public:
     static ImageReadDesc ReadFromMemory(
         const unsigned char* _memory_data,
         size_t               _len,
-        uint32_t             _desired_channal     = 4,
+        uint32               _desired_channal     = 4,
         bool                 _is_generate_mipmaps = true
     );
 };

@@ -1,7 +1,8 @@
 #include "ShaderUtils.h"
 #include "RaytracingGraphResources.h"
-#include <stdexcept>
+#include "misc/Types.h"
 #include <format>
+#include <stdexcept>
 
 // 实现渲染器侧工具调度和 CPU 生成的采样数据。
 
@@ -17,11 +18,11 @@ namespace Moer::Render::Raytracing {
 
 namespace {
 
-constexpr uint DivCeil(uint value, uint divisor) {
+constexpr uint32 DivCeil(uint32 value, uint32 divisor) {
     return (value + divisor - 1) / divisor;
 }
 
-constexpr uint MipExtent(uint base_extent, uint mip_level) {
+constexpr uint32 MipExtent(uint32 base_extent, uint32 mip_level) {
     return std::max(1u, base_extent >> std::min(mip_level, 31u));
 }
 
@@ -71,7 +72,7 @@ void ShaderUtils::GenerateLowDiscrepancySequence(
     Array<int8>   data(_param.num_samples * 2);
     constexpr int radius_scale = 250;
     const float   phi2         = 1.0f / 1.3247179572447f;
-    uint32_t      num          = 0;
+    uint32        num          = 0;
     float         u            = 0.5f;
     float         v            = 0.5f;
     while (num < _param.num_samples * 2) {
@@ -123,8 +124,8 @@ void ShaderUtils::GenerateMipPdf(
     RenderGraph graph("RT.EnvironmentPdf", RenderGraph::QueueTopology::FromRHI());
     const auto input = ImportSampledTexture(graph, "Environment", _env_map.GetTexture());
     const auto output = ImportSampledTexture(graph, "Pdf", _integrated_mips.front().GetTexture());
-    uint width = _env_map.extent.x, height = _env_map.extent.y;
-    for (uint i = 0; i < _integrated_mips.size(); i += 5) {
+    uint32      width = _env_map.extent.x, height = _env_map.extent.y;
+    for (uint32 i = 0; i < _integrated_mips.size(); i += 5) {
         PreprocessEnvironmentMapParams param{};
         param.src_mip_level = i;
         param.num_mip_levels = _integrated_mips.size();
@@ -155,10 +156,10 @@ void ShaderUtils::GenerateMipsChunk(CommandList& cmd_list, std::span<TextureView
 
     assert(mips.size() <= 6);
     const TextureView& source_mip = mips.front();
-    const uint         width      = MipExtent(source_mip.extent.x, source_mip.mip_level);
-    const uint         height     = MipExtent(source_mip.extent.y, source_mip.mip_level);
+    const uint32       width      = MipExtent(source_mip.extent.x, source_mip.mip_level);
+    const uint32       height     = MipExtent(source_mip.extent.y, source_mip.mip_level);
     BuildMipsParam     param{};
-    param.num_mip_levels = static_cast<uint>(mips.size());
+    param.num_mip_levels = static_cast<uint32>(mips.size());
     param.src_mip_level  = 0;
     param.src_size       = uint2(width, height);
     cmd_list.Compute(generate_mips_pipeline, mips, param)
@@ -169,7 +170,7 @@ void ShaderUtils::GenerateMips(CommandList& commands, std::span<TextureView> mip
     if (mips.size() < 2) { return; }
     RenderGraph graph("RT.GenerateMips", RenderGraph::QueueTopology::FromRHI());
     const auto texture = ImportSampledTexture(graph, "Image", mips.front().GetTexture());
-    for (uint i = 0; i + 1 < mips.size(); i += 5) {
+    for (uint32 i = 0; i + 1 < mips.size(); i += 5) {
         const auto chunk = mips.subspan(i, std::min<size_t>(6, mips.size() - i));
         graph.AddRecordPass(
             std::format("Mips.{}", i),

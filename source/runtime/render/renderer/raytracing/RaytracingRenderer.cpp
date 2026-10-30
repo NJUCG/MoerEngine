@@ -1,5 +1,6 @@
-#include "renderer/common/GraphResourceBoundary.h"
 #include "RaytracingRenderer.h"
+#include "misc/Types.h"
+#include "renderer/common/GraphResourceBoundary.h"
 
 // Runtime
 #include "PixelFormat.h"
@@ -106,7 +107,7 @@ bool IsRenderGraphRecordingFailureInjected() {
     return enabled;
 }
 
-std::string_view LocalLightSampleModeName(uint mode) {
+std::string_view LocalLightSampleModeName(uint32 mode) {
     switch (mode) {
         case s_di_local_light_sample_mode_uniform:
             return "Uniform";
@@ -260,7 +261,7 @@ struct RaytracingRenderer::RuntimeState {
     bool                         render_graph_recording_failure_latched = false;
     uint8                        gbuffer_initialized_history_mask       = 0;
     std::array<const Buffer*, 3> lighting_working_set{};
-    uint                         lighting_reservoir_block_array_pitch = 0;
+    uint32                       lighting_reservoir_block_array_pitch = 0;
     uint8                        lighting_initialized_reservoir_mask  = 0;
     UnorderedSet<std::string>    logged_render_graph_dumps;
 
@@ -372,10 +373,10 @@ RaytracingRenderer::~RaytracingRenderer() {
     LOG_INFO("[Threading] RaytracingRenderer destruction started on {} Thread.", thread_name);
 
     if (runtime_state && runtime_state->rt_ctx) {
-        for (const uint buffer : runtime_state->rt_ctx->GetAllocatedBdlsBuf()) {
+        for (const uint32 buffer : runtime_state->rt_ctx->GetAllocatedBdlsBuf()) {
             bindless_array->UnbindBuffer(buffer);
         }
-        for (const uint texture : runtime_state->rt_ctx->GetAllocatedBdlsTex()) {
+        for (const uint32 texture : runtime_state->rt_ctx->GetAllocatedBdlsTex()) {
             bindless_array->UnbindTexture(texture);
         }
     }
@@ -689,7 +690,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     );
 
     if (frame_packet.frame_id == 0) {
-        const uint32_t frame_thread_id = IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
+        const uint32 frame_thread_id = IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
         LOG_INFO(
             "[Threading] Raytracing frames execute on {} thread id = {}",
             IsCurrentlyRenderThread() ? "Render" : "Game",
@@ -869,7 +870,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
                 const float3 extent     = scene_bounds.max - scene_bounds.min;
                 const float  max_extent = std::max(std::max(extent.x, extent.y), extent.z);
-                const uint   grid_width = state.importance_sampling_context.GetGridConfig().grid_size.x;
+                const uint32 grid_width = state.importance_sampling_context.GetGridConfig().grid_size.x;
                 if (grid_width > 0u) {
                     ui_config.grid_config.cell_size = max_extent * 2.0f / grid_width;
                     feedback.has_grid_cell_size     = true;
@@ -995,7 +996,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             state.rt_ctx->config.enable_adaptive_local_light_sampling =
                 ui_config.restir_di_cfg.initial_sample_config.enable_adaptive_local_light_sampling &&
                 !IsLightGridForced();
-            state.rt_ctx->config.grid_min_local_light_count = static_cast<uint>(
+            state.rt_ctx->config.grid_min_local_light_count = static_cast<uint32>(
                 std::max(ui_config.restir_di_cfg.initial_sample_config.grid_min_local_light_count, 1)
             );
             di_initial_sample_config.env_map_is =
@@ -1058,7 +1059,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         if (show_texture_requested) {
             selected_debug_texture           = selected_texture_it->second.tex;
             show_texture_params.bdls_handle  = selected_texture_it->second.hdl;
-            show_texture_params.mip_level    = static_cast<uint>(std::max(debug_input.mip_level, 0));
+            show_texture_params.mip_level    = static_cast<uint32>(std::max(debug_input.mip_level, 0));
             show_texture_params.use_bindless = debug_input.use_bindless ? 1u : 0u;
         }
 
@@ -1069,7 +1070,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             state.rt_ctx->ris_buf.Get(),
             state.rt_ctx->ris_light_data_buf.Get()
         };
-        const uint lighting_reservoir_block_array_pitch =
+        const uint32 lighting_reservoir_block_array_pitch =
             state.rt_ctx->is_ctx.GetReSTIRDIRuntimeConfig().reservoir_buffer_params.block_array_pitch;
         if (state.lighting_working_set != lighting_working_set ||
             state.lighting_reservoir_block_array_pitch != lighting_reservoir_block_array_pitch) {
@@ -1086,7 +1087,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         }
         const auto& lighting_buffer_indices =
             state.rt_ctx->is_ctx.GetReSTIRDIBufferIndices();
-        const uint temporal_input_slice =
+        const uint32 temporal_input_slice =
             lighting_buffer_indices.temperal_resample_input_buff_idx;
         const uint8 temporal_input_bit =
             temporal_input_slice < 3u ? uint8(1u << temporal_input_slice) : uint8(0);
@@ -1875,7 +1876,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     }
     if (frame_native_accepted && graph_primary_recorded) {
         const auto& buffer_indices          = state.rt_ctx->is_ctx.GetReSTIRDIBufferIndices();
-        for (const uint reservoir_slice : {
+        for (const uint32 reservoir_slice : {
                  buffer_indices.initial_sample_output_buff_idx,
                  buffer_indices.temperal_resample_output_buff_idx,
                  buffer_indices.spatial_resample_output_buff_idx,
@@ -1884,7 +1885,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 state.lighting_initialized_reservoir_mask |= uint8(1u << reservoir_slice);
             }
         }
-
     }
     if (frame_setup_accepted) {
         state.rt_ctx->AdvanceFrame();
@@ -2031,7 +2031,7 @@ bool RaytracingRenderer::RefreshSceneRuntimeRefs() {
         if (state.material_textures.contains(display_name)) {
             display_name = std::format("{} [{}]", base_name, texture.hdl);
         }
-        uint duplicate_index = 2;
+        uint32 duplicate_index = 2;
         while (state.material_textures.contains(display_name)) {
             display_name = std::format("{} [{}:{}]", base_name, texture.hdl, duplicate_index++);
         }

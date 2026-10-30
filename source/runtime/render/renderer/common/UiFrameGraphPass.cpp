@@ -1,6 +1,6 @@
 #include "UiFrameGraphPass.h"
 #include "GraphResourceBoundary.h"
-
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 
 #include <algorithm>
@@ -13,13 +13,13 @@ namespace {
 RenderGraph::TextureAspect TextureAspects(const TextureRef& texture) {
     RenderGraph::TextureAspect aspects = RenderGraph::TextureAspect::None;
     const auto                 rhi_aspects = texture->GetAspectFlags();
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Color;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Depth;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Stencil;
     }
     return aspects;
@@ -86,8 +86,8 @@ bool HasTextureUsage(
     if (!texture) {
         return false;
     }
-    const auto usage_bits = static_cast<uint32_t>(texture->GetUsage());
-    const auto required_bits = static_cast<uint32_t>(required);
+    const auto usage_bits    = static_cast<uint32>(texture->GetUsage());
+    const auto required_bits = static_cast<uint32>(required);
     return (usage_bits & required_bits) == required_bits;
 }
 
@@ -95,8 +95,8 @@ bool IsColorOnlyTexture(const TextureRef& texture) {
     if (!texture) {
         return false;
     }
-    const auto aspects = static_cast<uint32_t>(texture->GetAspectFlags());
-    return aspects == static_cast<uint32_t>(ETextureAspectFlags::COLOR);
+    const auto aspects = static_cast<uint32>(texture->GetAspectFlags());
+    return aspects == static_cast<uint32>(ETextureAspectFlags::COLOR);
 }
 
 bool SupportsUiPresentation(const TextureRef& texture) {

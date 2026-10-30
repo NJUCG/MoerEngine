@@ -8,6 +8,7 @@
 #include "VulkanQueueInternal.h"
 #include "VulkanSwapChain.h"
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
 #endif
@@ -43,11 +44,11 @@ ClassifyPresentSourceRejection(VulkanDevice& _device, bool& _recoverable_rejecti
 }
 
 [[nodiscard]] bool AreVulkanCopyFormatsSizeCompatible(EPixelFormat _source, EPixelFormat _destination) noexcept {
-    const uint     source_index                = static_cast<uint>(_source);
-    const uint     destination_index           = static_cast<uint>(_destination);
-    constexpr uint first_single_plane_color    = static_cast<uint>(PF_R4G4_UNORM_PACK8);
-    constexpr uint last_single_plane_color     = static_cast<uint>(PF_E5B9G9R9_UFLOAT_PACK32);
-    const auto     is_known_single_plane_color = [](uint _format_index) noexcept {
+    const uint32     source_index                = static_cast<uint32>(_source);
+    const uint32     destination_index           = static_cast<uint32>(_destination);
+    constexpr uint32 first_single_plane_color    = static_cast<uint32>(PF_R4G4_UNORM_PACK8);
+    constexpr uint32 last_single_plane_color     = static_cast<uint32>(PF_E5B9G9R9_UFLOAT_PACK32);
+    const auto       is_known_single_plane_color = [](uint32 _format_index) noexcept {
         return _format_index >= first_single_plane_color && _format_index <= last_single_plane_color;
     };
     if (!is_known_single_plane_color(source_index) || !is_known_single_plane_color(destination_index)) {
@@ -145,7 +146,7 @@ static EPresentStatus PresentStatusFromVulkanOutcome(const VulkanOperationResult
     }
 }
 
-static uint8_t PresentStatusPriority(EPresentStatus _status) noexcept {
+static uint8 PresentStatusPriority(EPresentStatus _status) noexcept {
     switch (_status) {
         case EPresentStatus::Success:
             return 1;
@@ -274,7 +275,7 @@ static void VisitPresentationTextureArguments(
         return;
     }
     if (std::holds_alternative<ArrayArgReference>(_arguments)) {
-        const uint index = std::get<ArrayArgReference>(_arguments).handle;
+        const uint32 index = std::get<ArrayArgReference>(_arguments).handle;
         if (index < _cached_arguments.size()) {
             VisitPresentationTextureArguments(_cached_arguments[index], _texture_visitor, _bindless_visitor);
         }
@@ -947,7 +948,7 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
                 auto&                 command_list = command_context.GetCommandList();
                 VulkanBarrierRecorder barriers;
                 auto*                 source_texture    = static_cast<VulkanTexture*>(_source_view.texture);
-                const uint            image_index       = acquire.image_index;
+                const uint32          image_index       = acquire.image_index;
                 auto*                 swapchain_texture = ResourceCast(swapchain->GetSwapchainImage(image_index).texture);
                 VK_CHECK_RESULT(command_list.Begin());
                 const std::string present_label = std::format("Present: {}", source_texture->GetName());

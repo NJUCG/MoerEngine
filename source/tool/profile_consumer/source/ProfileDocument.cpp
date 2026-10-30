@@ -1,4 +1,5 @@
 #include "profile_consumer/ProfileDocument.h"
+#include "misc/Types.h"
 
 #include <condition_variable>
 #include <limits>
@@ -13,7 +14,7 @@ namespace Moer::ProfileDump {
 
 ProfileDocument::ProfileDocument(
     std::filesystem::path _source_path,
-    std::uint64_t         _request_generation,
+    uint64                _request_generation,
     SessionLoadResult     _load_result,
     ProfileSession        _session,
     ProfileTimelineIndex  _timeline_index
@@ -33,7 +34,7 @@ struct ProfileDocumentLoader::Impl final {
     struct Request {
         std::filesystem::path      path{};
         ProfileDocumentLoadOptions options{};
-        std::uint64_t              generation{kInvalidProfileDocumentGeneration};
+        uint64                     generation{kInvalidProfileDocumentGeneration};
     };
 
     mutable std::mutex            mutex{};
@@ -43,7 +44,7 @@ struct ProfileDocumentLoader::Impl final {
     std::stop_source              active_stop{};
     bool                          active{false};
     bool                          accepting{true};
-    std::uint64_t                 next_generation{kInvalidProfileDocumentGeneration};
+    uint64                        next_generation{kInvalidProfileDocumentGeneration};
     ProfileDocumentLoaderSnapshot snapshot{};
     std::jthread                  worker{};
 
@@ -72,7 +73,7 @@ struct ProfileDocumentLoader::Impl final {
         }
     }
 
-    [[nodiscard]] bool IsLatestLocked(std::uint64_t _generation) const noexcept {
+    [[nodiscard]] bool IsLatestLocked(uint64 _generation) const noexcept {
         return accepting && snapshot.request_generation == _generation;
     }
 
@@ -81,7 +82,7 @@ struct ProfileDocumentLoader::Impl final {
                _phase == ProfileDocumentLoadPhase::Cancelled || _phase == ProfileDocumentLoadPhase::Shutdown;
     }
 
-    void CompleteActiveGenerationLocked(std::uint64_t _generation) noexcept {
+    void CompleteActiveGenerationLocked(uint64 _generation) noexcept {
         if (snapshot.active_generation != _generation) {
             return;
         }
@@ -107,7 +108,7 @@ struct ProfileDocumentLoader::Impl final {
         return true;
     }
 
-    void BeginRequestLocked(std::uint64_t _generation, std::filesystem::path _latest_attempt_path) noexcept {
+    void BeginRequestLocked(uint64 _generation, std::filesystem::path _latest_attempt_path) noexcept {
         snapshot.request_generation             = _generation;
         snapshot.phase                          = ProfileDocumentLoadPhase::Opening;
         snapshot.latest_attempt_path            = std::move(_latest_attempt_path);
@@ -124,7 +125,7 @@ struct ProfileDocumentLoader::Impl final {
     void PublishOpeningSnapshot(
         const Request& _request,
         bool           _total_available,
-        std::uint64_t  _total_bytes
+        uint64         _total_bytes
     ) noexcept {
         std::lock_guard lock(mutex);
         if (!IsLatestLocked(_request.generation)) {
@@ -277,9 +278,9 @@ struct ProfileDocumentLoader::Impl final {
         const std::uintmax_t file_size = std::filesystem::file_size(_request.path, file_size_error);
         const bool           total_available =
             !file_size_error &&
-            file_size <= static_cast<std::uintmax_t>(std::numeric_limits<std::uint64_t>::max());
+            file_size <= static_cast<std::uintmax_t>(std::numeric_limits<uint64>::max());
         PublishOpeningSnapshot(
-            _request, total_available, total_available ? static_cast<std::uint64_t>(file_size) : 0
+            _request, total_available, total_available ? static_cast<uint64>(file_size) : 0
         );
 
         PublishReadingSnapshot(_request);
@@ -453,7 +454,7 @@ ProfileDocumentLoader::~ProfileDocumentLoader() {
     Shutdown();
 }
 
-std::uint64_t ProfileDocumentLoader::RequestLoad(
+uint64 ProfileDocumentLoader::RequestLoad(
     const std::filesystem::path&      _path,
     const ProfileDocumentLoadOptions& _options
 ) {
@@ -471,7 +472,7 @@ std::uint64_t ProfileDocumentLoader::RequestLoad(
     if (!impl_->accepting) {
         return kInvalidProfileDocumentGeneration;
     }
-    if (impl_->next_generation == std::numeric_limits<std::uint64_t>::max()) {
+    if (impl_->next_generation == std::numeric_limits<uint64>::max()) {
         impl_->snapshot.generation_exhausted = true;
         return kInvalidProfileDocumentGeneration;
     }
@@ -487,7 +488,7 @@ std::uint64_t ProfileDocumentLoader::RequestLoad(
     impl_->next_generation = impl_->pending->generation;
     impl_->BeginRequestLocked(impl_->pending->generation, std::move(latest_attempt_path));
     impl_->UpdatePendingCountLocked();
-    const std::uint64_t generation = impl_->next_generation;
+    const uint64 generation = impl_->next_generation;
     impl_->work_available.notify_one();
     return generation;
 }
@@ -502,7 +503,7 @@ bool ProfileDocumentLoader::CancelLatest() noexcept {
         return false;
     }
 
-    const std::uint64_t generation = impl_->snapshot.request_generation;
+    const uint64 generation = impl_->snapshot.request_generation;
     if (Impl::IsTerminalPhase(impl_->snapshot.phase)) {
         return false;
     }

@@ -1,7 +1,9 @@
 /**
  * Implements Scene testcase request dispatching and long-running scene debug actions.
  */
+
 #include "scene/testcase/SceneTestCaseDispatcher.h"
+#include "misc/Types.h"
 
 #include "misc/STL.h"
 #include "scene/LogicalComponents.h"
@@ -25,8 +27,8 @@ struct TransformMotionState {
 
 using TransformMotionStateMap = UnorderedMap<entt::entity, TransformMotionState>;
 
-uint HashEntity(entt::entity entity, uint salt) {
-    uint value = static_cast<uint>(entt::to_integral(entity)) ^ salt;
+uint32 HashEntity(entt::entity entity, uint32 salt) {
+    uint32 value = static_cast<uint32>(entt::to_integral(entity)) ^ salt;
     value ^= value >> 16;
     value *= 0x7feb352du;
     value ^= value >> 15;
@@ -35,15 +37,15 @@ uint HashEntity(entt::entity entity, uint salt) {
     return value;
 }
 
-float HashToUnitFloat(uint value) {
+float HashToUnitFloat(uint32 value) {
     return static_cast<float>(value & 0x00ffffffu) / static_cast<float>(0x00ffffffu);
 }
 
-float HashToRange(uint value, float min_value, float max_value) {
+float HashToRange(uint32 value, float min_value, float max_value) {
     return min_value + (max_value - min_value) * HashToUnitFloat(value);
 }
 
-float3 BuildMotionDirection(entt::entity entity, uint salt) {
+float3 BuildMotionDirection(entt::entity entity, uint32 salt) {
     const float x = HashToRange(HashEntity(entity, salt + 1u), -1.f, 1.f);
     const float y = HashToRange(HashEntity(entity, salt + 2u), -1.f, 1.f);
     const float z = HashToRange(HashEntity(entity, salt + 3u), -1.f, 1.f);
@@ -58,7 +60,7 @@ float3 BuildMotionDirection(entt::entity entity, uint salt) {
 TransformMotionState CreateMotionState(
     entt::entity      entity,
     const ecs::CNode& node,
-    uint              salt,
+    uint32            salt,
     float             min_amplitude,
     float             max_amplitude
 ) {
@@ -91,7 +93,7 @@ void ProcessTransformMotionGroup(
     float                    elapsed_time_seconds,
     TransformMotionStateMap& states,
     ViewBuilder&&            build_view,
-    uint                     salt,
+    uint32                   salt,
     float                    min_amplitude,
     float                    max_amplitude
 ) {

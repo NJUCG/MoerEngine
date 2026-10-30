@@ -1,4 +1,5 @@
 #include "rhi/backends/metal/MetalResource.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <chrono>
@@ -81,7 +82,7 @@ MetalTexture::MetalTexture(const TextureInfo& info, id<MTLTexture> texture) :
 
 id<MTLTexture> MetalTexture::Native() const noexcept { return texture_; }
 
-uint MetalTexture::GetMipByteSize(uint mip) const {
+uint32 MetalTexture::GetMipByteSize(uint32 mip) const {
     if (mip >= GetNumMips()) Unsupported("texture mip sizes");
     return std::max(1u, GetWidth() >> mip) *
            std::max(1u, GetHeight() >> mip) * PixelStride(GetFormat());
@@ -95,7 +96,7 @@ void MetalTexture::SetName(const std::string_view name) {
 void ValidateTextureUpload(const UploadTextureCmd& upload) {
     auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
     const uint3 size = upload.Size();
-    const uint mip = upload.MipLevel();
+    const uint32 mip     = upload.MipLevel();
     if (texture == nullptr || upload.Format() != texture->GetFormat() ||
         mip >= texture->GetNumMips() || upload.ArrayLayer() >= texture->GetNumArray() ||
         upload.Offset() != uint3{0, 0, 0} ||
@@ -128,8 +129,8 @@ void EncodeTextureUpload(
     id<MTLBuffer> staging = [device newBufferWithLength:staging_row_bytes * height
                                                options:MTLResourceStorageModeShared];
     if (staging == nil) throw std::runtime_error("Cannot allocate Metal upload staging buffer");
-    auto* destination = static_cast<uint8_t*>(staging.contents);
-    const auto* source = reinterpret_cast<const uint8_t*>(upload.Data().data());
+    auto*       destination = static_cast<uint8*>(staging.contents);
+    const auto* source      = reinterpret_cast<const uint8*>(upload.Data().data());
     for (NSUInteger row = 0; row < height; ++row) {
         std::memcpy(destination + row * staging_row_bytes,
                     source + row * source_row_bytes, source_row_bytes);

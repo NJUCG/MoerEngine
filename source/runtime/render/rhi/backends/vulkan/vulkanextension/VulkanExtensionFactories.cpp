@@ -1,5 +1,6 @@
 #include "VulkanExtensionFactories.h"
 #include "../VulkanDevice.h"
+#include "misc/Types.h"
 
 template<typename ExistingChainType, typename NewStructType>
 static void AddToPNext(ExistingChainType& _existing, NewStructType& _added) {
@@ -426,7 +427,7 @@ public:
             const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties())
                 .cooperative_matrix_supports;
 
-        uint32_t property_count = 0;
+        uint32   property_count = 0;
         VkResult result =
             vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(_device->GetGpu(), &property_count, nullptr);
         if ((result != VK_SUCCESS && result != VK_INCOMPLETE) || property_count == 0) {
@@ -505,7 +506,7 @@ public:
             const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties())
                 .cooperative_vector_supports;
 
-        uint32_t property_count = 0;
+        uint32   property_count = 0;
         VkResult result =
             vkGetPhysicalDeviceCooperativeVectorPropertiesNV(_device->GetGpu(), &property_count, nullptr);
         if ((result != VK_SUCCESS && result != VK_INCOMPLETE) || property_count == 0) {

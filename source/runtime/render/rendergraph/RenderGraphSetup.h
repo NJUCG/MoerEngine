@@ -2,6 +2,7 @@
 
 #include "RenderGraph.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <mutex>
@@ -16,7 +17,7 @@ namespace Moer::Render {
 
 namespace Detail {
 
-enum class ERGSetupState : uint8_t {
+enum class ERGSetupState : uint8 {
     Pending,
     Succeeded,
     Failed,

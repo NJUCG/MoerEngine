@@ -1,4 +1,5 @@
 #include "RenderScene.h"
+#include "misc/Types.h"
 
 #include "RenderThread.h"
 #include "log/LogSystem.h"
@@ -26,7 +27,7 @@ GpuScene::PendingCommandList RenderScene::ApplyUpdate(
         update.update_lights ? 1 : 0,
         update.update_materials ? 1 : 0,
         update.update_meshes ? 1 : 0,
-        static_cast<uint>(update.raytracing_update)
+        static_cast<uint32>(update.raytracing_update)
     );
 
     if (update.full_rebuild) {

@@ -7,13 +7,13 @@
 #include "rhi/RHIImpl.h"
 #include "rhi/RHIQuery.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <barrier>
 #include <chrono>
 #include <cmath>
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -50,11 +50,10 @@ void ExpectNear(
 class ScopedOutput {
 public:
     explicit ScopedOutput(std::string_view _stem) {
-        static std::atomic<std::uint64_t> next_id{0};
-        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
-            const auto now = static_cast<std::uint64_t>(
-                std::chrono::steady_clock::now().
-                    time_since_epoch().count()
+        static std::atomic<uint64> next_id{0};
+        for (uint32 attempt = 0; attempt < 64; ++attempt) {
+            const auto now = static_cast<uint64>(
+                std::chrono::steady_clock::now().time_since_epoch().count()
             );
             directory = std::filesystem::temp_directory_path() /
                         (std::string(_stem) + "-" +
@@ -106,14 +105,14 @@ struct ParsedDump {
     std::vector<DecodedRecord>    records{};
 };
 
-std::vector<std::uint8_t> ReadBinary(
+std::vector<uint8> ReadBinary(
     const std::filesystem::path& _path
 ) {
     std::ifstream file(_path, std::ios::binary | std::ios::ate);
     Expect(file.is_open(), "capture output could not be opened");
     const std::streamoff size = file.tellg();
     Expect(size >= 0, "capture output size is invalid");
-    std::vector<std::uint8_t> bytes(
+    std::vector<uint8> bytes(
         static_cast<std::size_t>(size)
     );
     file.seekg(0);
@@ -128,19 +127,19 @@ std::vector<std::uint8_t> ReadBinary(
 }
 
 ParsedDump ParseDump(const std::filesystem::path& _path) {
-    const std::vector<std::uint8_t> bytes = ReadBinary(_path);
+    const std::vector<uint8> bytes = ReadBinary(_path);
     Expect(!bytes.empty(), "capture output is empty");
 
     ParsedDump parsed{};
     CodecLimits limits{};
     std::size_t offset = 0;
-    std::uint64_t expected_packet_index = 0;
+    uint64      expected_packet_index = 0;
     while (offset < bytes.size()) {
         PacketView packet{};
         std::size_t consumed = 0;
         Expect(
             DecodePacket(
-                std::span<const std::uint8_t>(bytes).subspan(
+                std::span<const uint8>(bytes).subspan(
                     offset
                 ),
                 limits,
@@ -206,7 +205,7 @@ std::vector<const DecodedRecord*> RecordsFor(
     const ParsedDump& _dump,
     const SchemaDescriptor& _schema
 ) {
-    const std::uint64_t hash = ComputeSchemaHash(_schema);
+    const uint64                      hash = ComputeSchemaHash(_schema);
     std::vector<const DecodedRecord*> result{};
     for (const DecodedRecord& record : _dump.records) {
         if (record.schema_hash == hash) {
@@ -238,9 +237,9 @@ std::string_view StringAt(
 }
 
 RHIQueueBinding Binding(
-    EQueueType   _queue,
-    std::uint32_t _native_queue_id,
-    std::uint32_t _family_id
+    EQueueType _queue,
+    uint32     _native_queue_id,
+    uint32     _family_id
 ) {
     return {
         .queue = _queue,
@@ -251,9 +250,9 @@ RHIQueueBinding Binding(
 }
 
 TimestampQueryResult Timestamp(
-    std::uint64_t _begin,
-    std::uint64_t _end,
-    double        _period = 1.0
+    uint64 _begin,
+    uint64 _end,
+    double _period = 1.0
 ) {
     return {
         .begin_tick = _begin,
@@ -512,7 +511,7 @@ void FinishSessionOwnsStopAndTokenDestructorSeal() {
 
 void SessionGateStopsAdmissionDrainsAndRestartsNextGeneration() {
     RenderProfileCapture capture;
-    std::uint64_t        first_generation = 0;
+    uint64               first_generation = 0;
 
     {
         ScopedOutput output("moer-render-profile-session-a");
@@ -754,7 +753,7 @@ void AbortedPendingQueryCannotPolluteNextRuntimeGeneration() {
 void DelayedStaleStartCannotFaultNewGeneration() {
     RenderProfileCapture            capture;
     RegisteredGpuSchemas            stale_schemas{};
-    std::atomic_uint32_t            pause_entered{0};
+    std::atomic<uint32>             pause_entered{0};
     std::atomic_bool                pause_release{false};
     RenderProfileSessionStartResult stale_result = RenderProfileSessionStartResult::InvalidSchema;
 
@@ -836,7 +835,7 @@ void DelayedStaleStartCannotFaultNewGeneration() {
 
 void DelayedStartCannotPublishStaleCandidate() {
     RenderProfileCapture       capture;
-    std::atomic_uint32_t       pause_entered{0};
+    std::atomic<uint32>             pause_entered{0};
     std::atomic_bool           pause_release{false};
     RenderProfileSessionStartResult stale_result =
         RenderProfileSessionStartResult::InvalidSchema;
@@ -981,7 +980,7 @@ void StaleSchemaHandlesCannotReplaceCurrentSession() {
             RenderProfileSessionStartResult::Started,
         "current GPU capture session did not start"
     );
-    const std::uint64_t current_generation = capture.GetStats().generation;
+    const uint64 current_generation = capture.GetStats().generation;
     Expect(
         capture.StartSession(stale_schemas.frame, stale_schemas.scope) ==
             RenderProfileSessionStartResult::StaleGeneration,
@@ -1224,24 +1223,24 @@ void HappyPathPreservesTopologyAndRawTimestampDomains() {
         "decoded GPU record counts are incorrect"
     );
     Expect(
-        ValueAt<std::uint64_t>(*frame_records[0], 0) == 1 &&
-            ValueAt<std::uint32_t>(*frame_records[0], 1) ==
-                static_cast<std::uint32_t>(
+        ValueAt<uint64>(*frame_records[0], 0) == 1 &&
+            ValueAt<uint32>(*frame_records[0], 1) ==
+                static_cast<uint32>(
                     GpuFrameCaptureStatus::Complete
                 ) &&
             ValueAt<bool>(*frame_records[0], 2) &&
-            ValueAt<std::uint64_t>(*frame_records[0], 3) == 4 &&
+            ValueAt<uint64>(*frame_records[0], 3) == 4 &&
             StringAt(*frame_records[0], 6).empty(),
         "first GpuFrame payload is incorrect"
     );
     Expect(
-        ValueAt<std::uint64_t>(*frame_records[2], 0) == 3 &&
-            ValueAt<std::uint32_t>(*frame_records[2], 1) ==
-                static_cast<std::uint32_t>(
+        ValueAt<uint64>(*frame_records[2], 0) == 3 &&
+            ValueAt<uint32>(*frame_records[2], 1) ==
+                static_cast<uint32>(
                     GpuFrameCaptureStatus::Invalid
                 ) &&
             !ValueAt<bool>(*frame_records[2], 2) &&
-            ValueAt<std::uint64_t>(*frame_records[2], 5) == 1,
+            ValueAt<uint64>(*frame_records[2], 5) == 1,
         "error GpuFrame payload is incorrect"
     );
 
@@ -1258,19 +1257,19 @@ void HappyPathPreservesTopologyAndRawTimestampDomains() {
         );
     }
     Expect(
-        ValueAt<std::uint64_t>(*scope_records[0], 0) == 1 &&
-            ValueAt<std::uint64_t>(*scope_records[0], 3) == 7 &&
-            ValueAt<std::uint32_t>(*scope_records[0], 5) ==
-                static_cast<std::uint32_t>(EQueueType::Graphics) &&
-            ValueAt<std::uint32_t>(*scope_records[0], 6) == 3 &&
-            ValueAt<std::uint32_t>(*scope_records[0], 7) == 7 &&
-            ValueAt<std::uint32_t>(*scope_records[0], 16) == 0,
+        ValueAt<uint64>(*scope_records[0], 0) == 1 &&
+            ValueAt<uint64>(*scope_records[0], 3) == 7 &&
+            ValueAt<uint32>(*scope_records[0], 5) ==
+                static_cast<uint32>(EQueueType::Graphics) &&
+            ValueAt<uint32>(*scope_records[0], 6) == 3 &&
+            ValueAt<uint32>(*scope_records[0], 7) == 7 &&
+            ValueAt<uint32>(*scope_records[0], 16) == 0,
         "outer scope topology/domain payload is incorrect"
     );
     Expect(
-        ValueAt<std::uint64_t>(*scope_records[1], 2) ==
-                ValueAt<std::uint64_t>(*scope_records[0], 1) &&
-            ValueAt<std::uint32_t>(*scope_records[1], 16) == 1,
+        ValueAt<uint64>(*scope_records[1], 2) ==
+                ValueAt<uint64>(*scope_records[0], 1) &&
+            ValueAt<uint32>(*scope_records[1], 16) == 1,
         "child parent/depth payload is incorrect"
     );
     ExpectNear(
@@ -1284,11 +1283,11 @@ void HappyPathPreservesTopologyAndRawTimestampDomains() {
         "outer exclusive duration is incorrect"
     );
     Expect(
-        ValueAt<std::uint64_t>(*scope_records[3], 3) == 9 &&
-            ValueAt<std::uint32_t>(*scope_records[3], 5) ==
-                static_cast<std::uint32_t>(EQueueType::Compute) &&
-            ValueAt<std::uint32_t>(*scope_records[3], 6) == 4 &&
-            ValueAt<std::uint32_t>(*scope_records[3], 7) == 9,
+        ValueAt<uint64>(*scope_records[3], 3) == 9 &&
+            ValueAt<uint32>(*scope_records[3], 5) ==
+                static_cast<uint32>(EQueueType::Compute) &&
+            ValueAt<uint32>(*scope_records[3], 6) == 4 &&
+            ValueAt<uint32>(*scope_records[3], 7) == 9,
         "Compute queue domain/source order is incorrect"
     );
     ExpectNear(
@@ -1302,8 +1301,8 @@ void HappyPathPreservesTopologyAndRawTimestampDomains() {
         "Compute duration was not preserved"
     );
     Expect(
-        ValueAt<std::uint32_t>(*scope_records[4], 9) ==
-                static_cast<std::uint32_t>(
+        ValueAt<uint32>(*scope_records[4], 9) ==
+                static_cast<uint32>(
                     GpuScopeTerminalStatus::Error
                 ) &&
             StringAt(*scope_records[4], 17) ==
@@ -1524,30 +1523,30 @@ void RaytracingCaptureAggregationWaitsForReverseCompletionAndRecovers() {
         "raytracing capture aggregation record counts are incorrect"
     );
     Expect(
-        ValueAt<std::uint64_t>(*frames[0], 0) == 1 &&
-            ValueAt<std::uint32_t>(*frames[0], 1) ==
-                static_cast<std::uint32_t>(
+        ValueAt<uint64>(*frames[0], 0) == 1 &&
+            ValueAt<uint32>(*frames[0], 1) ==
+                static_cast<uint32>(
                     GpuFrameCaptureStatus::Complete
                 ) &&
             ValueAt<bool>(*frames[0], 2) &&
-            ValueAt<std::uint64_t>(*frames[0], 3) == 4,
+            ValueAt<uint64>(*frames[0], 3) == 4,
         "ordered raytracing frame payload is incorrect"
     );
     Expect(
-        ValueAt<std::uint64_t>(*frames[1], 0) == 2 &&
-            ValueAt<std::uint32_t>(*frames[1], 1) ==
-                static_cast<std::uint32_t>(
+        ValueAt<uint64>(*frames[1], 0) == 2 &&
+            ValueAt<uint32>(*frames[1], 1) ==
+                static_cast<uint32>(
                     GpuFrameCaptureStatus::Invalid
                 ) &&
             !ValueAt<bool>(*frames[1], 2) &&
-            ValueAt<std::uint64_t>(*frames[1], 3) == 4 &&
-            ValueAt<std::uint64_t>(*frames[1], 5) == 2,
+            ValueAt<uint64>(*frames[1], 3) == 4 &&
+            ValueAt<uint64>(*frames[1], 5) == 2,
         "rejected raytracing frame payload is incorrect"
     );
     Expect(
-        ValueAt<std::uint64_t>(*frames[2], 0) == 3 &&
-            ValueAt<std::uint32_t>(*frames[2], 1) ==
-                static_cast<std::uint32_t>(
+        ValueAt<uint64>(*frames[2], 0) == 3 &&
+            ValueAt<uint32>(*frames[2], 1) ==
+                static_cast<uint32>(
                     GpuFrameCaptureStatus::Complete
                 ) &&
             ValueAt<bool>(*frames[2], 2),
@@ -1565,10 +1564,10 @@ void RaytracingCaptureAggregationWaitsForReverseCompletionAndRecovers() {
         "RT.Invalid.FrameTail",
         "RT.Recovered.FrameTail",
     };
-    const std::array<std::uint64_t, 9> expected_source_orders{
+    const std::array<uint64, 9> expected_source_orders{
         10, 10, 20, 30, 10, 10, 20, 30, 50
     };
-    const std::array<std::uint64_t, 9> expected_local_orders{
+    const std::array<uint64, 9> expected_local_orders{
         0, 1, 0, 0, 0, 1, 0, 0, 0
     };
     for (std::size_t index = 0;
@@ -1576,22 +1575,22 @@ void RaytracingCaptureAggregationWaitsForReverseCompletionAndRecovers() {
          ++index) {
         Expect(
             StringAt(*scopes[index], 8) == expected_names[index] &&
-                ValueAt<std::uint64_t>(*scopes[index], 3) ==
+                ValueAt<uint64>(*scopes[index], 3) ==
                     expected_source_orders[index] &&
-                ValueAt<std::uint64_t>(*scopes[index], 4) ==
+                ValueAt<uint64>(*scopes[index], 4) ==
                     expected_local_orders[index] &&
-                ValueAt<std::uint32_t>(*scopes[index], 5) ==
-                    static_cast<std::uint32_t>(
+                ValueAt<uint32>(*scopes[index], 5) ==
+                    static_cast<uint32>(
                         EQueueType::Graphics
                     ) &&
-                ValueAt<std::uint32_t>(*scopes[index], 6) == 5 &&
-                ValueAt<std::uint32_t>(*scopes[index], 7) == 11,
+                ValueAt<uint32>(*scopes[index], 6) == 5 &&
+                ValueAt<uint32>(*scopes[index], 7) == 11,
             "raytracing scope generation order or queue domain is incorrect"
         );
     }
     Expect(
-        ValueAt<std::uint32_t>(*scopes[6], 9) ==
-                static_cast<std::uint32_t>(
+        ValueAt<uint32>(*scopes[6], 9) ==
+                static_cast<uint32>(
                     GpuScopeTerminalStatus::Error
                 ) &&
             StringAt(*scopes[6], 17) ==
@@ -1599,8 +1598,8 @@ void RaytracingCaptureAggregationWaitsForReverseCompletionAndRecovers() {
         "raytracing readback rejection diagnostic is incorrect"
     );
     Expect(
-        ValueAt<std::uint32_t>(*scopes[7], 9) ==
-                static_cast<std::uint32_t>(
+        ValueAt<uint32>(*scopes[7], 9) ==
+                static_cast<uint32>(
                     GpuScopeTerminalStatus::Error
                 ) &&
             StringAt(*scopes[7], 17) ==
@@ -1877,8 +1876,8 @@ void AdmissionRejectDoesNotOvertakeOrderedFrames() {
     const ParsedDump dump   = ParseDump(output.path);
     const auto       frames = RecordsFor(dump, FindSchema(dump, "GpuFrame"));
     Expect(
-        frames.size() == 2 && ValueAt<std::uint64_t>(*frames[0], 0) == 1 &&
-            ValueAt<std::uint64_t>(*frames[1], 0) == 3,
+        frames.size() == 2 && ValueAt<uint64>(*frames[0], 0) == 1 &&
+            ValueAt<uint64>(*frames[1], 0) == 3,
         "rejected frame overtook or polluted ordered frame output"
     );
 }

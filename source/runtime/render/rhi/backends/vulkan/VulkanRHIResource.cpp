@@ -6,6 +6,7 @@
 #include "VulkanMacroUtils.h"
 #include "log/LogSystem.h"
 #include "misc/MMemory.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <format>
@@ -22,7 +23,7 @@ VmaAllocationCreateFlags GetBufferAllocationFlags(EBufferUsageFlags flags) {
     return 0;
 }
 
-uint64 EncodeViewKey(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
+uint64 EncodeViewKey(uint32 _mip_level, uint32 _mip_cnt, uint32 _base_layer, uint32 _layer_cnt) {
     return ((uint64)_mip_level) | ((uint64)_mip_cnt << 16) | ((uint64)_base_layer << 32) |
            ((uint64)_layer_cnt << 48);
 }
@@ -65,7 +66,7 @@ VulkanBuffer::~VulkanBuffer() {
         vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc);
     }
 
-    for (uint i = 0; i < 4; ++i) {
+    for (uint32 i = 0; i < 4; ++i) {
         for (const auto& idx : m_descriptor_cache_slots[i]) {
             m_device->GetGlobalDescriptorHeap().FreeBufferDescriptorSlot(idx.second);
         }
@@ -110,7 +111,7 @@ VulkanBuffer::VulkanBuffer(
     };
     const auto queue_families = _allocation_info.queue_family_indices;
     if (queue_families.size() > 1) {
-        if (queue_families.size() > std::numeric_limits<uint32_t>::max()) {
+        if (queue_families.size() > std::numeric_limits<uint32>::max()) {
             throw std::overflow_error("Vulkan buffer queue family count exceeds uint32_t");
         }
         for (auto family = queue_families.begin(); family != queue_families.end(); ++family) {
@@ -119,7 +120,7 @@ VulkanBuffer::VulkanBuffer(
             }
         }
         buffer_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-        buffer_info.queueFamilyIndexCount = static_cast<uint32_t>(queue_families.size());
+        buffer_info.queueFamilyIndexCount = static_cast<uint32>(queue_families.size());
         buffer_info.pQueueFamilyIndices   = queue_families.data();
     }
 #if WITH_CUDA
@@ -223,7 +224,7 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, Vk
     image_create_info.flags       = VulkanEnumTranslator::METoVKImageCreateFlags(_info.dimension);
     image_create_info.imageType   = VulkanEnumTranslator::METoVKImageType(_info.dimension);
     image_create_info.format      = VulkanEnumTranslator::METoVKFormat(_info.format);
-    image_create_info.extent      = {uint(_info.extent.x), uint(_info.extent.y), _info.depth};
+    image_create_info.extent      = {uint32(_info.extent.x), uint32(_info.extent.y), _info.depth};
     image_create_info.mipLevels   = _info.num_mips;
     image_create_info.arrayLayers = _info.array_size;
     image_create_info.samples     = VulkanEnumTranslator::METoVKSampleCountFlagBits(_info.num_samples);
@@ -256,12 +257,12 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, Vk
             _info.extent.x,
             _info.extent.y,
             _info.depth,
-            uint(_info.format),
+            uint32(_info.format),
             _info.num_mips,
             _info.array_size,
-            uint(image_create_info.samples),
+            uint32(image_create_info.samples),
             image_create_info.usage,
-            uint(image_create_info.tiling),
+            uint32(image_create_info.tiling),
             int(result)
         );
         throw std::runtime_error(std::format("failed to create Vulkan texture (VkResult {})", int(result)));
@@ -275,7 +276,7 @@ VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, Vk
     }
 }
 
-VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
+VkImageView VulkanTexture::GetView(uint32 _mip_level, uint32 _mip_cnt, uint32 _base_layer, uint32 _layer_cnt) {
     const VkImageViewType view_type = GetDimension() == ETextureDimension::TEX_CUBE && _layer_cnt == 1 ?
                                           VK_IMAGE_VIEW_TYPE_2D :
                                           VulkanEnumTranslator::METoVKImageViewType(GetDimension());
@@ -283,7 +284,7 @@ VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt, uint _base_la
 }
 
 VkImageView
-VulkanTexture::GetAttachmentView(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
+VulkanTexture::GetAttachmentView(uint32 _mip_level, uint32 _mip_cnt, uint32 _base_layer, uint32 _layer_cnt) {
     const bool requires_attachment_view = _layer_cnt > 1 || GetDimension() == ETextureDimension::TEX_CUBE ||
                                           GetDimension() == ETextureDimension::TEX_CUBE_ARRAY;
     if (!requires_attachment_view) {
@@ -296,10 +297,10 @@ VulkanTexture::GetAttachmentView(uint _mip_level, uint _mip_cnt, uint _base_laye
 VkImageView VulkanTexture::GetOrCreateView(
     UnorderedMap<uint64, VkImageView>& cache,
     VkImageViewType                    view_type,
-    uint                               mip_level,
-    uint                               mip_count,
-    uint                               base_layer,
-    uint                               layer_count
+    uint32                             mip_level,
+    uint32                             mip_count,
+    uint32                             base_layer,
+    uint32                             layer_count
 ) {
     std::lock_guard<std::mutex> lock(m_views_mutex);
     const uint64                key = EncodeViewKey(mip_level, mip_count, base_layer, layer_count);
@@ -342,15 +343,15 @@ VkImageView VulkanTexture::GetOrCreateView(
     return view;
 }
 
-uint VulkanTexture::GetMipByteSize(uint _mip_level) const {
-    uint         mip_width  = std::max(1u, GetWidth() >> _mip_level);
-    uint         mip_height = std::max(1u, GetHeight() >> _mip_level);
-    uint         mip_depth  = std::max(1u, GetDepth() >> _mip_level);
+uint32 VulkanTexture::GetMipByteSize(uint32 _mip_level) const {
+    uint32       mip_width  = std::max(1u, GetWidth() >> _mip_level);
+    uint32       mip_height = std::max(1u, GetHeight() >> _mip_level);
+    uint32       mip_depth  = std::max(1u, GetDepth() >> _mip_level);
     const uint64 byte_size  = GetSizeFromPixelFormat(GetFormat(), uint3{mip_width, mip_height, mip_depth});
     MOER_ASSERT(
-        byte_size <= std::numeric_limits<uint>::max(), "Texture mip size exceeds uint: {}", byte_size
+        byte_size <= std::numeric_limits<uint32>::max(), "Texture mip size exceeds uint: {}", byte_size
     );
-    return static_cast<uint>(byte_size);
+    return static_cast<uint32>(byte_size);
 }
 
 VulkanTexture::~VulkanTexture() {

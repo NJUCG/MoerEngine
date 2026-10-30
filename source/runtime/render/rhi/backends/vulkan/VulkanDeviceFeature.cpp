@@ -1,4 +1,5 @@
 #include "VulkanDeviceFeature.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <array>
@@ -177,7 +178,7 @@ bool SupportsRequiredMembers(
 
 } // namespace
 
-VulkanDeviceFeatures::VulkanDeviceFeatures(uint32_t _api_version) noexcept : api_version(_api_version) {
+VulkanDeviceFeatures::VulkanDeviceFeatures(uint32 _api_version) noexcept : api_version(_api_version) {
     RebuildFeatureChain();
 }
 
@@ -217,7 +218,7 @@ VulkanDeviceFeatures& VulkanDeviceFeatures::operator=(VulkanDeviceFeatures&& _ot
     return operator=(static_cast<const VulkanDeviceFeatures&>(_other));
 }
 
-VulkanDeviceFeatures VulkanDeviceFeatures::BuildRequiredFeatures(uint32_t _api_version) {
+VulkanDeviceFeatures VulkanDeviceFeatures::BuildRequiredFeatures(uint32 _api_version) {
     VulkanDeviceFeatures required_features(_api_version);
 
     // 1.0 features
@@ -267,10 +268,10 @@ bool VulkanDeviceFeatures::SupportsAll(const VulkanDeviceFeatures& _required_fea
 }
 
 VulkanDeviceFeatures
-VulkanDeviceFeatures::QuerySupportedFeatures(VkPhysicalDevice _gpu, uint32_t _api_version) {
+VulkanDeviceFeatures::QuerySupportedFeatures(VkPhysicalDevice _gpu, uint32 _api_version) {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(_gpu, &properties);
-    const uint32_t            query_api_version = std::min(_api_version, properties.apiVersion);
+    const uint32              query_api_version = std::min(_api_version, properties.apiVersion);
     VulkanDeviceFeatures      features(query_api_version);
     VkPhysicalDeviceFeatures2 features2{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, features.RebuildFeatureChain()

@@ -1,9 +1,11 @@
 //
 // Created by 17152 on 2023/9/21.
 //
+
 #include "PixelFormat.h"
 #include "RHIImpl.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -33,19 +35,19 @@ uint64 NextNonZeroId(std::atomic<uint64>& _counter) noexcept {
 
 uint3 FullTextureMipExtent(
     const Texture& _texture,
-    uint           _mip_level
+    uint32         _mip_level
 ) noexcept {
     const uint3 base_extent = _texture.GetExtent();
-    const auto mip_dimension = [_mip_level](uint _dimension) noexcept {
-        if (_mip_level >= std::numeric_limits<uint>::digits) {
+    const auto  mip_dimension = [_mip_level](uint32 _dimension) noexcept {
+        if (_mip_level >= std::numeric_limits<uint32>::digits) {
             return 1u;
         }
         return std::max(_dimension >> _mip_level, 1u);
     };
     return uint3(
-        mip_dimension(uint(base_extent.x)),
-        mip_dimension(uint(base_extent.y)),
-        mip_dimension(uint(base_extent.z))
+        mip_dimension(uint32(base_extent.x)),
+        mip_dimension(uint32(base_extent.y)),
+        mip_dimension(uint32(base_extent.z))
     );
 }
 
@@ -77,10 +79,10 @@ bool IsOwningTextureReadbackSupported(
     // owning contract honest by accepting only the contiguous,
     // single-plane color range until block-compressed and multi-plane
     // packing is represented explicitly by the RHI.
-    const uint format = static_cast<uint>(texture->GetFormat());
-    const bool contiguous_single_plane_color =
-        format >= static_cast<uint>(PF_R4G4_UNORM_PACK8) &&
-        format <= static_cast<uint>(PF_E5B9G9R9_UFLOAT_PACK32);
+    const uint32 format = static_cast<uint32>(texture->GetFormat());
+    const bool   contiguous_single_plane_color =
+        format >= static_cast<uint32>(PF_R4G4_UNORM_PACK8) &&
+        format <= static_cast<uint32>(PF_E5B9G9R9_UFLOAT_PACK32);
     const ETextureUsageFlags required_usage =
         ETextureUsageFlags::TRANSFER_SRC;
     const uint3 base_extent = texture->GetExtent();
@@ -703,10 +705,10 @@ void CommandList::AppendRecorded(CommandList&& _source) {
 
     const size_t destination_cache_size = cached_args.size();
     const size_t source_cache_size      = _source.cached_args.size();
-    if (destination_cache_size > std::numeric_limits<uint>::max() ||
-        source_cache_size > std::numeric_limits<uint>::max() ||
+    if (destination_cache_size > std::numeric_limits<uint32>::max() ||
+        source_cache_size > std::numeric_limits<uint32>::max() ||
         source_cache_size >
-            std::numeric_limits<uint>::max() - destination_cache_size) {
+            std::numeric_limits<uint32>::max() - destination_cache_size) {
         throw std::overflow_error(
             "frontend CommandList cached-argument index overflow"
         );
@@ -795,7 +797,7 @@ void CommandList::AppendRecorded(CommandList&& _source) {
 
     KeepAlive(source.lifetime);
 
-    const uint cache_offset = static_cast<uint>(destination_cache_size);
+    const uint32 cache_offset = static_cast<uint32>(destination_cache_size);
     for (auto& command : source.cmds) {
         if (command != nullptr) {
             command->RebaseCachedArgumentReferences(cache_offset);
@@ -1064,9 +1066,9 @@ void CommandList::CopyFrom(
     Retain(_texture);
     ValidateRHICommandAccess("CommandList::CopyFrom");
     uint3 extent = uint3(
-        std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
-        std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
-        std::max(uint(_texture.extent.z) >> _texture.mip_level, 1u)
+        std::max(uint32(_texture.extent.x) >> _texture.mip_level, 1u),
+        std::max(uint32(_texture.extent.y) >> _texture.mip_level, 1u),
+        std::max(uint32(_texture.extent.z) >> _texture.mip_level, 1u)
     );
     Array<byte> owned_data(_data.begin(), _data.end());
     commands.push_back(
@@ -1131,7 +1133,7 @@ void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_
     if (!b_valid_size) {
         return;
     }
-    uint mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
+    uint32 mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
     b_valid_size &= mip_size <= _data.size();
 
     assert(b_valid_size && "Fatal: Copy back data size is less than texture mip size");
@@ -1338,7 +1340,7 @@ void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
     commands.push_back(_array->CreateUpdateCommand());
 }
 
-void CommandList::ClearResource(BufferView _buffer, uint _value) {
+void CommandList::ClearResource(BufferView _buffer, uint32 _value) {
     ValidateRHICommandAccess("CommandList::ClearResource");
     Retain(_buffer);
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_buffer, _value));
@@ -1350,7 +1352,7 @@ void CommandList::ClearResource(TextureView _texture, float4 _color) {
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _color));
 }
 
-void CommandList::ClearResource(TextureView _texture, uint _value) {
+void CommandList::ClearResource(TextureView _texture, uint32 _value) {
     ValidateRHICommandAccess("CommandList::ClearResource");
     Retain(_texture);
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _value));
@@ -1744,11 +1746,11 @@ void CommandList::Barriers(
                 using TResource = std::decay_t<decltype(resource)>;
                 if constexpr (std::is_same_v<TResource, TextureView>) {
                     const auto* texture = resource.GetTexture();
-                    const auto aspects =
-                        static_cast<uint32_t>(barrier.texture_aspects);
+                    const auto  aspects =
+                        static_cast<uint32>(barrier.texture_aspects);
                     const auto available_aspects =
                         texture == nullptr ? 0u :
-                        static_cast<uint32_t>(texture->GetAspectFlags());
+                                             static_cast<uint32>(texture->GetAspectFlags());
                     if (texture == nullptr || resource.num_mips == 0 ||
                         resource.num_array == 0 ||
                         resource.mip_level >= texture->GetNumMips() ||
@@ -1787,7 +1789,7 @@ void CommandList::Barriers(
     }
 
     auto barrier_cmd = MakeUnique<BarrierCmd>(
-        static_cast<uint>(_barriers.size()), _src_queue, _dst_queue
+        static_cast<uint32>(_barriers.size()), _src_queue, _dst_queue
     );
     for (const BarrierCreateInfo& barrier : _barriers) {
         std::visit([this](const auto& resource) {
@@ -2125,10 +2127,10 @@ void CommandList::Signal(const FenceRef& _fence, uint64 _signal_value) {
 }
 
 void CommandList::BeginBarriers(
-    uint       _read_tex_cnt,
-    uint       _write_tex_cnt,
-    uint       _read_buf_cnt,
-    uint       _write_buf_cnt,
+    uint32     _read_tex_cnt,
+    uint32     _write_tex_cnt,
+    uint32     _read_buf_cnt,
+    uint32     _write_buf_cnt,
     EQueueType _src_queue,
     EQueueType _dst_queue
 ) {
@@ -2192,24 +2194,24 @@ void CommandList::ImportResourcesFromQueue(
     }
     {
         // 空资源检测
-        for (uint i = 0; i < _textures_to_import.size(); ++i) {
+        for (uint32 i = 0; i < _textures_to_import.size(); ++i) {
             const auto& texture_to_import = _textures_to_import[i];
             if (texture_to_import.texture.GetTexture() == nullptr) {
                 LOG_WARNING(
                     "ImportResourcesFromQueue got empty texture at index {}. src_queue={}",
                     i,
-                    static_cast<uint>(_src_queue)
+                    static_cast<uint32>(_src_queue)
                 );
             }
         }
-        for (uint i = 0; i < _buffers_to_import.size(); ++i) {
+        for (uint32 i = 0; i < _buffers_to_import.size(); ++i) {
             const auto& buffer_to_import = _buffers_to_import[i];
             if (buffer_to_import.buffer.GetBuffer() == nullptr ||
                 buffer_to_import.buffer.GetByteSize() == 0) {
                 LOG_WARNING(
                     "ImportResourcesFromQueue got empty buffer at index {}. src_queue={}",
                     i,
-                    static_cast<uint>(_src_queue)
+                    static_cast<uint32>(_src_queue)
                 );
             }
         }
@@ -2237,24 +2239,24 @@ void CommandList::ExportResourcesToQueue(
     }
     {
         // 空资源检测
-        for (uint i = 0; i < _textures_to_export.size(); ++i) {
+        for (uint32 i = 0; i < _textures_to_export.size(); ++i) {
             const auto& texture_to_export = _textures_to_export[i];
             if (texture_to_export.texture.GetTexture() == nullptr) {
                 LOG_WARNING(
                     "ExportResourcesToQueue got empty texture at index {}. dst_queue={}",
                     i,
-                    static_cast<uint>(_dst_queue)
+                    static_cast<uint32>(_dst_queue)
                 );
             }
         }
-        for (uint i = 0; i < _buffers_to_export.size(); ++i) {
+        for (uint32 i = 0; i < _buffers_to_export.size(); ++i) {
             const auto& buffer_to_export = _buffers_to_export[i];
             if (buffer_to_export.buffer.GetBuffer() == nullptr ||
                 buffer_to_export.buffer.GetByteSize() == 0) {
                 LOG_WARNING(
                     "ExportResourcesToQueue got empty buffer at index {}. dst_queue={}",
                     i,
-                    static_cast<uint>(_dst_queue)
+                    static_cast<uint32>(_dst_queue)
                 );
             }
         }

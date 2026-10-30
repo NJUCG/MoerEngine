@@ -6,6 +6,7 @@
 #define VULKAN_SURFACE_SUPPORT_H
 
 #include "misc/STL.h"
+#include "misc/Types.h"
 
 #include "VulkanCommon.h"
 
@@ -16,7 +17,7 @@ struct SwapChainSupportDetails {
     Moer::Array<VkPresentModeKHR>   present_modes;
 };
 
-enum class ESwapChainSupportQueryStatus : uint8_t {
+enum class ESwapChainSupportQueryStatus : uint8 {
     Success,
     NativeFailure,
     PresentUnsupported,
@@ -38,7 +39,7 @@ struct SwapChainSupportQueryResult {
 // Vulkan backend-internal query contract. This is intentionally not exported
 // from moer_render; external RHI consumers use SwapchainCreateInfo instead.
 SwapChainSupportQueryResult
-QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32_t _present_queue_family);
+QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface, uint32 _present_queue_family);
 
 } // namespace Moer::Render
 

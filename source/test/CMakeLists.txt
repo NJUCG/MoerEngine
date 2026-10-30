@@ -520,7 +520,10 @@ add_test(NAME RHISubmissionPipelinePolicyContract COMMAND $<TARGET_FILE:${test_t
 # Header-only submission worker fault-injection and completion ownership.
 set(test_target TestVulkanSubmissionRequestDispatch)
 add_executable(${test_target} "VulkanSubmissionRequestDispatchTest.cpp")
-target_include_directories(${test_target} PRIVATE "${moer_source_dir}/runtime/render")
+target_include_directories(${test_target} PRIVATE
+    "${moer_source_dir}/runtime/render"
+    "${moer_source_dir}/runtime/core/include"
+)
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
 
@@ -604,14 +607,20 @@ add_executable(${test_target}
     "VulkanDescriptorBufferAllocatorTest.cpp"
     "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanDescriptorBufferAllocator.cpp"
 )
-target_include_directories(${test_target} PRIVATE "${moer_source_dir}/runtime/render")
+target_include_directories(${test_target} PRIVATE
+    "${moer_source_dir}/runtime/render"
+    "${moer_source_dir}/runtime/core/include"
+)
 target_link_libraries(${test_target} PRIVATE Threads::Threads)
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanDescriptorBufferAllocatorContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(VulkanDescriptorBufferAllocatorContract PROPERTIES TIMEOUT 30)
 
 add_executable(TestVulkanDescriptorPolicy "VulkanDescriptorPolicyTest.cpp")
-target_include_directories(TestVulkanDescriptorPolicy PRIVATE "${moer_source_dir}/runtime/render")
+target_include_directories(TestVulkanDescriptorPolicy PRIVATE
+    "${moer_source_dir}/runtime/render"
+    "${moer_source_dir}/runtime/core/include"
+)
 set_target_properties(TestVulkanDescriptorPolicy PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanDescriptorPolicyContract COMMAND $<TARGET_FILE:TestVulkanDescriptorPolicy>)
 

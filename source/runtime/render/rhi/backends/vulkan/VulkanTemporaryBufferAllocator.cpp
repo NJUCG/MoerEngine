@@ -2,6 +2,7 @@
 #include "VulkanRHIResource.h"
 #include "misc/Alignment.h"
 #include "misc/MMemory.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <format>
@@ -122,7 +123,7 @@ VulkanTemporaryBufferAllocator::LinearBufferAllocator::LinearBufferAllocator(
 }
 
 VulkanTemporaryBufferAllocator::LinearBufferAllocator::BufferSlice
-VulkanTemporaryBufferAllocator::LinearBufferAllocator::Allocate(uint64 _size, uint _alignment) {
+VulkanTemporaryBufferAllocator::LinearBufferAllocator::Allocate(uint64 _size, uint32 _alignment) {
 
     const uint64 align_size        = std::max(_alignment, 16u);
     const uint64 required_capacity = std::max(align_size, _size);
@@ -181,7 +182,7 @@ VulkanTemporaryBufferAllocator::VulkanTemporaryBufferAllocator(VulkanDevice& _de
 
 VulkanTemporaryBufferAllocator::~VulkanTemporaryBufferAllocator() = default;
 
-BufferView VulkanTemporaryBufferAllocator::AllocateUploadBuffer(uint64 _size, uint _alignment) {
+BufferView VulkanTemporaryBufferAllocator::AllocateUploadBuffer(uint64 _size, uint32 _alignment) {
     _size = std::max<uint64>(_size, _alignment);
     if (_size < small_block_size) {
         const LinearBufferAllocator::BufferSlice slice = upload_allocator.Allocate(_size, _alignment);
@@ -194,7 +195,7 @@ BufferView VulkanTemporaryBufferAllocator::AllocateUploadBuffer(uint64 _size, ui
     return {temporary_buffers.back().get(), 0, _size, 1u};
 }
 
-BufferView VulkanTemporaryBufferAllocator::AllocateReadbackBuffer(uint64 _size, uint _alignment) {
+BufferView VulkanTemporaryBufferAllocator::AllocateReadbackBuffer(uint64 _size, uint32 _alignment) {
     _size = std::max<uint64>(_size, _alignment);
     if (_size < small_block_size) {
         const LinearBufferAllocator::BufferSlice slice = readback_allocator.Allocate(_size, _alignment);

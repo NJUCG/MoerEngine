@@ -6,6 +6,7 @@
 #include "RaytracingSceneFrameSnapshot.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
@@ -29,10 +30,10 @@ public:
 class PrepareLightPass {
 public:
     struct EmissiveLightHistory {
-        uint light_offset       = 0;
-        uint num_triangles      = 0;
-        uint index_start_idx    = 0;
-        uint first_instance_idx = 0;
+        uint32 light_offset       = 0;
+        uint32 num_triangles      = 0;
+        uint32 index_start_idx    = 0;
+        uint32 first_instance_idx = 0;
     };
 
     struct RecordResources {
@@ -57,17 +58,17 @@ public:
     };
 
     struct MipDispatch {
-        uint source_mip      = 0;
-        uint bound_mip_count = 0;
+        uint32 source_mip      = 0;
+        uint32 bound_mip_count = 0;
     };
 
     struct RecordPayload {
-        Array<uint>                 primitive_to_light;
+        Array<uint32>               primitive_to_light;
         Array<PrepareLightsTask>    tasks;
         Array<PolymorphicLightInfo> primitive_light_infos;
         PrepareLightsParams         params{};
         DI::LightBufferParams       light_buffer_params{};
-        uint                        dispatch_light_count           = 0;
+        uint32                      dispatch_light_count           = 0;
         bool                        reads_scene_geometry           = false;
         bool                        reset_light_history            = false;
         bool                        primitive_to_light_initialized = false;
@@ -98,7 +99,7 @@ public:
         SharedPtr<const RecordPayload> record{};
 
         UnorderedMap<uint64, EmissiveLightHistory> next_instance_light_buffer_offsets;
-        UnorderedMap<uint64, uint>                 next_primitive_light_buffer_offsets;
+        UnorderedMap<uint64, uint32>               next_primitive_light_buffer_offsets;
         bool                                       next_odd_frame                   = false;
         const Buffer*                              next_primitive_to_light_identity = nullptr;
         const Buffer*                              next_tasks_identity              = nullptr;
@@ -130,7 +131,7 @@ private:
     BindlessArrayRef bindless_array;
 
     UnorderedMap<uint64, EmissiveLightHistory> instance_light_buffer_offsets;
-    UnorderedMap<uint64, uint>                 primitive_light_buffer_offsets;
+    UnorderedMap<uint64, uint32>               primitive_light_buffer_offsets;
     const Buffer*                              accepted_primitive_to_light_identity = nullptr;
     const Buffer*                              accepted_tasks_identity              = nullptr;
     const Buffer*                              accepted_primitive_lights_identity   = nullptr;

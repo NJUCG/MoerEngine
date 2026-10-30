@@ -1,4 +1,5 @@
 #include "config/ConfigManager.h"
+#include "misc/Types.h"
 #include "rhi/ShaderConstantLayout.h"
 #include "serialize/Serializer.h"
 #include "shader/ShaderCompiler.h"
@@ -16,7 +17,7 @@ namespace {
 class ReservedNameConstant : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(ReservedNameConstant);
-    DEFINE_SHADER_CONSTANT(uint, bdls_114514);
+    DEFINE_SHADER_CONSTANT(uint32, bdls_114514);
     DEFINE_SHADER_ARGS(bdls_114514);
 };
 
@@ -274,7 +275,7 @@ void CheckCompilerReflection() {
         "Compiler lost bindless array activity"
     );
 
-    input.environment.SetDefine("MOER_TEST_REFLECTION_COLLISION", uint(1));
+    input.environment.SetDefine("MOER_TEST_REFLECTION_COLLISION", uint32(1));
     RequireRejected([&] {
         ShaderCompiler::Compile(ShaderCompilerInput(input));
     });

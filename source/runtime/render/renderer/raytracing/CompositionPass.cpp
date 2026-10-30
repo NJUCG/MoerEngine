@@ -1,4 +1,5 @@
 #include "CompositionPass.h"
+#include "misc/Types.h"
 
 // 选择当前使用的 GBuffer 历史，并合成 HDR 光照结果。
 
@@ -45,9 +46,9 @@ CompositionPass::Prepare(const RTContext& rt_ctx) const {
     command.constants.env_scale      = rt_ctx.scene_params.env_map_scale;
     command.constants.main_view      = rt_ctx.main_view;
     command.constants.prev_view      = rt_ctx.prev_view;
-    command.dispatch_groups = uint3(
-        static_cast<uint>(std::ceil(command.constants.main_view.rect.x / 8.0f)),
-        static_cast<uint>(std::ceil(command.constants.main_view.rect.y / 8.0f)),
+    command.dispatch_groups          = uint3(
+        static_cast<uint32>(std::ceil(command.constants.main_view.rect.x / 8.0f)),
+        static_cast<uint32>(std::ceil(command.constants.main_view.rect.y / 8.0f)),
         1
     );
     return command;

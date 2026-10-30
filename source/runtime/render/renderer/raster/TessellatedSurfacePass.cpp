@@ -1,5 +1,5 @@
 #include "TessellatedSurfacePass.h"
-
+#include "misc/Types.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -11,7 +11,7 @@ constexpr std::string_view kSurfaceShaderPath =
     "pipelines/raster/deferred/geometry/TessellatedSurface.hlsl";
 // Matches the tested 16x16 grid at factor 64. Higher grid resolutions automatically receive a
 // lower factor cap so UI combinations cannot grow tessellation work quadratically into a TDR.
-constexpr uint64_t kSurfaceTriangleBudget = 2ull * 16ull * 16ull * 64ull * 64ull;
+constexpr uint64 kSurfaceTriangleBudget = 2ull * 16ull * 16ull * 64ull * 64ull;
 
 struct SurfacePreset {
     float  macro_amplitude;
@@ -115,11 +115,11 @@ TessellatedSurfacePass::RecordParameters TessellatedSurfacePass::Prepare(
         return parameters;
     }
 
-    const uint32_t grid_resolution = static_cast<uint32_t>(
+    const uint32 grid_resolution = static_cast<uint32>(
         std::clamp(config.tessellated_surface_grid_resolution, 1, 64)
     );
     const float half_extent = std::max(config.tessellated_surface_half_extent, 0.25f);
-    const uint64_t patch_count = 2ull * grid_resolution * grid_resolution;
+    const uint64 patch_count         = 2ull * grid_resolution * grid_resolution;
     const float budget_factor_limit = std::max(
         2.0f,
         std::floor(std::sqrt(static_cast<float>(kSurfaceTriangleBudget) / patch_count))
@@ -186,8 +186,8 @@ TessellatedSurfacePass::RecordParameters TessellatedSurfacePass::Prepare(
     data.grid_and_options = uint4(
         grid_resolution,
         grid_resolution,
-        static_cast<uint32_t>(preset_index),
-        static_cast<uint32_t>(std::clamp(config.tessellated_surface_debug_mode, 0, 3))
+        static_cast<uint32>(preset_index),
+        static_cast<uint32>(std::clamp(config.tessellated_surface_debug_mode, 0, 3))
     );
 
     parameters.enabled        = true;
