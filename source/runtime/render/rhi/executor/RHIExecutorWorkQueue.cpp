@@ -2,7 +2,7 @@
 
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
-#include "rhi/RHIThreadHeartbeat.h"
+#include "profile/ProfileScope.h"
 #include "rhi/RHIThreadOwnership.h"
 
 #include <algorithm>
@@ -139,21 +139,17 @@ bool RHIExecutorWorkQueue::IsIdle() const noexcept {
 
 void RHIExecutorWorkQueue::Run(std::stop_token _stop_token) noexcept {
     Platform::SetCurrentThreadName("Moer RHI Executor");
-    RHIThreadRoleScope      owner_scope(ERHIThreadRole::Executor);
-    RHIThreadHeartbeatScope heartbeat(
-        ERHIThreadRole::Executor,
-        ERHIHeartbeatDomain::General,
-        ERHIHeartbeatStage::Dispatch
-    );
+    RHIThreadRoleScope owner_scope(ERHIThreadRole::Executor);
 
     while (true) {
         RHIExecutorWork work{};
-        if (!WaitAndPopWork(work, _stop_token, heartbeat)) {
+        if (!WaitAndPopWork(work, _stop_token)) {
             break;
         }
 
+        MOER_PROFILE_SCOPE("RHI.Executor.Work");
         const ERHIExecutorWorkAction action =
-            WaitForPrerequisites(work.prerequisites, _stop_token, heartbeat);
+            WaitForPrerequisites(work.prerequisites, _stop_token);
         InvokeCallbackNoThrow(work, action);
 
         {
@@ -163,29 +159,23 @@ void RHIExecutorWorkQueue::Run(std::stop_token _stop_token) noexcept {
         idle_cv.notify_all();
 
         if (action == ERHIExecutorWorkAction::Cancel) {
-            heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
             break;
         }
     }
 
     CancelPendingWork();
-    heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
 }
 
 bool RHIExecutorWorkQueue::WaitAndPopWork(
-    RHIExecutorWork&         _work,
-    std::stop_token          _stop_token,
-    RHIThreadHeartbeatScope& _heartbeat
+    RHIExecutorWork& _work,
+    std::stop_token  _stop_token
 ) {
-    _heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
-    std::unique_lock           lock(mutex);
-    RHIThreadHeartbeatWaitLock wait_lock(lock, _heartbeat, ERHIHeartbeatStage::Dispatch);
-    work_cv.wait(wait_lock, _stop_token, [this] {
+    std::unique_lock lock(mutex);
+    work_cv.wait(lock, _stop_token, [this] {
         return !pending.empty();
     });
     if (pending.empty()) {
         assert(_stop_token.stop_requested());
-        _heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
         return false;
     }
     _work = std::move(pending.front());
@@ -196,18 +186,15 @@ bool RHIExecutorWorkQueue::WaitAndPopWork(
 
 ERHIExecutorWorkAction RHIExecutorWorkQueue::WaitForPrerequisites(
     std::span<const RHIRecordingGateRef> _prerequisites,
-    std::stop_token                      _stop_token,
-    RHIThreadHeartbeatScope&             _heartbeat
+    std::stop_token                      _stop_token
 ) {
+    MOER_PROFILE_SCOPE("RHI.Executor.WaitForPrerequisites");
     ERHIExecutorWorkAction action = ERHIExecutorWorkAction::Execute;
-    _heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
     for (const RHIRecordingGateRef& prerequisite : _prerequisites) {
         assert(prerequisite);
         ERHIRecordingStatus status = prerequisite->Status();
         if (status == ERHIRecordingStatus::Pending) {
-            _heartbeat.Pulse(ERHIHeartbeatStage::WaitForDependency);
             const std::optional<ERHIRecordingStatus> result = prerequisite->Wait(_stop_token);
-            _heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             if (!result) {
                 return ERHIExecutorWorkAction::Cancel;
             }
@@ -223,6 +210,7 @@ ERHIExecutorWorkAction RHIExecutorWorkQueue::WaitForPrerequisites(
 }
 
 void RHIExecutorWorkQueue::CancelPendingWork() {
+    MOER_PROFILE_SCOPE("RHI.Executor.CancelPendingWork");
     std::deque<RHIExecutorWork> cancelled_work{};
     {
         std::lock_guard lock(mutex);
@@ -243,6 +231,7 @@ void RHIExecutorWorkQueue::InvokeCallbackNoThrow(
     if (!_work.callback) {
         return;
     }
+    MOER_PROFILE_SCOPE("RHI.Executor.WorkCallback");
     try {
         _work.callback(_action);
     } catch (const std::exception& exception) {

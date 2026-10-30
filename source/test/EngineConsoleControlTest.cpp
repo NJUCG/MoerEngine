@@ -37,9 +37,6 @@ int main() {
     EngineConsoleStartupConfig startup_config{
         .render_thread                          = true,
         .configured_submission_batch_window     = 5,
-        .rhi_heartbeat_enabled                  = true,
-        .rhi_heartbeat_stall_timeout_ms         = 7000,
-        .rhi_heartbeat_poll_interval_ms         = 750,
         .raster_rdg_parallel_recording          = true,
         .raytracing_rdg_debug_dump              = true,
     };

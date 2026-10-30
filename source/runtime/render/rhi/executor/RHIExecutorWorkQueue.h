@@ -17,8 +17,6 @@
 
 namespace Moer::Render {
 
-class RHIThreadHeartbeatScope;
-
 enum class ERHIRecordingStatus : uint8_t {
     Pending,
     Succeeded,
@@ -145,14 +143,12 @@ private:
     void Run(std::stop_token _stop_token) noexcept;
     // False means stopped with no queued work; _work is left unchanged.
     bool WaitAndPopWork(
-        RHIExecutorWork&         _work,
-        std::stop_token          _stop_token,
-        RHIThreadHeartbeatScope& _heartbeat
+        RHIExecutorWork& _work,
+        std::stop_token  _stop_token
     );
     static ERHIExecutorWorkAction WaitForPrerequisites(
         std::span<const RHIRecordingGateRef> _prerequisites,
-        std::stop_token                      _stop_token,
-        RHIThreadHeartbeatScope&             _heartbeat
+        std::stop_token                      _stop_token
     );
     void        CancelPendingWork();
     static void InvokeCallbackNoThrow(

@@ -39,9 +39,6 @@ struct DeviceInitInfo {
     std::string_view rhi_api_version;
     uint32_t         submission_batch_window =
         Moer::Render::RHISubmissionPipelinePolicy::DefaultBatchWindow;
-    bool             rhi_heartbeat_enabled               = false;
-    uint32_t         rhi_heartbeat_stall_timeout_ms       = 5000;
-    uint32_t         rhi_heartbeat_poll_interval_ms       = 1000;
 };
 namespace Moer::Render {
 

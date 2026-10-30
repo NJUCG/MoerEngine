@@ -27,12 +27,12 @@
 #include "log/LogSystem.h"
 // #include "misc/MacroUtils.h"
 #include "misc/STL.h"
+#include "profile/ProfileScope.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIMultiview.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "rhi/RHIThreadHeartbeat.h"
 
 #include "Core.h"
 #include "shader/ShaderResourceManager.h"
@@ -1196,6 +1196,7 @@ VulkanOperationResult VulkanDevice::SubmitOnQueue(
     VkFence                       _fence,
     const VulkanOperationContext& _context
 ) {
+    MOER_PROFILE_SCOPE("Vulkan.SubmitOnQueue");
     std::shared_lock<std::shared_mutex> gate(native_queue_gate);
     std::unique_lock<std::mutex>        queue_lock(GetQueueHostMutex(_queue));
     if (IsFaulted()) {
@@ -1206,13 +1207,7 @@ VulkanOperationResult VulkanDevice::SubmitOnQueue(
     }
 
     native_submit_call_count.fetch_add(1, std::memory_order_relaxed);
-    RHIThreadHeartbeat::Get().PulseCurrent(
-        ERHIHeartbeatStage::NativeSubmit
-    );
     const VkResult result = vkQueueSubmit2(_queue, 1, &_submit_info, _fence);
-    RHIThreadHeartbeat::Get().PulseCurrent(
-        ERHIHeartbeatStage::Submit
-    );
     if (result == VK_SUCCESS) {
         return {};
     }
@@ -1232,6 +1227,7 @@ VulkanOperationResult VulkanDevice::PresentOnQueue(
     const VkPresentInfoKHR&       _present_info,
     const VulkanOperationContext& _context
 ) {
+    MOER_PROFILE_SCOPE("Vulkan.PresentOnQueue");
     std::shared_lock<std::shared_mutex> gate(native_queue_gate);
     std::unique_lock<std::mutex>        queue_lock(GetQueueHostMutex(_queue));
     if (IsFaulted()) {
@@ -1242,13 +1238,7 @@ VulkanOperationResult VulkanDevice::PresentOnQueue(
     }
 
     native_present_call_count.fetch_add(1, std::memory_order_relaxed);
-    RHIThreadHeartbeat::Get().PulseCurrent(
-        ERHIHeartbeatStage::Present
-    );
     const VkResult result = vkQueuePresentKHR(_queue, &_present_info);
-    RHIThreadHeartbeat::Get().PulseCurrent(
-        ERHIHeartbeatStage::Submit
-    );
     if (result == VK_SUCCESS) {
         return {};
     }
