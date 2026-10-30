@@ -33,12 +33,17 @@ struct Options {
     bool subranges = false;
     bool lower = false;
     bool record = false;
+    bool lifecycle = false;
 };
 
 Options ParseOptions(int argc, char** argv) {
     Options options;
     for (int index = 1; index < argc; ++index) {
         const std::string_view option = argv[index];
+        if (option == "--lifecycle") {
+            options.lifecycle = true;
+            continue;
+        }
         if (option == "--record") {
             options.record = true;
             continue;
@@ -74,8 +79,8 @@ Options ParseOptions(int argc, char** argv) {
             throw std::runtime_error("unknown option: " + std::string(option));
         }
     }
-    if (options.lower && options.record) {
-        throw std::runtime_error("choose either --lower or --record");
+    if (int(options.lower) + int(options.record) + int(options.lifecycle) > 1) {
+        throw std::runtime_error("choose one of --lower, --record or --lifecycle");
     }
     if (options.passes == 0 || options.resources == 0 || options.accesses == 0 ||
         options.accesses > options.resources || options.samples == 0) {
@@ -125,7 +130,8 @@ struct PhysicalResources {
     }
 };
 
-void BuildGraph(RenderGraph& graph, const Options& options, const PhysicalResources& physical) {
+void BuildGraph(RenderGraph& graph, const Options& options, const PhysicalResources& physical,
+                Moer::uint32* recorded_passes = nullptr) {
     std::vector<RenderGraph::TextureHandle> textures(options.resources);
     std::vector<RenderGraph::BufferHandle> buffers(options.resources);
     for (Moer::uint32 index = 0; index < options.resources; ++index) {
@@ -166,7 +172,11 @@ void BuildGraph(RenderGraph& graph, const Options& options, const PhysicalResour
                 }
             }
         },
-                            [](Moer::Render::CommandList&) {},
+                            [recorded_passes](Moer::Render::CommandList&) {
+                                if (recorded_passes) {
+                                    ++*recorded_passes;
+                                }
+                            },
                             RenderGraph::PassRecordPolicy::ParallelAllowed);
     }
 }
@@ -282,6 +292,53 @@ struct TimingResult {
     double p95_ms;
     Moer::uint64 dump_digest;
 };
+
+void MeasureLifecycle(const Options& options, const PhysicalResources& physical) {
+    using Clock = std::chrono::steady_clock;
+    const auto milliseconds = [](auto duration) {
+        return std::chrono::duration<double, std::milli>(duration).count();
+    };
+    std::vector<double> build_times, execute_times, total_times;
+    build_times.reserve(options.samples);
+    execute_times.reserve(options.samples);
+    total_times.reserve(options.samples);
+    for (Moer::uint64 iteration = 0; iteration < Moer::uint64{options.warmup} + options.samples; ++iteration) {
+        Moer::uint32 recorded_passes = 0;
+        const auto begin = Clock::now();
+        Clock::time_point built, executed;
+        {
+            RenderGraph graph("LifecycleBenchmark");
+            Moer::Render::CommandList commands;
+            commands.SetResourceStateOwnership(Moer::Render::ERHIResourceStateOwnership::Compiled);
+            BuildGraph(graph, options, physical, &recorded_passes);
+            built = Clock::now();
+            if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
+                throw std::runtime_error(graph.GetCompileError());
+            }
+            executed = Clock::now();
+        }
+        const auto end = Clock::now();
+        if (recorded_passes != options.passes) { throw std::runtime_error("not all passes were recorded"); }
+        if (iteration >= options.warmup) {
+            build_times.push_back(milliseconds(built - begin));
+            execute_times.push_back(milliseconds(executed - built));
+            total_times.push_back(milliseconds(end - begin));
+        }
+    }
+    std::sort(build_times.begin(), build_times.end());
+    std::sort(execute_times.begin(), execute_times.end());
+    std::sort(total_times.begin(), total_times.end());
+    std::cout << std::fixed << std::setprecision(6)
+        << "{\"engine\":\"Moer\",\"backend\":\"FakeResources\",\"passes\":" << options.passes
+        << ",\"resources_per_kind\":" << options.resources
+        << ",\"accesses_per_kind_per_pass\":" << options.accesses
+        << ",\"subranges\":" << std::boolalpha << options.subranges
+        << ",\"warmup\":" << options.warmup << ",\"samples\":" << options.samples
+        << ",\"build_p50_ms\":" << build_times[build_times.size() / 2]
+        << ",\"execute_p50_ms\":" << execute_times[execute_times.size() / 2]
+        << ",\"lifecycle_p50_ms\":" << total_times[total_times.size() / 2]
+        << ",\"lifecycle_p95_ms\":" << total_times[total_times.size() * 95 / 100] << "}\n";
+}
 
 bool RunPhase(const Options& options, RenderGraph& graph,
               RenderGraphLowering::LoweredPlan& lowered, Moer::Render::CommandList& commands,
@@ -420,7 +477,8 @@ int main(int argc, char** argv) {
 #endif
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Usage: TestRenderGraphCompilerBenchmark [--passes 64] [--resources 64] "
-                     "[--accesses 16] [--warmup 5] [--samples 80] [--subranges] [--lower | --record]\n"
+                     "[--accesses 16] [--warmup 5] [--samples 80] [--subranges] [--lower | --record | --lifecycle]\n"
+                     "--lifecycle includes build, Compile, compiled serial recording and destruction; no allocation probe.\n"
                      "Outputs JSON. Rebuilds the graph for every Compile; excludes build, Dump and graph destruction. --lower or --record measures Lower or compiled serial recording after untimed Compile.\n"
                      "--subranges selects single mip/layer pairs and 512-byte buffer ranges instead of whole resources.\n"
                      "Timing includes phase scratch destruction and has no allocation hooks.\n"
@@ -432,6 +490,10 @@ int main(int argc, char** argv) {
     try {
         const auto options = ParseOptions(argc, argv);
         const PhysicalResources physical(options.resources);
+        if (options.lifecycle) {
+            MeasureLifecycle(options, physical);
+            return 0;
+        }
         const auto timing = MeasurePhase(options, physical);
         const auto memory = MeasureAllocations(options, physical, timing.dump_digest);
         PrintResult(options, timing, memory);

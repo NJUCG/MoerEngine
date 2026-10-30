@@ -1,0 +1,6 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.7",
+  "DisableEnginePluginsByDefault": true,
+  "Modules": [{ "Name": "RdgCpuBenchmark", "Type": "Editor", "LoadingPhase": "Default" }]
+}

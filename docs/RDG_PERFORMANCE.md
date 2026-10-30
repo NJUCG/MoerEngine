@@ -926,3 +926,31 @@ Lower 已验证输出 Pass 与编译执行顺序一致；merged 路径再核对�
 最终完整 Debug 构建、9 项 RDG/RHI 契约及真实 Vulkan `--parallel` 的 29 个用例全部通过，Vulkan 日志无失败用例或 validation 错误。五次 Raster 均正常退出、无运行/validation 错误，测试编辑器已关闭。两步保留原有依赖、图边界、屏障、队列和资源生命周期规则。
 
 最终构建、契约、Vulkan 日志分别为 `build/rdg-record-prepare-final-build.log`、`rdg-record-prepare-final-contracts.log`、`rdg-record-prepare-final-vulkan.log`。最终配对二进制与 18 个基准 JSON 在 `build/rdg-record-prepare-variants/`，汇总为其中的 `summary.json`，脚本为 `build/run_rdg_record_prepare_benchmark.ps1`。最终 Render DLL SHA-256 为 `221619AFB4B4FF7C2C2D3F1396A44E82E49C4057C03DE17CDE527853EEFA3320`；前置 Lowering 版为 `0A61AC359C498F0004FA8199A9308702E2734C3AD3BD179316F703F8CA740A1C`。Raster 证据位于 `build/rdg-bisect-results/` 的上述目录，逐帧归因为各目录的 `raster-frame-stages.json`。这些本机忽略目录用于复查，本文保留关键条件与结果。
+
+## 16. 以本机 UE RDG 为参照的优化构建对照
+
+### 16.1 计划与比较边界
+
+先建立可复现的 CPU 管理基准，再依据实际差距优化和复测；架构调整仍须另行征得同意。UE 使用本机 5.7.1 Development，Moer 使用独立目录的 MSVC Release，均保持校验可用、关闭采集与图内并行。Moer 当前仅有 Debug LibTorch，独立构建关闭未参与 RDG 基准的 CUDA/NRD 集成，不混用 Debug 第三方 ABI，不更改常用 Debug 配置。
+
+两边使用相同 Pass/资源/访问数量与索引公式，每四个 Pass 写入，其余读取，Whole texture/buffer，资源在计时外创建并导入图，所有 Pass 保留。UE 使用 NullRHI，Moer 使用现有虚拟 CPU 资源。它们覆盖的 RHI 工作并不完全相同，因此该基准用于定位 CPU 管理差距，不能代表 Vulkan/GPU 成本或整体引擎性能。
+
+主指标包含构图、编译、空回调录制和图析构；同时分开报告构图与执行入口。UE 的部分访问处理发生于 AddPass，Compile 之后还有屏障和资源处理，不能只比较名称相同的 Compile。关闭 UE 并行 setup、compile、execute、destruction；每轮检查回调次数等于 Pass 数，避免测到被裁剪的空图。原生 RHI 命令排空位于 UE 单轮计时之后，Moer 命令流析构计入总耗时，这一差别需要在解释结果时保留。
+
+实施顺序：完成两端基准与三种规模的重复测量；测 Moer 优化构建下 Compile/Lower/Record 的占比；根据数据选择不改变状态和所有权语义的热点优化；运行契约、真实 Vulkan 与 Raster 验证；保留全部对照结果，分步提交。
+
+### 16.2 优化构建的基线
+
+基线为 `bbeafde9`，CPU 为 Ryzen 9 9950X（16 核 / 32 线程）。UE 5.7.1 安装版 Development 与 Moer MSVC Release 均运行本轮新增基准。100 次预热、1000 样本，三组矩阵；下表为各组 p50 的中位数。UE 三组在同一命令行进程中执行，Moer 各组各阶段为独立进程；未固定 CPU affinity。UE 启动有禁用 ACL 插件后的默认动画压缩资源警告，基准本身完成、无错误，所有 Pass 计数通过。
+
+| Pass / 每类资源 / 每类访问 | UE 生命周期 ms | Moer 生命周期 ms | Moer / UE | Moer Compile ms | Moer Lower ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 16/16/4 | 0.0390 | 0.1244 | 3.19 | 0.0549 | 0.0238 |
+| 64/64/16 | 0.4354 | 1.0654 | 2.45 | 0.4087 | 0.3311 |
+| 128/128/16 | 0.9046 | 2.1579 | 2.39 | 0.8939 | 0.6674 |
+
+Moer 构图中位数为 0.0225 / 0.1100 / 0.2241 ms，UE 为 0.0160 / 0.1606 / 0.3263 ms。中、大图差距主要在构图之后，而不是公共 API 建图。Moer Record 公共入口（含 Lower）为 0.0328 / 0.4430 / 0.9033 ms；独立样本的中位数不能直接相加或相减当作严格阶段分解。
+
+UE 小图第一轮为 0.0656 ms，后两轮约 0.0390 ms，存在运行状态差异。上表比例只是当前基准的参照，必须连同 16.1 的计时边界差异阅读。它证明优化构建下仍有差距，不能把此前 Debug 下的数毫秒直接解释成 UE 的若干倍。
+
+基准工程、调用脚本与口径说明位于 `tools/rdg_benchmark/`；Moer 新增 `--lifecycle` 模式。原始 JSON、UE 启动日志和 `baseline-summary.json` 位于 `build/rdg-ue-comparison/`。两端均已成功构建、运行；本步骤只新增测量能力，不调整生产 RDG。
