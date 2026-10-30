@@ -37,6 +37,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/rdg_benchmark/run_comp
 The script writes results under `build/rdg-ue-comparison`. Each of three matrix
 rounds measures 16/64/128 passes, the same number of resources of each kind, and
 4/16/16 accesses of each kind per pass. It uses 100 warmups and 1000 samples.
+The script pins both benchmark threads to logical CPU 2 (`-Cpu` overrides it).
+Moer's `--cpu` switch is Windows-only; omitting it leaves affinity unchanged.
 UE's three rounds run in one commandlet process; Moer starts one process per
 case/phase/round. Report the run distribution and median of run medians.
 Do not build or run another editor while sampling. `-SkipUnreal` reruns only Moer.

@@ -2,6 +2,7 @@
 
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Modules/ModuleManager.h"
@@ -25,6 +26,7 @@ struct FOptions
     int32 Accesses = 16;
     int32 Warmup = 20;
     int32 Samples = 200;
+    int32 Cpu = -1;
 };
 
 double Percentile(TArray<double> Values, double Fraction)
@@ -95,8 +97,8 @@ FString Measure(FRHICommandListImmediate& Commands, const FOptions& Options)
         // Drain native command storage outside graph timing. No GPU rendering in NullRHI.
         Commands.ImmediateFlush(EImmediateFlushType::FlushRHIThread);
     }
-    return FString::Printf(TEXT("{\"engine\":\"UE5.7.1\",\"backend\":\"NullRHI\",\"passes\":%d,\"resources_per_kind\":%d,\"accesses_per_kind_per_pass\":%d,\"warmup\":%d,\"samples\":%d,\"build_p50_ms\":%.6f,\"execute_p50_ms\":%.6f,\"lifecycle_p50_ms\":%.6f,\"lifecycle_p95_ms\":%.6f}\n"),
-        Options.Passes, Options.Resources, Options.Accesses, Options.Warmup, Options.Samples,
+    return FString::Printf(TEXT("{\"engine\":\"UE5.7.1\",\"backend\":\"NullRHI\",\"passes\":%d,\"resources_per_kind\":%d,\"accesses_per_kind_per_pass\":%d,\"warmup\":%d,\"samples\":%d,\"cpu\":%d,\"build_p50_ms\":%.6f,\"execute_p50_ms\":%.6f,\"lifecycle_p50_ms\":%.6f,\"lifecycle_p95_ms\":%.6f}\n"),
+        Options.Passes, Options.Resources, Options.Accesses, Options.Warmup, Options.Samples, Options.Cpu,
         Percentile(BuildTimes, .5), Percentile(ExecuteTimes, .5), Percentile(TotalTimes, .5), Percentile(TotalTimes, .95));
 }
 }
@@ -117,10 +119,12 @@ int32 URdgBenchmarkCommandlet::Main(const FString& Params)
     FParse::Value(*Params, TEXT("Accesses="), Options.Accesses);
     FParse::Value(*Params, TEXT("Warmup="), Options.Warmup);
     FParse::Value(*Params, TEXT("Samples="), Options.Samples);
+    FParse::Value(*Params, TEXT("Cpu="), Options.Cpu);
     FString Output;
     FParse::Value(*Params, TEXT("Output="), Output);
     if (Options.Passes <= 0 || Options.Resources <= 0 || Options.Accesses <= 0 ||
-        Options.Accesses > Options.Resources || Options.Warmup < 0 || Options.Samples <= 0 || Output.IsEmpty())
+        Options.Accesses > Options.Resources || Options.Warmup < 0 || Options.Samples <= 0 ||
+        Options.Cpu < -1 || Options.Cpu >= 64 || Output.IsEmpty())
     {
         return 1;
     }
@@ -135,6 +139,7 @@ int32 URdgBenchmarkCommandlet::Main(const FString& Params)
     FString Result;
     ENQUEUE_RENDER_COMMAND(RdgCpuBenchmark)([&](FRHICommandListImmediate& Commands)
     {
+        if (Options.Cpu >= 0) { FPlatformProcess::SetThreadAffinityMask(uint64{1} << Options.Cpu); }
         if (FParse::Param(*Params, TEXT("Matrix")))
         {
             Result = TEXT("[\n");

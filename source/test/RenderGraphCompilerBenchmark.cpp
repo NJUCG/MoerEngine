@@ -15,6 +15,10 @@
 #include <string_view>
 #include <vector>
 
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
+
 #if defined(_MSC_VER) && defined(_DEBUG)
 #include <crtdbg.h>
 #endif
@@ -30,6 +34,7 @@ struct Options {
     uint32_t accesses = 16;
     uint32_t warmup = 5;
     uint32_t samples = 80;
+    uint32_t cpu = UINT32_MAX;
     bool subranges = false;
     bool lower = false;
     bool record = false;
@@ -75,6 +80,8 @@ Options ParseOptions(int argc, char** argv) {
             options.warmup = value;
         } else if (option == "--samples") {
             options.samples = value;
+        } else if (option == "--cpu") {
+            options.cpu = value;
         } else {
             throw std::runtime_error("unknown option: " + std::string(option));
         }
@@ -327,6 +334,7 @@ void MeasureLifecycle(const Options& options, const PhysicalResources& physical)
         << ",\"resources_per_kind\":" << options.resources
         << ",\"accesses_per_kind_per_pass\":" << options.accesses
         << ",\"subranges\":" << std::boolalpha << options.subranges
+        << ",\"cpu\":" << options.cpu
         << ",\"warmup\":" << options.warmup << ",\"samples\":" << options.samples
         << ",\"build_p50_ms\":" << build_times[build_times.size() / 2]
         << ",\"execute_p50_ms\":" << execute_times[execute_times.size() / 2]
@@ -441,6 +449,7 @@ void PrintResult(const Options& options, const TimingResult& timing, const Alloc
         << ",\"textures\":" << options.resources << ",\"buffers\":" << options.resources
         << ",\"accesses_per_kind_per_pass\":" << options.accesses
         << ",\"subranges\":" << options.subranges
+        << ",\"cpu\":" << options.cpu
         << ",\"warmup\":" << options.warmup << ",\"samples\":" << options.samples
         << (options.record ? ",\"record_p50_ms\":" : options.lower ? ",\"lower_p50_ms\":" : ",\"compile_p50_ms\":") << timing.p50_ms
         << (options.record ? ",\"record_p95_ms\":" : options.lower ? ",\"lower_p95_ms\":" : ",\"compile_p95_ms\":") << timing.p95_ms
@@ -469,7 +478,7 @@ int main(int argc, char** argv) {
 #endif
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Usage: TestRenderGraphCompilerBenchmark [--passes 64] [--resources 64] "
-                     "[--accesses 16] [--warmup 5] [--samples 80] [--subranges] [--lower | --record | --lifecycle]\n"
+                     "[--accesses 16] [--warmup 5] [--samples 80] [--cpu logical-index] [--subranges] [--lower | --record | --lifecycle]\n"
                      "--lifecycle includes build, Compile, compiled serial recording and destruction; no allocation probe.\n"
                      "Outputs JSON. Rebuilds the graph for every Compile; excludes build, Dump and graph destruction. --lower or --record measures Lower or compiled serial recording after untimed Compile.\n"
                      "--subranges selects single mip/layer pairs and 512-byte buffer ranges instead of whole resources.\n"
@@ -481,6 +490,16 @@ int main(int argc, char** argv) {
     }
     try {
         const auto options = ParseOptions(argc, argv);
+        if (options.cpu != UINT32_MAX) {
+#if defined(_WIN32)
+            if (options.cpu >= sizeof(DWORD_PTR) * 8 ||
+                !SetThreadAffinityMask(GetCurrentThread(), DWORD_PTR{1} << options.cpu)) {
+                throw std::runtime_error("cannot set benchmark thread affinity");
+            }
+#else
+            throw std::runtime_error("--cpu is currently supported only on Windows");
+#endif
+        }
         const PhysicalResources physical(options.resources);
         if (options.lifecycle) {
             MeasureLifecycle(options, physical);
