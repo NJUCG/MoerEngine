@@ -1,12 +1,14 @@
 #ifndef THREAD_H
 #define THREAD_H
+
 #include "Event.h"
 #include "GraphTask.h"
 #include "ThreadManager.h"
 #include "misc/LockFree.h"
+#include "misc/Types.h"
 #include <iostream>
 
-enum QuitCommand : int32_t {
+enum QuitCommand : Moer::int32 {
     QUIT   = -1,
     RETURN = 0
 };
@@ -55,7 +57,7 @@ public:
     virtual void Tick() {
         ProcessTaskUntilFinished(0); //for single threaded
     }
-    virtual uint32_t Run() override {
+    virtual Moer::uint32 Run() override {
         ProcessTaskUntilQuit(0);
         return 0;
     }
@@ -74,7 +76,7 @@ protected:
     WorkerThread* m_worker;
     EThread::Type m_thread_type;
     // Moer::Array<BaseGraphTask*> m_graph_tasks;
-    std::atomic<uint32_t> m_hanged;
+    std::atomic<Moer::uint32> m_hanged;
 };
 
 class TaskThreadAnyThread : public TaskThreadBase {
@@ -82,7 +84,7 @@ class TaskThreadAnyThread : public TaskThreadBase {
         Event*   m_hang_event;
         bool     m_close;
         bool     m_hang;
-        uint32_t call_amount;
+        Moer::uint32 call_amount;
 
     public:
         AnyThreadTaskQueue() :
@@ -116,8 +118,8 @@ public:
         m_queue.m_close = true;
         m_queue.m_hang_event->Trigger();
     }
-    uint32_t Run() override;
-    uint32_t     ProcessTasks();
+    Moer::uint32 Run() override;
+    Moer::uint32 ProcessTasks();
     virtual bool IsProcessingTask(QueueIndex queueIndex) override {
         return m_queue.call_amount > 0;
     }
@@ -134,7 +136,7 @@ class NamedThread : public TaskThreadBase {
         bool                            m_close;
         bool                            m_should_return;
         bool                            m_hang;
-        uint32_t                        call_amount;
+        Moer::uint32                    call_amount;
 
         explicit NamedTaskQueue() :
             m_hang_event{EventPool::Get()->GetEvent()},
@@ -182,14 +184,14 @@ public:
     virtual void EnqueueFromCurrentThread(QueueIndex queueIndex, BaseGraphTask* task) override {
 
         //todo: get priority from task
-        int32_t thread_to_invoke = m_queue[queueIndex].m_queue.Push(task, queueIndex);
+        Moer::int32 thread_to_invoke = m_queue[queueIndex].m_queue.Push(task, queueIndex);
         assert(thread_to_invoke < 0);
     }
 
     virtual bool EnqueueFromExternThread(QueueIndex queueIndex, BaseGraphTask* task) override {
 
         //todo: get priority from task
-        int32_t thread_to_invoke = m_queue[queueIndex].m_queue.Push(task, queueIndex);
+        Moer::int32 thread_to_invoke = m_queue[queueIndex].m_queue.Push(task, queueIndex);
         if (thread_to_invoke >= 0) {
             m_queue[queueIndex].m_hang_event->Trigger();
             return true;
@@ -197,10 +199,10 @@ public:
 
         return false;
     }
-    virtual uint32_t Run() override {
+    virtual Moer::uint32 Run() override {
         return TaskThreadBase::Run(); //process task until quit
     }
-    uint32_t     ProcessTasks(QueueIndex index, bool allowHang);
+    Moer::uint32 ProcessTasks(QueueIndex index, bool allowHang);
     virtual bool IsProcessingTask(QueueIndex queueIndex) override {
         return m_queue[queueIndex].call_amount > 0;
     }

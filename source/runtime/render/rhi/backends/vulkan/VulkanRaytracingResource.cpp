@@ -1,13 +1,14 @@
 #include "VulkanRaytracingResource.h"
-#include "VulkanRaytracingInstance.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanEnumTranslator.h"
 #include "VulkanMacroUtils.h"
+#include "VulkanRaytracingInstance.h"
 #include "VulkanVertexFormat.h"
 #include "log/LogSystem.h"
-#include "misc/MMemory.h"
 #include "misc/Alignment.h"
+#include "misc/MMemory.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <format>
@@ -21,7 +22,7 @@ static constexpr std::string_view s_tlas_instance_buffer_name   = "VkRaytracing:
 
 static void BuildRaytracingGeometryInfo(
     Array<VkAccelerationStructureGeometryKHR>&       _build_info,
-    Array<uint>&                                     _primitive_counts,
+    Array<uint32>&                                   _primitive_counts,
     Array<VkAccelerationStructureBuildRangeInfoKHR>& _build_ranges,
     const RaytracingGeometryInfo&                    _info
 ) {
@@ -85,7 +86,7 @@ VulkanRaytracingGeometry::VulkanRaytracingGeometry(
     VkAccelerationStructureBuildGeometryInfoKHR build_info{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR
     };
-    Array<uint> primitive_counts;
+    Array<uint32> primitive_counts;
     BuildRaytracingGeometryInfo(build_geometries, primitive_counts, build_ranges, _info);
     build_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
     build_info.flags         = VulkanEnumTranslator::METoVKAccelerationStructureBuildType(_info.build_flags);
@@ -167,12 +168,12 @@ RaytracingInstance& VulkanRaytracingScene::AddInstance() {
     return instance;
 }
 
-void VulkanRaytracingScene::FreeInstance(uint array_index) {
+void VulkanRaytracingScene::FreeInstance(uint32 array_index) {
     VulkanRaytracingDetail::FreeInstance(instances, free_instance_slots, array_index);
     MarkModified(array_index);
 }
 
-void VulkanRaytracingScene::MarkModified(uint _array_idx) {
+void VulkanRaytracingScene::MarkModified(uint32 _array_idx) {
     auto res = modified_instance_indices.emplace(_array_idx);
     if (res.second) {
         pending_instance_indices.emplace_back(_array_idx);
@@ -219,7 +220,7 @@ static VkAccelerationStructureInstanceKHR BuildNativeInstance(const RaytracingIn
 
 UniquePtr<Command> VulkanRaytracingScene::UpdateScene() {
 
-    UnorderedMap<uint64, uint> related_geometries;
+    UnorderedMap<uint64, uint32> related_geometries;
     Array<byte> instance_update_data;
     if (instances.empty()) {
         pending_instance_indices.clear();
@@ -244,7 +245,7 @@ UniquePtr<Command> VulkanRaytracingScene::UpdateScene() {
 
     if (instance_buffer_recreated) {
         pending_instance_indices.clear();
-        for (uint i = 0; i < instances.size(); i++) {
+        for (uint32 i = 0; i < instances.size(); i++) {
             pending_instance_indices.push_back(i);
         }
     }
@@ -313,7 +314,7 @@ RaytracingTlasRef VulkanRaytracingScene::GetPrevTlas() const {
     return RaytracingTlasRef(prev_tlas.Get());
 }
 
-VulkanBufferRef VulkanRaytracingScene::CreateInstanceBuffer(uint capacity) {
+VulkanBufferRef VulkanRaytracingScene::CreateInstanceBuffer(uint32 capacity) {
     // Preserve the existing 256-byte address alignment policy and padding.
     const uint64 byte_size = uint64(capacity) * sizeof(VkAccelerationStructureInstanceKHR) + 256;
     return MoerNew(VulkanBuffer)(
@@ -332,7 +333,7 @@ VulkanBufferRef VulkanRaytracingScene::CreateInstanceBuffer(uint capacity) {
 }
 
 void VulkanRaytracingScene::GrowInstanceBuffer() {
-    const uint capacity = std::max<size_t>(instances.size(), size_t(instance_capacity) * 2);
+    const uint32 capacity = std::max<size_t>(instances.size(), size_t(instance_capacity) * 2);
     instance_buffer = CreateInstanceBuffer(capacity);
     instance_capacity = capacity;
 }
@@ -365,7 +366,7 @@ RaytracingSizeInfos VulkanRaytracingScene::CalculateSizeInfos() {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR
     };
 
-    uint instance_cnt = instances.size();
+    uint32 instance_cnt = instances.size();
     vkGetAccelerationStructureBuildSizesKHR(
         m_device->GetDevice(),
         VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,

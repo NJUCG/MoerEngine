@@ -2,6 +2,7 @@
 
 #include "VulkanDeviceObject.h"
 #include "VulkanFault.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 
 #include <atomic>
@@ -19,27 +20,27 @@ public:
 
     // Last observed GPU value; may lag the semaphore. This watermark alone
     // does not imply that an individual value was accepted (see IsRejected).
-    uint64_t GetValue() const override;
+    uint64 GetValue() const override;
 
     // Non-blocking: cached success, otherwise query Vulkan. Returns SUCCESS,
     // NOT_READY or an error; rejected values never report success.
-    RENDER_API VkResult QueryGpuCompletion(uint64_t value);
+    RENDER_API VkResult QueryGpuCompletion(uint64 value);
 
     // Wait for GPU completion, not the queue's CPU retirement work.
-    RENDER_API bool Wait(uint64_t value) override;
+    RENDER_API bool Wait(uint64 value) override;
 
     // Only after native completion has been established, including an external
     // producer such as CUDA. Does not signal the semaphore or accept a submit.
-    void RecordGpuCompletion(uint64_t value);
+    void RecordGpuCompletion(uint64 value);
 
     // Native-submission acceptance is independent of the GPU progress cache.
-    void MarkSubmitted(uint64_t value) override;
+    void            MarkSubmitted(uint64 value) override;
     RENDER_API bool WaitSubmitted(
-        uint64_t                value,
+        uint64                  value,
         const std::atomic_bool* continue_waiting = nullptr
     ) override;
-    void            Reject(uint64_t value) noexcept override;
-    RENDER_API bool IsRejected(uint64_t value) const override;
+    void            Reject(uint64 value) noexcept override;
+    RENDER_API bool IsRejected(uint64 value) const override;
 
     RENDER_API void Fail(VkResult result);
     RENDER_API bool IsFailed() const;
@@ -48,9 +49,9 @@ public:
     }
 
 private:
-    VkResult GetCachedGpuCompletionStatus(uint64_t value) const;
-    VkResult RefreshGpuCompletedValue(uint64_t target_value);
-    VkResult HandleGpuOperationFailure(VkResult result, uint64_t value, EVulkanFaultOperation operation);
+    VkResult GetCachedGpuCompletionStatus(uint64 value) const;
+    VkResult RefreshGpuCompletedValue(uint64 target_value);
+    VkResult HandleGpuOperationFailure(VkResult result, uint64 value, EVulkanFaultOperation operation);
 
     VkSemaphore             m_timeline{VK_NULL_HANDLE};
     mutable std::mutex      m_state_mutex;

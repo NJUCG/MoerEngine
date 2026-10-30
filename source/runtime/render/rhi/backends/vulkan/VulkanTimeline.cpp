@@ -1,6 +1,7 @@
 #include "VulkanTimeline.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <chrono>
@@ -53,17 +54,17 @@ uint64 VulkanTimeline::GetValue() const {
     return m_cached_gpu_completed_value;
 }
 
-VkResult VulkanTimeline::QueryGpuCompletion(uint64_t value) {
+VkResult VulkanTimeline::QueryGpuCompletion(uint64 value) {
     const VkResult cached_status = GetCachedGpuCompletionStatus(value);
     return cached_status != VK_NOT_READY ? cached_status : RefreshGpuCompletedValue(value);
 }
 
-bool VulkanTimeline::Wait(uint64_t value) {
+bool VulkanTimeline::Wait(uint64 value) {
     VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
     info.semaphoreCount = 1;
     info.pValues        = &value;
     info.pSemaphores    = &m_timeline;
-    constexpr uint64_t k_wait_slice_ns = 50'000'000;
+    constexpr uint64 k_wait_slice_ns = 50'000'000;
     while (true) {
         const VkResult cached_status = GetCachedGpuCompletionStatus(value);
         if (cached_status != VK_NOT_READY) {
@@ -86,12 +87,12 @@ bool VulkanTimeline::Wait(uint64_t value) {
     }
 }
 
-void VulkanTimeline::RecordGpuCompletion(uint64_t value) {
+void VulkanTimeline::RecordGpuCompletion(uint64 value) {
     std::lock_guard lock(m_state_mutex);
     m_cached_gpu_completed_value = std::max(m_cached_gpu_completed_value, value);
 }
 
-void VulkanTimeline::MarkSubmitted(uint64_t value) {
+void VulkanTimeline::MarkSubmitted(uint64 value) {
     {
         std::lock_guard lock(m_state_mutex);
         m_submitted_value = std::max(m_submitted_value, value);
@@ -100,7 +101,7 @@ void VulkanTimeline::MarkSubmitted(uint64_t value) {
 }
 
 bool VulkanTimeline::WaitSubmitted(
-    uint64_t                value,
+    uint64                  value,
     const std::atomic_bool* continue_waiting
 ) {
     std::unique_lock<std::mutex> lock(m_state_mutex);
@@ -113,7 +114,7 @@ bool VulkanTimeline::WaitSubmitted(
            !m_device->IsFaulted();
 }
 
-void VulkanTimeline::Reject(uint64_t value) noexcept {
+void VulkanTimeline::Reject(uint64 value) noexcept {
     {
         std::lock_guard lock(m_state_mutex);
         try {
@@ -129,7 +130,7 @@ void VulkanTimeline::Reject(uint64_t value) noexcept {
     m_submission_cv.notify_all();
 }
 
-bool VulkanTimeline::IsRejected(uint64_t value) const {
+bool VulkanTimeline::IsRejected(uint64 value) const {
     std::lock_guard lock(m_state_mutex);
     return m_rejected_values.contains(value);
 }
@@ -148,7 +149,7 @@ bool VulkanTimeline::IsFailed() const {
     return m_is_failed;
 }
 
-VkResult VulkanTimeline::GetCachedGpuCompletionStatus(uint64_t value) const {
+VkResult VulkanTimeline::GetCachedGpuCompletionStatus(uint64 value) const {
     std::lock_guard lock(m_state_mutex);
     // A later successful signal may pass a rejected value. Check the outcome
     // before using the monotonic GPU watermark, even on the cached fast path.
@@ -164,8 +165,8 @@ VkResult VulkanTimeline::GetCachedGpuCompletionStatus(uint64_t value) const {
     return m_cached_gpu_completed_value >= value ? VK_SUCCESS : VK_NOT_READY;
 }
 
-VkResult VulkanTimeline::RefreshGpuCompletedValue(uint64_t target_value) {
-    uint64_t       completed_value = 0;
+VkResult VulkanTimeline::RefreshGpuCompletedValue(uint64 target_value) {
+    uint64         completed_value = 0;
     const VkResult result = vkGetSemaphoreCounterValue(m_device->GetDevice(), m_timeline, &completed_value);
     if (result != VK_SUCCESS) {
         return HandleGpuOperationFailure(result, target_value, EVulkanFaultOperation::TimelineQuery);
@@ -176,7 +177,9 @@ VkResult VulkanTimeline::RefreshGpuCompletedValue(uint64_t target_value) {
 }
 
 VkResult VulkanTimeline::HandleGpuOperationFailure(
-    VkResult result, uint64_t value, EVulkanFaultOperation operation
+    VkResult              result,
+    uint64                value,
+    EVulkanFaultOperation operation
 ) {
     const VulkanOperationContext fault_context{.operation = operation, .timeline = value};
     m_device->TryLatchFirstFault(fault_context, result);

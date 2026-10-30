@@ -5,6 +5,8 @@
  */
 #pragma once
 
+#include "misc/Types.h"
+
 #if !defined(WITH_CUDA)
 #error "This header requires WITH_CUDA=1"
 #endif
@@ -38,7 +40,7 @@ public:
                 "CUDA error at {}:{} code={}. error name={}. error description={}. \"{}\"",
                 file,
                 line,
-                static_cast<uint>(result),
+                static_cast<uint32>(result),
                 cudaGetErrorName(result),
                 cudaGetErrorString(result),
                 func
@@ -114,9 +116,9 @@ struct CudaTexture {
 
     // non-cuda objects
     TextureRef moer_texture;
-    uint       mip_levels;
-    uint       width;
-    uint       height;
+    uint32     mip_levels;
+    uint32     width;
+    uint32     height;
 
     // 如果是cudaChannelFormatKindFloat，则必须使用float读取
     // 如果是cudaChannelFormatKindUnsigned，则必须使用uchar读取
@@ -213,7 +215,7 @@ struct CudaTexture {
                 ));
             }
             { // surface
-                for (uint mipLevelIdx = 0; mipLevelIdx < mip_levels; mipLevelIdx++) {
+                for (uint32 mipLevelIdx = 0; mipLevelIdx < mip_levels; mipLevelIdx++) {
                     cudaArray_t      cudaMipLevelArray;
                     cudaResourceDesc resourceDesc;
 

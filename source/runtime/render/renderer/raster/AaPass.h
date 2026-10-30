@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "math/Function.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraphUpload.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
@@ -318,10 +319,10 @@ public:
         //       有更好的方案的话，直接修改下面这段代码即可
         auto GetSamplerIdx = [&](const Sampler& sampler) {
             // method 1
-            uint filter  = uint(sampler.filter);
-            uint address = uint(sampler.address_mode);
-            uint compare = uint(sampler.compare_function);
-            return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
+            uint32 filter  = uint32(sampler.filter);
+            uint32 address = uint32(sampler.address_mode);
+            uint32 compare = uint32(sampler.compare_function);
+            return (uint32(SF_Num) * uint32(SAM_Num)) * compare + (uint32(SF_Num)) * address + filter;
             // method 2
             // uint bdls_tex_handle = context.bdls->AllocateTexture(antialiasing_output, sampler);
             // uint sampler_idx     = bdls_tex_handle & 0xff;

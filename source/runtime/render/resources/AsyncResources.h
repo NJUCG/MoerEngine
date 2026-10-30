@@ -3,6 +3,7 @@
 
 #include "PixelFormat.h"
 #include "math/Base.h"
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 
@@ -11,18 +12,18 @@ struct VirtualViewportInfo {
     std::string    name;
     Moer::Vector2i extent;
     EPixelFormat   format;
-    uint32_t       back_buffer_count = 2;
+    uint32         back_buffer_count = 2;
 };
 
 struct VirtualViewportCreateInfo {
     std::string    name;
     Moer::Vector2i extent;
     EPixelFormat   format;
-    uint32_t       back_buffer_count = 2;
+    uint32         back_buffer_count = 2;
 };
 
 struct VirtualViewportBackBufferInfo {
-    uint32_t  back_buffer_index;
+    uint32    back_buffer_index;
     RHIFence* backbuffer_ready_fence;
     RHIUAVRef backbuffer_uav;
 };

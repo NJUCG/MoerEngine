@@ -1,4 +1,5 @@
 #include "Core.h"
+#include "misc/Types.h"
 #include "taskgraph/ThreadManager.h"
 
 namespace Moer {
@@ -17,11 +18,11 @@ bool IsGameThreadInitialized() {
 bool IsRenderThreadInitialized() {
     return GetRenderThreadId() != 0;
 }
-uint32_t GetRenderThreadId() {
+uint32 GetRenderThreadId() {
     return ThreadManager::GetRenderThreadID();
 }
 
-uint32_t GetGameThreadId() {
+uint32 GetGameThreadId() {
     return ThreadManager::GetGameThreadID();
 }
 } // namespace Moer

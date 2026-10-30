@@ -1,8 +1,10 @@
 // 负责调用 DXC 编译 Shader，并从 DXIL/SPIR-V 结果中提取资源绑定信息。
+
 #include "DirectXShaderCompiler.h"
 #include "config/ConfigManager.h"
 #include "misc/Hash.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "spirv.hpp"
@@ -63,13 +65,13 @@ MetalShaderSource TranslateToMetal(
     IDxcResult* result, EShaderType shader_type, bool vertex_for_tessellation
 ) {
     ComPtr<IDxcBlob> spirv;
-    if (FAILED(result->GetResult(&spirv)) || !spirv || spirv->GetBufferSize() % sizeof(uint32_t) != 0) {
+    if (FAILED(result->GetResult(&spirv)) || !spirv || spirv->GetBufferSize() % sizeof(Moer::uint32) != 0) {
         throw std::runtime_error("DXC did not produce valid SPIR-V for Metal translation");
     }
 
     spirv_cross::CompilerMSL compiler(
-        static_cast<const uint32_t*>(spirv->GetBufferPointer()),
-        spirv->GetBufferSize() / sizeof(uint32_t)
+        static_cast<const Moer::uint32*>(spirv->GetBufferPointer()),
+        spirv->GetBufferSize() / sizeof(Moer::uint32)
     );
     auto options = compiler.get_msl_options();
     // The shared bindless texture binding aliases typed HLSL texture arrays.
@@ -93,7 +95,7 @@ MetalShaderSource TranslateToMetal(
         for (const auto& resource : resource_list) {
             const auto& type = compiler.get_type(resource.type_id);
             if (std::find(type.array.begin(), type.array.end(), 0) != type.array.end()) {
-                const uint32_t set = compiler.get_decoration(resource.id, spv::DecorationDescriptorSet);
+                const Moer::uint32 set = compiler.get_decoration(resource.id, spv::DecorationDescriptorSet);
                 compiler.set_argument_buffer_device_address_space(set, true);
             }
         }
@@ -423,11 +425,11 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         HRESULT hres = compiler->Compile(
             &buffer,
             (LPCWSTR*)arguments_wchar.data(),
-            (uint32_t)arguments_wchar.size(),
+            (Moer::uint32)arguments_wchar.size(),
             tracking_handler,
             IID_PPV_ARGS(&result)
         );
-        uint64_t result_hash[2] = {0, 0};
+        Moer::uint64 result_hash[2] = {0, 0};
 
         if (SUCCEEDED(hres)) {
             result->GetStatus(&hres);
@@ -440,8 +442,8 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
                 // 某些 DXC 版本不返回 HASH 输出，此时对二进制两半分别计算稳定哈希。
                 IDxcBlob* code;
                 result->GetResult(&code);
-                const uint8_t*   data = (uint8_t*)code->GetBufferPointer();
-                uint32_t         size = code->GetBufferSize();
+                const Moer::uint8* data = (Moer::uint8*)code->GetBufferPointer();
+                Moer::uint32       size = code->GetBufferSize();
                 std::string_view data_view((const char*)data, size / 2);
 
                 result_hash[0] = GetHash(data_view);
@@ -483,8 +485,8 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
              tracking_handler]() {
                 IDxcBlob* code;
                 result->GetResult(&code);
-                const uint8_t* data = (uint8_t*)code->GetBufferPointer();
-                uint32_t       size = code->GetBufferSize();
+                const Moer::uint8* data = (Moer::uint8*)code->GetBufferPointer();
+                Moer::uint32       size = code->GetBufferSize();
                 _output.shader_code.resize(size);
                 std::copy(data, data + size, _output.shader_code.begin());
 
@@ -598,8 +600,8 @@ bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
 void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParametersInfoMap& _param_map) {
     IDxcBlob* code;
     _result->GetResult(&code);
-    const uint8_t* data = (uint8_t*)code->GetBufferPointer();
-    uint32_t       size = code->GetBufferSize();
+    const Moer::uint8* data = (Moer::uint8*)code->GetBufferPointer();
+    Moer::uint32       size = code->GetBufferSize();
 
     ShaderReflectInfo reflect_info;
 
@@ -624,9 +626,9 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
     Moer::UnorderedMap<std::string, ReflectParamInfo> reflect_map;
 
     {
-        std::span<Moer::uint> spirv_code_span((Moer::uint*)data, size / sizeof(Moer::uint));
+        std::span<Moer::uint32>      spirv_code_span((Moer::uint32*)data, size / sizeof(Moer::uint32));
         spirv_cross::Compiler        comp(spirv_code_span.data(), spirv_code_span.size());
-        const auto                   stage_bits = uint(ToPipelineStageFlag(comp.get_execution_model()));
+        const auto                   stage_bits = uint32(ToPipelineStageFlag(comp.get_execution_model()));
         if (comp.get_execution_model() == spv::ExecutionModelGLCompute) {
             _param_map.compute_local_size = uint3{
                 comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, 0),
@@ -710,7 +712,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                     SetZeroIfEmpty(bdls_param.acceleration_structure);
                     target = &bdls_param.acceleration_structure.value();
                 } else {
-                    LOG_INFO("unknown bindless type {}", uint(_desc_type));
+                    LOG_INFO("unknown bindless type {}", uint32(_desc_type));
                     assert(false && "unknown bindless type");
                 }
                 target->set           = set;
@@ -795,8 +797,8 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
         for (auto& resource : resources.push_constant_buffers) {
             GET_RESOURCE_DEFAULT_INFOS(resource);
             const auto record_constant = [&](const std::string& argument_name,
-                                             uint               offset,
-                                             uint               size,
+                                             uint32             offset,
+                                             uint32             size,
                                              bool               active) {
                 ReflectParamInfo::Constant constant{};
                 constant.size = constant.padded_size = size;
@@ -832,16 +834,15 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
             };
             if (name == ReflectParamInfo::constants_name) {
                 const auto ranges = comp.get_active_buffer_ranges(resource.id);
-                for (uint member = 0; member < type.member_types.size(); ++member) {
+                for (uint32 member = 0; member < type.member_types.size(); ++member) {
                     const auto member_name = comp.get_member_name(type.self, member);
                     const bool active = is_active && std::any_of(ranges.begin(), ranges.end(),
                         [member](const auto& range) { return range.index == member; });
-                    record_constant(member_name, comp.type_struct_member_offset(type, member),
-                                    static_cast<uint>(comp.get_declared_struct_member_size(type, member)), active);
+                    record_constant(member_name, comp.type_struct_member_offset(type, member), static_cast<uint32>(comp.get_declared_struct_member_size(type, member)), active);
                 }
             } else {
                 // Legacy single-argument shaders keep their block name and start at byte zero.
-                record_constant(name, 0, static_cast<uint>(comp.get_declared_struct_size(type)), is_active);
+                record_constant(name, 0, static_cast<uint32>(comp.get_declared_struct_size(type)), is_active);
             }
         }
 
@@ -871,7 +872,7 @@ void DXCompiler::Impl::ReflectDXIL(
     const ShaderCompilerInput& _input,
     ShaderParametersInfoMap&   _param_map
 ) {
-    using Moer::uint;
+    using Moer::uint32;
 
     // DXC 将反射数据作为独立输出返回，不能直接复用编译后的 Shader Blob。
     ComPtr<IDxcBlob> reflectionBlob{};
@@ -911,7 +912,7 @@ void DXCompiler::Impl::ReflectDXIL(
         switch (shaderInputBindDesc.Type) {
             case D3D_SIT_CBUFFER: {
                 // 当前统一按 ConstantBuffer 反射；如需 RootConstant，应在参数模型层单独设计。
-                param_info.type = uint(ED3D12ShaderVariableType::ConstantBuffer);
+                param_info.type = Moer::uint32(ED3D12ShaderVariableType::ConstantBuffer);
                 auto* cb        = shaderReflection->GetConstantBufferByName(shaderInputBindDesc.Name);
                 assert(cb);
                 D3D12_SHADER_BUFFER_DESC desc{};
@@ -934,40 +935,40 @@ void DXCompiler::Impl::ReflectDXIL(
                 const auto dim = shaderInputBindDesc.Dimension;
                 switch (dim) {
                     case D3D_SRV_DIMENSION_BUFFER:
-                        param_info.type = uint(ED3D12ShaderVariableType::TypedBuffer);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::TypedBuffer);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE1D:
-                        param_info.type = uint(ED3D12ShaderVariableType::Texture1D);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::Texture1D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE1DARRAY:
-                        param_info.type = uint(ED3D12ShaderVariableType::Texture1DArray);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::Texture1DArray);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2D:
-                        param_info.type = uint(ED3D12ShaderVariableType::Texture2D);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::Texture2D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DARRAY:
-                        param_info.type = uint(ED3D12ShaderVariableType::Texture2DArray);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::Texture2DArray);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DMS:
-                        param_info.type = uint(ED3D12ShaderVariableType::Texture2DMS);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::Texture2DMS);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DMSARRAY:
-                        param_info.type = uint(ED3D12ShaderVariableType::Texture2DMSArray);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::Texture2DMSArray);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE3D:
-                        param_info.type = uint(ED3D12ShaderVariableType::Texture3D);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::Texture3D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURECUBE:
-                        param_info.type = uint(ED3D12ShaderVariableType::TextureCube);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::TextureCube);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURECUBEARRAY:
-                        param_info.type = uint(ED3D12ShaderVariableType::TextureCubeArray);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::TextureCubeArray);
                         break;
                     default:
                         LOG_WARNING(
                             "unsupported shader varibale '{}' dimension: '{}' in shader '{}'",
                             shaderInputBindDesc.Name,
-                            uint(shaderInputBindDesc.Type),
+                            Moer::uint32(shaderInputBindDesc.Type),
                             _input.shader_name
                         );
                         assert(false && "unsupported type");
@@ -975,35 +976,35 @@ void DXCompiler::Impl::ReflectDXIL(
                 }
             } break;
             case D3D_SIT_SAMPLER:
-                param_info.type = uint(ED3D12ShaderVariableType::Sampler);
+                param_info.type = Moer::uint32(ED3D12ShaderVariableType::Sampler);
                 break;
             case D3D_SIT_UAV_RWTYPED: {
                 // Shader Model 6.7 才引入可写多重采样纹理；当前枚举仅覆盖现有编译目标使用的类型。
                 const auto dim = shaderInputBindDesc.Dimension;
                 switch (dim) {
                     case D3D_SRV_DIMENSION_BUFFER:
-                        param_info.type = uint(ED3D12ShaderVariableType::RWTypedBuffer);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::RWTypedBuffer);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE1D:
-                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture1D);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::RWTexture1D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE1DARRAY:
-                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture1DArray);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::RWTexture1DArray);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2D:
-                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture2D);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::RWTexture2D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DARRAY:
-                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture2DArray);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::RWTexture2DArray);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE3D:
-                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture3D);
+                        param_info.type = Moer::uint32(ED3D12ShaderVariableType::RWTexture3D);
                         break;
                     default:
                         LOG_WARNING(
                             "unsupported shader varibale '{}' rw dimension: '{}' in shader '{}'",
                             shaderInputBindDesc.Name,
-                            uint(shaderInputBindDesc.Type),
+                            Moer::uint32(shaderInputBindDesc.Type),
                             _input.shader_name
                         );
                         assert(false && "unsupported type");
@@ -1012,19 +1013,19 @@ void DXCompiler::Impl::ReflectDXIL(
             } break;
             case D3D_SIT_STRUCTURED:
                 param_info.type =
-                    uint(ED3D12ShaderVariableType::StructuredBuffer); // todo 32_tstruct size/stride)?
+                    Moer::uint32(ED3D12ShaderVariableType::StructuredBuffer); // todo 32_tstruct size/stride)?
                 break;
             case D3D_SIT_UAV_RWSTRUCTURED:
-                param_info.type = uint(ED3D12ShaderVariableType::RWStructuredBuffer);
+                param_info.type = Moer::uint32(ED3D12ShaderVariableType::RWStructuredBuffer);
                 break;
             case D3D_SIT_BYTEADDRESS:
-                param_info.type = uint(ED3D12ShaderVariableType::ByteAddressBuffer);
+                param_info.type = Moer::uint32(ED3D12ShaderVariableType::ByteAddressBuffer);
                 break;
             case D3D_SIT_UAV_RWBYTEADDRESS:
-                param_info.type = uint(ED3D12ShaderVariableType::RWByteAddressBuffer);
+                param_info.type = Moer::uint32(ED3D12ShaderVariableType::RWByteAddressBuffer);
                 break;
             case D3D_SIT_RTACCELERATIONSTRUCTURE:
-                param_info.type = uint(ED3D12ShaderVariableType::RaytracingAccelerationStructure);
+                param_info.type = Moer::uint32(ED3D12ShaderVariableType::RaytracingAccelerationStructure);
                 break;
             case D3D_SIT_UAV_APPEND_STRUCTURED:
             case D3D_SIT_UAV_CONSUME_STRUCTURED:
@@ -1034,7 +1035,7 @@ void DXCompiler::Impl::ReflectDXIL(
                 LOG_WARNING(
                     "unsupported shader varibale '{}' type: '{}' in shader '{}'",
                     shaderInputBindDesc.Name,
-                    uint(shaderInputBindDesc.Type),
+                    Moer::uint32(shaderInputBindDesc.Type),
                     _input.shader_name
                 );
                 assert(false && "unsupported type");

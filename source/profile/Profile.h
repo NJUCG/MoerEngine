@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/Types.h"
+
 #if WITH_PROFILE
 #include "ProfileTypes.h"
 
@@ -14,14 +16,14 @@ extern PROFILE_API std::mutex g_history_mtx;
 extern PROFILE_API PassHistory g_pass_history[];
 extern PROFILE_API int         g_pass_history_count;
 extern PROFILE_API std::mutex  g_pass_history_mtx;
-extern uint64_t current_frame;
+extern Moer::uint64            current_frame;
 
 extern moodycamel::ConcurrentQueue<EventRecord>* g_rings[];
-extern std::atomic<uint64_t> g_global_sequence;
+extern std::atomic<Moer::uint64>                 g_global_sequence;
 
 extern std::unordered_map<void*,    LiveAllocInfo> g_live_allocs_editor;
 extern std::unordered_map<void*,    LiveAllocInfo> g_live_allocs_vulkan;
-extern std::unordered_map<uint64_t, size_t>        g_live_allocs_vktmp;
+extern std::unordered_map<Moer::uint64, size_t>    g_live_allocs_vktmp;
 // extern std::unordered_map<StackKey, HotspotInfo, StackKeyHash> g_hotspots;
 // extern std::mutex g_hotspots_mtx;
 
@@ -54,7 +56,7 @@ struct RecordComparator {
 };
 
 extern std::priority_queue<EventRecord, std::vector<EventRecord>, RecordComparator> g_reorder_buffer;
-extern uint64_t g_expected_sequence;
+extern Moer::uint64                                                                 g_expected_sequence;
 extern const size_t MAX_REORDER_WINDOW;
 //void DumpLeaks();
 #endif

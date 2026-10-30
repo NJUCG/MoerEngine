@@ -9,10 +9,10 @@
 #include "misc/MMemory.h"
 #include "rhi/RHICommon.h"
 
+#include "misc/Types.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cassert>
-#include <cstdint>
 #include <exception>
 #include <string>
 #include <utility>
@@ -268,8 +268,8 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             observe_setup_result(native_result);
             LOG_ERROR(
                 "Window surface creation failed: window_system={}, native_result={}.",
-                static_cast<uint32_t>(native_window.window_system),
-                static_cast<int32_t>(native_result)
+                static_cast<uint32>(native_window.window_system),
+                static_cast<int32>(native_result)
             );
             if (ShouldLatchSwapchainFailure(
                     effective_force_surface_recreate,
@@ -307,8 +307,8 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         observe_setup_result(support_query.native_result);
         LOG_ERROR(
             "Swapchain surface query failed: status={}, native_result={}, present_queue_family={}.",
-            static_cast<uint32_t>(support_query.status),
-            static_cast<int32_t>(support_query.native_result),
+            static_cast<uint32>(support_query.status),
+            static_cast<int32>(support_query.native_result),
             queue_families.present.value()
         );
         if (ShouldLatchSwapchainFailure(
@@ -338,15 +338,15 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     VkPresentModeKHR   present_mode           = ChooseSwapPresentMode(details.present_modes, false);
     const EPixelFormat new_format             = VulkanEnumTranslator::VKToMEFormat(new_fmt.format);
     if (new_format == PF_UNDEFINED && new_fmt.format != VK_FORMAT_UNDEFINED) {
-        LOG_ERROR("Swapchain selected an unmapped Vulkan format: {}", static_cast<uint32_t>(new_fmt.format));
+        LOG_ERROR("Swapchain selected an unmapped Vulkan format: {}", static_cast<uint32>(new_fmt.format));
         return false;
     }
-    const uint32_t     queue_family_indices[] = {
+    const uint32 queue_family_indices[] = {
         queue_families.graphics.value(),
         queue_families.present.value(),
     };
     const bool use_concurrent_sharing = queue_family_indices[0] != queue_family_indices[1];
-    uint32_t   image_count            = details.capabilities.minImageCount + 1;
+    uint32     image_count            = details.capabilities.minImageCount + 1;
     if (details.capabilities.maxImageCount > 0 && image_count > details.capabilities.maxImageCount) {
         image_count = details.capabilities.maxImageCount;
     }
@@ -436,10 +436,10 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    uint32_t       image_cnt = 0;
+    uint32         image_cnt = 0;
     Array<VkImage> images;
     bool           images_ready = false;
-    for (uint attempt = 0; attempt < 4; ++attempt) {
+    for (uint32 attempt = 0; attempt < 4; ++attempt) {
         result = vkGetSwapchainImagesKHR(device.GetDevice(), new_sc, &image_cnt, nullptr);
         if (!check_device_result(result, EVulkanFaultOperation::SwapchainGetImages)) {
             abort_transaction();
@@ -454,7 +454,7 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         }
 
         images.assign(image_cnt, VK_NULL_HANDLE);
-        uint32_t fetched_image_cnt = image_cnt;
+        uint32 fetched_image_cnt = image_cnt;
         result = vkGetSwapchainImagesKHR(
             device.GetDevice(), new_sc, &fetched_image_cnt, images.data()
         );
@@ -488,7 +488,7 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
 
     new_swapchain_images.resize(image_cnt);
     VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    for (uint i = 0; i < image_cnt; i++) {
+    for (uint32 i = 0; i < image_cnt; i++) {
         result = vkCreateSemaphore(
             device.GetDevice(),
             &semaphore_info,
@@ -509,7 +509,7 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         );
     }
 
-    for (uint i = 0; i < image_cnt; i++) {
+    for (uint32 i = 0; i < image_cnt; i++) {
         new_swapchain_images[i].texture = MoerNew(VulkanTexture)(
             TextureInfo{
                 ETextureDimension::TEX_2D,
@@ -576,15 +576,15 @@ void VkSwapchain::DestroyImages(Array<SwapchainImage>& _images) {
     _images.clear();
 }
 
-VkSemaphore VkSwapchain::GetRenderFinishedSemaphore(uint _image_index) const {
+VkSemaphore VkSwapchain::GetRenderFinishedSemaphore(uint32 _image_index) const {
     return swapchain_images[_image_index % swapchain_images.size()].render_finished_semaphore;
 }
-TextureView VkSwapchain::GetSwapchainImage(uint _index) const {
+TextureView VkSwapchain::GetSwapchainImage(uint32 _index) const {
     return swapchain_images[_index % swapchain_images.size()].view;
 }
 VkSwapchain::AcquireResult VkSwapchain::AcquireNextImage(VkSemaphore _ready_semaphore, uint64 _timeout) {
     assert(_ready_semaphore != VK_NULL_HANDLE);
-    uint32_t                    image_index = UINT32_MAX;
+    uint32                      image_index = UINT32_MAX;
     const VulkanOperationResult outcome     = device.AcquireNextImage(
         handle,
         _timeout,
@@ -605,7 +605,7 @@ VkSwapchain::AcquireResult VkSwapchain::AcquireNextImage(VkSemaphore _ready_sema
 }
 
 VkSwapchain::PresentResult
-VkSwapchain::Present(VkQueue _queue, uint _index, uint64 _timeline, uint64 _work_serial) {
+VkSwapchain::Present(VkQueue _queue, uint32 _index, uint64 _timeline, uint64 _work_serial) {
     PresentResult present_result{};
     if (_index == UINT32_MAX) {
         present_result.outcome = {

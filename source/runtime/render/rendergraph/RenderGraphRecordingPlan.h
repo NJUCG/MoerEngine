@@ -1,5 +1,6 @@
 #pragma once
 
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "taskgraph/TaskGraph.h"
 
@@ -10,13 +11,13 @@
 namespace Moer::Render::Detail {
 
 struct RecordingRange {
-    uint32_t first_unit = 0;
-    uint32_t unit_count = 0;
+    uint32 first_unit = 0;
+    uint32 unit_count = 0;
 };
 
 struct RecordingDispatch {
-    uint32_t first_unit = 0;
-    uint32_t unit_count = 0;
+    uint32   first_unit = 0;
+    uint32   unit_count = 0;
     bool     parallel = false;
 };
 
@@ -47,23 +48,23 @@ inline std::vector<RecordingDispatch> BuildRecordingDispatches(
 // Eight units is an initial granularity policy, not a correctness constraint.
 inline std::vector<RecordingRange> PartitionRecordingRange(
     std::span<const RenderGraph::CompiledFrontendRecordUnit> units,
-    RecordingDispatch dispatch,
-    uint32_t worker_count,
-    std::span<const uint8_t> split_before = {}
+    RecordingDispatch                                        dispatch,
+    uint32                                                   worker_count,
+    std::span<const uint8>                                   split_before = {}
 ) {
     std::vector<RecordingRange> ranges;
     if (dispatch.unit_count == 0) { return ranges; }
-    const uint32_t end = dispatch.first_unit + dispatch.unit_count;
-    uint64_t total_work = 0;
-    for (uint32_t index = dispatch.first_unit; index < end; ++index) {
+    const uint32 end        = dispatch.first_unit + dispatch.unit_count;
+    uint64       total_work = 0;
+    for (uint32 index = dispatch.first_unit; index < end; ++index) {
         total_work += units[index].recording_workload;
     }
-    const uint64_t workers = std::max(1u, worker_count);
-    const uint64_t target_work = std::max(uint64_t{8}, (total_work + workers - 1) / workers);
+    const uint64 workers     = std::max(1u, worker_count);
+    const uint64 target_work = std::max(uint64{8}, (total_work + workers - 1) / workers);
 
-    uint32_t first = dispatch.first_unit;
-    uint64_t work = 0;
-    for (uint32_t index = first; index < end; ++index) {
+    uint32 first = dispatch.first_unit;
+    uint64 work  = 0;
+    for (uint32 index = first; index < end; ++index) {
         if (index != first) {
             const auto& previous = units[index - 1];
             const auto& current = units[index];

@@ -1,4 +1,5 @@
 #include "rhi/backends/vulkan/VulkanTranslateWaveScheduler.h"
+#include "misc/Types.h"
 #include "taskgraph/TaskGraph.h"
 
 #include <array>
@@ -18,9 +19,9 @@ static_assert(noexcept(std::declval<BaseGraphTask&>().PrerequestsComplete(EThrea
 
 namespace {
 
-constexpr uint64_t BatchSequence = 71;
+constexpr Moer::uint64 BatchSequence = 71;
 
-[[nodiscard]] constexpr SubmissionKey Key(uint32_t _index) noexcept {
+[[nodiscard]] constexpr SubmissionKey Key(Moer::uint32 _index) noexcept {
     return SubmissionKey{BatchSequence, _index};
 }
 

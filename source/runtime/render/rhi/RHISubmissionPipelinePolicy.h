@@ -2,20 +2,20 @@
 
 #include "rhi/RHICommon.h"
 
+#include "misc/Types.h"
 #include <atomic>
 #include <cassert>
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 
 namespace Moer::Render::RHISubmissionPipelinePolicy {
 
-inline constexpr uint32_t DefaultBatchWindow = 2;
-inline constexpr uint32_t MinBatchWindow     = 1;
-inline constexpr uint32_t MaxBatchWindow     = 8;
+inline constexpr uint32 DefaultBatchWindow = 2;
+inline constexpr uint32 MinBatchWindow     = 1;
+inline constexpr uint32 MaxBatchWindow     = 8;
 
-[[nodiscard]] constexpr uint32_t ClampBatchWindow(
-    uint32_t _configured
+[[nodiscard]] constexpr uint32 ClampBatchWindow(
+    uint32 _configured
 ) noexcept {
     return _configured < MinBatchWindow ? MinBatchWindow :
            _configured > MaxBatchWindow ? MaxBatchWindow :
@@ -54,8 +54,8 @@ inline constexpr uint32_t MaxBatchWindow     = 8;
            compute_copy_alias;
 }
 
-[[nodiscard]] constexpr uint32_t ResolveEffectiveBatchWindow(
-    uint32_t                _configured,
+[[nodiscard]] constexpr uint32 ResolveEffectiveBatchWindow(
+    uint32                  _configured,
     const RHIQueueTopology& _topology
 ) noexcept {
     return HasAvailableNativeLaneAlias(_topology) ?

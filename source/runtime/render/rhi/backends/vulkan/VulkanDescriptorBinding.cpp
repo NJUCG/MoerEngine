@@ -4,6 +4,7 @@
 #include "VulkanEnumTranslator.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPipeline.h"
+#include "misc/Types.h"
 #include "shader/ShaderPipeline.h"
 
 #include <algorithm>
@@ -53,7 +54,7 @@ Array<VkWriteDescriptorSet> ResolveWrites(Array<DescriptorWrite>& records) {
 }
 
 template<class View, class Fn>
-void ForDescriptorViews(const TArg& argument, uint count, Fn&& fn) {
+void ForDescriptorViews(const TArg& argument, uint32 count, Fn&& fn) {
     if (count == 1) {
         fn(std::get<View>(argument), 0);
         return;
@@ -61,7 +62,7 @@ void ForDescriptorViews(const TArg& argument, uint count, Fn&& fn) {
     const auto& views = std::get<Array<View>>(argument);
     if (views.empty() || views.size() > count)
         throw std::invalid_argument("Invalid descriptor array length");
-    for (uint i = 0; i < count; ++i)
+    for (uint32 i = 0; i < count; ++i)
         fn(views[std::min<size_t>(i, views.size() - 1)], i);
 }
 } // namespace
@@ -84,7 +85,7 @@ VkDescriptorSet VulkanCommandList::AllocateDescriptorSet(
     VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     allocate.descriptorSetCount = 1;
     allocate.pSetLayouts        = &layout;
-    UnorderedMap<VkDescriptorType, uint> counts;
+    UnorderedMap<VkDescriptorType, uint32> counts;
     for (const auto& binding : bindings)
         if (binding.descriptor_count)
             counts[binding.descriptor_type] += binding.descriptor_count;
@@ -125,7 +126,7 @@ VkDescriptorSet VulkanCommandList::AllocateDescriptorSet(
         sizes.push_back({type, std::max(64u, count * 64)});
     VkDescriptorPoolCreateInfo create{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     create.maxSets       = 64;
-    create.poolSizeCount = static_cast<uint>(sizes.size());
+    create.poolSizeCount = static_cast<uint32>(sizes.size());
     create.pPoolSizes    = sizes.data();
     VkDescriptorPool pool;
     VK_CHECK_RESULT(vkCreateDescriptorPool(device, &create, nullptr, &pool));
@@ -199,7 +200,7 @@ void VulkanCommandList::BindPipelineDescriptorSets(
                 !(pipeline.GetActiveArgumentBits() & (uint64(1) << binding.argument_index)))
                 continue;
             const auto& argument = arguments[binding.argument_index];
-            auto        add      = [&](uint element) -> DescriptorWrite& {
+            auto        add      = [&](uint32 element) -> DescriptorWrite& {
                 auto& record                 = records.emplace_back();
                 record.write.dstBinding      = binding.binding_index;
                 record.write.dstArrayElement = element;
@@ -215,7 +216,7 @@ void VulkanCommandList::BindPipelineDescriptorSets(
                     ForDescriptorViews<BufferView>(
                         argument,
                         binding.descriptor_count,
-                        [&](const BufferView& view, uint element) {
+                        [&](const BufferView& view, uint32 element) {
                             auto& record  = add(element);
                             record.buffer = {
                                 ResourceCast(view.GetBuffer())->GetHandle(),
@@ -252,7 +253,7 @@ void VulkanCommandList::BindPipelineDescriptorSets(
                     ForDescriptorViews<TextureView>(
                         argument,
                         binding.descriptor_count,
-                        [&](const TextureView& view, uint element) {
+                        [&](const TextureView& view, uint32 element) {
                             auto& record           = add(element);
                             record.image.imageView = ResourceCast(view.GetTexture())
                                                          ->GetView(
@@ -294,7 +295,7 @@ void VulkanCommandList::BindPipelineDescriptorSets(
                 pipeline.GetPipelineBindPoint(),
                 pipeline.GetPipelineLayout(),
                 set_index,
-                static_cast<uint>(writes.size()),
+                static_cast<uint32>(writes.size()),
                 writes.data()
             );
         } else {
@@ -303,7 +304,7 @@ void VulkanCommandList::BindPipelineDescriptorSets(
             for (auto& write : writes)
                 write.dstSet = native_set;
             vkUpdateDescriptorSets(
-                device.GetDevice(), static_cast<uint>(writes.size()), writes.data(), 0, nullptr
+                device.GetDevice(), static_cast<uint32>(writes.size()), writes.data(), 0, nullptr
             );
             vkCmdBindDescriptorSets(
                 command_buffer,
@@ -328,13 +329,13 @@ void VulkanCommandList::BindHeapDescriptors(
     auto&       heap    = device.GetGlobalDescriptorHeap();
     const auto& binding = *pipeline.binding_template;
     Array<byte> push(binding.heap_push_size, byte{});
-    const auto  store = [&](uint offset, const auto& value) {
+    const auto  store = [&](uint32 offset, const auto& value) {
         if (offset + sizeof(value) > push.size())
             throw std::out_of_range("Heap push data overflow");
         memcpy(push.data() + offset, &value, sizeof(value));
     };
     const auto& constants = binding.push_constants_info;
-    if (arguments.constants.size() * sizeof(uint) < constants.size)
+    if (arguments.constants.size() * sizeof(uint32) < constants.size)
         throw std::invalid_argument("Push data source is too small");
     if (constants.size)
         memcpy(push.data() + constants.offset, arguments.constants.data(), constants.size);
@@ -350,7 +351,7 @@ void VulkanCommandList::BindHeapDescriptors(
     }
     for (const auto& [set_index, set] : binding.set_bindings) {
         if (const auto* resources = std::get_if<VulkanResourceSetBindings>(&set.resource_bindings)) {
-            store(set.heap_push_offset, static_cast<uint>(allocation_offset + set.byte_offset));
+            store(set.heap_push_offset, static_cast<uint32>(allocation_offset + set.byte_offset));
             for (const auto& resource : resources->bindings) {
                 if (resource.heap_push_offset == UINT32_MAX || resource.argument_index >= 64 ||
                     !(pipeline.GetActiveArgumentBits() & (uint64(1) << resource.argument_index)))
@@ -375,11 +376,11 @@ void VulkanCommandList::BindHeapDescriptors(
                         if (!array)
                             throw std::invalid_argument("Null bindless array");
                         auto*      native = static_cast<VulkanBindlessArray*>(array.Get());
-                        const uint base   = Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ?
-                                                static_cast<uint>(native->buffer_descriptors_byte_offset) :
-                                            Type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ?
-                                                static_cast<uint>(native->texture_offset_in_buffer) :
-                                                0;
+                        const uint32 base   = Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ?
+                                                  static_cast<uint32>(native->buffer_descriptors_byte_offset) :
+                                              Type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ?
+                                                  static_cast<uint32>(native->texture_offset_in_buffer) :
+                                                  0;
                         store(set.heap_push_offset, base);
                     }
                 },

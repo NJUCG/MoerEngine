@@ -3,8 +3,8 @@
 #include "RenderAPI.h"
 #include "command/EngineCommandProcessor.h"
 
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -16,9 +16,9 @@ struct EditorConfig;
 struct EngineConsoleStartupConfig {
     bool          render_thread                          = false;
     bool          profile_logging                        = false;
-    std::uint32_t configured_submission_batch_window     = 2;
-    std::uint32_t max_frame_lag                          = 0;
-    std::uint32_t max_frames_in_flight                   = 0;
+    uint32        configured_submission_batch_window     = 2;
+    uint32        max_frame_lag                          = 0;
+    uint32        max_frames_in_flight                   = 0;
 
     bool raster_rdg_debug_dump             = false;
     bool raster_rdg_parallel_recording     = false;
@@ -41,7 +41,7 @@ public:
 
     [[nodiscard]] Command::ESubmitStatus SubmitText(std::string_view text);
     [[nodiscard]] Command::CommandOutputBatch
-    PollOutput(std::uint64_t next_sequence = 1, std::size_t max_count = 256) const;
+    PollOutput(uint64 next_sequence = 1, std::size_t max_count = 256) const;
     [[nodiscard]] std::vector<Command::CommandCandidate>
                        GetCandidates(std::string_view input, std::size_t max_count = 64) const;
     [[nodiscard]] bool IsAccepting() const noexcept;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "misc/Types.h"
 #include "rhi/RHI.h"
 #include "rhi/executor/RHIExecutorBackend.h"
 #include "window/WindowFrameSnapshot.h"
@@ -14,8 +15,8 @@ struct PresentationSurfaceSnapshot {
     WindowSurfaceIdentity surface_identity{};
     Extent2D              source_drawable_extent{};
     Extent2D              drawable_extent{};
-    uint64_t              capture_sequence    = 0;
-    uint64_t              drawable_generation = 0;
+    uint64                capture_sequence    = 0;
+    uint64                drawable_generation = 0;
 
     [[nodiscard]] bool IsValid() const noexcept {
         return surface_identity.IsValid() && drawable_extent.x != 0 && drawable_extent.y != 0 &&
@@ -23,7 +24,7 @@ struct PresentationSurfaceSnapshot {
     }
 };
 
-enum class EPresentationSurfacePlan : uint8_t {
+enum class EPresentationSurfacePlan : uint8 {
     Invalid,
     MetadataOnly,
     Reuse,
@@ -92,14 +93,14 @@ struct PresentationSurfaceFrameBufferDesc {
 };
 
 struct PresentationSurfaceDesc {
-    uint                                              back_buffer_count{2};
+    uint32                                            back_buffer_count{2};
     EPixelFormat                                      preferred_format{PF_R8G8B8A8_SRGB};
     std::string                                       debug_name{"PresentationSurface"};
     std::optional<PresentationSurfaceFrameBufferDesc> frame_buffer{};
     PresentFeedbackMailboxRef                         feedback_mailbox{};
 };
 
-enum class EPresentationSurfaceEnsureResult : uint8_t {
+enum class EPresentationSurfaceEnsureResult : uint8 {
     Invalid,
     MetadataOnly,
     Current,

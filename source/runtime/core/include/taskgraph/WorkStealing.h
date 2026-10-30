@@ -3,11 +3,11 @@
 
 #include "taskgraph/ThreadManager.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cassert>
-#include <cstdint>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -24,15 +24,15 @@ namespace Moer::TaskGraphDetail {
  * ranges explicit also removes the old 32-bit waiter-bitmap indexing limit.
  */
 struct WorkerPoolTopology {
-    int32_t named_thread_count  = 0;
-    int32_t worker_thread_count = 0;
-    std::array<int32_t, EThread::PriorityCount> starts{};
-    std::array<int32_t, EThread::PriorityCount> counts{};
+    int32                                     named_thread_count  = 0;
+    int32                                     worker_thread_count = 0;
+    std::array<int32, EThread::PriorityCount> starts{};
+    std::array<int32, EThread::PriorityCount> counts{};
 
-    [[nodiscard]] int32_t PriorityForThread(int32_t thread_index) const noexcept {
-        for (int32_t priority = 0; priority < EThread::PriorityCount; ++priority) {
-            const int32_t begin = starts[priority];
-            const int32_t end   = begin + counts[priority];
+    [[nodiscard]] int32 PriorityForThread(int32 thread_index) const noexcept {
+        for (int32 priority = 0; priority < EThread::PriorityCount; ++priority) {
+            const int32 begin = starts[priority];
+            const int32 end   = begin + counts[priority];
             if (thread_index >= begin && thread_index < end) {
                 return priority;
             }
@@ -40,15 +40,15 @@ struct WorkerPoolTopology {
         return -1;
     }
 
-    [[nodiscard]] int32_t LocalIndex(int32_t thread_index, int32_t priority) const noexcept {
+    [[nodiscard]] int32 LocalIndex(int32 thread_index, int32 priority) const noexcept {
         if (priority < 0 || priority >= EThread::PriorityCount) {
             return -1;
         }
-        const int32_t local_index = thread_index - starts[priority];
+        const int32 local_index = thread_index - starts[priority];
         return local_index >= 0 && local_index < counts[priority] ? local_index : -1;
     }
 
-    [[nodiscard]] int32_t ThreadIndex(int32_t priority, int32_t local_index) const noexcept {
+    [[nodiscard]] int32 ThreadIndex(int32 priority, int32 local_index) const noexcept {
         if (priority < 0 || priority >= EThread::PriorityCount || local_index < 0 ||
             local_index >= counts[priority]) {
             return -1;
@@ -58,8 +58,8 @@ struct WorkerPoolTopology {
 };
 
 inline WorkerPoolTopology BuildWorkerPoolTopology(
-    int32_t named_thread_count,
-    int32_t worker_thread_count
+    int32 named_thread_count,
+    int32 worker_thread_count
 ) noexcept {
     if (named_thread_count < 0 || worker_thread_count < EThread::PriorityCount ||
         named_thread_count + worker_thread_count > EThread::UNKNOWN_THREAD) {
@@ -70,10 +70,10 @@ inline WorkerPoolTopology BuildWorkerPoolTopology(
     topology.named_thread_count  = named_thread_count;
     topology.worker_thread_count = worker_thread_count;
 
-    const int32_t workers_per_pool = worker_thread_count / EThread::PriorityCount;
-    const int32_t remainder        = worker_thread_count % EThread::PriorityCount;
-    int32_t       next_start       = named_thread_count;
-    for (int32_t priority = 0; priority < EThread::PriorityCount; ++priority) {
+    const int32 workers_per_pool = worker_thread_count / EThread::PriorityCount;
+    const int32 remainder        = worker_thread_count % EThread::PriorityCount;
+    int32       next_start       = named_thread_count;
+    for (int32 priority = 0; priority < EThread::PriorityCount; ++priority) {
         topology.starts[priority] = next_start;
         topology.counts[priority] = workers_per_pool + (priority < remainder ? 1 : 0);
         next_start += topology.counts[priority];
@@ -97,34 +97,34 @@ class ChaseLevDeque {
     static_assert(std::is_object_v<T>);
 
     struct Buffer {
-        explicit Buffer(int64_t initial_capacity) : capacity(initial_capacity) {
+        explicit Buffer(int64 initial_capacity) : capacity(initial_capacity) {
             assert(initial_capacity >= 2);
             assert((initial_capacity & (initial_capacity - 1)) == 0);
             slots = std::make_unique<std::atomic<T*>[]>(static_cast<size_t>(capacity));
-            for (int64_t index = 0; index < capacity; ++index) {
+            for (int64 index = 0; index < capacity; ++index) {
                 slots[index].store(nullptr, std::memory_order_relaxed);
             }
         }
 
-        [[nodiscard]] T* Load(int64_t index) const noexcept {
+        [[nodiscard]] T* Load(int64 index) const noexcept {
             return slots[static_cast<size_t>(index & (capacity - 1))].load(
                 std::memory_order_relaxed
             );
         }
 
-        void Store(int64_t index, T* value) noexcept {
+        void Store(int64 index, T* value) noexcept {
             slots[static_cast<size_t>(index & (capacity - 1))].store(
                 value,
                 std::memory_order_relaxed
             );
         }
 
-        int64_t                            capacity = 0;
+        int64                              capacity = 0;
         std::unique_ptr<std::atomic<T*>[]> slots{};
     };
 
 public:
-    explicit ChaseLevDeque(int64_t initial_capacity = 32) : m_top(0), m_bottom(0) {
+    explicit ChaseLevDeque(int64 initial_capacity = 32) : m_top(0), m_bottom(0) {
         assert(initial_capacity >= 2);
         assert((initial_capacity & (initial_capacity - 1)) == 0);
         Buffer* initial = AllocateBuffer(initial_capacity);
@@ -139,8 +139,8 @@ public:
     void PushBottom(T* value) noexcept {
         assert(value != nullptr);
 
-        const int64_t bottom = m_bottom.load(std::memory_order_relaxed);
-        const int64_t top    = m_top.load(std::memory_order_acquire);
+        const int64   bottom = m_bottom.load(std::memory_order_relaxed);
+        const int64   top    = m_top.load(std::memory_order_acquire);
         Buffer*       buffer = m_buffer.load(std::memory_order_relaxed);
         if (bottom - top >= buffer->capacity - 1) {
             Grow(top, bottom, buffer);
@@ -153,12 +153,12 @@ public:
     }
 
     [[nodiscard]] T* PopBottom() noexcept {
-        int64_t bottom = m_bottom.load(std::memory_order_relaxed) - 1;
+        int64   bottom = m_bottom.load(std::memory_order_relaxed) - 1;
         Buffer* buffer = m_buffer.load(std::memory_order_relaxed);
         m_bottom.store(bottom, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_seq_cst);
 
-        int64_t top = m_top.load(std::memory_order_relaxed);
+        int64 top = m_top.load(std::memory_order_relaxed);
         if (top <= bottom) {
             T* value = buffer->Load(bottom);
             if (top == bottom) {
@@ -180,9 +180,9 @@ public:
     }
 
     [[nodiscard]] T* StealTop() noexcept {
-        int64_t top = m_top.load(std::memory_order_acquire);
+        int64 top = m_top.load(std::memory_order_acquire);
         std::atomic_thread_fence(std::memory_order_seq_cst);
-        const int64_t bottom = m_bottom.load(std::memory_order_acquire);
+        const int64 bottom = m_bottom.load(std::memory_order_acquire);
         if (top >= bottom) {
             return nullptr;
         }
@@ -200,35 +200,35 @@ public:
         return nullptr;
     }
 
-    [[nodiscard]] int64_t ApproximateSize() const noexcept {
-        const int64_t bottom = m_bottom.load(std::memory_order_acquire);
-        const int64_t top    = m_top.load(std::memory_order_acquire);
-        return std::max<int64_t>(0, bottom - top);
+    [[nodiscard]] int64 ApproximateSize() const noexcept {
+        const int64 bottom = m_bottom.load(std::memory_order_acquire);
+        const int64 top    = m_top.load(std::memory_order_acquire);
+        return std::max<int64>(0, bottom - top);
     }
 
 private:
-    Buffer* AllocateBuffer(int64_t capacity) {
+    Buffer* AllocateBuffer(int64 capacity) {
         auto buffer = std::make_unique<Buffer>(capacity);
         Buffer* raw = buffer.get();
         m_buffers.emplace_back(std::move(buffer));
         return raw;
     }
 
-    void Grow(int64_t top, int64_t bottom, Buffer* current) noexcept {
+    void Grow(int64 top, int64 bottom, Buffer* current) noexcept {
         assert(current == m_buffer.load(std::memory_order_relaxed));
-        if (current->capacity > std::numeric_limits<int64_t>::max() / 2) {
+        if (current->capacity > std::numeric_limits<int64>::max() / 2) {
             std::terminate();
         }
 
         Buffer* expanded = AllocateBuffer(current->capacity * 2);
-        for (int64_t index = top; index < bottom; ++index) {
+        for (int64 index = top; index < bottom; ++index) {
             expanded->Store(index, current->Load(index));
         }
         m_buffer.store(expanded, std::memory_order_release);
     }
 
-    alignas(64) std::atomic<int64_t> m_top;
-    alignas(64) std::atomic<int64_t> m_bottom;
+    alignas(64) std::atomic<int64> m_top;
+    alignas(64) std::atomic<int64> m_bottom;
     alignas(64) std::atomic<Buffer*> m_buffer{nullptr};
 
     // Owner-only metadata. Thieves only dereference published Buffer objects.

@@ -1,17 +1,17 @@
 #include "remote/RemoteEventHub.h"
-
+#include "misc/Types.h"
 #include <utility>
 
 namespace Moer::remote {
 
-uint64_t RemoteEventHub::Subscribe(RemoteEventCallback callback) {
+uint64 RemoteEventHub::Subscribe(RemoteEventCallback callback) {
     std::lock_guard lock(m_mutex);
-    const uint64_t  subscription_id = m_next_subscription_id++;
+    const uint64    subscription_id = m_next_subscription_id++;
     m_callbacks.emplace(subscription_id, std::move(callback));
     return subscription_id;
 }
 
-void RemoteEventHub::Unsubscribe(uint64_t subscription_id) {
+void RemoteEventHub::Unsubscribe(uint64 subscription_id) {
     std::lock_guard lock(m_mutex);
     m_callbacks.erase(subscription_id);
 }

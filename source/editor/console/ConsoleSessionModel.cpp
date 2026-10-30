@@ -1,6 +1,6 @@
 #include "console/ConsoleSessionModel.h"
-
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <limits>
@@ -164,7 +164,7 @@ ConsoleSessionPumpResult ConsoleSessionModel::Pump(std::size_t max_log_lines, st
 
     struct LogVisitorContext {
         struct Entry {
-            std::uint64_t        sequence = 0;
+            uint64               sequence = 0;
             EConsoleSessionLevel level    = EConsoleSessionLevel::Info;
             std::string          text;
         };
@@ -279,7 +279,7 @@ ConsoleSessionModel::GetCandidates(std::string_view input, std::size_t max_count
 void ConsoleSessionModel::Append(
     EConsoleSessionSource source,
     EConsoleSessionLevel  level,
-    std::uint64_t         source_sequence,
+    uint64                source_sequence,
     std::string           text
 ) {
     const std::size_t effective_entry_limit =

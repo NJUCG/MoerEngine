@@ -1,15 +1,16 @@
 #include "Core.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "misc/RAII.h"
+#include "misc/Types.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/executor/RHIExecutor.h"
-#include "rhi/backends/vulkan/VulkanDescriptorMode.h"
 #include "rhi/backends/vulkan/VulkanDescriptor.h"
+#include "rhi/backends/vulkan/VulkanDescriptorMode.h"
 #include "rhi/backends/vulkan/VulkanDevice.h"
 #include "rhi/backends/vulkan/VulkanPipeline.h"
 #include "rhi/backends/vulkan/VulkanTimeline.h"
-#include "misc/RAII.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 
@@ -28,8 +29,8 @@ public:
     DEFINE_COMPUTE_PIPELINE_CLASS(DescriptorBoundTest);
     DEFINE_SHADER_BUFFER(parameters);
     DEFINE_SHADER_BUFFER(result);
-    DEFINE_SHADER_CONSTANT(uint, index);
-    DEFINE_SHADER_CONSTANT(uint, iteration);
+    DEFINE_SHADER_CONSTANT(uint32, index);
+    DEFINE_SHADER_CONSTANT(uint32, iteration);
     DEFINE_SHADER_TEX(depth_source);
     DEFINE_SHADER_ARGS(parameters, result, depth_source, index, iteration);
 };
@@ -41,8 +42,8 @@ public:
     DEFINE_SHADER_BUFFER(typed_source);
     DEFINE_SHADER_TEX(depth_source);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT(uint, index);
-    DEFINE_SHADER_CONSTANT(uint, iteration);
+    DEFINE_SHADER_CONSTANT(uint32, index);
+    DEFINE_SHADER_CONSTANT(uint32, iteration);
     DEFINE_SHADER_ARGS(parameters, result, typed_source, depth_source, bdls, index, iteration);
 };
 class DescriptorArrayTest : public ComputePipeline {
@@ -50,8 +51,8 @@ public:
     DEFINE_COMPUTE_PIPELINE_CLASS(DescriptorArrayTest);
     DEFINE_SHADER_BUFFER_ARRAY(sources, 40);
     DEFINE_SHADER_BUFFER(result);
-    DEFINE_SHADER_CONSTANT(uint, index);
-    DEFINE_SHADER_CONSTANT(uint, iteration);
+    DEFINE_SHADER_CONSTANT(uint32, index);
+    DEFINE_SHADER_CONSTANT(uint32, iteration);
     DEFINE_SHADER_ARGS(sources, result, index, iteration);
 };
 struct DescriptorPadding {
@@ -65,8 +66,8 @@ public:
     DEFINE_SHADER_BUFFER(typed_source);
     DEFINE_SHADER_TEX(depth_source);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT(uint, index);
-    DEFINE_SHADER_CONSTANT(uint, iteration);
+    DEFINE_SHADER_CONSTANT(uint32, index);
+    DEFINE_SHADER_CONSTANT(uint32, iteration);
     DEFINE_SHADER_CONSTANT(DescriptorPadding, padding);
     DEFINE_SHADER_ARGS(parameters, result, typed_source, depth_source, bdls, index, iteration, padding);
 };
@@ -100,7 +101,7 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         native_bindless->GetDescriptorMode() != native_device.GetDescriptorMode())
         throw std::runtime_error("Eligible ordinary and bindless pipelines must use the device backend");
     const auto find_push_set = [](const VulkanPipelineState& pipeline) {
-        std::optional<uint> pushed_set;
+        std::optional<uint32> pushed_set;
         for (const auto& [set, binding] : pipeline.binding_template->set_bindings) {
             if (!binding.push)
                 continue;
@@ -122,7 +123,7 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         (native_uniform_push->GetDescriptorMode() == VulkanDescriptorMode::Sets ||
          (native_uniform_push->GetDescriptorMode() == VulkanDescriptorMode::Buffer && caps.buffer_push));
     const auto uniform_push_set = find_push_set(*native_uniform_push);
-    if (uniform_push_set != (expect_uniform_push ? std::optional<uint>{5} : std::nullopt))
+    if (uniform_push_set != (expect_uniform_push ? std::optional<uint32>{5} : std::nullopt))
         throw std::runtime_error("A pure UB set with binding gaps must use push descriptors when supported");
     if (large_constants && native_device.GetDescriptorMode() == VulkanDescriptorMode::Heap &&
         native_device.GetDescriptorCapabilities().max_push_data < 272 &&
@@ -131,10 +132,10 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         throw std::runtime_error("Heap push-data overflow did not fall back to native descriptor sets");
     constexpr auto usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC |
                            EBufferUsageFlags::TRANSFER_DST;
-    auto input = device.CreateBuffer<uint>("descriptor_input", 1, usage | EBufferUsageFlags::TEXTURE_BUFFER);
+    auto input = device.CreateBuffer<uint32>("descriptor_input", 1, usage | EBufferUsageFlags::TEXTURE_BUFFER);
     auto uniform =
         device.CreateBuffer<uint4>("descriptor_uniform", 1, usage | EBufferUsageFlags::CONSTANT_BUFFER);
-    auto output  = device.CreateBuffer<uint>("descriptor_output", 192, usage);
+    auto output  = device.CreateBuffer<uint32>("descriptor_output", 192, usage);
     auto texture = device.CreateTexture(
         "descriptor_texture",
         Extent3D(1, 1, 1),
@@ -147,15 +148,15 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
     );
     const float depth_value = 0.25f;
     auto        table       = device.CreateBindlessArray();
-    const uint  input_index = table->AllocateBuffer(input->GetView());
-    const uint  texture_index =
+    const uint32 input_index = table->AllocateBuffer(input->GetView());
+    const uint32 texture_index =
         table->AllocateTexture(texture->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
     if (texture_index != input_index + 1)
         throw std::runtime_error("Unexpected fresh bindless slot order");
     Array<BufferView> input_views{input->GetView(PF_R32_UINT)
     }; // The RHI pads the rest of the declared array.
-    const uint        input_value = 23;
-    const uint        texel       = 0xffffffffu;
+    const uint32      input_value = 23;
+    const uint32      texel       = 0xffffffffu;
     const uint4       params{100, 0, 0, 0};
     const auto undefined = BarrierState::Texture(ERHIPipelineStageFlags::PS_NONE,
         ERHIAccessFlags::UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
@@ -193,12 +194,12 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         auto release = OnScopeExit([&] { heap.RecycleDescriptorBufferLease(std::move(occupied)); });
         while (heap.ReserveDescriptorRange(occupied, 64 * 1024)) {}
         // Also consume any sub-page holes left by atom-granular reservations.
-        const std::vector<std::vector<uint64_t>> atom{{heap.GetStorageAlignment()}};
+        const std::vector<std::vector<uint64>> atom{{heap.GetStorageAlignment()}};
         while (heap.PrepareDescriptorRecordings(occupied, atom)) {}
-        std::atomic<uint> completed{0}, succeeded{0};
+        std::atomic<uint32> completed{0}, succeeded{0};
         auto done = device.CreateFence();
         CommandList rejected;
-        const uint poison = 999;
+        const uint32        poison = 999;
         rejected.Barriers({BarrierCreateInfo::Transition(input->GetView(), shader_read, transfer_write)});
         rejected.CopyFrom(Bytes(poison), input->GetView());
         rejected.Barriers({BarrierCreateInfo::Transition(input->GetView(), transfer_write, shader_read)});
@@ -223,13 +224,13 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
     const auto        start = std::chrono::steady_clock::now();
     DescriptorPadding padding{};
     padding.values[13].x = 7;
-    std::array<std::array<uint, 192>, 8> readbacks{};
-    for (uint batch = 0; batch < 8; ++batch) {
+    std::array<std::array<uint32, 192>, 8> readbacks{};
+    for (uint32 batch = 0; batch < 8; ++batch) {
         auto&       readback = readbacks[batch];
         CommandList commands;
         commands.Barriers({BarrierCreateInfo::Transition(output->GetView(), transfer_read, shader_write)});
-        for (uint i = 0; i < readback.size(); ++i) {
-            const uint iteration = batch * uint(readback.size()) + i;
+        for (uint32 i = 0; i < readback.size(); ++i) {
+            const uint32 iteration = batch * uint32(readback.size()) + i;
             if (large_constants && i % 4 == 3)
                 commands
                     .Compute(
@@ -272,15 +273,15 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         if (batch % 4 == 3)
             RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     }
-    for (uint batch = 0; batch < readbacks.size(); ++batch) {
+    for (uint32 batch = 0; batch < readbacks.size(); ++batch) {
         const auto& readback = readbacks[batch];
-        for (uint i = 0; i < readback.size(); ++i) {
-            const uint expected = batch * uint(readback.size()) + i +
-                                  (large_constants && i % 4 == 3 ? 409 :
-                                   i % 5 == 4                    ? 402 :
-                                   i % 3 == 0                    ? 101 :
-                                   i % 3 == 1                    ? 402 :
-                                                                   23);
+        for (uint32 i = 0; i < readback.size(); ++i) {
+            const uint32 expected = batch * uint32(readback.size()) + i +
+                                    (large_constants && i % 4 == 3 ? 409 :
+                                     i % 5 == 4                    ? 402 :
+                                     i % 3 == 0                    ? 101 :
+                                     i % 3 == 1                    ? 402 :
+                                                                     23);
             if (readback[i] != expected)
                 throw std::runtime_error(
                     "Descriptor readback mismatch at " + std::to_string(i) + ": " +

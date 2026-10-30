@@ -16,6 +16,7 @@
 #include "VulkanRaytracingResource.h"
 #include "VulkanSwapChain.h"
 #include "VulkanTimeline.h"
+#include "misc/Types.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
 #endif
@@ -174,7 +175,7 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     const auto instance_extensions = [&]() {
         Set<std::string> extensions;
 
-        uint32_t prop_count = 0;
+        uint32 prop_count = 0;
         VK_CHECK_RESULT(vkEnumerateInstanceExtensionProperties(nullptr, &prop_count, nullptr));
         Array<VkExtensionProperties> extension_props;
         if (prop_count > 0) {
@@ -465,7 +466,7 @@ void VulkanDevice::LogGpuEnvironment(uint32 _requested_api_version) const {
     constexpr char hex_digits[] = "0123456789abcdef";
     std::string    device_uuid;
     device_uuid.reserve(VK_UUID_SIZE * 2);
-    for (const uint8_t byte : m_device_info.core_properties.core_1_1.deviceUUID) {
+    for (const uint8 byte : m_device_info.core_properties.core_1_1.deviceUUID) {
         device_uuid.push_back(hex_digits[byte >> 4]);
         device_uuid.push_back(hex_digits[byte & 0x0f]);
     }
@@ -497,15 +498,15 @@ void VulkanDevice::LogGpuEnvironment(uint32 _requested_api_version) const {
 }
 
 void VulkanDevice::CreateDevice() {
-    const uint32_t graphics_family =
+    const uint32 graphics_family =
         m_device_info.queue_family_indices.graphics.value();
-    const uint32_t compute_family =
+    const uint32 compute_family =
         m_device_info.queue_family_indices.compute.value();
     const bool can_split_same_family_compute =
         compute_family == graphics_family &&
         compute_family < m_device_info.queue_family_props.size() &&
         m_device_info.queue_family_props[compute_family].queueCount >= 2;
-    const uint32_t compute_queue_index =
+    const uint32 compute_queue_index =
         can_split_same_family_compute ? 1u : 0u;
 
     std::set<uint32> unique_family_indices = {
@@ -652,7 +653,7 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
     std::vector<VkExternalMemoryHandleTypeFlagsKHR> handleTypes(
         m_device_info.memory_properties.memoryTypeCount
     );
-    for (uint i = 0; i < handleTypes.size(); i++) {
+    for (uint32 i = 0; i < handleTypes.size(); i++) {
         if ((m_device_info.memory_properties.memoryTypes[i].propertyFlags &
              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) > 0) {
             // 只针对gpu内存，设置winn32标记位
@@ -701,14 +702,14 @@ void VulkanDevice::CreateDescriptorHeap() {
     const auto& ext   = GetOptionalExtensions();
     const auto& props = GetOptionalProperties();
     descriptor_caps   = {
-          .heap   = ext.m_has_ext_descriptor_heap,
-          .buffer = ext.m_has_ext_descriptor_buffer,
-          .push =
+        .heap   = ext.m_has_ext_descriptor_heap,
+        .buffer = ext.m_has_ext_descriptor_buffer,
+        .push =
             HasDeviceExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) && !ReadPushDescriptorDisableOverride(),
-          .buffer_push =
+        .buffer_push =
             ext.m_has_descriptor_buffer_push && props.descriptor_buffer_properties.bufferlessPushDescriptors,
-          .max_push_descriptors = props.push_descriptor_properties.maxPushDescriptors,
-          .max_push_data        = static_cast<uint32_t>(props.descriptor_heap_properties.maxPushDataSize),
+        .max_push_descriptors = props.push_descriptor_properties.maxPushDescriptors,
+        .max_push_data        = static_cast<uint32>(props.descriptor_heap_properties.maxPushDataSize),
     };
     if (descriptor_caps.heap) {
         auto& fn           = descriptor_heap_functions;
@@ -770,10 +771,10 @@ void VulkanDevice::CreateImmutableSamplers() {
     sampler_create_info.mipLodBias              = 0.0f;
     sampler_create_info.minLod                  = 0.0f;
     sampler_create_info.maxLod                  = VK_LOD_CLAMP_NONE;
-    for (uint i = 0; i < immutable_sampler_count; ++i) {
+    for (uint32 i = 0; i < immutable_sampler_count; ++i) {
         ESamplerFilter          filter           = ESamplerFilter(i % SF_Num);
         ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);
-        ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * uint(SF_Num)));
+        ESamplerCompareFunction compare_function = ESamplerCompareFunction(i / (SAM_Num * uint32(SF_Num)));
 
         sampler_create_info.minFilter = sampler_create_info.magFilter =
             VulkanEnumTranslator::METoVKMinMagFilterMode(filter);
@@ -853,7 +854,7 @@ void VulkanDevice::Destroy() {
 }
 
 Set<std::string> VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu, const char* _layer_name) {
-    uint32_t gpu_extension_count = 0;
+    uint32   gpu_extension_count = 0;
     VkResult result = vkEnumerateDeviceExtensionProperties(_gpu, _layer_name, &gpu_extension_count, nullptr);
     if (result != VK_SUCCESS || gpu_extension_count == 0) {
         return {};
@@ -874,7 +875,7 @@ Set<std::string> VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu, const cha
 }
 
 TQueueFamilyPropertiesArray VulkanDevice::GetQueueFamilyProperties(VkPhysicalDevice _gpu) {
-    uint32_t queue_family_count = 0;
+    uint32 queue_family_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(_gpu, &queue_family_count, nullptr);
     assert(queue_family_count > 0);
     TQueueFamilyPropertiesArray queue_family_props(queue_family_count);
@@ -883,22 +884,22 @@ TQueueFamilyPropertiesArray VulkanDevice::GetQueueFamilyProperties(VkPhysicalDev
     return queue_family_props;
 }
 
-static int32_t FindQueueFamilyIndex(
+static int32 FindQueueFamilyIndex(
     std::span<const VkQueueFamilyProperties> _queue_family_props,
     VkQueueFlags                             _required_queue_flags,
     VkQueueFlags                             _exclude_queue_flags
 ) {
-    for (uint32_t i = 0; i < _queue_family_props.size(); ++i) {
+    for (uint32 i = 0; i < _queue_family_props.size(); ++i) {
         const VkQueueFlags flags = _queue_family_props[i].queueFlags;
         if ((flags & _required_queue_flags) == _required_queue_flags &&
             (flags & _exclude_queue_flags) == 0) {
-            return static_cast<int32_t>(i);
+            return static_cast<int32>(i);
         }
     }
     return -1;
 }
 
-uint VulkanDevice::GetQueueFamilyIndex(EQueueType _type) const {
+uint32 VulkanDevice::GetQueueFamilyIndex(EQueueType _type) const {
     switch (_type) {
 
         case EQueueType::Graphics:
@@ -918,10 +919,10 @@ uint VulkanDevice::GetQueueFamilyIndex(EQueueType _type) const {
     return VK_QUEUE_FAMILY_IGNORED;
 }
 
-uint32_t VulkanDevice::GetTimestampValidBits(
+uint32 VulkanDevice::GetTimestampValidBits(
     EQueueType _queue_type
 ) const {
-    const uint32_t family_index = GetQueueFamilyIndex(_queue_type);
+    const uint32 family_index = GetQueueFamilyIndex(_queue_type);
     return family_index < m_device_info.queue_family_props.size() ?
                m_device_info.queue_family_props[family_index].
                    timestampValidBits :
@@ -931,7 +932,7 @@ uint32_t VulkanDevice::GetTimestampValidBits(
 VkQueueFlags VulkanDevice::GetQueueFamilyFlags(
     EQueueType _queue_type
 ) const {
-    const uint32_t family_index = GetQueueFamilyIndex(_queue_type);
+    const uint32 family_index = GetQueueFamilyIndex(_queue_type);
     return family_index < m_device_info.queue_family_props.size() ?
                m_device_info.queue_family_props[family_index].queueFlags :
                VkQueueFlags{0};
@@ -940,7 +941,7 @@ VkQueueFlags VulkanDevice::GetQueueFamilyFlags(
 EVulkanTimestampQueryResetMode
 VulkanDevice::GetTimestampQueryResetMode(
     EQueueType _queue_type,
-    uint32_t   _effective_valid_bits
+    uint32     _effective_valid_bits
 ) const {
     if (_effective_valid_bits == 0) {
         return EVulkanTimestampQueryResetMode::Unsupported;
@@ -981,7 +982,7 @@ QueueFamilyIndices VulkanDevice::SelectQueueFamilyIndices(VkPhysicalDevice _gpu)
     vkGetPhysicalDeviceProperties(_gpu, &gpu_props);
     const bool is_amd = (gpu_props.vendorID == 0x1002);
 
-    const int32_t graphics = FindQueueFamilyIndex(queue_family_props, VK_QUEUE_GRAPHICS_BIT, 0);
+    const int32 graphics = FindQueueFamilyIndex(queue_family_props, VK_QUEUE_GRAPHICS_BIT, 0);
     if (graphics < 0) {
         return indices;
     }
@@ -997,7 +998,7 @@ QueueFamilyIndices VulkanDevice::SelectQueueFamilyIndices(VkPhysicalDevice _gpu)
             gpu_props.vendorID
         );
     } else {
-        int32_t transfer = FindQueueFamilyIndex(
+        int32 transfer = FindQueueFamilyIndex(
             queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT
         );
         if (transfer < 0) {
@@ -1009,7 +1010,7 @@ QueueFamilyIndices VulkanDevice::SelectQueueFamilyIndices(VkPhysicalDevice _gpu)
         indices.transfer = transfer;
     }
 
-    const int32_t compute = FindQueueFamilyIndex(queue_family_props, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
+    const int32 compute = FindQueueFamilyIndex(queue_family_props, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
     if (compute >= 0) {
         indices.compute = compute;
     } else {
@@ -1535,10 +1536,10 @@ VulkanCommandRecorder& VulkanDevice::GetCommandRecorder(EQueueType _type) {
 }
 
 RHIQueueTopology VulkanDevice::GetQueueTopology() const {
-    const uint32_t graphics_native_id = 0;
-    const uint32_t compute_native_id =
+    const uint32 graphics_native_id = 0;
+    const uint32 compute_native_id =
         m_compute_queue_handle == m_graphics_queue_handle ? graphics_native_id : 1u;
-    const uint32_t copy_native_id =
+    const uint32 copy_native_id =
         m_transfer_queue_handle == m_graphics_queue_handle ?
             graphics_native_id :
         m_transfer_queue_handle == m_compute_queue_handle ?
@@ -1581,8 +1582,8 @@ TextureRef VulkanDevice::CreateTexture(
 
 BufferRef VulkanDevice::CreateBuffer(
     std::string_view  _name,
-    uint              _element_cnt,
-    uint              _byte_stride,
+    uint32            _element_cnt,
+    uint32            _byte_stride,
     EBufferUsageFlags _usage,
     EPixelFormat      _format
 ) {
@@ -1590,7 +1591,7 @@ BufferRef VulkanDevice::CreateBuffer(
     return BufferRef{MoerNew(VulkanBuffer)(_name, info, *this)};
 }
 
-BindlessArrayRef VulkanDevice::CreateBindlessArray(uint _max_size) {
+BindlessArrayRef VulkanDevice::CreateBindlessArray(uint32 _max_size) {
     return MoerNew(VulkanBindlessArray)(this, _max_size);
 }
 

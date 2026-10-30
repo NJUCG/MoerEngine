@@ -1,6 +1,7 @@
+#include "VulkanDescriptor.h"
 #include "VulkanEnumTranslator.h"
 #include "VulkanRaytracingResource.h"
-#include "VulkanDescriptor.h"
+#include "misc/Types.h"
 
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
@@ -68,7 +69,7 @@ uint64 GetDescriptorBlockSize(const VulkanDevice& _device) {
 
 } // namespace
 
-VulkanDescriptorHeap::DescriptorCache::DescriptorCache(uint _slot_stride) :
+VulkanDescriptorHeap::DescriptorCache::DescriptorCache(uint32 _slot_stride) :
     slot_stride(_slot_stride),
     bytes(static_cast<size_t>(_slot_stride) * s_descriptor_cache_slot_capacity) {
     // Releasing a slot, including rollback after a failed native encode, must not allocate.
@@ -76,9 +77,9 @@ VulkanDescriptorHeap::DescriptorCache::DescriptorCache(uint _slot_stride) :
         free_slots.reserve(s_descriptor_cache_slot_capacity);
 }
 
-uint VulkanDescriptorHeap::DescriptorCache::AllocateSlot() {
+uint32 VulkanDescriptorHeap::DescriptorCache::AllocateSlot() {
     if (!free_slots.empty()) {
-        const uint slot = free_slots.back();
+        const uint32 slot = free_slots.back();
         if (slot >= next_slot) {
             throw std::runtime_error("descriptor free-list index is invalid");
         }
@@ -156,9 +157,9 @@ void VulkanDescriptorHeap::InitializeSamplerSetLayout() {
 }
 
 void VulkanDescriptorHeap::InitializeSamplerDescriptors() {
-    const uint sampler_descriptor_size = GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLER);
-    for (uint32_t i = 0; i < VulkanDevice::bindless_sampler_count; ++i) {
-        const uint source      = i < m_device->ImmutableSamplerCount() ? i : 0;
+    const uint32 sampler_descriptor_size = GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLER);
+    for (uint32 i = 0; i < VulkanDevice::bindless_sampler_count; ++i) {
+        const uint32 source      = i < m_device->ImmutableSamplerCount() ? i : 0;
         auto*      destination = sampler_descriptors.data() + i * sampler_descriptor_size;
         if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
             VkHostAddressRangeEXT      range{destination, sampler_descriptor_size};
@@ -188,7 +189,7 @@ uint64 VulkanDescriptorHeap::GetStorageAlignment() const {
 
 void VulkanDescriptorHeap::CreateNativeHeaps() {
     const auto&    p          = m_device->GetOptionalProperties().descriptor_heap_properties;
-    const uint32_t families[] = {
+    const uint32   families[] = {
         m_device->GetQueueFamilyIndex(EQueueType::Graphics),
         m_device->GetQueueFamilyIndex(EQueueType::Compute)
     };
@@ -236,7 +237,7 @@ void VulkanDescriptorHeap::CreateNativeHeaps() {
 }
 
 void VulkanDescriptorHeap::CreateDescriptorBuffer() {
-    const uint32_t queue_families[] = {
+    const uint32 queue_families[] = {
         m_device->GetQueueFamilyIndex(EQueueType::Graphics),
         m_device->GetQueueFamilyIndex(EQueueType::Compute)
     };
@@ -272,53 +273,53 @@ VulkanDescriptorHeap::~VulkanDescriptorHeap() {
     }
 }
 
-uint VulkanDescriptorHeap::GetDescriptorSize(VkDescriptorType _type) const {
+uint32 VulkanDescriptorHeap::GetDescriptorSize(VkDescriptorType _type) const {
     if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Sets)
         return 0;
     if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
         const auto& p = m_device->GetOptionalProperties().descriptor_heap_properties;
         switch (_type) {
             case VK_DESCRIPTOR_TYPE_SAMPLER:
-                return static_cast<uint>(p.samplerDescriptorSize);
+                return static_cast<uint32>(p.samplerDescriptorSize);
             case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
             case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
             case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
             case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-                return static_cast<uint>(p.imageDescriptorSize);
+                return static_cast<uint32>(p.imageDescriptorSize);
             default:
-                return static_cast<uint>(p.bufferDescriptorSize);
+                return static_cast<uint32>(p.bufferDescriptorSize);
         }
     }
     const auto& properties = m_device->GetOptionalProperties().descriptor_buffer_properties;
     const bool  robust     = m_device->GetCoreFeatures().GetCore10Features().robustBufferAccess == VK_TRUE;
     switch (_type) {
         case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-            return static_cast<uint>(
+            return static_cast<uint32>(
                 robust ? properties.robustStorageBufferDescriptorSize : properties.storageBufferDescriptorSize
             );
         case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-            return static_cast<uint>(
+            return static_cast<uint32>(
                 robust ? properties.robustUniformBufferDescriptorSize : properties.uniformBufferDescriptorSize
             );
         case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-            return static_cast<uint>(
+            return static_cast<uint32>(
                 robust ? properties.robustStorageTexelBufferDescriptorSize :
                          properties.storageTexelBufferDescriptorSize
             );
         case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-            return static_cast<uint>(
+            return static_cast<uint32>(
                 robust ? properties.robustUniformTexelBufferDescriptorSize :
                          properties.uniformTexelBufferDescriptorSize
             );
         case VK_DESCRIPTOR_TYPE_SAMPLER:
-            return static_cast<uint>(properties.samplerDescriptorSize);
+            return static_cast<uint32>(properties.samplerDescriptorSize);
         case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-            return static_cast<uint>(properties.sampledImageDescriptorSize);
+            return static_cast<uint32>(properties.sampledImageDescriptorSize);
         case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-            return static_cast<uint>(properties.storageImageDescriptorSize);
+            return static_cast<uint32>(properties.storageImageDescriptorSize);
         case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-            return static_cast<uint>(properties.accelerationStructureDescriptorSize);
+            return static_cast<uint32>(properties.accelerationStructureDescriptorSize);
         default:
             throw std::invalid_argument("unsupported descriptor type");
     }
@@ -360,7 +361,7 @@ VulkanCachedDescriptor VulkanDescriptorHeap::GetOrCreateBufferDescriptor(
     buffer_info.range   = _buffer.GetByteSize();
     VkDescriptorGetInfoEXT buffer_desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
     buffer_desc_info.type = _type;
-    const uint desc_size  = GetDescriptorSize(_type);
+    const uint32 desc_size = GetDescriptorSize(_type);
     switch (_type) {
         case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
             buffer_info.format                        = _format;
@@ -379,7 +380,7 @@ VulkanCachedDescriptor VulkanDescriptorHeap::GetOrCreateBufferDescriptor(
         default:
             throw std::invalid_argument("unsupported buffer descriptor type");
     }
-    const uint slot_index = buffer_cache.AllocateSlot();
+    const uint32 slot_index = buffer_cache.AllocateSlot();
 
     bool published = false;
     auto rollback  = OnScopeExit([&] {
@@ -459,7 +460,7 @@ VulkanCachedDescriptor VulkanDescriptorHeap::GetOrCreateImageDescriptor(
     } else {
         desc_info.data.pSampledImage = &image_info;
     }
-    const uint slot_index = image_cache.AllocateSlot();
+    const uint32 slot_index  = image_cache.AllocateSlot();
     bool       published   = false;
     auto       rollback    = OnScopeExit([&] {
         if (!published)
@@ -510,7 +511,7 @@ VulkanCachedDescriptor VulkanDescriptorHeap::GetOrCreateAccelerationStructureDes
     if (_acceleration_structure->m_descriptor_cache_slot >= 0) {
         return {
             VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-            static_cast<uint>(_acceleration_structure->m_descriptor_cache_slot)
+            static_cast<uint32>(_acceleration_structure->m_descriptor_cache_slot)
         };
     }
     VkAccelerationStructureDeviceAddressInfoKHR address_info{
@@ -521,7 +522,7 @@ VulkanCachedDescriptor VulkanDescriptorHeap::GetOrCreateAccelerationStructureDes
     desc_info.type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     desc_info.data.accelerationStructure =
         vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &address_info);
-    const uint slot_index                            = acceleration_structure_cache.AllocateSlot();
+    const uint32 slot_index                            = acceleration_structure_cache.AllocateSlot();
     bool       published                             = false;
     auto       rollback                              = OnScopeExit([&] {
         if (!published)
@@ -553,21 +554,21 @@ VulkanCachedDescriptor VulkanDescriptorHeap::GetSamplerDescriptor(Sampler _sampl
     return {VK_DESCRIPTOR_TYPE_SAMPLER, m_device->GetSamplerIndex(_sampler)};
 }
 
-void VulkanDescriptorHeap::FreeBufferDescriptorSlot(uint _slot_index) {
+void VulkanDescriptorHeap::FreeBufferDescriptorSlot(uint32 _slot_index) {
     std::lock_guard<std::mutex> lock(cache_mutex);
     assert(_slot_index < buffer_descriptor_types.size() && "buffer descriptor index is invalid");
     buffer_descriptor_types[_slot_index] = VK_DESCRIPTOR_TYPE_MAX_ENUM;
     buffer_cache.free_slots.push_back(_slot_index);
 }
 
-void VulkanDescriptorHeap::FreeImageDescriptorSlot(uint _slot_index) {
+void VulkanDescriptorHeap::FreeImageDescriptorSlot(uint32 _slot_index) {
     std::lock_guard<std::mutex> lock(cache_mutex);
     assert(_slot_index < image_descriptor_types.size() && "image descriptor index is invalid");
     image_descriptor_types[_slot_index] = VK_DESCRIPTOR_TYPE_MAX_ENUM;
     image_cache.free_slots.push_back(_slot_index);
 }
 
-void VulkanDescriptorHeap::FreeAccelerationStructureDescriptorSlot(uint _slot_index) {
+void VulkanDescriptorHeap::FreeAccelerationStructureDescriptorSlot(uint32 _slot_index) {
     std::lock_guard<std::mutex> lock(cache_mutex);
     acceleration_structure_cache.free_slots.push_back(_slot_index);
 }
@@ -640,8 +641,8 @@ uint64 VulkanDescriptorHeap::GetUsedDescriptorBytes(const VulkanDescriptorBuffer
 
 std::optional<std::vector<VulkanDescriptorBufferAllocator::Recording>>
 VulkanDescriptorHeap::PrepareDescriptorRecordings(
-    const VulkanDescriptorBufferLease& _lease,
-    std::span<const std::vector<uint64_t>> _requests
+    const VulkanDescriptorBufferLease&   _lease,
+    std::span<const std::vector<uint64>> _requests
 ) {
     if (!_lease || m_device->IsFaulted()) {
         return std::nullopt;
@@ -650,7 +651,7 @@ VulkanDescriptorHeap::PrepareDescriptorRecordings(
 }
 
 std::span<const byte> VulkanDescriptorHeap::GetCachedDescriptor(VulkanCachedDescriptor _descriptor) const {
-    const uint descriptor_size = GetDescriptorSize(_descriptor.type);
+    const uint32 descriptor_size = GetDescriptorSize(_descriptor.type);
     if (_descriptor.type == VK_DESCRIPTOR_TYPE_SAMPLER) {
         if (descriptor_size == 0 || _descriptor.slot_index >= sampler_descriptors.size() / descriptor_size) {
             throw std::out_of_range("sampler descriptor slot is invalid");

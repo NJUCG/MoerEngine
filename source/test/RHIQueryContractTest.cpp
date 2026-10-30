@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIImpl.h"
 #include "rhi/RHIQuery.h"
@@ -33,36 +34,36 @@ bool WaitForFlag(const std::atomic_bool& _flag, std::chrono::milliseconds _timeo
 
 class QueryFenceProbe final : public Fence {
 public:
-    uint64_t GetValue() const override {
+    Moer::uint64 GetValue() const override {
         return 0;
     }
 
-    bool Wait(uint64_t _value) override {
+    bool Wait(Moer::uint64 _value) override {
         return _value == 0 && !IsRejected(_value);
     }
 
-    void MarkSubmitted(uint64_t _value) override {
+    void MarkSubmitted(Moer::uint64 _value) override {
         submitted_value.store(_value, std::memory_order_release);
     }
 
     bool WaitSubmitted(
-        uint64_t,
+        Moer::uint64,
         const std::atomic_bool* = nullptr
     ) override {
         return false;
     }
 
-    bool IsRejected(uint64_t _value) const override {
+    bool IsRejected(Moer::uint64 _value) const override {
         return rejected_value.load(std::memory_order_acquire) == _value;
     }
 
-    void Reject(uint64_t _value) noexcept override {
+    void Reject(Moer::uint64 _value) noexcept override {
         rejected_value.store(_value, std::memory_order_release);
     }
 
 private:
-    std::atomic<uint64_t> submitted_value{0};
-    std::atomic<uint64_t> rejected_value{0};
+    std::atomic<Moer::uint64> submitted_value{0};
+    std::atomic<Moer::uint64> rejected_value{0};
 };
 
 template<typename TException, typename TCallback>
@@ -93,8 +94,8 @@ TimestampQueryResult TestTimestampResult() {
 }
 
 OcclusionQueryResult TestOcclusionResult(
-    std::uint64_t _sample_count = 37,
-    bool          _visible      = true
+    Moer::uint64 _sample_count = 37,
+    bool         _visible      = true
 ) {
     return OcclusionQueryResult{
         .sample_count = _sample_count,

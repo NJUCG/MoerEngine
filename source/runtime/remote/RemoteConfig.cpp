@@ -1,6 +1,6 @@
 #include "remote/RemoteConfig.h"
-
 #include "config/GlobalConfig.h"
+#include "misc/Types.h"
 
 #include <limits>
 
@@ -8,12 +8,12 @@ namespace Moer::remote {
 
 namespace {
 
-uint16_t ClampPort(uint port, uint16_t fallback) {
-    if (port == 0 || port > std::numeric_limits<uint16_t>::max()) {
+uint16 ClampPort(uint32 port, uint16 fallback) {
+    if (port == 0 || port > std::numeric_limits<uint16>::max()) {
         return fallback;
     }
 
-    return static_cast<uint16_t>(port);
+    return static_cast<uint16>(port);
 }
 
 } // namespace

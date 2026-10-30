@@ -1,9 +1,10 @@
 // 实现各独立 Raster Pass 共用的小型工具函数。
-#include "RasterTool.h"
 
+#include "RasterTool.h"
 #include "RasterConfig.h"
 #include "log/LogSystem.h"
 #include "misc/Timer.h"
+#include "misc/Types.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/executor/RHIExecutor.h"
@@ -112,33 +113,33 @@ std::string_view RasterTool::GetGeometryDrawProfileScopeName() {
 }
 
 // 返回某个级联阴影的可视 marker 名称。
-std::string_view RasterTool::GetCsmShadowCascadeMarkerName(uint cascade_index) {
+std::string_view RasterTool::GetCsmShadowCascadeMarkerName(uint32 cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
     return s_csm_shadow_cascade_marker_names[cascade_index];
 }
 
 // 返回某个级联阴影视锥剔除 dispatch 使用的 profiling scope 名称。
-std::string_view RasterTool::GetCsmShadowCullingProfileScopeName(uint cascade_index) {
+std::string_view RasterTool::GetCsmShadowCullingProfileScopeName(uint32 cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
     return s_csm_shadow_culling_scope_names[cascade_index];
 }
 
-std::string_view RasterTool::GetCsmShadowDrawProfileScopeName(uint cascade_index) {
+std::string_view RasterTool::GetCsmShadowDrawProfileScopeName(uint32 cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
     return s_csm_shadow_draw_scope_names[cascade_index];
 }
 
-std::string_view RasterTool::GetPointShadowFaceMarkerName(uint face) {
+std::string_view RasterTool::GetPointShadowFaceMarkerName(uint32 face) {
     assert(face < CUBE_FACE_Num);
     return s_point_shadow_face_marker_names[face];
 }
 
-std::string_view RasterTool::GetPointShadowCullingProfileScopeName(uint face) {
+std::string_view RasterTool::GetPointShadowCullingProfileScopeName(uint32 face) {
     assert(face < CUBE_FACE_Num);
     return s_point_shadow_culling_scope_names[face];
 }
 
-std::string_view RasterTool::GetPointShadowDrawProfileScopeName(uint face) {
+std::string_view RasterTool::GetPointShadowDrawProfileScopeName(uint32 face) {
     assert(face < CUBE_FACE_Num);
     return s_point_shadow_draw_scope_names[face];
 }

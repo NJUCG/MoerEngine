@@ -1,7 +1,7 @@
 #include "WindowsCrashDiagnostics.h"
-
 #include "PlatformWindows.h"
 #include "WindowsCrashDiagnosticsTesting.h"
+#include "misc/Types.h"
 
 #include <DbgHelp.h>
 #include <algorithm>
@@ -19,7 +19,7 @@ namespace {
 constexpr std::size_t kCrashWidePathCapacity = 4096;
 constexpr std::size_t kCrashMetadataCapacity = 16 * 1024;
 
-enum class ECrashRequestState : std::uint32_t {
+enum class ECrashRequestState : Moer::uint32 {
     Idle,
     Reserved,
     Pending,
@@ -30,7 +30,7 @@ enum class ECrashRequestState : std::uint32_t {
 template<std::size_t Capacity>
 struct StoredText {
     std::array<char, Capacity> bytes{};
-    std::uint32_t              size{0};
+    Moer::uint32               size{0};
     bool                       truncated{false};
 
     void Assign(std::string_view _source) noexcept {
@@ -39,7 +39,7 @@ struct StoredText {
             std::memcpy(bytes.data(), _source.data(), stored);
         }
         bytes[stored] = '\0';
-        size          = static_cast<std::uint32_t>(stored);
+        size          = static_cast<Moer::uint32>(stored);
         truncated     = stored != _source.size();
     }
 
@@ -55,8 +55,8 @@ struct StoredCrashRequest {
     StoredText<256>    function{};
     StoredText<1024>   message{};
     StoredText<64>     profile_flush_status{};
-    std::uint32_t      line{0};
-    std::uint32_t      thread_id{0};
+    Moer::uint32       line{0};
+    Moer::uint32       thread_id{0};
     bool               message_truncated{false};
     PlatformStackTrace stack{};
 
@@ -118,7 +118,7 @@ struct FixedTextWriter {
 struct CrashArtifactService {
     std::atomic<bool>               ready{false};
     std::atomic<ECrashRequestState> request_state{ECrashRequestState::Idle};
-    std::atomic<std::uint64_t>      nonce{1};
+    std::atomic<Moer::uint64>       nonce{1};
     std::atomic<bool>               test_pause_before_dump{false};
 
     HANDLE request_event{nullptr};
@@ -226,8 +226,8 @@ bool CreateUniqueArtifactPair(
     CrashArtifactService& _service,
     HANDLE&               _metadata_file,
     HANDLE&               _dump_file,
-    std::uint32_t&        _metadata_error,
-    std::uint32_t&        _dump_error
+    Moer::uint32&         _metadata_error,
+    Moer::uint32&         _dump_error
 ) noexcept {
     SYSTEMTIME time{};
     ::GetSystemTime(&time);
@@ -235,8 +235,8 @@ bool CreateUniqueArtifactPair(
     const DWORD thread_id =
         _service.request.thread_id != 0 ? _service.request.thread_id : ::GetCurrentThreadId();
 
-    for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
-        const std::uint64_t nonce          = _service.nonce.fetch_add(1, std::memory_order_relaxed);
+    for (Moer::uint32 attempt = 0; attempt < 64; ++attempt) {
+        const Moer::uint64  nonce          = _service.nonce.fetch_add(1, std::memory_order_relaxed);
         const int           metadata_count = _snwprintf_s(
             _service.metadata_path.data(),
             _service.metadata_path.size(),
@@ -353,10 +353,10 @@ void WritePreDumpMetadata(
         std::string_view(_result.dump_path.data(), std::char_traits<char>::length(_result.dump_path.data()))
     );
     writer.AppendFormat("stack_count=%u\n", _service.request.stack.frame_count);
-    const std::uint32_t stack_count = std::min<std::uint32_t>(
-        _service.request.stack.frame_count, static_cast<std::uint32_t>(_service.request.stack.frames.size())
+    const Moer::uint32 stack_count = std::min<Moer::uint32>(
+        _service.request.stack.frame_count, static_cast<Moer::uint32>(_service.request.stack.frames.size())
     );
-    for (std::uint32_t index = 0; index < stack_count; ++index) {
+    for (Moer::uint32 index = 0; index < stack_count; ++index) {
         writer.AppendFormat(
             "stack[%u]=0x%llx\n", index, static_cast<unsigned long long>(_service.request.stack.frames[index])
         );
@@ -541,7 +541,7 @@ bool InitializeWindowsCrashDiagnostics() noexcept {
 
 PlatformCrashArtifactResult SubmitWindowsCrashArtifacts(
     const PlatformCrashArtifactRequest& _request,
-    std::uint32_t                       _timeout_ms
+    Moer::uint32                        _timeout_ms
 ) noexcept {
     auto&                       service = g_crash_service;
     PlatformCrashArtifactResult unavailable{};

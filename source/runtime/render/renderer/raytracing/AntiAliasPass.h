@@ -1,6 +1,8 @@
 #ifndef MOER_ANTIALIASPASS_H
 #define MOER_ANTIALIASPASS_H
 
+#include "misc/Types.h"
+
 // 提供时序抗锯齿 Pass 和逐帧相机抖动。
 
 #include "RaytracingGraphResources.h"
@@ -164,7 +166,7 @@ private:
         const RecordResources& resources
     );
 
-    uint    frame_idx   = 0;
+    uint32  frame_idx   = 0;
     float2  jitter      = float2(0.f);
     EJitter jitter_mode = EJitter::MSAA;
 

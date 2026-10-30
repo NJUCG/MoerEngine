@@ -1,8 +1,8 @@
 #include "PlatformWindows.h"
-
 #include "WindowsCrashDiagnostics.h"
 #include "math/Function.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <array>
@@ -11,7 +11,7 @@
 #include <processthreadsapi.h>
 #include <winnt.h>
 
-void WindowsPlatform::SetThreadAffinityMask(void* current_thread_handle, uint64_t mask) {
+void WindowsPlatform::SetThreadAffinityMask(void* current_thread_handle, Moer::uint64 mask) {
 
     ::SetThreadAffinityMask(current_thread_handle, mask);
 }
@@ -19,7 +19,7 @@ void WindowsPlatform::SetCurrentThreadAffinity(Affinity&& _affinity) {
     SIZE_T size = 0;
     ::InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
     assert(size > 0 && "InitializeProcThreadAttributeList failed");
-    Moer::Array<uint8_t> buffer(size);
+    Moer::Array<Moer::uint8> buffer(size);
     auto*                attr_list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(buffer.data());
     auto                 res       = ::InitializeProcThreadAttributeList(attr_list, 1, 0, &size);
     assert(res && "InitializeProcThreadAttributeList failed");
@@ -56,44 +56,44 @@ void WindowsPlatform::SetCurrentThreadName(std::string_view _name) {
     set_thread_description(GetCurrentThread(), wname.data());
 }
 void WindowsPlatform::SetThreadGroupAffinity(
-    void*    current_thread_handle,
-    uint16_t group_mask,
-    uint64_t affinity_mask
+    void*        current_thread_handle,
+    Moer::uint16 group_mask,
+    Moer::uint64 affinity_mask
 ) {
     GROUP_AFFINITY group_affinity{affinity_mask, group_mask, {0, 0, 0}};
     ::SetThreadGroupAffinity(current_thread_handle, &group_affinity, nullptr);
 }
 
-int32_t WindowsPlatform::GetProcessorWorkGroupCount() {
+Moer::int32 WindowsPlatform::GetProcessorWorkGroupCount() {
     return ::GetActiveProcessorGroupCount();
 }
 
-int32_t WindowsPlatform::GetProcessorCoreCountInGroup(uint32_t groupID) {
+Moer::int32 WindowsPlatform::GetProcessorCoreCountInGroup(Moer::uint32 groupID) {
     return ::GetActiveProcessorCount(groupID);
 }
 
-int32_t WindowsPlatform::GetProcessorCoreCount() {
+Moer::int32 WindowsPlatform::GetProcessorCoreCount() {
     SYSTEM_INFO sys_info;
     GetSystemInfo(&sys_info);
     return sys_info.dwNumberOfProcessors;
 }
 
-uint32_t WindowsPlatform::GetCurrentThreadID() {
+Moer::uint32 WindowsPlatform::GetCurrentThreadID() {
     return ::GetCurrentThreadId();
 }
 
 PlatformStackTrace WindowsPlatform::CaptureStackTrace(
-    std::uint32_t _frames_to_skip,
-    std::uint32_t _max_frames
+    Moer::uint32 _frames_to_skip,
+    Moer::uint32 _max_frames
 ) noexcept {
     PlatformStackTrace trace{};
-    const std::uint32_t frame_limit = std::min<std::uint32_t>(
-        _max_frames, static_cast<std::uint32_t>(trace.frames.size())
+    const Moer::uint32 frame_limit = std::min<Moer::uint32>(
+        _max_frames, static_cast<Moer::uint32>(trace.frames.size())
     );
     if (frame_limit == 0) {
         return trace;
     }
-    trace.frame_count = static_cast<std::uint32_t>(
+    trace.frame_count = static_cast<Moer::uint32>(
         ::CaptureStackBackTrace(
             static_cast<DWORD>(_frames_to_skip + 1),
             static_cast<DWORD>(frame_limit),
@@ -110,7 +110,7 @@ bool WindowsPlatform::InitializeCrashDiagnostics() noexcept {
 
 PlatformCrashArtifactResult WindowsPlatform::WriteCrashArtifacts(
     const PlatformCrashArtifactRequest& _request,
-    std::uint32_t _timeout_ms
+    Moer::uint32                        _timeout_ms
 ) noexcept {
     return SubmitWindowsCrashArtifacts(_request, _timeout_ms);
 }
@@ -153,7 +153,7 @@ const PlatformMemoryInfo& WindowsPlatform::GetMemoryInfo() {
         memory_info.allocation_granularity = sys_info.dwAllocationGranularity;
 
         memory_info.total_physical_memory_mb =
-            static_cast<uint32_t>((memory_info.total_physical_memory + 1024 * 1024 - 1) / 1024 / 1024);
+            static_cast<Moer::uint32>((memory_info.total_physical_memory + 1024 * 1024 - 1) / 1024 / 1024);
         //caclulate address limit by physical memory
         memory_info.addrress_limit = Moer::RoundUpToPowerOf2(memory_info.total_physical_memory);
     }

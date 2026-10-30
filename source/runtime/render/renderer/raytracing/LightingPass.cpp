@@ -1,4 +1,5 @@
 #include "LightingPass.h"
+#include "misc/Types.h"
 
 // 协调 ReSTIR DI 各阶段调度，并共享同一组不可变参数。
 
@@ -101,7 +102,7 @@ LightingPass::Prepare(const RTContext& rt_ctx, const DI::LightBufferParams& ligh
     constants.reblur_diff_hit_dist_params   = rt_ctx.config.reblur_diffuse_hit_dist_params;
     constants.reblur_spec_hit_dist_params   = rt_ctx.config.reblur_specular_hit_dist_params;
 
-    const auto div_ceil = [](uint value, uint divisor) -> uint {
+    const auto div_ceil = [](uint32 value, uint32 divisor) -> uint32 {
         return (value + divisor - 1) / divisor;
     };
     const bool has_local_candidates = initial_sample_params.num_primary_local_lights > 0;

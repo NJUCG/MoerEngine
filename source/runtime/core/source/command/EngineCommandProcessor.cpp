@@ -1,6 +1,6 @@
 #include "command/EngineCommandProcessor.h"
-
 #include "config/CVarSystem.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <cctype>
@@ -177,7 +177,7 @@ struct EngineCommandProcessor::Impl {
 
     mutable std::mutex            output_mutex;
     std::deque<CommandOutputLine> output_lines;
-    std::uint64_t                 next_output_sequence = 1;
+    uint64                        next_output_sequence = 1;
 };
 
 EngineCommandProcessor::EngineCommandProcessor(EngineCommandProcessorLimits _limits) :
@@ -239,7 +239,7 @@ ProcessPendingResult EngineCommandProcessor::ProcessPending(std::size_t _max_com
 }
 
 CommandOutputPollResult EngineCommandProcessor::VisitOutput(
-    std::uint64_t        _next_sequence,
+    uint64               _next_sequence,
     std::size_t          _max_count,
     CommandOutputVisitor _visitor,
     void*                _context
@@ -257,7 +257,7 @@ CommandOutputPollResult EngineCommandProcessor::VisitOutput(
             return result;
         }
 
-        const std::uint64_t first_sequence = impl->output_lines.front().sequence;
+        const uint64 first_sequence = impl->output_lines.front().sequence;
         if (result.next_sequence < first_sequence) {
             result.dropped_count = first_sequence - result.next_sequence;
             result.next_sequence = first_sequence;

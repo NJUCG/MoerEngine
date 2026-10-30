@@ -1,11 +1,12 @@
 #include "rhi/backends/metal/MetalQueue.h"
+#include "log/LogSystem.h"
+#include "misc/Types.h"
+#include "rhi/RHIThreadOwnership.h"
 #include "rhi/backends/metal/MetalBindless.h"
 #include "rhi/backends/metal/MetalDraw.h"
 #include "rhi/backends/metal/MetalPipeline.h"
 #include "rhi/backends/metal/MetalResource.h"
 #include "rhi/backends/metal/MetalSwapchain.h"
-#include "rhi/RHIThreadOwnership.h"
-#include "log/LogSystem.h"
 
 #include <algorithm>
 #include <atomic>
@@ -57,8 +58,7 @@ void ValidateBarrier(const BarrierCmd& barrier) {
          barrier.GetDstQueue() != EQueueType::Graphics)) {
         Unsupported("a cross-queue graphics barrier");
     }
-    const auto validate_texture = [](uint64 handle, uint mip, uint mip_count,
-                                     uint layer, uint layer_count) {
+    const auto validate_texture = [](uint64 handle, uint32 mip, uint32 mip_count, uint32 layer, uint32 layer_count) {
         auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(handle));
         if (texture == nullptr || mip_count == 0 || layer_count == 0 ||
             mip + mip_count > texture->GetNumMips() ||
@@ -273,9 +273,7 @@ public:
                 continue;
             }
             if (command->Type() != Command::EType::ClearResource) {
-                throw std::runtime_error("Metal RHI has not implemented graphics command " +
-                    command->name + " (type=" +
-                    std::to_string(static_cast<uint>(command->Type())) + ")");
+                throw std::runtime_error("Metal RHI has not implemented graphics command " + command->name + " (type=" + std::to_string(static_cast<uint32>(command->Type())) + ")");
             }
             has_gpu_work = true;
             const auto& clear = static_cast<const ClearResourceCmd&>(*command);
@@ -283,8 +281,8 @@ public:
                 const BufferView& view = clear.Buffer();
                 auto* buffer = dynamic_cast<MetalBuffer*>(view.GetBuffer());
                 if (buffer == nullptr || view.GetByteSize() == 0 ||
-                    view.GetByteOffset() % sizeof(uint32_t) != 0 ||
-                    view.GetByteSize() % sizeof(uint32_t) != 0 ||
+                    view.GetByteOffset() % sizeof(uint32) != 0 ||
+                    view.GetByteSize() % sizeof(uint32) != 0 ||
                     view.GetByteOffset() > buffer->GetByteSize() ||
                     view.GetByteSize() > buffer->GetByteSize() - view.GetByteOffset()) {
                     Unsupported("this buffer clear view");
@@ -389,18 +387,18 @@ public:
                 }
                 if (command->Type() == Command::EType::SetDrawState) {
                     const auto& draw = static_cast<const SetDrawStateCmd&>(*command);
-                    std::vector<uint> indirect_counts(draw.DrawData().size(), 0);
-                    std::vector<std::pair<uint, id<MTLBuffer>>> pending_counts;
-                    for (uint mesh_index = 0; mesh_index < draw.DrawData().size(); ++mesh_index) {
+                    std::vector<uint32>                           indirect_counts(draw.DrawData().size(), 0);
+                    std::vector<std::pair<uint32, id<MTLBuffer>>> pending_counts;
+                    for (uint32 mesh_index = 0; mesh_index < draw.DrawData().size(); ++mesh_index) {
                         const auto& indirect = draw.DrawData()[mesh_index].indirect_draw_param;
                         if (!indirect) continue;
                         indirect_counts[mesh_index] = indirect->count;
                         if (!indirect->count_buffer) continue;
                         const BufferView& view = *indirect->count_buffer;
                         auto* source = static_cast<MetalBuffer*>(view.GetBuffer());
-                        id<MTLBuffer> staging = [queue_.device
-                            newBufferWithLength:sizeof(uint32_t)
-                            options:MTLResourceStorageModeShared];
+                        id<MTLBuffer>     staging = [queue_.device
+                            newBufferWithLength:sizeof(uint32)
+                                        options:MTLResourceStorageModeShared];
                         if (staging == nil) {
                             throw std::runtime_error("Cannot allocate Metal indirect count staging");
                         }
@@ -410,8 +408,11 @@ public:
                         if (blit == nil) {
                             throw std::runtime_error("Cannot encode Metal indirect count readback");
                         }
-                        [blit copyFromBuffer:source->Native() sourceOffset:view.GetByteOffset()
-                                    toBuffer:staging destinationOffset:0 size:sizeof(uint32_t)];
+                        [blit copyFromBuffer:source->Native()
+                                 sourceOffset:view.GetByteOffset()
+                                     toBuffer:staging
+                            destinationOffset:0
+                                         size:sizeof(uint32)];
                         [blit endEncoding];
                     }
                     if (!pending_counts.empty()) {
@@ -424,7 +425,7 @@ public:
                                 gpu_error(command_buffer));
                         }
                         for (const auto& [mesh_index, staging] : pending_counts) {
-                            uint32_t count = 0;
+                            uint32 count = 0;
                             std::memcpy(&count, staging.contents, sizeof(count));
                             indirect_counts[mesh_index] = std::min(count, indirect_counts[mesh_index]);
                         }
@@ -467,22 +468,22 @@ public:
                 if (clear.IsBuffer()) {
                     const BufferView& view = clear.Buffer();
                     auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
-                    const uint32_t value = clear.UIntValue();
+                    const uint32              value  = clear.UIntValue();
                     id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
                     if (blit == nil) throw std::runtime_error("Cannot encode Metal buffer clear");
                     if ((value & 0xffu) == ((value >> 8) & 0xffu) &&
                         (value & 0xffu) == ((value >> 16) & 0xffu) &&
                         (value & 0xffu) == ((value >> 24) & 0xffu)) {
                         [blit fillBuffer:buffer->Native()
-                                    range:NSMakeRange(view.GetByteOffset(), view.GetByteSize())
-                                    value:static_cast<uint8_t>(value)];
+                                   range:NSMakeRange(view.GetByteOffset(), view.GetByteSize())
+                                   value:static_cast<uint8>(value)];
                     } else {
                         id<MTLBuffer> staging = [queue_.device
                             newBufferWithLength:view.GetByteSize()
                             options:MTLResourceStorageModeShared];
                         if (staging == nil) throw std::runtime_error("Cannot allocate Metal buffer clear staging");
-                        auto* words = static_cast<uint32_t*>(staging.contents);
-                        for (uint64 i = 0; i < view.GetByteSize() / sizeof(uint32_t); ++i) {
+                        auto* words = static_cast<uint32*>(staging.contents);
+                        for (uint64 i = 0; i < view.GetByteSize() / sizeof(uint32); ++i) {
                             words[i] = value;
                         }
                         [staging_buffers addObject:staging];

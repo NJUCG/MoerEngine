@@ -4,6 +4,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
@@ -13,9 +14,9 @@
 
 namespace Moer::Render::Raster {
 
-inline uint ProbeGizmoPackFloat(float value) {
-    static_assert(sizeof(uint) == sizeof(float));
-    return std::bit_cast<uint>(value);
+inline uint32 ProbeGizmoPackFloat(float value) {
+    static_assert(sizeof(uint32) == sizeof(float));
+    return std::bit_cast<uint32>(value);
 }
 
 class ProbeGizmoPipeline : public RasterPipeline {
@@ -70,8 +71,8 @@ public:
         RecordParameters parameters{};
         parameters.bindless = context.bdls;
         parameters.output   = context.textures.lighting_output;
-        const uint probe_count = context.probe_volume.GetPhysicalAllocatorCapacity();
-        const uint gizmo_color_mode = static_cast<uint>(Clamp(
+        const uint32 probe_count      = context.probe_volume.GetPhysicalAllocatorCapacity();
+        const uint32 gizmo_color_mode = static_cast<uint32>(Clamp(
             config.probe_gi_gizmo_color_mode,
             int(RASTER_PROBE_GIZMO_COLOR_FIXED),
             int(RASTER_PROBE_GIZMO_COLOR_APV_LEVEL)
@@ -94,7 +95,7 @@ public:
 
         if (draw_probes) {
             auto is_published_resident = [](const ProbeBrickGpuDesc& brick) {
-                const uint streaming_state =
+                const uint32 streaming_state =
                     (brick.neighbor_pages_1.w & RASTER_PROBE_STREAMING_STATE_FLAG_MASK) >>
                     RASTER_PROBE_STREAMING_STATE_FLAG_SHIFT;
                 return brick.probe_range.z != 0u && brick.probe_range.y != 0u &&
@@ -102,10 +103,10 @@ public:
             };
 
             auto append_probe_batch = [&](Array<SingleDrawParam>&& draws,
-                                        uint                     color_mode,
-                                        float3                   fixed_color,
-                                        float                    alpha,
-                                        const char*              pass_name) {
+                                          uint32                   color_mode,
+                                          float3                   fixed_color,
+                                          float                    alpha,
+                                          const char*              pass_name) {
                 if (draws.empty()) {
                     return;
                 }
@@ -143,7 +144,7 @@ public:
             if (!draw_apv_selected_level) {
                 Array<SingleDrawParam> resident_draws;
                 resident_draws.reserve(context.probe_volume.GetResidentBrickCount());
-                for (uint brick_index = 0; brick_index < context.probe_volume.GetBrickCount(); ++brick_index) {
+                for (uint32 brick_index = 0; brick_index < context.probe_volume.GetBrickCount(); ++brick_index) {
                     const ProbeBrickGpuDesc& brick = context.probe_volume.GetBrickDesc(brick_index);
                     if (!is_published_resident(brick)) {
                         continue;
@@ -162,9 +163,9 @@ public:
                 );
             } else {
                 StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_has_coarse_cell{};
-                for (uint cell_index = 0u; cell_index < context.probe_volume.GetCellCount(); ++cell_index) {
+                for (uint32 cell_index = 0u; cell_index < context.probe_volume.GetCellCount(); ++cell_index) {
                     const ProbeCellGpuDesc& cell = context.probe_volume.GetCellDesc(cell_index);
-                    const uint desired_level = Min(cell.geometry.z, RASTER_PROBE_MAX_SUBDIVISION_LEVEL);
+                    const uint32            desired_level = Min(cell.geometry.z, RASTER_PROBE_MAX_SUBDIVISION_LEVEL);
                     if (desired_level == RASTER_PROBE_MAX_SUBDIVISION_LEVEL &&
                         cell.coord_volume.w < RASTER_PROBE_VOLUME_MAX_COUNT) {
                         volume_has_coarse_cell[cell.coord_volume.w] = true;
@@ -172,22 +173,22 @@ public:
                 }
 
                 Array<SingleDrawParam> level_draws[RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u];
-                for (uint brick_index = 0u; brick_index < context.probe_volume.GetBrickCount(); ++brick_index) {
+                for (uint32 brick_index = 0u; brick_index < context.probe_volume.GetBrickCount(); ++brick_index) {
                     const ProbeBrickGpuDesc& brick = context.probe_volume.GetBrickDesc(brick_index);
-                    const uint level = brick.hierarchy.y;
+                    const uint32             level = brick.hierarchy.y;
                     if (!is_published_resident(brick) || level > RASTER_PROBE_MAX_SUBDIVISION_LEVEL) {
                         continue;
                     }
 
                     bool selected_level = false;
                     if (level < RASTER_PROBE_MAX_SUBDIVISION_LEVEL) {
-                        const uint cell_index = brick.hierarchy.x;
+                        const uint32 cell_index = brick.hierarchy.x;
                         if (cell_index < context.probe_volume.GetCellCount()) {
                             const ProbeCellGpuDesc& cell = context.probe_volume.GetCellDesc(cell_index);
                             selected_level = Min(cell.geometry.z, RASTER_PROBE_MAX_SUBDIVISION_LEVEL) == level;
                         }
                     } else {
-                        const uint volume_index = brick.coord_volume.w;
+                        const uint32 volume_index = brick.coord_volume.w;
                         selected_level = volume_index < RASTER_PROBE_VOLUME_MAX_COUNT &&
                                          volume_has_coarse_cell[volume_index];
                     }
@@ -208,7 +209,7 @@ public:
                     append_probe_batch(
                         std::move(level_draws[level]),
                         RASTER_PROBE_GIZMO_COLOR_FIXED,
-                        GetAdaptiveCellColor(static_cast<uint>(level)),
+                        GetAdaptiveCellColor(static_cast<uint32>(level)),
                         0.82f,
                         level_pass_names[level]
                     );
@@ -218,7 +219,7 @@ public:
         }
 
         if (draw_bounds) {
-            for (uint volume_index = 0; volume_index < context.probe_volume.GetVolumeCount(); ++volume_index) {
+            for (uint32 volume_index = 0; volume_index < context.probe_volume.GetVolumeCount(); ++volume_index) {
                 const ProbeVolumeGpuDesc& volume = context.probe_volume.GetVolumeDesc(volume_index);
                 const float3 volume_color = GetVolumeBoundsColor(config, volume_index);
                 AppendBounds(
@@ -236,9 +237,9 @@ public:
         }
 
         if (draw_adaptive_cells) {
-            for (uint cell_index = 0u; cell_index < context.probe_volume.GetCellCount(); ++cell_index) {
+            for (uint32 cell_index = 0u; cell_index < context.probe_volume.GetCellCount(); ++cell_index) {
                 const ProbeCellGpuDesc& cell = context.probe_volume.GetCellDesc(cell_index);
-                const uint volume_index = cell.coord_volume.w;
+                const uint32            volume_index = cell.coord_volume.w;
                 if (volume_index >= context.probe_volume.GetVolumeCount()) {
                     continue;
                 }
@@ -310,14 +311,14 @@ public:
 private:
     static void AppendBounds(
         RecordParameters& parameters,
-        const Camera&  camera,
-        float3         origin,
-        float3         extent,
-        float3         color,
-        float          thickness,
-        float          alpha,
-        uint           draw_mode,
-        const char*    pass_name
+        const Camera&     camera,
+        float3            origin,
+        float3            extent,
+        float3            color,
+        float             thickness,
+        float             alpha,
+        uint32            draw_mode,
+        const char*       pass_name
     ) {
         ProbeGizmoParam param{};
         param.world2clip = Transpose(camera.GetViewProjectionMatrix());
@@ -344,7 +345,7 @@ private:
         });
     }
 
-    static float3 GetVolumeBoundsColor(const RasterConfig& config, uint volume_index) {
+    static float3 GetVolumeBoundsColor(const RasterConfig& config, uint32 volume_index) {
         if (volume_index == 0u) {
             return config.probe_gi_volume_bounds_color;
         }
@@ -357,7 +358,7 @@ private:
         return float3(0.95f, 0.30f, 0.82f);
     }
 
-    static float3 GetAdaptiveCellColor(uint subdivision_level) {
+    static float3 GetAdaptiveCellColor(uint32 subdivision_level) {
         if (subdivision_level == 0u) {
             return float3(0.95f, 0.10f, 0.04f);
         }

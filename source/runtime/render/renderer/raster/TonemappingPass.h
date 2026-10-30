@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "math/Function.h"
+#include "misc/Types.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -99,12 +100,12 @@ public:
         );
 
         // Buffer
-        histogram_buffer = device.CreateBuffer<uint>(
+        histogram_buffer = device.CreateBuffer<uint32>(
             "raster histogram buffer",
             TONEMAPPING_HISTOGRAM_BIN_COUNT,
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER
         );
-        exposure_buffer = device.CreateBuffer<uint>(
+        exposure_buffer = device.CreateBuffer<uint32>(
             "raster exposure buffer",
             1,
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER |

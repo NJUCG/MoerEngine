@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 // 对几何缓冲和方向光阴影遮罩应用延迟 PBR 光照。
+
+#include "misc/Types.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/Constants.h"
 
@@ -76,7 +78,7 @@ public:
         pass_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
         parameters.extra_ambient_intensity = ui_config.shading_extra_ambient_intensity;
         pass_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
-        pass_param.shading_mode            = static_cast<uint>(ui_config.shading_mode);
+        pass_param.shading_mode            = static_cast<uint32>(ui_config.shading_mode);
 
         pass_param.gbuffer_base_color     = context.textures.base_color.hdl;
         pass_param.gbuffer_normal         = context.textures.normal.hdl;

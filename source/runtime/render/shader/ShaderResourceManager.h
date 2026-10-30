@@ -4,6 +4,7 @@
 #include "ShaderPipeline.h"
 #include "misc/CountableRef.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -175,7 +176,7 @@ struct RTConstructor {
     Render::RenderDevice& device;
 };
 
-using ShaderCodeMap = Moer::UnorderedMap<uint, ShaderEntry>;
+using ShaderCodeMap = Moer::UnorderedMap<uint32, ShaderEntry>;
 
 struct TypedShaderCache {
     UnorderedMap<ShaderCompilerInput, ShaderEntryKey>    shader_cache_map;
@@ -301,7 +302,7 @@ public:
         VertexFactory*                   _factory,
         std::string_view                 _entry_name,
         const ShaderCompilerEnvironment& _base_env,
-        uint                             _mutation_id
+        uint32                           _mutation_id
     ) {
         ShaderAsset asset(_path, _entry_name, _factory);
         asset.environment.Merge(_base_env);

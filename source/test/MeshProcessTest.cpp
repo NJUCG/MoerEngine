@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include <algorithm>
 #include <metis.h>
 
@@ -30,10 +31,10 @@ int main(const int argc, const char** argv) {
 }
 
 struct MeshletDesc {
-    uint32_t vertex_count; // number of vertices used
-    uint32_t prim_count;   // number of primitives (triangles) used
-    uint32_t vertex_begin; // offset into vertexIndices
-    uint32_t prim_begin;   // offset into primitiveIndices
+    Moer::uint32 vertex_count; // number of vertices used
+    Moer::uint32 prim_count;   // number of primitives (triangles) used
+    Moer::uint32 vertex_begin; // offset into vertexIndices
+    Moer::uint32 prim_begin;   // offset into primitiveIndices
 };
 
 //information for culling
@@ -45,9 +46,9 @@ struct MeshletInfo {
 struct MoerMesh {
     Moer::Array<MeshletDesc> meshlets;
 
-    Moer::Array<uint8_t> primitive_indices; //local triangle indices
+    Moer::Array<Moer::uint8> primitive_indices; //local triangle indices
 
-    Moer::Array<uint32_t>    vertex_indices; //unique original vertex indices
+    Moer::Array<Moer::uint32> vertex_indices; //unique original vertex indices
     Moer::Array<MeshletInfo> meshlet_info;
 };
 
@@ -61,7 +62,7 @@ struct Vertex {
 
 struct OriginalMesh {
     Moer::Array<Vertex>   vertexs;
-    Moer::Array<uint32_t> indices;
+    Moer::Array<Moer::uint32> indices;
 };
 
 struct MoerMeshletOutputs {
@@ -136,7 +137,7 @@ void MetisTest() {
     Moer::Array<MoerMeshletOutputs> moer_meshes(original_meshes.size());
     for (auto& original_mesh : original_meshes) {
 
-        Moer::Array<uint32_t> remap(original_mesh.vertexs.size());
+        Moer::Array<Moer::uint32> remap(original_mesh.vertexs.size());
 
         size_t target_vertex_size = meshopt_generateVertexRemap(
             &remap[0],
@@ -147,7 +148,7 @@ void MetisTest() {
             sizeof(Vertex)
         );
 
-        Moer::Array<uint32_t> target_indices(original_mesh.indices.size());
+        Moer::Array<Moer::uint32> target_indices(original_mesh.indices.size());
         Moer::Array<Vertex>   target_vertices(target_vertex_size);
 
         meshopt_remapIndexBuffer(
@@ -209,14 +210,14 @@ void MetisTest() {
         meshlet_triangles.resize(last.triangle_offset + ((last.triangle_count * 3 + 3) & ~3));
         meshlets.resize(meshlet_count);
 
-        for (uint32_t i = 0; i < meshlet_vertices.size(); i++) {
+        for (Moer::uint32 i = 0; i < meshlet_vertices.size(); i++) {
             meshlet_vertices_data[i] = target_vertices[meshlet_vertices[i]];
         }
 
         Moer::Array<meshopt_Bounds> meshlet_bounds(meshlet_count);
 
         std::for_each(meshlets.begin(), meshlets.end(), [&](const meshopt_Meshlet& m) {
-            uint32_t index = &m - &meshlets[0];
+            Moer::uint32 index = &m - &meshlets[0];
 
             meshlet_bounds[index] = meshopt_computeMeshletBounds(
                 &meshlet_vertices[m.vertex_offset],
@@ -282,11 +283,11 @@ void GenerateMoerMeshletMesh(const MoerMeshletInputs& input, MoerMeshletOutputs&
     int num_element = num_faces;
     int num_nodes   = num_faces * 3;
 
-    Moer::Array<int32_t> eptr(num_element + 1);
-    Moer::Array<int32_t> eind(num_nodes); //num indices
+    Moer::Array<Moer::int32> eptr(num_element + 1);
+    Moer::Array<Moer::int32> eind(num_nodes); //num indices
 
-    constexpr int32_t num_node_per_element = 3; //triangle mesh
-    int32_t           current_offset       = 0;
+    constexpr Moer::int32 num_node_per_element = 3; //triangle mesh
+    Moer::int32           current_offset       = 0;
     for (int i = 0; i < num_element + 1; i++) {
         eptr[i] = current_offset;
         current_offset += num_node_per_element;
@@ -341,10 +342,10 @@ void GenerateMoerMeshletMesh(const MoerMeshletInputs& input, MoerMeshletOutputs&
         meshlet.vertex_begin = moer_mesh.vertex_indices.size();
         meshlet.prim_begin   = moer_mesh.primitive_indices.size();
 
-        Moer::Array<uint32_t> vertex_indices;
-        Moer::Array<uint8_t>  primitive_indices;
+        Moer::Array<Moer::uint32> vertex_indices;
+        Moer::Array<Moer::uint8>  primitive_indices;
 
-        uint32_t meshlet_index = &meshlet - &moer_mesh.meshlets[0];
+        Moer::uint32 meshlet_index = &meshlet - &moer_mesh.meshlets[0];
         for (const int& partition_id : part | std::views::filter([&](const int& p) {
                                            return p == meshlet_index;
                                        }) | std::views::transform([&](const int& p) {

@@ -1,4 +1,5 @@
 #include "profile_consumer/ProfileSession.h"
+#include "misc/Types.h"
 
 #include "profile/ProfileDumpTemplates.h"
 
@@ -38,20 +39,20 @@ template<typename T>
     return false;
 }
 
-[[nodiscard]] std::uint32_t
-ReadU32LittleEndian(std::span<const std::uint8_t> _bytes, std::size_t _offset) noexcept {
-    std::uint32_t value = 0;
+[[nodiscard]] uint32
+ReadU32LittleEndian(std::span<const uint8> _bytes, std::size_t _offset) noexcept {
+    uint32 value = 0;
     for (std::size_t byte = 0; byte < sizeof(value); ++byte) {
-        value |= static_cast<std::uint32_t>(_bytes[_offset + byte]) << (byte * 8);
+        value |= static_cast<uint32>(_bytes[_offset + byte]) << (byte * 8);
     }
     return value;
 }
 
-[[nodiscard]] std::uint64_t
-ReadU64LittleEndian(std::span<const std::uint8_t> _bytes, std::size_t _offset) noexcept {
-    std::uint64_t value = 0;
+[[nodiscard]] uint64
+ReadU64LittleEndian(std::span<const uint8> _bytes, std::size_t _offset) noexcept {
+    uint64 value = 0;
     for (std::size_t byte = 0; byte < sizeof(value); ++byte) {
-        value |= static_cast<std::uint64_t>(_bytes[_offset + byte]) << (byte * 8);
+        value |= static_cast<uint64>(_bytes[_offset + byte]) << (byte * 8);
     }
     return value;
 }
@@ -65,13 +66,13 @@ ReadU64LittleEndian(std::span<const std::uint8_t> _bytes, std::size_t _offset) n
     return _inner <= _outer + tolerance;
 }
 
-[[nodiscard]] std::uint64_t TimestampMask(std::uint32_t _valid_bits) noexcept {
-    return _valid_bits == 64 ? std::numeric_limits<std::uint64_t>::max() :
-                               (std::uint64_t{1} << _valid_bits) - 1;
+[[nodiscard]] uint64 TimestampMask(uint32 _valid_bits) noexcept {
+    return _valid_bits == 64 ? std::numeric_limits<uint64>::max() :
+                               (uint64{1} << _valid_bits) - 1;
 }
 
-[[nodiscard]] std::uint64_t
-TimestampDelta(std::uint64_t _begin_tick, std::uint64_t _end_tick, std::uint32_t _valid_bits) noexcept {
+[[nodiscard]] uint64
+TimestampDelta(uint64 _begin_tick, uint64 _end_tick, uint32 _valid_bits) noexcept {
     return (_end_tick - _begin_tick) & TimestampMask(_valid_bits);
 }
 
@@ -84,20 +85,20 @@ TimestampDelta(std::uint64_t _begin_tick, std::uint64_t _end_tick, std::uint32_t
 }
 
 [[nodiscard]] bool CanBridgeSerialTimestampGap(
-    std::uint64_t _duration,
-    std::uint64_t _begin_offset,
-    std::uint32_t _valid_bits,
-    std::uint64_t _missing_local_orders
+    uint64 _duration,
+    uint64 _begin_offset,
+    uint32 _valid_bits,
+    uint64 _missing_local_orders
 ) noexcept {
-    const std::uint64_t half_range =
-        _valid_bits == 64 ? (std::uint64_t{1} << 63) : (std::uint64_t{1} << (_valid_bits - 1));
-    const std::uint64_t maximum_step = half_range - 1;
+    const uint64 half_range =
+        _valid_bits == 64 ? (uint64{1} << 63) : (uint64{1} << (_valid_bits - 1));
+    const uint64 maximum_step = half_range - 1;
     if (_duration > maximum_step) {
         return false;
     }
 
-    std::uint64_t step_count = 0;
-    if (AddOverflow(_missing_local_orders, std::uint64_t{1}, step_count)) {
+    uint64 step_count = 0;
+    if (AddOverflow(_missing_local_orders, uint64{1}, step_count)) {
         return true;
     }
     if (maximum_step == 0) {
@@ -105,20 +106,20 @@ TimestampDelta(std::uint64_t _begin_tick, std::uint64_t _end_tick, std::uint32_t
     }
 
     if (_valid_bits != 64) {
-        const std::uint64_t modulus  = std::uint64_t{1} << _valid_bits;
-        const std::uint64_t distance = _begin_offset >= _duration ? _begin_offset : _begin_offset + modulus;
-        const std::uint64_t required_steps =
-            distance / maximum_step + static_cast<std::uint64_t>(distance % maximum_step != 0);
+        const uint64 modulus  = uint64{1} << _valid_bits;
+        const uint64 distance = _begin_offset >= _duration ? _begin_offset : _begin_offset + modulus;
+        const uint64 required_steps =
+            distance / maximum_step + static_cast<uint64>(distance % maximum_step != 0);
         return required_steps <= step_count;
     }
 
-    std::uint64_t required_steps = 0;
+    uint64 required_steps = 0;
     if (_begin_offset >= _duration) {
         required_steps =
-            _begin_offset / maximum_step + static_cast<std::uint64_t>(_begin_offset % maximum_step != 0);
+            _begin_offset / maximum_step + static_cast<uint64>(_begin_offset % maximum_step != 0);
     } else if (_begin_offset <= maximum_step - 2) {
         required_steps = 3;
-    } else if (_begin_offset <= std::numeric_limits<std::uint64_t>::max() - 3) {
+    } else if (_begin_offset <= std::numeric_limits<uint64>::max() - 3) {
         required_steps = 4;
     } else {
         required_steps = 5;
@@ -127,8 +128,8 @@ TimestampDelta(std::uint64_t _begin_tick, std::uint64_t _end_tick, std::uint32_t
 }
 
 struct SerialTick {
-    std::uint64_t epoch{0};
-    std::uint64_t tick{0};
+    uint64 epoch{0};
+    uint64 tick{0};
 
     [[nodiscard]] bool operator<(const SerialTick& _right) const noexcept {
         return std::tie(epoch, tick) < std::tie(_right.epoch, _right.tick);
@@ -140,15 +141,15 @@ struct SerialTick {
 }
 
 [[nodiscard]] bool AddSerialTickDelta(
-    SerialTick    _base,
-    std::uint64_t _delta,
-    std::uint32_t _valid_bits,
-    SerialTick&   _result
+    SerialTick  _base,
+    uint64      _delta,
+    uint32      _valid_bits,
+    SerialTick& _result
 ) noexcept {
     if (_valid_bits == 64) {
-        const std::uint64_t tick  = _base.tick + _delta;
-        const std::uint64_t carry = static_cast<std::uint64_t>(tick < _base.tick);
-        if (carry != 0 && _base.epoch == std::numeric_limits<std::uint64_t>::max()) {
+        const uint64 tick  = _base.tick + _delta;
+        const uint64 carry = static_cast<uint64>(tick < _base.tick);
+        if (carry != 0 && _base.epoch == std::numeric_limits<uint64>::max()) {
             return false;
         }
         _result = {
@@ -158,10 +159,10 @@ struct SerialTick {
         return true;
     }
 
-    const std::uint64_t modulus = std::uint64_t{1} << _valid_bits;
-    const std::uint64_t sum     = _base.tick + _delta;
-    const std::uint64_t carry   = static_cast<std::uint64_t>(sum >= modulus);
-    if (carry != 0 && _base.epoch == std::numeric_limits<std::uint64_t>::max()) {
+    const uint64 modulus = uint64{1} << _valid_bits;
+    const uint64 sum     = _base.tick + _delta;
+    const uint64 carry   = static_cast<uint64>(sum >= modulus);
+    if (carry != 0 && _base.epoch == std::numeric_limits<uint64>::max()) {
         return false;
     }
     _result = {
@@ -172,10 +173,10 @@ struct SerialTick {
 }
 
 [[nodiscard]] bool SubtractSerialTickDelta(
-    SerialTick    _base,
-    std::uint64_t _delta,
-    std::uint32_t _valid_bits,
-    SerialTick&   _result
+    SerialTick  _base,
+    uint64      _delta,
+    uint32      _valid_bits,
+    SerialTick& _result
 ) noexcept {
     if (_base.tick >= _delta) {
         _result = {
@@ -194,7 +195,7 @@ struct SerialTick {
         };
         return true;
     }
-    const std::uint64_t modulus = std::uint64_t{1} << _valid_bits;
+    const uint64 modulus        = uint64{1} << _valid_bits;
     _result                     = {
                             .epoch = _base.epoch - 1,
                             .tick  = modulus - (_delta - _base.tick),
@@ -203,8 +204,8 @@ struct SerialTick {
 }
 
 [[nodiscard]] bool NextSerialTickOccurrence(
-    std::uint64_t     _tick,
-    std::uint32_t     _valid_bits,
+    uint64            _tick,
+    uint32            _valid_bits,
     const SerialTick& _lower_bound,
     SerialTick&       _result
 ) noexcept {
@@ -213,7 +214,7 @@ struct SerialTick {
         .tick  = _tick & TimestampMask(_valid_bits),
     };
     if (_result < _lower_bound) {
-        if (_result.epoch == std::numeric_limits<std::uint64_t>::max()) {
+        if (_result.epoch == std::numeric_limits<uint64>::max()) {
             return false;
         }
         ++_result.epoch;
@@ -253,10 +254,10 @@ class CancellationProbe final {
 public:
     explicit CancellationProbe(const SessionLoadControl& _control) noexcept :
         stop_token_(_control.stop_token),
-        interval_(std::max<std::uint64_t>(std::uint64_t{1}, _control.cancellation_check_interval)),
+        interval_(std::max<uint64>(uint64{1}, _control.cancellation_check_interval)),
         remaining_budget_(_control.max_work_items_before_cancel) {}
 
-    [[nodiscard]] bool Requested(std::uint64_t _work_items = 1) noexcept {
+    [[nodiscard]] bool Requested(uint64 _work_items = 1) noexcept {
         if (_work_items > remaining_budget_) {
             remaining_budget_ = 0;
             return true;
@@ -269,7 +270,7 @@ public:
         return remaining_budget_ == 0 || stop_token_.stop_requested();
     }
 
-    [[nodiscard]] bool StopRequested(std::uint64_t _actual_iterations = 1) noexcept {
+    [[nodiscard]] bool StopRequested(uint64 _actual_iterations = 1) noexcept {
         if (!stop_token_.stop_possible()) {
             return false;
         }
@@ -282,15 +283,15 @@ public:
     }
 
     [[nodiscard]] std::size_t SortRunSize() const noexcept {
-        constexpr std::uint64_t kMaximumSortRunSize = 4096;
+        constexpr uint64 kMaximumSortRunSize = 4096;
         return static_cast<std::size_t>(std::min(interval_, kMaximumSortRunSize));
     }
 
 private:
     std::stop_token stop_token_{};
-    std::uint64_t   interval_{1};
-    std::uint64_t   pending_stop_iterations_{0};
-    std::uint64_t   remaining_budget_{std::numeric_limits<std::uint64_t>::max()};
+    uint64          interval_{1};
+    uint64          pending_stop_iterations_{0};
+    uint64          remaining_budget_{std::numeric_limits<uint64>::max()};
 };
 
 } // namespace
@@ -389,8 +390,8 @@ struct ProfileSessionReader::Impl {
     };
 
     struct DomainKey {
-        std::uint32_t native_queue_id{0};
-        std::uint32_t family_id{0};
+        uint32 native_queue_id{0};
+        uint32 family_id{0};
 
         friend bool operator==(const DomainKey&, const DomainKey&) = default;
         friend bool operator<(const DomainKey& _left, const DomainKey& _right) noexcept {
@@ -402,9 +403,9 @@ struct ProfileSessionReader::Impl {
     };
 
     struct ScopeLookup {
-        std::uint64_t frame_id{0};
-        std::uint64_t scope_id{0};
-        std::uint64_t scope_index{0};
+        uint64 frame_id{0};
+        uint64 scope_id{0};
+        uint64 scope_index{0};
 
         friend bool operator<(const ScopeLookup& _left, const ScopeLookup& _right) noexcept {
             if (_left.frame_id != _right.frame_id) {
@@ -418,24 +419,24 @@ struct ProfileSessionReader::Impl {
     };
 
     struct RecordSequenceDemand {
-        std::uint64_t release_sequence{0};
-        std::uint64_t deadline_sequence{0};
-        std::uint64_t count{0};
+        uint64 release_sequence{0};
+        uint64 deadline_sequence{0};
+        uint64 count{0};
     };
 
     struct JointVirtualTask {
-        std::uint64_t first_allowed_local{0};
-        std::uint64_t deadline_local{0};
-        std::uint64_t deadline_sequence{0};
+        uint64 first_allowed_local{0};
+        uint64 deadline_local{0};
+        uint64 deadline_sequence{0};
     };
 
     struct JointLocalCell {
-        std::uint64_t            frame_id{0};
-        std::uint64_t            local_begin{0};
-        std::uint64_t            local_end{0};
-        std::uint64_t            release_sequence{0};
-        std::uint64_t            deadline_sequence{0};
-        std::uint64_t            local_capacity{0};
+        uint64                   frame_id{0};
+        uint64                   local_begin{0};
+        uint64                   local_end{0};
+        uint64                   release_sequence{0};
+        uint64                   deadline_sequence{0};
+        uint64                   local_capacity{0};
         std::vector<std::size_t> task_indices{};
     };
 
@@ -478,7 +479,7 @@ struct ProfileSessionReader::Impl {
         }
     }
 
-    [[nodiscard]] bool CheckCancellation(std::uint64_t _work_items = 1) noexcept {
+    [[nodiscard]] bool CheckCancellation(uint64 _work_items = 1) noexcept {
         if (!IsReading() || !cancellation.Requested(_work_items)) {
             return !IsReading();
         }
@@ -494,7 +495,7 @@ struct ProfileSessionReader::Impl {
         return true;
     }
 
-    [[nodiscard]] bool CheckStopOnly(std::uint64_t _actual_iterations = 1) noexcept {
+    [[nodiscard]] bool CheckStopOnly(uint64 _actual_iterations = 1) noexcept {
         if (!IsReading() || !cancellation.StopRequested(_actual_iterations)) {
             return !IsReading();
         }
@@ -523,7 +524,7 @@ struct ProfileSessionReader::Impl {
         const std::size_t run_size = std::min(count, cancellation.SortRunSize());
         for (std::size_t run_begin = 0; run_begin < count;) {
             const std::size_t run_count = std::min(run_size, count - run_begin);
-            if (CheckCancellation(static_cast<std::uint64_t>(run_count))) {
+            if (CheckCancellation(static_cast<uint64>(run_count))) {
                 return false;
             }
             const Iterator begin = _begin + static_cast<std::ptrdiff_t>(run_begin);
@@ -538,10 +539,10 @@ struct ProfileSessionReader::Impl {
             return true;
         }
 
-        std::uint64_t scratch_bytes = 0;
+        uint64 scratch_bytes = 0;
         if (sizeof(Value) != 0 &&
-            static_cast<std::uint64_t>(count) >
-                std::numeric_limits<std::uint64_t>::max() / static_cast<std::uint64_t>(sizeof(Value))) {
+            static_cast<uint64>(count) >
+                std::numeric_limits<uint64>::max() / static_cast<uint64>(sizeof(Value))) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
@@ -551,7 +552,7 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        scratch_bytes = static_cast<std::uint64_t>(count) * static_cast<std::uint64_t>(sizeof(Value));
+        scratch_bytes = static_cast<uint64>(count) * static_cast<uint64>(sizeof(Value));
         if (scratch_bytes > options.limits.max_transient_materialization_bytes) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
@@ -680,7 +681,7 @@ struct ProfileSessionReader::Impl {
         const char*       _diagnostic,
         DecodeStatus      _codec_status = DecodeStatus::Ok,
         SessionLimitKind  _limit_kind   = SessionLimitKind::None,
-        std::uint64_t     _byte_offset  = kInvalidSessionIndex
+        uint64            _byte_offset  = kInvalidSessionIndex
     ) noexcept {
         if (!IsReading()) {
             return;
@@ -698,8 +699,8 @@ struct ProfileSessionReader::Impl {
         }
     }
 
-    [[nodiscard]] bool ChargeModel(std::uint64_t _bytes) noexcept {
-        std::uint64_t next = 0;
+    [[nodiscard]] bool ChargeModel(uint64 _bytes) noexcept {
+        uint64 next = 0;
         if (AddOverflow(session.impl_->summary.logical_model_bytes, _bytes, next) ||
             next > options.limits.max_logical_model_bytes) {
             Fail(
@@ -716,8 +717,8 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool CheckCountLimit(
-        std::uint64_t    _current,
-        std::uint64_t    _maximum,
+        uint64           _current,
+        uint64           _maximum,
         SessionLimitKind _kind,
         const char*      _diagnostic
     ) noexcept {
@@ -734,11 +735,11 @@ struct ProfileSessionReader::Impl {
         return true;
     }
 
-    [[nodiscard]] bool ChargeTopologyWork(std::uint64_t _count) noexcept {
+    [[nodiscard]] bool ChargeTopologyWork(uint64 _count) noexcept {
         if ((_count == 0 && CheckCancellationNow()) || (_count != 0 && CheckCancellation(_count))) {
             return false;
         }
-        std::uint64_t next_topology_work_items = 0;
+        uint64 next_topology_work_items = 0;
         if (AddOverflow(topology_work_items, _count, next_topology_work_items) ||
             next_topology_work_items > options.limits.max_topology_work_items) {
             Fail(
@@ -755,11 +756,11 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool ChargeTopologyLinearWork(std::size_t _count) noexcept {
-        return ChargeTopologyWork(static_cast<std::uint64_t>(_count));
+        return ChargeTopologyWork(static_cast<uint64>(_count));
     }
 
     [[nodiscard]] bool ChargeTopologySortWork(std::size_t _count) noexcept {
-        const std::uint64_t count = static_cast<std::uint64_t>(_count);
+        const uint64        count = static_cast<uint64>(_count);
         std::size_t         width = 1;
         while (width < _count) {
             if (!ChargeTopologyWork(count)) {
@@ -774,7 +775,7 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool ChargeTopologyBinarySearchWork(std::size_t _count) noexcept {
-        std::uint64_t work = 0;
+        uint64 work = 0;
         while (_count != 0) {
             ++work;
             _count /= 2;
@@ -783,7 +784,7 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool ChargeTopologyHeapWork(std::size_t _size) noexcept {
-        std::uint64_t work = 1;
+        uint64 work = 1;
         while (_size > 1) {
             ++work;
             _size /= 2;
@@ -811,8 +812,8 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
-        std::uint64_t next_string_bytes = 0;
-        if (AddOverflow(string_bytes, static_cast<std::uint64_t>(_value.size()), next_string_bytes) ||
+        uint64 next_string_bytes = 0;
+        if (AddOverflow(string_bytes, static_cast<uint64>(_value.size()), next_string_bytes) ||
             next_string_bytes > options.limits.max_string_bytes) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
@@ -823,7 +824,7 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        if (!ChargeModel(sizeof(std::string) + static_cast<std::uint64_t>(_value.size()))) {
+        if (!ChargeModel(sizeof(std::string) + static_cast<uint64>(_value.size()))) {
             return false;
         }
 
@@ -851,11 +852,11 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool MaterializeCpuScope(const DecodedRecord& _record) {
-        const auto* thread_id = RecordField<std::uint64_t>(_record, 0);
+        const auto* thread_id = RecordField<uint64>(_record, 0);
         const auto* name      = RecordField<ProfileString>(_record, 1);
-        const auto* begin_ns  = RecordField<std::uint64_t>(_record, 2);
-        const auto* end_ns    = RecordField<std::uint64_t>(_record, 3);
-        const auto* depth     = RecordField<std::uint32_t>(_record, 4);
+        const auto* begin_ns  = RecordField<uint64>(_record, 2);
+        const auto* end_ns    = RecordField<uint64>(_record, 3);
+        const auto* depth     = RecordField<uint32>(_record, 4);
         if (thread_id == nullptr || name == nullptr || begin_ns == nullptr || end_ns == nullptr ||
             depth == nullptr) {
             Fail(
@@ -921,12 +922,12 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool MaterializeGpuFrame(const DecodedRecord& _record) {
-        const auto* frame_id       = RecordField<std::uint64_t>(_record, 0);
-        const auto* capture_status = RecordField<std::uint32_t>(_record, 1);
+        const auto* frame_id       = RecordField<uint64>(_record, 0);
+        const auto* capture_status = RecordField<uint32>(_record, 1);
         const auto* valid          = RecordField<bool>(_record, 2);
-        const auto* admitted       = RecordField<std::uint64_t>(_record, 3);
-        const auto* dropped        = RecordField<std::uint64_t>(_record, 4);
-        const auto* errors         = RecordField<std::uint64_t>(_record, 5);
+        const auto* admitted       = RecordField<uint64>(_record, 3);
+        const auto* dropped        = RecordField<uint64>(_record, 4);
+        const auto* errors         = RecordField<uint64>(_record, 5);
         const auto* reason         = RecordField<ProfileString>(_record, 6);
         if (frame_id == nullptr || capture_status == nullptr || valid == nullptr || admitted == nullptr ||
             dropped == nullptr || errors == nullptr || reason == nullptr) {
@@ -938,7 +939,7 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        if (*capture_status > static_cast<std::uint32_t>(ProfileGpuFrameStatus::Invalid)) {
+        if (*capture_status > static_cast<uint32>(ProfileGpuFrameStatus::Invalid)) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
                 SessionErrorCode::GpuFrameStatusInvalid,
@@ -1009,23 +1010,23 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool MaterializeGpuScope(const DecodedRecord& _record) {
-        const auto* frame_id              = RecordField<std::uint64_t>(_record, 0);
-        const auto* scope_id              = RecordField<std::uint64_t>(_record, 1);
-        const auto* parent_scope_id       = RecordField<std::uint64_t>(_record, 2);
-        const auto* source_order          = RecordField<std::uint64_t>(_record, 3);
-        const auto* local_order           = RecordField<std::uint64_t>(_record, 4);
-        const auto* logical_queue         = RecordField<std::uint32_t>(_record, 5);
-        const auto* native_queue_id       = RecordField<std::uint32_t>(_record, 6);
-        const auto* family_id             = RecordField<std::uint32_t>(_record, 7);
+        const auto* frame_id              = RecordField<uint64>(_record, 0);
+        const auto* scope_id              = RecordField<uint64>(_record, 1);
+        const auto* parent_scope_id       = RecordField<uint64>(_record, 2);
+        const auto* source_order          = RecordField<uint64>(_record, 3);
+        const auto* local_order           = RecordField<uint64>(_record, 4);
+        const auto* logical_queue         = RecordField<uint32>(_record, 5);
+        const auto* native_queue_id       = RecordField<uint32>(_record, 6);
+        const auto* family_id             = RecordField<uint32>(_record, 7);
         const auto* name                  = RecordField<ProfileString>(_record, 8);
-        const auto* encoded_status        = RecordField<std::uint32_t>(_record, 9);
-        const auto* begin_tick            = RecordField<std::uint64_t>(_record, 10);
-        const auto* end_tick              = RecordField<std::uint64_t>(_record, 11);
-        const auto* valid_bits            = RecordField<std::uint32_t>(_record, 12);
+        const auto* encoded_status        = RecordField<uint32>(_record, 9);
+        const auto* begin_tick            = RecordField<uint64>(_record, 10);
+        const auto* end_tick              = RecordField<uint64>(_record, 11);
+        const auto* valid_bits            = RecordField<uint32>(_record, 12);
         const auto* tick_period_ns        = RecordField<double>(_record, 13);
         const auto* total_duration_ns     = RecordField<double>(_record, 14);
         const auto* exclusive_duration_ns = RecordField<double>(_record, 15);
-        const auto* depth                 = RecordField<std::uint32_t>(_record, 16);
+        const auto* depth                 = RecordField<uint32>(_record, 16);
         const auto* error_reason          = RecordField<ProfileString>(_record, 17);
         if (frame_id == nullptr || scope_id == nullptr || parent_scope_id == nullptr ||
             source_order == nullptr || local_order == nullptr || logical_queue == nullptr ||
@@ -1049,7 +1050,7 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        if (*logical_queue > static_cast<std::uint32_t>(ProfileLogicalQueue::Copy)) {
+        if (*logical_queue > static_cast<uint32>(ProfileLogicalQueue::Copy)) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
                 SessionErrorCode::GpuScopeQueueInvalid,
@@ -1057,7 +1058,7 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        if (*encoded_status > static_cast<std::uint32_t>(ProfileGpuScopeStatus::Error)) {
+        if (*encoded_status > static_cast<uint32>(ProfileGpuScopeStatus::Error)) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
                 SessionErrorCode::GpuScopeStatusInvalid,
@@ -1154,7 +1155,7 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
-        const std::uint64_t hash     = ComputeSchemaHash(descriptor);
+        const uint64        hash     = ComputeSchemaHash(descriptor);
         const auto          existing = schemas.find(hash);
         ++session.impl_->summary.schema_packet_count;
         if (existing != schemas.end()) {
@@ -1178,9 +1179,9 @@ struct ProfileSessionReader::Impl {
             )) {
             return false;
         }
-        std::uint64_t next_schema_bytes = 0;
+        uint64 next_schema_bytes = 0;
         if (AddOverflow(
-                schema_bytes, static_cast<std::uint64_t>(_packet.payload.size()), next_schema_bytes
+                schema_bytes, static_cast<uint64>(_packet.payload.size()), next_schema_bytes
             ) ||
             next_schema_bytes > options.limits.max_schema_bytes) {
             Fail(
@@ -1192,7 +1193,7 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        if (!ChargeModel(sizeof(ProfileSchemaInfo) + static_cast<std::uint64_t>(_packet.payload.size()))) {
+        if (!ChargeModel(sizeof(ProfileSchemaInfo) + static_cast<uint64>(_packet.payload.size()))) {
             return false;
         }
 
@@ -1202,7 +1203,7 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
-        const std::uint64_t first_field = session.impl_->schema_fields.size();
+        const uint64 first_field = session.impl_->schema_fields.size();
         for (const SchemaField& field : descriptor.fields) {
             if (CheckStopOnly()) {
                 return false;
@@ -1231,7 +1232,7 @@ struct ProfileSessionReader::Impl {
             .channel        = descriptor.channel,
             .known_schema   = known,
             .first_field    = first_field,
-            .field_count    = static_cast<std::uint32_t>(descriptor.fields.size()),
+            .field_count    = static_cast<uint32>(descriptor.fields.size()),
         });
         schemas.emplace(
             hash,
@@ -1247,7 +1248,7 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool ProcessRecord(const PacketView& _packet) {
-        if (_packet.payload.size() < sizeof(std::uint64_t) * 2 + sizeof(std::uint32_t)) {
+        if (_packet.payload.size() < sizeof(uint64) * 2 + sizeof(uint32)) {
             Fail(
                 SessionLoadStatus::CorruptData,
                 SessionErrorCode::RecordPayloadInvalid,
@@ -1265,7 +1266,7 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
-        const std::uint64_t schema_hash = ReadU64LittleEndian(_packet.payload, 0);
+        const uint64        schema_hash = ReadU64LittleEndian(_packet.payload, 0);
         const auto          schema      = schemas.find(schema_hash);
         if (schema == schemas.end()) {
             Fail(
@@ -1333,8 +1334,8 @@ struct ProfileSessionReader::Impl {
         }
 
         ProfileSessionSummary& summary      = session.impl_->summary;
-        std::uint64_t          lost_records = 0;
-        std::uint64_t          lost_bytes   = 0;
+        uint64                 lost_records = 0;
+        uint64                 lost_bytes   = 0;
         if (AddOverflow(summary.lost_record_count, loss.record_count, lost_records) ||
             AddOverflow(summary.lost_value_bytes, loss.value_bytes, lost_bytes)) {
             Fail(
@@ -1364,18 +1365,18 @@ struct ProfileSessionReader::Impl {
         }
 
         struct SequenceDemand {
-            std::uint64_t release_sequence{0};
-            std::uint64_t deadline_sequence{0};
-            std::uint64_t count{0};
+            uint64 release_sequence{0};
+            uint64 deadline_sequence{0};
+            uint64 count{0};
         };
 
-        const std::uint64_t loss_notice_count = static_cast<std::uint64_t>(session.impl_->losses.size());
+        const uint64 loss_notice_count = static_cast<uint64>(session.impl_->losses.size());
         if (!ChargeTopologyWork(loss_notice_count)) {
             return false;
         }
 
-        std::uint64_t mandatory_sequence_count = 0;
-        std::uint64_t residual_demand_count    = 0;
+        uint64 mandatory_sequence_count = 0;
+        uint64 residual_demand_count    = 0;
         for (const ProfileLossRecord& loss : session.impl_->losses) {
             if (CheckStopOnly()) {
                 return false;
@@ -1390,7 +1391,7 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
 
-            std::uint64_t mandatory_for_loss = 1;
+            uint64 mandatory_for_loss = 1;
             if (loss.record_count != 1) {
                 ++mandatory_for_loss;
             }
@@ -1409,10 +1410,10 @@ struct ProfileSessionReader::Impl {
             }
         }
 
-        std::uint64_t construction_work = 0;
+        uint64 construction_work = 0;
         if (AddOverflow(mandatory_sequence_count, residual_demand_count, construction_work) ||
-            mandatory_sequence_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
-            residual_demand_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            mandatory_sequence_count > static_cast<uint64>(std::numeric_limits<std::size_t>::max()) ||
+            residual_demand_count > static_cast<uint64>(std::numeric_limits<std::size_t>::max())) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
@@ -1426,7 +1427,7 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
-        std::vector<std::uint64_t> mandatory_sequences;
+        std::vector<uint64> mandatory_sequences;
         mandatory_sequences.reserve(static_cast<std::size_t>(mandatory_sequence_count));
         std::vector<SequenceDemand> residual_demands;
         residual_demands.reserve(static_cast<std::size_t>(residual_demand_count));
@@ -1447,13 +1448,13 @@ struct ProfileSessionReader::Impl {
             }
         }
 
-        const auto charge_sort_work = [&](std::uint64_t _count) {
-            std::uint64_t width = 1;
+        const auto charge_sort_work = [&](uint64 _count) {
+            uint64 width = 1;
             while (width < _count) {
                 if (!ChargeTopologyWork(_count)) {
                     return false;
                 }
-                if (width > std::numeric_limits<std::uint64_t>::max() / 2) {
+                if (width > std::numeric_limits<uint64>::max() / 2) {
                     break;
                 }
                 width *= 2;
@@ -1461,7 +1462,7 @@ struct ProfileSessionReader::Impl {
             return true;
         };
         const auto charge_binary_search = [&](std::size_t _count) {
-            std::uint64_t work      = 0;
+            uint64        work      = 0;
             std::size_t   remaining = _count;
             while (remaining != 0) {
                 ++work;
@@ -1496,7 +1497,7 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologyWork(mandatory_sequence_count)) {
             return false;
         }
-        for (const std::uint64_t sequence : mandatory_sequences) {
+        for (const uint64 sequence : mandatory_sequences) {
             if (CheckStopOnly()) {
                 return false;
             }
@@ -1534,8 +1535,8 @@ struct ProfileSessionReader::Impl {
         }
 
         struct PendingDemand {
-            std::uint64_t deadline_sequence{0};
-            std::uint64_t remaining_count{0};
+            uint64 deadline_sequence{0};
+            uint64 remaining_count{0};
         };
         const auto later_deadline = [](const PendingDemand& _left, const PendingDemand& _right) {
             return _left.deadline_sequence > _right.deadline_sequence;
@@ -1545,7 +1546,7 @@ struct ProfileSessionReader::Impl {
         std::priority_queue<PendingDemand, std::vector<PendingDemand>, decltype(later_deadline)>
                    pending_demands(later_deadline, std::move(pending_storage));
         const auto charge_heap_work = [&](std::size_t _size) {
-            std::uint64_t work = 1;
+            uint64 work = 1;
             while (_size > 1) {
                 ++work;
                 _size /= 2;
@@ -1565,7 +1566,7 @@ struct ProfileSessionReader::Impl {
         std::size_t   demand_index             = 0;
         std::size_t   record_index             = 0;
         std::size_t   mandatory_index          = 0;
-        std::uint64_t position                 = residual_demands.front().release_sequence;
+        uint64        position                 = residual_demands.front().release_sequence;
         bool          sequence_space_exhausted = false;
         while (demand_index < residual_demands.size() || !pending_demands.empty()) {
             if (!ChargeTopologyWork(1)) {
@@ -1614,14 +1615,14 @@ struct ProfileSessionReader::Impl {
 
             const bool          has_record    = record_index < record_sequences.size();
             const bool          has_mandatory = mandatory_index < mandatory_sequences.size();
-            const std::uint64_t next_record =
-                has_record ? record_sequences[record_index] : std::numeric_limits<std::uint64_t>::max();
-            const std::uint64_t next_mandatory = has_mandatory ? mandatory_sequences[mandatory_index] :
-                                                                 std::numeric_limits<std::uint64_t>::max();
+            const uint64        next_record =
+                has_record ? record_sequences[record_index] : std::numeric_limits<uint64>::max();
+            const uint64        next_mandatory = has_mandatory ? mandatory_sequences[mandatory_index] :
+                                                                 std::numeric_limits<uint64>::max();
             const bool          has_occupied   = has_record || has_mandatory;
-            const std::uint64_t next_occupied  = std::min(next_record, next_mandatory);
+            const uint64        next_occupied  = std::min(next_record, next_mandatory);
             if (has_occupied && next_occupied == position) {
-                if (position == std::numeric_limits<std::uint64_t>::max()) {
+                if (position == std::numeric_limits<uint64>::max()) {
                     return fail_allocation();
                 }
                 if (has_record && next_record == position) {
@@ -1638,7 +1639,7 @@ struct ProfileSessionReader::Impl {
             }
             PendingDemand demand = pending_demands.top();
             pending_demands.pop();
-            std::uint64_t batch_end = demand.deadline_sequence;
+            uint64 batch_end = demand.deadline_sequence;
             if (has_occupied && next_occupied > position) {
                 batch_end = std::min(batch_end, next_occupied - 1);
             }
@@ -1650,12 +1651,12 @@ struct ProfileSessionReader::Impl {
                 return fail_allocation();
             }
 
-            const std::uint64_t available = batch_end - position + 1;
-            const std::uint64_t assigned  = std::min(available, demand.remaining_count);
+            const uint64 available = batch_end - position + 1;
+            const uint64 assigned  = std::min(available, demand.remaining_count);
             demand.remaining_count -= assigned;
             if (assigned < available) {
                 position += assigned;
-            } else if (batch_end == std::numeric_limits<std::uint64_t>::max()) {
+            } else if (batch_end == std::numeric_limits<uint64>::max()) {
                 sequence_space_exhausted = true;
             } else {
                 position = batch_end + 1;
@@ -1781,7 +1782,7 @@ struct ProfileSessionReader::Impl {
 
     [[nodiscard]] bool BuildCpuTracks(
         bool                               _allow_missing,
-        std::uint64_t&                     _required_cpu_drops,
+        uint64&                            _required_cpu_drops,
         std::vector<RecordSequenceDemand>& _sequence_demands
     ) {
         _required_cpu_drops = 0;
@@ -1820,9 +1821,9 @@ struct ProfileSessionReader::Impl {
         }
 
         struct CpuGapEvent {
-            std::uint64_t ancestor_index{0};
-            std::uint64_t scope_index{0};
-            std::uint32_t depth_gap{0};
+            uint64 ancestor_index{0};
+            uint64 scope_index{0};
+            uint32 depth_gap{0};
         };
         std::vector<CpuGapEvent> gap_events;
         gap_events.reserve(scopes.size());
@@ -1848,19 +1849,19 @@ struct ProfileSessionReader::Impl {
                 !ChargeModel(sizeof(CpuTrack))) {
                 return false;
             }
-            const std::uint32_t track_index = static_cast<std::uint32_t>(session.impl_->cpu_tracks.size());
+            const uint32 track_index = static_cast<uint32>(session.impl_->cpu_tracks.size());
             session.impl_->cpu_tracks.push_back({
                 .thread_id   = scopes[track_begin].thread_id,
                 .first_scope = track_begin,
                 .scope_count = track_end - track_begin,
             });
 
-            std::vector<std::uint64_t> active;
+            std::vector<uint64> active;
             active.reserve(std::min<std::size_t>(
                 track_end - track_begin, static_cast<std::size_t>(options.limits.max_scope_depth) + 1
             ));
-            std::map<std::uint32_t, std::vector<std::uint64_t>> ending_parents_by_depth;
-            std::uint64_t                                       boundary_time     = 0;
+            std::map<uint32, std::vector<uint64>>               ending_parents_by_depth;
+            uint64                                              boundary_time     = 0;
             bool                                                has_boundary_time = false;
             for (std::size_t index = track_begin; index < track_end; ++index) {
                 if (CheckStopOnly()) {
@@ -1881,7 +1882,7 @@ struct ProfileSessionReader::Impl {
                     if (CheckStopOnly()) {
                         return false;
                     }
-                    const std::uint64_t   candidate_index = active.back();
+                    const uint64          candidate_index = active.back();
                     const CpuScopeRecord& candidate       = scopes[candidate_index];
                     const bool            zero_duration_child_at_end =
                         candidate.end_ns == scope.begin_ns && scope.end_ns == scope.begin_ns &&
@@ -1920,19 +1921,19 @@ struct ProfileSessionReader::Impl {
                     }
                 }
 
-                std::uint64_t ancestor_index = active.empty() ? kInvalidSessionIndex : active.back();
+                uint64 ancestor_index = active.empty() ? kInvalidSessionIndex : active.back();
                 if (scope.begin_ns == scope.end_ns && scope.depth != 0) {
-                    std::uint64_t ending_ancestor_index = kInvalidSessionIndex;
+                    uint64 ending_ancestor_index = kInvalidSessionIndex;
                     if (!ChargeTopologyBinarySearchWork(ending_parents_by_depth.size())) {
                         return false;
                     }
                     auto ending_depth = ending_parents_by_depth.lower_bound(scope.depth);
                     while (ending_depth != ending_parents_by_depth.begin()) {
                         --ending_depth;
-                        if (!ChargeTopologyWork(static_cast<std::uint64_t>(ending_depth->second.size()))) {
+                        if (!ChargeTopologyWork(static_cast<uint64>(ending_depth->second.size()))) {
                             return false;
                         }
-                        for (const std::uint64_t candidate_index : ending_depth->second) {
+                        for (const uint64 candidate_index : ending_depth->second) {
                             if (CheckStopOnly()) {
                                 return false;
                             }
@@ -1956,7 +1957,7 @@ struct ProfileSessionReader::Impl {
                     }
                 }
 
-                std::uint64_t parent_index = kInvalidSessionIndex;
+                uint64 parent_index = kInvalidSessionIndex;
                 if (ancestor_index != kInvalidSessionIndex) {
                     const CpuScopeRecord& ancestor = scopes[ancestor_index];
                     if (ancestor.sequence <= scope.sequence) {
@@ -1967,8 +1968,8 @@ struct ProfileSessionReader::Impl {
                         );
                         return false;
                     }
-                    const std::uint32_t depth_gap      = scope.depth - ancestor.depth - 1;
-                    const std::uint64_t sequence_slots = ancestor.sequence - scope.sequence - 1;
+                    const uint32 depth_gap      = scope.depth - ancestor.depth - 1;
+                    const uint64 sequence_slots = ancestor.sequence - scope.sequence - 1;
                     if (sequence_slots < depth_gap) {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
@@ -1999,7 +2000,7 @@ struct ProfileSessionReader::Impl {
 
         _sequence_demands.reserve(gap_events.size());
         const auto add_sequence_demand =
-            [&](std::uint64_t _lower_sequence, std::uint64_t _upper_sequence, std::uint64_t _count) {
+            [&](uint64 _lower_sequence, uint64 _upper_sequence, uint64 _count) {
                 if (_count == 0) {
                     return true;
                 }
@@ -2011,7 +2012,7 @@ struct ProfileSessionReader::Impl {
                     );
                     return false;
                 }
-                std::uint64_t required_cpu_drops = 0;
+                uint64 required_cpu_drops = 0;
                 if (AddOverflow(_required_cpu_drops, _count, required_cpu_drops)) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
@@ -2061,14 +2062,14 @@ struct ProfileSessionReader::Impl {
                 ++event_end;
             }
 
-            std::uint32_t previous_gap      = gap_events[event_begin].depth_gap;
-            std::uint64_t previous_sequence = scopes[gap_events[event_begin].scope_index].sequence;
+            uint32 previous_gap      = gap_events[event_begin].depth_gap;
+            uint64 previous_sequence = scopes[gap_events[event_begin].scope_index].sequence;
             for (std::size_t index = event_begin + 1; index < event_end; ++index) {
                 if (CheckStopOnly()) {
                     return false;
                 }
                 const CpuGapEvent&  event          = gap_events[index];
-                const std::uint64_t event_sequence = scopes[event.scope_index].sequence;
+                const uint64        event_sequence = scopes[event.scope_index].sequence;
                 if (event_sequence <= previous_sequence) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
@@ -2081,7 +2082,7 @@ struct ProfileSessionReader::Impl {
                     !add_sequence_demand(
                         previous_sequence,
                         event_sequence,
-                        static_cast<std::uint64_t>(previous_gap - event.depth_gap)
+                        static_cast<uint64>(previous_gap - event.depth_gap)
                     )) {
                     return false;
                 }
@@ -2089,7 +2090,7 @@ struct ProfileSessionReader::Impl {
                 previous_sequence = event_sequence;
             }
 
-            const std::uint64_t ancestor_sequence = scopes[gap_events[event_begin].ancestor_index].sequence;
+            const uint64 ancestor_sequence = scopes[gap_events[event_begin].ancestor_index].sequence;
             if (!add_sequence_demand(previous_sequence, ancestor_sequence, previous_gap)) {
                 return false;
             }
@@ -2149,8 +2150,8 @@ struct ProfileSessionReader::Impl {
         };
 
         struct PendingSequenceDemand {
-            std::uint64_t deadline_sequence{0};
-            std::uint64_t remaining_count{0};
+            uint64 deadline_sequence{0};
+            uint64 remaining_count{0};
         };
         const auto later_deadline = [](const PendingSequenceDemand& _left,
                                        const PendingSequenceDemand& _right) {
@@ -2169,7 +2170,7 @@ struct ProfileSessionReader::Impl {
 
         std::size_t   demand_index   = 0;
         std::size_t   observed_index = 0;
-        std::uint64_t position       = _sequence_demands.front().release_sequence;
+        uint64        position       = _sequence_demands.front().release_sequence;
         while (demand_index < _sequence_demands.size() || !pending_demands.empty()) {
             if (!ChargeTopologyWork(1)) {
                 return false;
@@ -2200,7 +2201,7 @@ struct ProfileSessionReader::Impl {
                 ++observed_index;
             }
             if (observed_index < record_sequences.size() && record_sequences[observed_index] == position) {
-                if (position == std::numeric_limits<std::uint64_t>::max()) {
+                if (position == std::numeric_limits<uint64>::max()) {
                     return fail_capacity();
                 }
                 ++position;
@@ -2214,9 +2215,9 @@ struct ProfileSessionReader::Impl {
             PendingSequenceDemand demand = pending_demands.top();
             pending_demands.pop();
 
-            std::uint64_t available = demand.remaining_count;
-            if (demand.deadline_sequence != std::numeric_limits<std::uint64_t>::max() || position != 0) {
-                available = std::min(available, demand.deadline_sequence - position + std::uint64_t{1});
+            uint64 available = demand.remaining_count;
+            if (demand.deadline_sequence != std::numeric_limits<uint64>::max() || position != 0) {
+                available = std::min(available, demand.deadline_sequence - position + uint64{1});
             }
             if (observed_index < record_sequences.size() && record_sequences[observed_index] >= position) {
                 available = std::min(available, record_sequences[observed_index] - position);
@@ -2231,7 +2232,7 @@ struct ProfileSessionReader::Impl {
 
             demand.remaining_count -= available;
             const bool exhausts_sequence_domain =
-                available > std::numeric_limits<std::uint64_t>::max() - position;
+                available > std::numeric_limits<uint64>::max() - position;
             if (exhausts_sequence_domain) {
                 if (demand.remaining_count != 0 || demand_index != _sequence_demands.size() ||
                     !pending_demands.empty()) {
@@ -2268,15 +2269,15 @@ struct ProfileSessionReader::Impl {
         };
 
         struct LossBucket {
-            std::uint64_t release_sequence{0};
-            std::uint64_t deadline_sequence{0};
-            std::uint64_t count{0};
+            uint64 release_sequence{0};
+            uint64 deadline_sequence{0};
+            uint64 count{0};
         };
 
-        std::uint64_t input_work = _forensic ? 0 : static_cast<std::uint64_t>(session.impl_->losses.size());
-        if (AddOverflow(input_work, static_cast<std::uint64_t>(_sequence_demands.size()), input_work) ||
-            AddOverflow(input_work, static_cast<std::uint64_t>(joint_virtual_tasks.size()), input_work) ||
-            AddOverflow(input_work, static_cast<std::uint64_t>(joint_local_cells.size()), input_work)) {
+        uint64 input_work = _forensic ? 0 : static_cast<uint64>(session.impl_->losses.size());
+        if (AddOverflow(input_work, static_cast<uint64>(_sequence_demands.size()), input_work) ||
+            AddOverflow(input_work, static_cast<uint64>(joint_virtual_tasks.size()), input_work) ||
+            AddOverflow(input_work, static_cast<uint64>(joint_local_cells.size()), input_work)) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
@@ -2290,14 +2291,14 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
-        std::uint64_t loss_bucket_count = 0;
-        std::uint64_t loss_bucket_total = 0;
+        uint64 loss_bucket_count = 0;
+        uint64 loss_bucket_total = 0;
         if (!_forensic) {
             for (const ProfileLossRecord& loss : session.impl_->losses) {
                 if (CheckStopOnly()) {
                     return false;
                 }
-                std::uint64_t buckets_for_loss = 1;
+                uint64 buckets_for_loss = 1;
                 if (loss.record_count != 1) {
                     ++buckets_for_loss;
                 }
@@ -2315,7 +2316,7 @@ struct ProfileSessionReader::Impl {
                 }
             }
         }
-        std::uint64_t demand_total = 0;
+        uint64 demand_total = 0;
         for (const RecordSequenceDemand& demand : _sequence_demands) {
             if (CheckStopOnly()) {
                 return false;
@@ -2331,9 +2332,9 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
         }
-        std::uint64_t required_topology_total = 0;
+        uint64 required_topology_total = 0;
         if (AddOverflow(
-                demand_total, static_cast<std::uint64_t>(joint_virtual_tasks.size()), required_topology_total
+                demand_total, static_cast<uint64>(joint_virtual_tasks.size()), required_topology_total
             )) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
@@ -2356,22 +2357,22 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
-        std::uint64_t       early_edge_lower_bound = _forensic ? 0 : loss_bucket_count;
-        const std::uint64_t early_dummy_edge =
+        uint64       early_edge_lower_bound = _forensic ? 0 : loss_bucket_count;
+        const uint64 early_dummy_edge =
             !_forensic && loss_bucket_total != required_topology_total ? 1 : 0;
         if (AddOverflow(
                 early_edge_lower_bound,
-                static_cast<std::uint64_t>(_sequence_demands.size()),
+                static_cast<uint64>(_sequence_demands.size()),
                 early_edge_lower_bound
             ) ||
             AddOverflow(
                 early_edge_lower_bound,
-                static_cast<std::uint64_t>(joint_local_cells.size()),
+                static_cast<uint64>(joint_local_cells.size()),
                 early_edge_lower_bound
             ) ||
             AddOverflow(
                 early_edge_lower_bound,
-                static_cast<std::uint64_t>(joint_virtual_tasks.size()),
+                static_cast<uint64>(joint_virtual_tasks.size()),
                 early_edge_lower_bound
             ) ||
             AddOverflow(early_edge_lower_bound, joint_cell_task_edge_count, early_edge_lower_bound) ||
@@ -2387,27 +2388,27 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
-        std::uint64_t loss_critical_count   = 0;
-        std::uint64_t demand_critical_count = 0;
-        std::uint64_t cell_critical_count   = 0;
-        std::uint64_t critical_point_count  = 0;
-        std::uint64_t construction_work     = 0;
+        uint64 loss_critical_count   = 0;
+        uint64 demand_critical_count = 0;
+        uint64 cell_critical_count   = 0;
+        uint64 critical_point_count  = 0;
+        uint64 construction_work     = 0;
         if (AddOverflow(loss_bucket_count, loss_bucket_count, loss_critical_count) ||
             AddOverflow(
-                static_cast<std::uint64_t>(_sequence_demands.size()),
-                static_cast<std::uint64_t>(_sequence_demands.size()),
+                static_cast<uint64>(_sequence_demands.size()),
+                static_cast<uint64>(_sequence_demands.size()),
                 demand_critical_count
             ) ||
             AddOverflow(
-                static_cast<std::uint64_t>(joint_local_cells.size()),
-                static_cast<std::uint64_t>(joint_local_cells.size()),
+                static_cast<uint64>(joint_local_cells.size()),
+                static_cast<uint64>(joint_local_cells.size()),
                 cell_critical_count
             ) ||
             AddOverflow(loss_critical_count, demand_critical_count, critical_point_count) ||
             AddOverflow(critical_point_count, cell_critical_count, critical_point_count) ||
             AddOverflow(loss_bucket_count, critical_point_count, construction_work) ||
-            loss_bucket_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
-            critical_point_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            loss_bucket_count > static_cast<uint64>(std::numeric_limits<std::size_t>::max()) ||
+            critical_point_count > static_cast<uint64>(std::numeric_limits<std::size_t>::max())) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
@@ -2423,11 +2424,10 @@ struct ProfileSessionReader::Impl {
 
         std::vector<LossBucket> loss_buckets;
         loss_buckets.reserve(static_cast<std::size_t>(loss_bucket_count));
-        std::vector<std::uint64_t> critical_points;
+        std::vector<uint64> critical_points;
         critical_points.reserve(static_cast<std::size_t>(critical_point_count));
 
-        const auto add_loss_bucket = [&](std::uint64_t _release, std::uint64_t _deadline, std::uint64_t _count
-                                     ) {
+        const auto add_loss_bucket = [&](uint64 _release, uint64 _deadline, uint64 _count) {
             if (_count == 0) {
                 return;
             }
@@ -2484,12 +2484,12 @@ struct ProfileSessionReader::Impl {
         // Charge one abstract work item per element and merge level before
         // invoking the bounded-run cancellable sort so preprocessing cannot
         // escape the session-wide topology budget.
-        std::uint64_t sort_width = 1;
+        uint64 sort_width = 1;
         while (sort_width < critical_point_count) {
             if (!ChargeTopologyWork(critical_point_count)) {
                 return false;
             }
-            if (sort_width > std::numeric_limits<std::uint64_t>::max() / 2) {
+            if (sort_width > std::numeric_limits<uint64>::max() / 2) {
                 break;
             }
             sort_width *= 2;
@@ -2507,15 +2507,15 @@ struct ProfileSessionReader::Impl {
         critical_points.erase(critical_points_end, critical_points.end());
 
         struct SequenceSegment {
-            std::uint64_t begin{0};
-            std::uint64_t end{0};
-            std::uint64_t capacity{0};
+            uint64 begin{0};
+            uint64 end{0};
+            uint64 capacity{0};
         };
-        std::uint64_t maximum_segment_count = 0;
+        uint64 maximum_segment_count = 0;
         if (!critical_points.empty()) {
             if (AddOverflow(
-                    static_cast<std::uint64_t>(critical_points.size()),
-                    static_cast<std::uint64_t>(critical_points.size()),
+                    static_cast<uint64>(critical_points.size()),
+                    static_cast<uint64>(critical_points.size()),
                     maximum_segment_count
                 )) {
                 Fail(
@@ -2529,11 +2529,11 @@ struct ProfileSessionReader::Impl {
             }
             --maximum_segment_count;
         }
-        std::uint64_t segmentation_work = maximum_segment_count;
+        uint64 segmentation_work = maximum_segment_count;
         if (AddOverflow(
-                segmentation_work, static_cast<std::uint64_t>(record_sequences.size()), segmentation_work
+                segmentation_work, static_cast<uint64>(record_sequences.size()), segmentation_work
             ) ||
-            maximum_segment_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            maximum_segment_count > static_cast<uint64>(std::numeric_limits<std::size_t>::max())) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
@@ -2548,8 +2548,8 @@ struct ProfileSessionReader::Impl {
         }
 
         struct LossCoverage {
-            std::uint64_t begin{0};
-            std::uint64_t end{0};
+            uint64 begin{0};
+            uint64 end{0};
         };
         std::vector<LossCoverage> loss_coverage;
         if (!_forensic) {
@@ -2562,7 +2562,7 @@ struct ProfileSessionReader::Impl {
                     return false;
                 }
                 if (loss_coverage.empty() ||
-                    (loss_coverage.back().end != std::numeric_limits<std::uint64_t>::max() &&
+                    (loss_coverage.back().end != std::numeric_limits<uint64>::max() &&
                      bucket.release_sequence > loss_coverage.back().end + 1)) {
                     loss_coverage.push_back({
                         .begin = bucket.release_sequence,
@@ -2575,12 +2575,12 @@ struct ProfileSessionReader::Impl {
         }
 
         std::vector<SequenceSegment> segments;
-        const std::uint64_t          segment_edge_capacity = options.limits.max_topology_flow_edges / 2;
+        const uint64                 segment_edge_capacity = options.limits.max_topology_flow_edges / 2;
         segments.reserve(static_cast<std::size_t>(std::min(maximum_segment_count, segment_edge_capacity)));
         std::size_t         observed_index      = 0;
         std::size_t         loss_coverage_index = 0;
-        const std::uint64_t flow_target         = _forensic ? required_topology_total : loss_bucket_total;
-        const auto          add_segment         = [&](std::uint64_t _begin, std::uint64_t _end) {
+        const uint64        flow_target         = _forensic ? required_topology_total : loss_bucket_total;
+        const auto          add_segment         = [&](uint64 _begin, uint64 _end) {
             while (observed_index < record_sequences.size() && record_sequences[observed_index] < _begin) {
                 if (CheckStopOnly()) {
                     return false;
@@ -2594,22 +2594,22 @@ struct ProfileSessionReader::Impl {
                 }
                 ++observed_index;
             }
-            const std::uint64_t observed_count = static_cast<std::uint64_t>(observed_index - observed_begin);
-            const std::uint64_t span_minus_one = _end - _begin;
-            std::uint64_t       available      = 0;
-            if (span_minus_one == std::numeric_limits<std::uint64_t>::max()) {
+            const uint64 observed_count = static_cast<uint64>(observed_index - observed_begin);
+            const uint64 span_minus_one = _end - _begin;
+            uint64       available      = 0;
+            if (span_minus_one == std::numeric_limits<uint64>::max()) {
                 // The full uint64 domain has 2^64 values, which cannot itself
                 // be represented. The available count is representable after
                 // excluding any observed sequence, or can be capped directly
                 // by the total flow when none are observed.
                 available = observed_count == 0 ?
-                                                 flow_target :
-                                                 std::numeric_limits<std::uint64_t>::max() - (observed_count - 1);
+                                flow_target :
+                                std::numeric_limits<uint64>::max() - (observed_count - 1);
             } else {
-                const std::uint64_t span = span_minus_one + 1;
+                const uint64 span        = span_minus_one + 1;
                 available                = observed_count < span ? span - observed_count : 0;
             }
-            const std::uint64_t capacity = std::min(available, flow_target);
+            const uint64 capacity = std::min(available, flow_target);
             if (capacity == 0) {
                 return true;
             }
@@ -2627,7 +2627,7 @@ struct ProfileSessionReader::Impl {
                     return true;
                 }
             }
-            if (static_cast<std::uint64_t>(segments.size()) >= segment_edge_capacity) {
+            if (static_cast<uint64>(segments.size()) >= segment_edge_capacity) {
                 Fail(
                     SessionLoadStatus::LimitExceeded,
                     SessionErrorCode::LimitExceeded,
@@ -2648,11 +2648,11 @@ struct ProfileSessionReader::Impl {
             if (CheckStopOnly()) {
                 return false;
             }
-            const std::uint64_t point = critical_points[index];
+            const uint64 point = critical_points[index];
             if (!add_segment(point, point)) {
                 return false;
             }
-            if (index + 1 < critical_points.size() && point != std::numeric_limits<std::uint64_t>::max() &&
+            if (index + 1 < critical_points.size() && point != std::numeric_limits<uint64>::max() &&
                 critical_points[index + 1] > point + 1) {
                 if (!add_segment(point + 1, critical_points[index + 1] - 1)) {
                     return false;
@@ -2664,12 +2664,12 @@ struct ProfileSessionReader::Impl {
             std::size_t begin{0};
             std::size_t end{0};
         };
-        const auto find_segment_range = [&](std::uint64_t _release, std::uint64_t _deadline) {
+        const auto find_segment_range = [&](uint64 _release, uint64 _deadline) {
             const auto begin = std::lower_bound(
                 segments.begin(),
                 segments.end(),
                 _release,
-                [](const SequenceSegment& _segment, std::uint64_t _sequence) {
+                [](const SequenceSegment& _segment, uint64 _sequence) {
                     return _segment.end < _sequence;
                 }
             );
@@ -2677,7 +2677,7 @@ struct ProfileSessionReader::Impl {
                 begin,
                 segments.end(),
                 _deadline,
-                [](std::uint64_t _sequence, const SequenceSegment& _segment) {
+                [](uint64 _sequence, const SequenceSegment& _segment) {
                     return _sequence < _segment.begin;
                 }
             );
@@ -2732,18 +2732,18 @@ struct ProfileSessionReader::Impl {
             cell_segment_ranges.push_back(find_segment_range(cell.release_sequence, cell.deadline_sequence));
         }
 
-        std::uint64_t graph_node_work = 3;
-        const auto    add_node_work   = [&](std::uint64_t _count) {
+        uint64     graph_node_work = 3;
+        const auto add_node_work   = [&](uint64 _count) {
             return !AddOverflow(graph_node_work, _count, graph_node_work);
         };
-        if (!add_node_work(static_cast<std::uint64_t>(loss_buckets.size())) ||
-            !add_node_work(static_cast<std::uint64_t>(segments.size())) ||
-            !add_node_work(static_cast<std::uint64_t>(segments.size())) ||
-            !add_node_work(static_cast<std::uint64_t>(_sequence_demands.size())) ||
-            !add_node_work(static_cast<std::uint64_t>(joint_local_cells.size())) ||
-            !add_node_work(static_cast<std::uint64_t>(joint_local_cells.size())) ||
-            !add_node_work(static_cast<std::uint64_t>(joint_virtual_tasks.size())) ||
-            graph_node_work > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        if (!add_node_work(static_cast<uint64>(loss_buckets.size())) ||
+            !add_node_work(static_cast<uint64>(segments.size())) ||
+            !add_node_work(static_cast<uint64>(segments.size())) ||
+            !add_node_work(static_cast<uint64>(_sequence_demands.size())) ||
+            !add_node_work(static_cast<uint64>(joint_local_cells.size())) ||
+            !add_node_work(static_cast<uint64>(joint_local_cells.size())) ||
+            !add_node_work(static_cast<uint64>(joint_virtual_tasks.size())) ||
+            graph_node_work > static_cast<uint64>(std::numeric_limits<std::size_t>::max())) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
@@ -2753,7 +2753,7 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        std::uint64_t graph_storage_work = 0;
+        uint64 graph_storage_work = 0;
         if (AddOverflow(graph_node_work, graph_node_work, graph_storage_work) ||
             AddOverflow(graph_storage_work, graph_node_work, graph_storage_work) ||
             AddOverflow(graph_storage_work, graph_node_work, graph_storage_work)) {
@@ -2774,7 +2774,7 @@ struct ProfileSessionReader::Impl {
             struct Edge {
                 std::size_t   target{0};
                 std::size_t   reverse_index{0};
-                std::uint64_t capacity{0};
+                uint64        capacity{0};
             };
 
             explicit FlowNetwork(Impl& _owner, std::size_t _node_count) :
@@ -2784,7 +2784,7 @@ struct ProfileSessionReader::Impl {
                 parent_edges(_node_count),
                 pending_nodes(_node_count) {}
 
-            void AddEdge(std::size_t _source, std::size_t _target, std::uint64_t _capacity) {
+            void AddEdge(std::size_t _source, std::size_t _target, uint64 _capacity) {
                 const std::size_t source_reverse = edges[_target].size();
                 const std::size_t target_reverse = edges[_source].size();
                 edges[_source].push_back({
@@ -2800,11 +2800,11 @@ struct ProfileSessionReader::Impl {
             }
 
             [[nodiscard]] bool
-            MaxFlow(std::size_t _source, std::size_t _sink, std::uint64_t _target, std::uint64_t& _flow) {
+            MaxFlow(std::size_t _source, std::size_t _sink, uint64 _target, uint64& _flow) {
                 constexpr std::size_t unreached = std::numeric_limits<std::size_t>::max();
                 _flow                           = 0;
                 while (_flow < _target) {
-                    if (!owner->ChargeTopologyWork(static_cast<std::uint64_t>(parent_nodes.size()))) {
+                    if (!owner->ChargeTopologyWork(static_cast<uint64>(parent_nodes.size()))) {
                         return false;
                     }
                     for (std::size_t& parent_node : parent_nodes) {
@@ -2820,7 +2820,7 @@ struct ProfileSessionReader::Impl {
 
                     while (pending_begin < pending_end && parent_nodes[_sink] == unreached) {
                         const std::size_t node = pending_nodes[pending_begin++];
-                        if (!owner->ChargeTopologyWork(static_cast<std::uint64_t>(edges[node].size()))) {
+                        if (!owner->ChargeTopologyWork(static_cast<uint64>(edges[node].size()))) {
                             return false;
                         }
                         for (std::size_t edge_index = 0; edge_index < edges[node].size(); ++edge_index) {
@@ -2842,7 +2842,7 @@ struct ProfileSessionReader::Impl {
                         return true;
                     }
 
-                    std::uint64_t augment = _target - _flow;
+                    uint64 augment = _target - _flow;
                     for (std::size_t node = _sink; node != _source; node = parent_nodes[node]) {
                         if (!owner->ChargeTopologyWork(1)) {
                             return false;
@@ -2881,10 +2881,10 @@ struct ProfileSessionReader::Impl {
         const std::size_t   task_base           = cell_out_base + joint_local_cells.size();
         const std::size_t   dummy_demand_node   = task_base + joint_virtual_tasks.size();
         const std::size_t   sink_node           = dummy_demand_node + 1;
-        const std::uint64_t dummy_capacity      = _forensic ? 0 : loss_bucket_total - required_topology_total;
-        std::uint64_t       forward_edge_count  = 0;
-        const auto          count_forward_edges = [&](std::uint64_t _count) {
-            std::uint64_t next = 0;
+        const uint64        dummy_capacity      = _forensic ? 0 : loss_bucket_total - required_topology_total;
+        uint64              forward_edge_count  = 0;
+        const auto          count_forward_edges = [&](uint64 _count) {
+            uint64 next = 0;
             if (AddOverflow(forward_edge_count, _count, next) ||
                 next > options.limits.max_topology_flow_edges) {
                 Fail(
@@ -2902,23 +2902,23 @@ struct ProfileSessionReader::Impl {
             forward_edge_count = next;
             return true;
         };
-        std::uint64_t fixed_edge_count = static_cast<std::uint64_t>(segments.size());
+        uint64 fixed_edge_count = static_cast<uint64>(segments.size());
         if (AddOverflow(
                 fixed_edge_count,
-                static_cast<std::uint64_t>(_forensic ? segments.size() : loss_buckets.size()),
+                static_cast<uint64>(_forensic ? segments.size() : loss_buckets.size()),
                 fixed_edge_count
             ) ||
             AddOverflow(
-                fixed_edge_count, static_cast<std::uint64_t>(_sequence_demands.size()), fixed_edge_count
+                fixed_edge_count, static_cast<uint64>(_sequence_demands.size()), fixed_edge_count
             ) ||
             AddOverflow(
-                fixed_edge_count, static_cast<std::uint64_t>(joint_local_cells.size()), fixed_edge_count
+                fixed_edge_count, static_cast<uint64>(joint_local_cells.size()), fixed_edge_count
             ) ||
             AddOverflow(
-                fixed_edge_count, static_cast<std::uint64_t>(joint_virtual_tasks.size()), fixed_edge_count
+                fixed_edge_count, static_cast<uint64>(joint_virtual_tasks.size()), fixed_edge_count
             ) ||
             AddOverflow(
-                fixed_edge_count, dummy_capacity == 0 ? std::uint64_t{0} : std::uint64_t{1}, fixed_edge_count
+                fixed_edge_count, dummy_capacity == 0 ? uint64{0} : uint64{1}, fixed_edge_count
             )) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
@@ -2933,7 +2933,7 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         const auto count_segment_range_edges = [&](const SegmentRange& _range) {
-            const std::uint64_t count = static_cast<std::uint64_t>(_range.end - _range.begin);
+            const uint64 count = static_cast<uint64>(_range.end - _range.begin);
             return count_forward_edges(count);
         };
         for (const SegmentRange& range : loss_segment_ranges) {
@@ -2961,7 +2961,7 @@ struct ProfileSessionReader::Impl {
             }
         }
         if (dummy_capacity != 0) {
-            if (!count_forward_edges(static_cast<std::uint64_t>(segments.size()))) {
+            if (!count_forward_edges(static_cast<uint64>(segments.size()))) {
                 return false;
             }
         }
@@ -2969,7 +2969,7 @@ struct ProfileSessionReader::Impl {
             if (CheckStopOnly()) {
                 return false;
             }
-            if (!count_forward_edges(static_cast<std::uint64_t>(cell.task_indices.size()))) {
+            if (!count_forward_edges(static_cast<uint64>(cell.task_indices.size()))) {
                 return false;
             }
             for (const std::size_t task_index : cell.task_indices) {
@@ -2986,7 +2986,7 @@ struct ProfileSessionReader::Impl {
                 }
             }
         }
-        if (forward_edge_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / 2)) {
+        if (forward_edge_count > static_cast<uint64>(std::numeric_limits<std::size_t>::max() / 2)) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
@@ -2997,8 +2997,8 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         FlowNetwork   network(*this, sink_node + 1);
-        std::uint64_t built_forward_edges = 0;
-        const auto    add_edge = [&](std::size_t _source, std::size_t _target, std::uint64_t _capacity) {
+        uint64        built_forward_edges = 0;
+        const auto    add_edge            = [&](std::size_t _source, std::size_t _target, uint64 _capacity) {
             if (!ChargeTopologyWork(1)) {
                 return false;
             }
@@ -3155,7 +3155,7 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        std::uint64_t allocated_flow = 0;
+        uint64 allocated_flow = 0;
         if (!network.MaxFlow(source_node, sink_node, flow_target, allocated_flow)) {
             return false;
         }
@@ -3285,7 +3285,7 @@ struct ProfileSessionReader::Impl {
                 frames.begin(),
                 frames.end(),
                 scope.frame_id,
-                [](const GpuFrameRecord& _frame, std::uint64_t _frame_id) {
+                [](const GpuFrameRecord& _frame, uint64 _frame_id) {
                     return _frame.frame_id < _frame_id;
                 }
             );
@@ -3297,7 +3297,7 @@ struct ProfileSessionReader::Impl {
                 .family_id       = scope.family_id,
             };
             const auto          domain_position = std::lower_bound(keys.begin(), keys.end(), key);
-            const std::uint32_t domain_index    = static_cast<std::uint32_t>(domain_position - keys.begin());
+            const uint32        domain_index    = static_cast<uint32>(domain_position - keys.begin());
             scope.domain_index                  = domain_index;
             GpuTimestampDomain& domain          = session.impl_->gpu_domains[domain_index];
             domain.logical_queue_mask |= ProfileLogicalQueueBit(scope.logical_queue);
@@ -3385,7 +3385,7 @@ struct ProfileSessionReader::Impl {
                 !ChargeModel(sizeof(GpuTrack))) {
                 return false;
             }
-            const std::uint32_t track_index = static_cast<std::uint32_t>(session.impl_->gpu_tracks.size());
+            const uint32 track_index = static_cast<uint32>(session.impl_->gpu_tracks.size());
             session.impl_->gpu_tracks.push_back({
                 .logical_queue   = scopes[track_begin].logical_queue,
                 .native_queue_id = scopes[track_begin].native_queue_id,
@@ -3407,7 +3407,7 @@ struct ProfileSessionReader::Impl {
 
     [[nodiscard]] bool BuildGpuTopology(
         bool                               _allow_missing,
-        std::uint64_t                      _required_cpu_drops,
+        uint64                             _required_cpu_drops,
         std::vector<RecordSequenceDemand>& _sequence_demands
     ) {
         _sequence_demands.clear();
@@ -3420,24 +3420,23 @@ struct ProfileSessionReader::Impl {
             return true;
         }
 
-        const auto charge_topology_work = [&](std::uint64_t _count) {
+        const auto charge_topology_work = [&](uint64 _count) {
             return ChargeTopologyWork(_count);
         };
         if (!ChargeTopologyLinearWork(frames.size()) || !ChargeTopologyLinearWork(frames.size()) ||
             !ChargeTopologyLinearWork(frames.size())) {
             return false;
         }
-        std::vector<std::uint64_t> frame_error_counts(frames.size(), 0);
-        std::vector<std::uint8_t>  frame_root_partition_ambiguous(frames.size(), 0);
+        std::vector<uint64> frame_error_counts(frames.size(), 0);
+        std::vector<uint8>  frame_root_partition_ambiguous(frames.size(), 0);
         struct FrameSequenceEvidence {
-            std::uint64_t earliest_scope_sequence{0};
-            std::uint64_t latest_scope_sequence{0};
-            std::uint64_t constrained_missing_scope_count{0};
+            uint64 earliest_scope_sequence{0};
+            uint64 latest_scope_sequence{0};
+            uint64 constrained_missing_scope_count{0};
         };
         std::vector<FrameSequenceEvidence> frame_sequence_evidence(frames.size());
         const auto                         add_sequence_demand =
-            [&](std::uint64_t _release, std::uint64_t _deadline, std::uint64_t _count, const char* _diagnostic
-            ) {
+            [&](uint64 _release, uint64 _deadline, uint64 _count, const char* _diagnostic) {
                 if (_count == 0) {
                     return true;
                 }
@@ -3498,7 +3497,7 @@ struct ProfileSessionReader::Impl {
             }
         }
 
-        const auto find_scope = [&](std::uint64_t _frame_id, std::uint64_t _scope_id) {
+        const auto find_scope = [&](uint64 _frame_id, uint64 _scope_id) {
             const ScopeLookup key{
                 .frame_id    = _frame_id,
                 .scope_id    = _scope_id,
@@ -3514,36 +3513,36 @@ struct ProfileSessionReader::Impl {
             !ChargeTopologyLinearWork(scopes.size())) {
             return false;
         }
-        std::vector<std::uint64_t> previous_child_end(scopes.size(), 0);
-        std::vector<std::uint8_t>  has_previous_child(scopes.size(), 0);
+        std::vector<uint64>        previous_child_end(scopes.size(), 0);
+        std::vector<uint8>         has_previous_child(scopes.size(), 0);
         std::vector<double>        direct_child_duration(scopes.size(), 0.0);
         std::vector<ScopeLookup>   missing_parent_keys;
         struct MissingFrameEvidence {
-            std::uint64_t frame_id{0};
-            std::uint64_t earliest_scope_sequence{0};
-            std::uint64_t latest_scope_sequence{0};
+            uint64 frame_id{0};
+            uint64 earliest_scope_sequence{0};
+            uint64 latest_scope_sequence{0};
         };
         std::vector<MissingFrameEvidence> missing_frame_evidence;
         struct MissingParentEvidence {
-            std::uint64_t       frame_id{0};
-            std::uint64_t       parent_scope_id{0};
+            uint64              frame_id{0};
+            uint64              parent_scope_id{0};
             ProfileLogicalQueue logical_queue{ProfileLogicalQueue::Graphics};
-            std::uint32_t       native_queue_id{0};
-            std::uint32_t       family_id{0};
-            std::uint64_t       source_order{0};
-            std::uint32_t       parent_depth{0};
-            std::uint64_t       child_local_order{0};
-            std::uint64_t       child_index{0};
+            uint32              native_queue_id{0};
+            uint32              family_id{0};
+            uint64              source_order{0};
+            uint32              parent_depth{0};
+            uint64              child_local_order{0};
+            uint64              child_index{0};
         };
         std::vector<MissingParentEvidence> missing_parent_evidence;
         if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
             !ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size())) {
             return false;
         }
-        std::vector<std::uint64_t> source_local_rank(scopes.size(), 0);
-        std::vector<std::uint64_t> nearest_observed_timing_ancestor(scopes.size(), kInvalidSessionIndex);
-        std::vector<std::uint64_t> completed_observed_child_end(scopes.size(), 0);
-        std::vector<std::uint64_t> active_timing_stack_position(scopes.size(), kInvalidSessionIndex);
+        std::vector<uint64> source_local_rank(scopes.size(), 0);
+        std::vector<uint64> nearest_observed_timing_ancestor(scopes.size(), kInvalidSessionIndex);
+        std::vector<uint64> completed_observed_child_end(scopes.size(), 0);
+        std::vector<uint64> active_timing_stack_position(scopes.size(), kInvalidSessionIndex);
         if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
             !ChargeTopologyLinearWork(scopes.size())) {
             return false;
@@ -3588,7 +3587,7 @@ struct ProfileSessionReader::Impl {
             GpuScopeRecord& scope  = scopes[index];
             bool            orphan = false;
 
-            if (scope.local_order == std::numeric_limits<std::uint64_t>::max()) {
+            if (scope.local_order == std::numeric_limits<uint64>::max()) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
                     SessionErrorCode::GpuScopeIdentityInvalid,
@@ -3604,7 +3603,7 @@ struct ProfileSessionReader::Impl {
                 frames.begin(),
                 frames.end(),
                 scope.frame_id,
-                [](const GpuFrameRecord& _frame, std::uint64_t _frame_id) {
+                [](const GpuFrameRecord& _frame, uint64 _frame_id) {
                     return _frame.frame_id < _frame_id;
                 }
             );
@@ -3683,7 +3682,7 @@ struct ProfileSessionReader::Impl {
                 if (!ChargeTopologyBinarySearchWork(lookup.size())) {
                     return false;
                 }
-                const std::uint64_t parent_index = find_scope(scope.frame_id, scope.parent_scope_id);
+                const uint64 parent_index = find_scope(scope.frame_id, scope.parent_scope_id);
                 if (parent_index == kInvalidSessionIndex) {
                     orphan = true;
                     missing_parent_keys.push_back({
@@ -3745,11 +3744,11 @@ struct ProfileSessionReader::Impl {
                             return false;
                         }
 
-                        const std::uint64_t parent_delta =
+                        const uint64 parent_delta =
                             TimestampDelta(parent.begin_tick, parent.end_tick, parent.valid_bits);
-                        const std::uint64_t child_begin_offset =
+                        const uint64 child_begin_offset =
                             (scope.begin_tick - parent.begin_tick) & TimestampMask(parent.valid_bits);
-                        const std::uint64_t child_delta =
+                        const uint64 child_delta =
                             TimestampDelta(scope.begin_tick, scope.end_tick, scope.valid_bits);
                         const bool contained = child_begin_offset <= parent_delta &&
                                                child_delta <= parent_delta - child_begin_offset;
@@ -3835,9 +3834,9 @@ struct ProfileSessionReader::Impl {
                 has_known_frame ? static_cast<std::size_t>(first_scope.frame_index) : 0;
             const bool complete_frame =
                 has_known_frame && frames[frame_index].status == ProfileGpuFrameStatus::Complete;
-            std::uint64_t previous_sequence =
-                has_known_frame ? frames[frame_index].sequence : std::uint64_t{0};
-            std::uint64_t constrained_missing_scope_count = 0;
+            uint64 previous_sequence =
+                has_known_frame ? frames[frame_index].sequence : uint64{0};
+            uint64        constrained_missing_scope_count = 0;
             bool          has_previous_record             = has_known_frame;
             bool          has_previous_scope              = false;
             for (std::size_t order_index = emission_begin; order_index < emission_end; ++order_index) {
@@ -3855,7 +3854,7 @@ struct ProfileSessionReader::Impl {
                 }
 
                 if (complete_frame) {
-                    std::uint64_t gap_count = scope.local_order;
+                    uint64 gap_count = scope.local_order;
                     if (has_previous_scope) {
                         const GpuScopeRecord& previous    = scopes[emission_order[order_index - 1]];
                         const bool            same_source = previous.logical_queue == scope.logical_queue &&
@@ -3916,9 +3915,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         struct TimingContractEnvelope {
-            std::uint32_t parent_depth{0};
-            std::uint64_t begin_tick{0};
-            std::uint64_t duration{0};
+            uint32        parent_depth{0};
+            uint64        begin_tick{0};
+            uint64        duration{0};
             bool          trusted{false};
         };
         std::vector<TimingContractEnvelope> timing_contract_envelopes;
@@ -3927,7 +3926,7 @@ struct ProfileSessionReader::Impl {
             !ChargeTopologyLinearWork(missing_parent_evidence.size())) {
             return false;
         }
-        std::vector<std::uint64_t> timing_contract_for_child(scopes.size(), kInvalidSessionIndex);
+        std::vector<uint64> timing_contract_for_child(scopes.size(), kInvalidSessionIndex);
         timing_contract_envelopes.reserve(missing_parent_evidence.size());
         std::size_t timing_evidence_begin = 0;
         while (timing_evidence_begin < missing_parent_evidence.size()) {
@@ -3955,13 +3954,13 @@ struct ProfileSessionReader::Impl {
                 frames.begin(),
                 frames.end(),
                 first_evidence.frame_id,
-                [](const GpuFrameRecord& _frame, std::uint64_t _frame_id) {
+                [](const GpuFrameRecord& _frame, uint64 _frame_id) {
                     return _frame.frame_id < _frame_id;
                 }
             );
             const bool trusted = frame != frames.end() && frame->frame_id == first_evidence.frame_id &&
                                  frame->status == ProfileGpuFrameStatus::Complete;
-            std::uint64_t envelope_end_offset = 0;
+            uint64 envelope_end_offset = 0;
             for (std::size_t index = timing_evidence_begin; index < timing_evidence_end; ++index) {
                 if (CheckStopOnly()) {
                     return false;
@@ -3991,11 +3990,11 @@ struct ProfileSessionReader::Impl {
                         );
                         return false;
                     }
-                    const std::uint64_t child_begin_offset =
+                    const uint64 child_begin_offset =
                         (child.begin_tick - first_child.begin_tick) & TimestampMask(first_child.valid_bits);
-                    const std::uint64_t child_duration =
+                    const uint64 child_duration =
                         TimestampDelta(child.begin_tick, child.end_tick, child.valid_bits);
-                    const std::uint64_t timestamp_mask = TimestampMask(first_child.valid_bits);
+                    const uint64 timestamp_mask = TimestampMask(first_child.valid_bits);
                     if (child_begin_offset < envelope_end_offset ||
                         child_duration > timestamp_mask - child_begin_offset) {
                         Fail(
@@ -4009,7 +4008,7 @@ struct ProfileSessionReader::Impl {
                 }
             }
 
-            const std::uint64_t contract_index = static_cast<std::uint64_t>(timing_contract_envelopes.size());
+            const uint64 contract_index = static_cast<uint64>(timing_contract_envelopes.size());
             timing_contract_envelopes.push_back({
                 .parent_depth = first_evidence.parent_depth,
                 .begin_tick   = first_child.begin_tick,
@@ -4058,7 +4057,7 @@ struct ProfileSessionReader::Impl {
                 first_scope.frame_index != kInvalidSessionIndex &&
                 frames[first_scope.frame_index].status == ProfileGpuFrameStatus::Complete;
             if (timing_topology_trusted) {
-                std::vector<std::uint64_t> timing_stack;
+                std::vector<uint64> timing_stack;
                 timing_stack.reserve(std::min<std::size_t>(
                     timing_source_end - timing_source_begin,
                     static_cast<std::size_t>(options.limits.max_scope_depth) + 1
@@ -4077,9 +4076,9 @@ struct ProfileSessionReader::Impl {
                         const std::size_t     parent_index = static_cast<std::size_t>(timing_stack.back());
                         const GpuScopeRecord& parent       = scopes[parent_index];
                         const GpuScopeRecord& child        = scopes[child_index];
-                        const std::uint64_t   child_begin_offset =
+                        const uint64          child_begin_offset =
                             (child.begin_tick - parent.begin_tick) & TimestampMask(parent.valid_bits);
-                        const std::uint64_t child_duration =
+                        const uint64 child_duration =
                             TimestampDelta(child.begin_tick, child.end_tick, child.valid_bits);
                         completed_observed_child_end[parent_index] = std::max(
                             completed_observed_child_end[parent_index], child_begin_offset + child_duration
@@ -4112,7 +4111,7 @@ struct ProfileSessionReader::Impl {
 
                     std::size_t container_position = timing_stack.size();
                     if (scope.parent_index != kInvalidSessionIndex) {
-                        const std::uint64_t active_position =
+                        const uint64 active_position =
                             active_timing_stack_position[scope.parent_index];
                         if (active_position == kInvalidSessionIndex ||
                             active_position >= timing_stack.size() ||
@@ -4126,18 +4125,18 @@ struct ProfileSessionReader::Impl {
                         }
                         container_position = static_cast<std::size_t>(active_position);
                     } else if (scope.parent_scope_id != 0) {
-                        const std::uint64_t timing_contract_index = timing_contract_for_child[index];
+                        const uint64                  timing_contract_index = timing_contract_for_child[index];
                         const TimingContractEnvelope* timing_contract =
                             timing_contract_index == kInvalidSessionIndex ?
                                 nullptr :
                                 &timing_contract_envelopes[static_cast<std::size_t>(timing_contract_index)];
-                        const std::uint32_t required_parent_depth =
+                        const uint32 required_parent_depth =
                             timing_contract != nullptr ? timing_contract->parent_depth : scope.depth - 1;
-                        const std::uint64_t required_begin_tick =
+                        const uint64 required_begin_tick =
                             timing_contract != nullptr && timing_contract->trusted ?
                                 timing_contract->begin_tick :
                                 scope.begin_tick;
-                        const std::uint64_t required_duration =
+                        const uint64 required_duration =
                             timing_contract != nullptr && timing_contract->trusted ?
                                 timing_contract->duration :
                                 TimestampDelta(scope.begin_tick, scope.end_tick, scope.valid_bits);
@@ -4149,10 +4148,10 @@ struct ProfileSessionReader::Impl {
                             if (candidate.depth >= required_parent_depth) {
                                 continue;
                             }
-                            const std::uint64_t candidate_duration = TimestampDelta(
+                            const uint64 candidate_duration = TimestampDelta(
                                 candidate.begin_tick, candidate.end_tick, candidate.valid_bits
                             );
-                            const std::uint64_t required_begin_offset =
+                            const uint64 required_begin_offset =
                                 (required_begin_tick - candidate.begin_tick) &
                                 TimestampMask(candidate.valid_bits);
                             if (required_begin_offset <= candidate_duration &&
@@ -4169,11 +4168,11 @@ struct ProfileSessionReader::Impl {
                         }
                         const std::size_t     container_index = static_cast<std::size_t>(timing_stack.back());
                         const GpuScopeRecord& container       = scopes[container_index];
-                        const std::uint64_t   scope_begin_offset =
+                        const uint64          scope_begin_offset =
                             (scope.begin_tick - container.begin_tick) & TimestampMask(container.valid_bits);
-                        const std::uint64_t scope_duration =
+                        const uint64 scope_duration =
                             TimestampDelta(scope.begin_tick, scope.end_tick, scope.valid_bits);
-                        const std::uint64_t container_duration =
+                        const uint64 container_duration =
                             TimestampDelta(container.begin_tick, container.end_tick, container.valid_bits);
                         if (scope_begin_offset > container_duration ||
                             scope_duration > container_duration - scope_begin_offset ||
@@ -4198,13 +4197,13 @@ struct ProfileSessionReader::Impl {
                         if (scope.parent_scope_id == 0 && !timing_stack.empty()) {
                             const GpuScopeRecord& previous_root = scopes[timing_stack.front()];
                             if (previous_root.parent_scope_id == 0) {
-                                const std::uint64_t previous_duration = TimestampDelta(
+                                const uint64 previous_duration = TimestampDelta(
                                     previous_root.begin_tick, previous_root.end_tick, previous_root.valid_bits
                                 );
-                                const std::uint64_t begin_offset =
+                                const uint64 begin_offset =
                                     (scope.begin_tick - previous_root.begin_tick) &
                                     TimestampMask(scope.valid_bits);
-                                const std::uint64_t missing_local_orders =
+                                const uint64 missing_local_orders =
                                     index == timing_source_begin ?
                                         0 :
                                         scope.local_order - scopes[index - 1].local_order - 1;
@@ -4228,7 +4227,7 @@ struct ProfileSessionReader::Impl {
                         }
                     }
 
-                    const std::uint64_t timing_parent = nearest_observed_timing_ancestor[index];
+                    const uint64 timing_parent = nearest_observed_timing_ancestor[index];
                     if (scope.parent_index != kInvalidSessionIndex && timing_parent != scope.parent_index) {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
@@ -4268,8 +4267,8 @@ struct ProfileSessionReader::Impl {
             !ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size())) {
             return false;
         }
-        std::vector<std::uint64_t> timing_subtree_end_local(scopes.size(), 0);
-        std::vector<std::uint64_t> structural_subtree_end_local(scopes.size(), 0);
+        std::vector<uint64> timing_subtree_end_local(scopes.size(), 0);
+        std::vector<uint64> structural_subtree_end_local(scopes.size(), 0);
         for (std::size_t index = 0; index < scopes.size(); ++index) {
             if (CheckStopOnly()) {
                 return false;
@@ -4282,13 +4281,13 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
             const std::size_t   scope_index         = index - 1;
-            const std::uint64_t timing_parent_index = nearest_observed_timing_ancestor[scope_index];
+            const uint64        timing_parent_index = nearest_observed_timing_ancestor[scope_index];
             if (timing_parent_index != kInvalidSessionIndex) {
                 timing_subtree_end_local[timing_parent_index] = std::max(
                     timing_subtree_end_local[timing_parent_index], timing_subtree_end_local[scope_index]
                 );
             }
-            const std::uint64_t structural_parent_index = scopes[scope_index].parent_index;
+            const uint64 structural_parent_index = scopes[scope_index].parent_index;
             if (structural_parent_index != kInvalidSessionIndex) {
                 structural_subtree_end_local[structural_parent_index] = std::max(
                     structural_subtree_end_local[structural_parent_index],
@@ -4304,8 +4303,8 @@ struct ProfileSessionReader::Impl {
             !ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(depth_range_leaf_count)) {
             return false;
         }
-        std::vector<std::uint32_t> depth_range_tree(
-            depth_range_leaf_count * 2, std::numeric_limits<std::uint32_t>::max()
+        std::vector<uint32> depth_range_tree(
+            depth_range_leaf_count * 2, std::numeric_limits<uint32>::max()
         );
         for (std::size_t index = 0; index < scopes.size(); ++index) {
             if (CheckStopOnly()) {
@@ -4322,7 +4321,7 @@ struct ProfileSessionReader::Impl {
                 std::min(depth_range_tree[parent * 2], depth_range_tree[parent * 2 + 1]);
         }
         const auto minimum_depth_in_range = [&](std::size_t _begin, std::size_t _end) {
-            std::uint32_t minimum = std::numeric_limits<std::uint32_t>::max();
+            uint32        minimum = std::numeric_limits<uint32>::max();
             std::size_t   begin   = depth_range_leaf_count + _begin;
             std::size_t   end     = depth_range_leaf_count + _end;
             while (begin < end) {
@@ -4338,21 +4337,21 @@ struct ProfileSessionReader::Impl {
             return minimum;
         };
         struct MissingParentContract {
-            std::uint64_t       frame_id{0};
+            uint64              frame_id{0};
             ProfileLogicalQueue logical_queue{ProfileLogicalQueue::Graphics};
-            std::uint32_t       native_queue_id{0};
-            std::uint32_t       family_id{0};
-            std::uint64_t       source_order{0};
-            std::uint32_t       parent_depth{0};
-            std::uint64_t       child_local_order_deadline{0};
-            std::uint64_t       earliest_child_sequence{0};
-            std::uint64_t       latest_parent_local_order{0};
-            std::uint64_t       observed_local_orders_before_deadline{0};
+            uint32              native_queue_id{0};
+            uint32              family_id{0};
+            uint64              source_order{0};
+            uint32              parent_depth{0};
+            uint64              child_local_order_deadline{0};
+            uint64              earliest_child_sequence{0};
+            uint64              latest_parent_local_order{0};
+            uint64              observed_local_orders_before_deadline{0};
             bool                timing_topology_trusted{false};
-            std::uint64_t       observed_ancestor_index{kInvalidSessionIndex};
-            std::uint64_t       last_child_subtree_end_local{0};
-            std::uint64_t       timing_envelope_begin_tick{0};
-            std::uint64_t       timing_envelope_duration{0};
+            uint64              observed_ancestor_index{kInvalidSessionIndex};
+            uint64              last_child_subtree_end_local{0};
+            uint64              timing_envelope_begin_tick{0};
+            uint64              timing_envelope_duration{0};
         };
         std::vector<MissingParentContract> missing_parent_contracts;
         if (!ChargeTopologyLinearWork(missing_parent_evidence.size()) ||
@@ -4379,11 +4378,11 @@ struct ProfileSessionReader::Impl {
             }
 
             const MissingParentEvidence& contract = missing_parent_evidence[evidence_begin];
-            std::uint64_t                last_child_timing_subtree_end_local =
+            uint64                       last_child_timing_subtree_end_local =
                 timing_subtree_end_local[static_cast<std::size_t>(contract.child_index)];
-            std::uint64_t last_child_structural_subtree_end_local =
+            uint64 last_child_structural_subtree_end_local =
                 structural_subtree_end_local[static_cast<std::size_t>(contract.child_index)];
-            std::uint64_t earliest_child_sequence =
+            uint64 earliest_child_sequence =
                 scopes[static_cast<std::size_t>(contract.child_index)].sequence;
             for (std::size_t index = evidence_begin + 1; index < evidence_end; ++index) {
                 if (CheckStopOnly()) {
@@ -4416,7 +4415,7 @@ struct ProfileSessionReader::Impl {
             }
 
             const std::size_t   first_child_index = static_cast<std::size_t>(contract.child_index);
-            const std::uint64_t observed_before   = source_local_rank[first_child_index];
+            const uint64        observed_before   = source_local_rank[first_child_index];
             if (contract.child_local_order == 0 || contract.child_local_order <= observed_before) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
@@ -4425,13 +4424,13 @@ struct ProfileSessionReader::Impl {
                 );
                 return false;
             }
-            std::uint64_t latest_parent_local_order = contract.child_local_order - 1;
+            uint64 latest_parent_local_order = contract.child_local_order - 1;
             if (observed_before != 0) {
                 const std::size_t last_observed_index = first_child_index - 1;
                 if (scopes[last_observed_index].local_order == latest_parent_local_order) {
                     const std::size_t source_begin_index =
                         first_child_index - static_cast<std::size_t>(observed_before);
-                    const std::uint64_t contiguous_run_key =
+                    const uint64 contiguous_run_key =
                         scopes[last_observed_index].local_order - (observed_before - 1);
                     std::size_t low  = source_begin_index;
                     std::size_t high = first_child_index;
@@ -4440,8 +4439,8 @@ struct ProfileSessionReader::Impl {
                     }
                     while (low < high) {
                         const std::size_t   mid = low + (high - low) / 2;
-                        const std::uint64_t order_without_rank =
-                            scopes[mid].local_order - static_cast<std::uint64_t>(mid - source_begin_index);
+                        const uint64        order_without_rank =
+                            scopes[mid].local_order - static_cast<uint64>(mid - source_begin_index);
                         if (order_without_rank < contiguous_run_key) {
                             low = mid + 1;
                         } else {
@@ -4467,29 +4466,29 @@ struct ProfileSessionReader::Impl {
                 frames.begin(),
                 frames.end(),
                 contract.frame_id,
-                [](const GpuFrameRecord& _frame, std::uint64_t _frame_id) {
+                [](const GpuFrameRecord& _frame, uint64 _frame_id) {
                     return _frame.frame_id < _frame_id;
                 }
             );
             const bool timing_topology_trusted = frame != frames.end() &&
                                                  frame->frame_id == contract.frame_id &&
                                                  frame->status == ProfileGpuFrameStatus::Complete;
-            std::uint64_t       observed_ancestor_index = kInvalidSessionIndex;
-            const std::uint64_t timing_contract_index   = timing_contract_for_child[first_child_index];
+            uint64                        observed_ancestor_index = kInvalidSessionIndex;
+            const uint64                  timing_contract_index   = timing_contract_for_child[first_child_index];
             const TimingContractEnvelope* timing_contract =
                 timing_contract_index == kInvalidSessionIndex ?
                     nullptr :
                     &timing_contract_envelopes[static_cast<std::size_t>(timing_contract_index)];
-            std::uint64_t envelope_begin_tick = timing_contract != nullptr ?
-                                                    timing_contract->begin_tick :
-                                                    scopes[first_child_index].begin_tick;
-            std::uint64_t envelope_end_offset = timing_contract != nullptr ?
-                                                    timing_contract->duration :
-                                                    TimestampDelta(
-                                                        scopes[first_child_index].begin_tick,
-                                                        scopes[first_child_index].end_tick,
-                                                        scopes[first_child_index].valid_bits
-                                                    );
+            uint64 envelope_begin_tick = timing_contract != nullptr ?
+                                             timing_contract->begin_tick :
+                                             scopes[first_child_index].begin_tick;
+            uint64 envelope_end_offset = timing_contract != nullptr ?
+                                             timing_contract->duration :
+                                             TimestampDelta(
+                                                 scopes[first_child_index].begin_tick,
+                                                 scopes[first_child_index].end_tick,
+                                                 scopes[first_child_index].valid_bits
+                                             );
             if (timing_topology_trusted) {
                 const GpuScopeRecord& first_child =
                     scopes[missing_parent_evidence[evidence_begin].child_index];
@@ -4516,11 +4515,11 @@ struct ProfileSessionReader::Impl {
                         );
                         return false;
                     }
-                    const std::uint64_t child_begin_offset =
+                    const uint64 child_begin_offset =
                         (child.begin_tick - envelope_begin_tick) & TimestampMask(child.valid_bits);
-                    const std::uint64_t child_duration =
+                    const uint64 child_duration =
                         TimestampDelta(child.begin_tick, child.end_tick, child.valid_bits);
-                    const std::uint64_t timestamp_mask = TimestampMask(child.valid_bits);
+                    const uint64 timestamp_mask = TimestampMask(child.valid_bits);
                     if (child_begin_offset < envelope_end_offset ||
                         child_duration > timestamp_mask - child_begin_offset) {
                         Fail(
@@ -4531,7 +4530,7 @@ struct ProfileSessionReader::Impl {
                         return false;
                     }
                     envelope_end_offset = child_begin_offset + child_duration;
-                    const std::uint64_t child_observed_ancestor =
+                    const uint64 child_observed_ancestor =
                         nearest_observed_timing_ancestor[missing_parent_evidence[index].child_index];
                     if (index == evidence_begin) {
                         observed_ancestor_index = child_observed_ancestor;
@@ -4555,9 +4554,9 @@ struct ProfileSessionReader::Impl {
                 }
                 if (observed_ancestor_index != kInvalidSessionIndex) {
                     const GpuScopeRecord& ancestor = scopes[observed_ancestor_index];
-                    const std::uint64_t   ancestor_duration =
+                    const uint64          ancestor_duration =
                         TimestampDelta(ancestor.begin_tick, ancestor.end_tick, ancestor.valid_bits);
-                    const std::uint64_t envelope_begin_offset =
+                    const uint64 envelope_begin_offset =
                         (envelope_begin_tick - ancestor.begin_tick) & TimestampMask(ancestor.valid_bits);
                     if (envelope_begin_offset > ancestor_duration ||
                         envelope_end_offset > ancestor_duration - envelope_begin_offset) {
@@ -4674,9 +4673,9 @@ struct ProfileSessionReader::Impl {
         missing_frame_evidence.resize(missing_frame_count);
 
         struct FrameEmissionBoundary {
-            std::uint64_t frame_id{0};
-            std::uint64_t earliest_scope_sequence{0};
-            std::uint64_t latest_observed_sequence{0};
+            uint64        frame_id{0};
+            uint64        earliest_scope_sequence{0};
+            uint64        latest_observed_sequence{0};
             std::size_t   source_index{0};
             bool          known{false};
         };
@@ -4691,7 +4690,7 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         const std::size_t boundary_count = frames.size() + missing_frame_evidence.size();
-        if (!ChargeTopologyWork(static_cast<std::uint64_t>(boundary_count)) ||
+        if (!ChargeTopologyWork(static_cast<uint64>(boundary_count)) ||
             !ChargeTopologyLinearWork(boundary_count) || !ChargeTopologyLinearWork(boundary_count)) {
             return false;
         }
@@ -4731,11 +4730,11 @@ struct ProfileSessionReader::Impl {
             }
         }
 
-        std::vector<std::uint64_t> known_frame_tail_deadlines(
-            frames.size(), std::numeric_limits<std::uint64_t>::max()
+        std::vector<uint64> known_frame_tail_deadlines(
+            frames.size(), std::numeric_limits<uint64>::max()
         );
-        std::vector<std::uint64_t> missing_frame_record_releases(missing_frame_evidence.size(), 1);
-        std::uint64_t              previous_observed_end = 0;
+        std::vector<uint64>        missing_frame_record_releases(missing_frame_evidence.size(), 1);
+        uint64                     previous_observed_end = 0;
         bool                       has_previous_boundary = false;
         for (std::size_t index = 0; index < frame_boundaries.size(); ++index) {
             if (CheckStopOnly()) {
@@ -4762,8 +4761,8 @@ struct ProfileSessionReader::Impl {
                     );
                     return false;
                 }
-                const std::uint64_t release =
-                    has_previous_boundary ? previous_observed_end + 1 : std::uint64_t{1};
+                const uint64 release =
+                    has_previous_boundary ? previous_observed_end + 1 : uint64{1};
                 missing_frame_record_releases[boundary.source_index] = release;
             }
 
@@ -4777,16 +4776,16 @@ struct ProfileSessionReader::Impl {
         }
 
         struct SourceLossEvidence {
-            std::uint64_t       frame_id{0};
+            uint64              frame_id{0};
             ProfileLogicalQueue logical_queue{ProfileLogicalQueue::Graphics};
-            std::uint32_t       native_queue_id{0};
-            std::uint32_t       family_id{0};
-            std::uint64_t       source_order{0};
-            std::uint64_t       first_scope{0};
-            std::uint64_t       scope_count{0};
-            std::uint64_t       local_hole_count{0};
-            std::uint64_t       required_parent_record_count{0};
-            std::uint64_t       producer_predecessor_sequence{0};
+            uint32              native_queue_id{0};
+            uint32              family_id{0};
+            uint64              source_order{0};
+            uint64              first_scope{0};
+            uint64              scope_count{0};
+            uint64              local_hole_count{0};
+            uint64              required_parent_record_count{0};
+            uint64              producer_predecessor_sequence{0};
         };
         std::vector<SourceLossEvidence> source_loss_evidence;
         if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
@@ -4828,8 +4827,8 @@ struct ProfileSessionReader::Impl {
                 }
             }
 
-            std::uint64_t local_span = 0;
-            if (AddOverflow(scopes[source_end - 1].local_order, std::uint64_t{1}, local_span)) {
+            uint64 local_span = 0;
+            if (AddOverflow(scopes[source_end - 1].local_order, uint64{1}, local_span)) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
                     SessionErrorCode::GpuScopeIdentityInvalid,
@@ -4837,7 +4836,7 @@ struct ProfileSessionReader::Impl {
                 );
                 return false;
             }
-            const std::uint64_t observed_count = static_cast<std::uint64_t>(source_end - source_begin);
+            const uint64 observed_count = static_cast<uint64>(source_end - source_begin);
             source_loss_evidence.push_back({
                 .frame_id                      = scopes[source_begin].frame_id,
                 .logical_queue                 = scopes[source_begin].logical_queue,
@@ -4889,8 +4888,8 @@ struct ProfileSessionReader::Impl {
             )) {
             return false;
         }
-        std::uint64_t previous_source_frame_id = 0;
-        std::uint64_t previous_source_sequence = 0;
+        uint64        previous_source_frame_id = 0;
+        uint64        previous_source_sequence = 0;
         bool          has_previous_source      = false;
         if (!ChargeTopologyLinearWork(source_emission_order.size())) {
             return false;
@@ -4900,9 +4899,9 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
             SourceLossEvidence& source = source_loss_evidence[source_index];
-            std::uint64_t predecessor  = has_previous_source && previous_source_frame_id == source.frame_id ?
-                                             previous_source_sequence :
-                                             std::uint64_t{0};
+            uint64              predecessor      = has_previous_source && previous_source_frame_id == source.frame_id ?
+                                                       previous_source_sequence :
+                                                       uint64{0};
             source.producer_predecessor_sequence = predecessor;
             const std::size_t source_end_index =
                 static_cast<std::size_t>(source.first_scope + source.scope_count);
@@ -4988,7 +4987,7 @@ struct ProfileSessionReader::Impl {
                 frame_boundaries.begin(),
                 frame_boundaries.end(),
                 source->frame_id,
-                [](const FrameEmissionBoundary& _boundary, std::uint64_t _frame_id) {
+                [](const FrameEmissionBoundary& _boundary, uint64 _frame_id) {
                     return _boundary.frame_id < _frame_id;
                 }
             );
@@ -5000,10 +4999,10 @@ struct ProfileSessionReader::Impl {
                 );
                 return false;
             }
-            std::uint64_t source_frame_release = 0;
+            uint64 source_frame_release = 0;
             if (frame_boundary->known) {
                 const GpuFrameRecord& frame = frames[frame_boundary->source_index];
-                if (frame.sequence == std::numeric_limits<std::uint64_t>::max()) {
+                if (frame.sequence == std::numeric_limits<uint64>::max()) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
                         SessionErrorCode::GpuFrameTotalsMismatch,
@@ -5016,7 +5015,7 @@ struct ProfileSessionReader::Impl {
                 source_frame_release = missing_frame_record_releases[frame_boundary->source_index];
             }
 
-            std::vector<std::uint32_t> depth_coordinates;
+            std::vector<uint32>        depth_coordinates;
             const std::size_t          source_scope_count = static_cast<std::size_t>(source->scope_count);
             const std::size_t          contract_count     = contract_end - contract_begin;
             if (!ChargeTopologyLinearWork(source_scope_count) || !ChargeTopologyLinearWork(contract_count)) {
@@ -5025,7 +5024,7 @@ struct ProfileSessionReader::Impl {
             depth_coordinates.reserve(source_scope_count + contract_count);
             const std::size_t source_end_index =
                 static_cast<std::size_t>(source->first_scope + source->scope_count);
-            std::uint64_t last_observed_root_local_order = 0;
+            uint64        last_observed_root_local_order = 0;
             bool          has_observed_root              = false;
             for (std::size_t index = static_cast<std::size_t>(source->first_scope); index < source_end_index;
                  ++index) {
@@ -5067,16 +5066,16 @@ struct ProfileSessionReader::Impl {
                 !ChargeTopologyLinearWork(depth_coordinates.size())) {
                 return false;
             }
-            std::vector<std::uint64_t> covered_depth_tree(depth_coordinates.size() + 1, 0);
-            std::vector<std::uint64_t> prefix_covered_depth_tree(depth_coordinates.size() + 1, 0);
-            std::vector<std::uint8_t>  depth_covered(depth_coordinates.size(), 0);
-            std::vector<std::uint8_t>  prefix_depth_covered(depth_coordinates.size(), 0);
-            std::vector<std::uint8_t>  active_observed_depth(depth_coordinates.size(), 0);
+            std::vector<uint64>        covered_depth_tree(depth_coordinates.size() + 1, 0);
+            std::vector<uint64>        prefix_covered_depth_tree(depth_coordinates.size() + 1, 0);
+            std::vector<uint8>         depth_covered(depth_coordinates.size(), 0);
+            std::vector<uint8>         prefix_depth_covered(depth_coordinates.size(), 0);
+            std::vector<uint8>         active_observed_depth(depth_coordinates.size(), 0);
             std::vector<std::size_t>   active_observed_depth_stack;
             active_observed_depth_stack.reserve(depth_coordinates.size());
-            const auto cover_depth = [&](std::uint32_t               _depth,
-                                         std::vector<std::uint64_t>& _tree,
-                                         std::vector<std::uint8_t>&  _covered) {
+            const auto cover_depth = [&](uint32               _depth,
+                                         std::vector<uint64>& _tree,
+                                         std::vector<uint8>&  _covered) {
                 const std::size_t coordinate = static_cast<std::size_t>(
                     std::lower_bound(depth_coordinates.begin(), depth_coordinates.end(), _depth) -
                     depth_coordinates.begin()
@@ -5090,13 +5089,13 @@ struct ProfileSessionReader::Impl {
                     ++_tree[tree_index];
                 }
             };
-            const auto covered_depth_count_before = [&](std::uint32_t                     _depth,
-                                                        const std::vector<std::uint64_t>& _tree) {
+            const auto covered_depth_count_before = [&](uint32                     _depth,
+                                                        const std::vector<uint64>& _tree) {
                 std::size_t tree_index = static_cast<std::size_t>(
                     std::lower_bound(depth_coordinates.begin(), depth_coordinates.end(), _depth) -
                     depth_coordinates.begin()
                 );
-                std::uint64_t covered_count = 0;
+                uint64 covered_count = 0;
                 while (tree_index != 0) {
                     covered_count += _tree[tree_index];
                     tree_index &= tree_index - 1;
@@ -5118,9 +5117,9 @@ struct ProfileSessionReader::Impl {
                 missing_parent_contracts[contract_begin].timing_topology_trusted;
             if (timing_topology_trusted) {
                 struct MissingTaskKey {
-                    std::uint64_t anchor_index{kInvalidSessionIndex};
-                    std::uint32_t depth{0};
-                    std::uint64_t first_allowed_slot{0};
+                    uint64 anchor_index{kInvalidSessionIndex};
+                    uint32 depth{0};
+                    uint64 first_allowed_slot{0};
 
                     [[nodiscard]] bool operator<(const MissingTaskKey& _right) const noexcept {
                         return std::tie(anchor_index, depth, first_allowed_slot) <
@@ -5128,30 +5127,30 @@ struct ProfileSessionReader::Impl {
                     }
                 };
                 struct MissingTaskState {
-                    std::uint64_t canonical_task_index{kInvalidSessionIndex};
+                    uint64        canonical_task_index{kInvalidSessionIndex};
                     bool          canonical_is_direct{false};
                 };
                 struct MissingTask {
-                    std::uint64_t first_allowed_slot{0};
-                    std::uint64_t deadline_slot{0};
-                    std::uint64_t assigned_slot{kInvalidSessionIndex};
-                    std::uint32_t depth{0};
+                    uint64        first_allowed_slot{0};
+                    uint64        deadline_slot{0};
+                    uint64        assigned_slot{kInvalidSessionIndex};
+                    uint32        depth{0};
                     bool          has_timing_envelope{false};
-                    std::uint64_t timing_envelope_begin_tick{0};
-                    std::uint64_t timing_envelope_duration{0};
-                    std::uint64_t timing_envelope_member_count{0};
-                    std::uint64_t maximum_member_duration{0};
-                    std::uint64_t first_member_duration{0};
-                    std::uint64_t first_member_subtree_end_local{0};
-                    std::uint64_t timing_subtree_end_local{0};
+                    uint64        timing_envelope_begin_tick{0};
+                    uint64        timing_envelope_duration{0};
+                    uint64        timing_envelope_member_count{0};
+                    uint64        maximum_member_duration{0};
+                    uint64        first_member_duration{0};
+                    uint64        first_member_subtree_end_local{0};
+                    uint64        timing_subtree_end_local{0};
                 };
                 struct RootPartitionCandidate {
-                    std::uint64_t root_task_index{kInvalidSessionIndex};
-                    std::uint64_t previous_subtree_end_local{0};
-                    std::uint64_t child_local_order_deadline{0};
-                    std::uint64_t member_begin_tick{0};
-                    std::uint64_t member_duration{0};
-                    std::uint64_t member_subtree_end_local{0};
+                    uint64        root_task_index{kInvalidSessionIndex};
+                    uint64        previous_subtree_end_local{0};
+                    uint64        child_local_order_deadline{0};
+                    uint64        member_begin_tick{0};
+                    uint64        member_duration{0};
+                    uint64        member_subtree_end_local{0};
                     std::size_t   chain_begin{0};
                     std::size_t   chain_end{0};
                 };
@@ -5159,26 +5158,26 @@ struct ProfileSessionReader::Impl {
                 if (!ChargeTopologyLinearWork(depth_coordinates.size())) {
                     return false;
                 }
-                std::vector<std::uint64_t> latest_barrier_tree(depth_coordinates.size() + 1, 0);
+                std::vector<uint64>        latest_barrier_tree(depth_coordinates.size() + 1, 0);
                 const auto                 observe_barrier = [&](std::size_t _scope_index) {
                     const GpuScopeRecord& scope      = scopes[_scope_index];
                     const std::size_t     coordinate = static_cast<std::size_t>(
                         std::lower_bound(depth_coordinates.begin(), depth_coordinates.end(), scope.depth) -
                         depth_coordinates.begin()
                     );
-                    const std::uint64_t local_order_after = timing_subtree_end_local[_scope_index] + 1;
+                    const uint64 local_order_after = timing_subtree_end_local[_scope_index] + 1;
                     for (std::size_t tree_index = coordinate + 1; tree_index < latest_barrier_tree.size();
                          tree_index += tree_index & (~tree_index + 1)) {
                         latest_barrier_tree[tree_index] =
                             std::max(latest_barrier_tree[tree_index], local_order_after);
                     }
                 };
-                const auto latest_barrier_after = [&](std::uint32_t _depth) {
+                const auto latest_barrier_after = [&](uint32 _depth) {
                     std::size_t tree_index = static_cast<std::size_t>(
                         std::upper_bound(depth_coordinates.begin(), depth_coordinates.end(), _depth) -
                         depth_coordinates.begin()
                     );
-                    std::uint64_t latest = 0;
+                    uint64 latest = 0;
                     while (tree_index != 0) {
                         latest = std::max(latest, latest_barrier_tree[tree_index]);
                         tree_index &= tree_index - 1;
@@ -5188,12 +5187,12 @@ struct ProfileSessionReader::Impl {
 
                 std::map<MissingTaskKey, MissingTaskState> task_states;
                 std::vector<MissingTask>                   tasks;
-                std::vector<std::uint64_t>                 chain_task_indices;
-                std::vector<std::uint8_t>                  chain_task_shared_with_prior;
-                std::vector<std::uint64_t>                 chain_ends;
+                std::vector<uint64>                        chain_task_indices;
+                std::vector<uint8>                         chain_task_shared_with_prior;
+                std::vector<uint64>                        chain_ends;
                 std::vector<RootPartitionCandidate>        root_partition_candidates;
-                std::map<std::uint32_t, std::uint64_t>     previous_missing_direct_end;
-                std::map<std::uint32_t, std::uint64_t>     virtual_epoch_floor;
+                std::map<uint32, uint64>                   previous_missing_direct_end;
+                std::map<uint32, uint64>                   virtual_epoch_floor;
                 std::vector<std::size_t>                   completion_order;
                 if (!ChargeTopologyLinearWork(source_scope_count)) {
                     return false;
@@ -5240,24 +5239,24 @@ struct ProfileSessionReader::Impl {
                         ++completed_observed_index;
                     }
 
-                    const std::uint64_t anchor_index = contract.observed_ancestor_index;
-                    const std::uint32_t base_depth =
+                    const uint64 anchor_index = contract.observed_ancestor_index;
+                    const uint32 base_depth =
                         anchor_index == kInvalidSessionIndex ? 0 : scopes[anchor_index].depth + 1;
-                    const std::uint64_t chain_item_count =
-                        static_cast<std::uint64_t>(contract.parent_depth - base_depth) + 1;
+                    const uint64 chain_item_count =
+                        static_cast<uint64>(contract.parent_depth - base_depth) + 1;
                     if (!charge_topology_work(chain_item_count)) {
                         return false;
                     }
 
-                    const std::uint64_t anchor_first_allowed =
+                    const uint64 anchor_first_allowed =
                         anchor_index == kInvalidSessionIndex ? 0 : scopes[anchor_index].local_order + 1;
                     if (!ChargeTopologyBinarySearchWork(previous_missing_direct_end.size())) {
                         return false;
                     }
                     const auto previous_direct = previous_missing_direct_end.find(contract.parent_depth);
                     if (previous_direct != previous_missing_direct_end.end()) {
-                        std::uint64_t sibling_after = 0;
-                        if (AddOverflow(previous_direct->second, std::uint64_t{1}, sibling_after)) {
+                        uint64 sibling_after = 0;
+                        if (AddOverflow(previous_direct->second, uint64{1}, sibling_after)) {
                             Fail(
                                 SessionLoadStatus::ProtocolViolation,
                                 SessionErrorCode::GpuScopeIdentityInvalid,
@@ -5279,7 +5278,7 @@ struct ProfileSessionReader::Impl {
                         virtual_epoch_floor[contract.parent_depth] = sibling_after;
                     }
                     const std::size_t current_chain_begin = chain_task_indices.size();
-                    for (std::uint32_t depth = base_depth;; ++depth) {
+                    for (uint32 depth = base_depth;; ++depth) {
                         if (CheckStopOnly()) {
                             return false;
                         }
@@ -5287,7 +5286,7 @@ struct ProfileSessionReader::Impl {
                             !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                             return false;
                         }
-                        std::uint64_t first_allowed_slot =
+                        uint64 first_allowed_slot =
                             std::max(anchor_first_allowed, latest_barrier_after(depth));
                         if (!ChargeTopologyBinarySearchWork(virtual_epoch_floor.size())) {
                             return false;
@@ -5316,10 +5315,10 @@ struct ProfileSessionReader::Impl {
                         }
                         auto [state_it, state_inserted]          = task_states.try_emplace(key);
                         MissingTaskState& state                  = state_it->second;
-                        std::uint64_t     task_index             = state.canonical_task_index;
+                        uint64            task_index             = state.canonical_task_index;
                         bool              task_shared_with_prior = false;
                         if (state_inserted) {
-                            task_index = static_cast<std::uint64_t>(tasks.size());
+                            task_index = static_cast<uint64>(tasks.size());
                             tasks.push_back({
                                 .first_allowed_slot = first_allowed_slot,
                                 .deadline_slot      = contract.child_local_order_deadline,
@@ -5328,7 +5327,7 @@ struct ProfileSessionReader::Impl {
                             state.canonical_task_index = task_index;
                             state.canonical_is_direct  = direct;
                         } else if (direct && state.canonical_is_direct) {
-                            task_index = static_cast<std::uint64_t>(tasks.size());
+                            task_index = static_cast<uint64>(tasks.size());
                             tasks.push_back({
                                 .first_allowed_slot = first_allowed_slot,
                                 .deadline_slot      = contract.child_local_order_deadline,
@@ -5345,14 +5344,14 @@ struct ProfileSessionReader::Impl {
                         }
                         chain_task_indices.push_back(task_index);
                         chain_task_shared_with_prior.push_back(
-                            static_cast<std::uint8_t>(task_shared_with_prior)
+                            static_cast<uint8>(task_shared_with_prior)
                         );
                         if (depth == contract.parent_depth) {
                             break;
                         }
                     }
                     if (base_depth == 0) {
-                        const std::uint64_t root_task_index = chain_task_indices[current_chain_begin];
+                        const uint64        root_task_index = chain_task_indices[current_chain_begin];
                         MissingTask&        root_task       = tasks[root_task_index];
                         if (!root_task.has_timing_envelope) {
                             root_task.has_timing_envelope            = true;
@@ -5364,21 +5363,21 @@ struct ProfileSessionReader::Impl {
                             root_task.first_member_subtree_end_local = contract.last_child_subtree_end_local;
                             root_task.timing_subtree_end_local       = contract.last_child_subtree_end_local;
                         } else {
-                            const std::uint32_t valid_bits =
+                            const uint32 valid_bits =
                                 scopes[static_cast<std::size_t>(source->first_scope)].valid_bits;
-                            const std::uint64_t envelope_begin_offset =
+                            const uint64 envelope_begin_offset =
                                 (contract.timing_envelope_begin_tick - root_task.timing_envelope_begin_tick) &
                                 TimestampMask(valid_bits);
-                            const std::uint64_t timestamp_mask = TimestampMask(valid_bits);
+                            const uint64        timestamp_mask = TimestampMask(valid_bits);
                             const bool          envelope_invalid =
                                 envelope_begin_offset < root_task.timing_envelope_duration ||
                                 contract.timing_envelope_duration > timestamp_mask - envelope_begin_offset;
-                            const std::uint64_t merged_envelope_duration =
+                            const uint64 merged_envelope_duration =
                                 envelope_invalid ? 0 :
                                                    envelope_begin_offset + contract.timing_envelope_duration;
-                            const std::uint64_t maximum_root_step =
-                                valid_bits == 64 ? (std::uint64_t{1} << 63) - 1 :
-                                                   (std::uint64_t{1} << (valid_bits - 1)) - 1;
+                            const uint64 maximum_root_step =
+                                valid_bits == 64 ? (uint64{1} << 63) - 1 :
+                                                   (uint64{1} << (valid_bits - 1)) - 1;
                             const bool has_later_observed_root =
                                 has_observed_root &&
                                 last_observed_root_local_order > contract.last_child_subtree_end_local;
@@ -5386,13 +5385,13 @@ struct ProfileSessionReader::Impl {
                                 (has_later_observed_root && merged_envelope_duration > maximum_root_step)) {
                                 const std::size_t chain_count =
                                     chain_task_indices.size() - current_chain_begin;
-                                if (!charge_topology_work(static_cast<std::uint64_t>(chain_count))) {
+                                if (!charge_topology_work(static_cast<uint64>(chain_count))) {
                                     return false;
                                 }
-                                std::uint64_t split_first_allowed = 0;
+                                uint64 split_first_allowed = 0;
                                 if (AddOverflow(
                                         root_task.timing_subtree_end_local,
-                                        std::uint64_t{1},
+                                        uint64{1},
                                         split_first_allowed
                                     ) ||
                                     split_first_allowed >= contract.child_local_order_deadline) {
@@ -5422,8 +5421,8 @@ struct ProfileSessionReader::Impl {
                                     clone.first_member_duration        = 0;
                                     clone.first_member_subtree_end_local = 0;
                                     clone.timing_subtree_end_local       = 0;
-                                    const std::uint64_t clone_index =
-                                        static_cast<std::uint64_t>(tasks.size());
+                                    const uint64 clone_index =
+                                        static_cast<uint64>(tasks.size());
                                     tasks.push_back(clone);
                                     chain_task_indices[chain_index]           = clone_index;
                                     chain_task_shared_with_prior[chain_index] = 0;
@@ -5471,7 +5470,7 @@ struct ProfileSessionReader::Impl {
                             }
                         }
                     }
-                    chain_ends.push_back(static_cast<std::uint64_t>(chain_task_indices.size()));
+                    chain_ends.push_back(static_cast<uint64>(chain_task_indices.size()));
                     if (!ChargeTopologyHeapWork(previous_missing_direct_end.size() + 1)) {
                         return false;
                     }
@@ -5483,9 +5482,9 @@ struct ProfileSessionReader::Impl {
                     !ChargeTopologyLinearWork(chain_task_indices.size())) {
                     return false;
                 }
-                std::vector<std::uint8_t> task_active(tasks.size(), 0);
-                std::uint64_t             active_task_count = 0;
-                for (const std::uint64_t task_index : chain_task_indices) {
+                std::vector<uint8> task_active(tasks.size(), 0);
+                uint64             active_task_count = 0;
+                for (const uint64 task_index : chain_task_indices) {
                     if (CheckStopOnly()) {
                         return false;
                     }
@@ -5505,7 +5504,7 @@ struct ProfileSessionReader::Impl {
                 }
                 const bool has_spare_local_holes =
                     source->required_parent_record_count < source->local_hole_count;
-                std::vector<std::uint64_t> task_order;
+                std::vector<uint64> task_order;
                 if (!ChargeTopologyLinearWork(tasks.size())) {
                     return false;
                 }
@@ -5515,7 +5514,7 @@ struct ProfileSessionReader::Impl {
                         return false;
                     }
                     if (task_active[index] != 0) {
-                        task_order.push_back(static_cast<std::uint64_t>(index));
+                        task_order.push_back(static_cast<uint64>(index));
                     }
                 }
                 if (!ChargeTopologySortWork(task_order.size())) {
@@ -5524,7 +5523,7 @@ struct ProfileSessionReader::Impl {
                 if (!CancellableSort(
                         task_order.begin(),
                         task_order.end(),
-                        [&](std::uint64_t _left, std::uint64_t _right) {
+                        [&](uint64 _left, uint64 _right) {
                             const MissingTask& left  = tasks[_left];
                             const MissingTask& right = tasks[_right];
                             return std::tie(left.deadline_slot, left.first_allowed_slot, left.depth, _left) >
@@ -5535,18 +5534,18 @@ struct ProfileSessionReader::Impl {
                     )) {
                     return false;
                 }
-                const auto earlier_release = [&](std::uint64_t _left, std::uint64_t _right) {
+                const auto earlier_release = [&](uint64 _left, uint64 _right) {
                     const MissingTask& left  = tasks[_left];
                     const MissingTask& right = tasks[_right];
                     return std::tie(left.first_allowed_slot, left.depth, _left) <
                            std::tie(right.first_allowed_slot, right.depth, _right);
                 };
-                std::priority_queue<std::uint64_t, std::vector<std::uint64_t>, decltype(earlier_release)>
+                std::priority_queue<uint64, std::vector<uint64>, decltype(earlier_release)>
                               ready_tasks(earlier_release);
                 std::size_t   ordered_task_index  = 0;
                 std::size_t   observed_slot_index = source_end_index;
                 bool          has_slot            = !task_order.empty();
-                std::uint64_t slot = task_order.empty() ? 0 : tasks[task_order.front()].deadline_slot - 1;
+                uint64        slot                  = task_order.empty() ? 0 : tasks[task_order.front()].deadline_slot - 1;
                 const auto    move_to_previous_slot = [&]() {
                     if (slot == 0) {
                         has_slot = false;
@@ -5595,7 +5594,7 @@ struct ProfileSessionReader::Impl {
                         move_to_previous_slot();
                         continue;
                     }
-                    const std::uint64_t task_index = ready_tasks.top();
+                    const uint64 task_index = ready_tasks.top();
                     if (tasks[task_index].first_allowed_slot > slot) {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
@@ -5616,7 +5615,7 @@ struct ProfileSessionReader::Impl {
                 if (!ChargeTopologyLinearWork(chain_task_indices.size())) {
                     return false;
                 }
-                for (const std::uint64_t chain_end_value : chain_ends) {
+                for (const uint64 chain_end_value : chain_ends) {
                     if (CheckStopOnly()) {
                         return false;
                     }
@@ -5638,7 +5637,7 @@ struct ProfileSessionReader::Impl {
                     chain_begin = chain_end;
                 }
 
-                std::vector<std::uint64_t> occupied_local_orders;
+                std::vector<uint64> occupied_local_orders;
                 if (!ChargeTopologyLinearWork(source_scope_count) ||
                     !ChargeTopologyLinearWork(tasks.size())) {
                     return false;
@@ -5676,14 +5675,14 @@ struct ProfileSessionReader::Impl {
                     !ChargeTopologyLinearWork(tasks.size())) {
                     return false;
                 }
-                std::vector<std::uint64_t> candidate_split_root_slot(
+                std::vector<uint64> candidate_split_root_slot(
                     root_partition_candidates.size(), kInvalidSessionIndex
                 );
                 std::vector<std::size_t>   candidate_reserved_slot_begin(root_partition_candidates.size(), 0);
                 std::vector<std::size_t>   candidate_reserved_slot_end(root_partition_candidates.size(), 0);
-                std::vector<std::uint64_t> candidate_reserved_slot_storage;
-                std::vector<std::uint8_t>  task_has_concrete_split(tasks.size(), 0);
-                std::set<std::uint64_t>    reserved_split_slots;
+                std::vector<uint64>        candidate_reserved_slot_storage;
+                std::vector<uint8>         task_has_concrete_split(tasks.size(), 0);
+                std::set<uint64>           reserved_split_slots;
                 std::vector<std::size_t>   candidate_order;
                 if (!ChargeTopologyLinearWork(root_partition_candidates.size())) {
                     return false;
@@ -5729,7 +5728,7 @@ struct ProfileSessionReader::Impl {
                         }
                         if (task_active[root_task_index] == 0 ||
                             tasks[root_task_index].timing_envelope_member_count !=
-                                static_cast<std::uint64_t>(group_end - group_begin + 1)) {
+                                static_cast<uint64>(group_end - group_begin + 1)) {
                             group_begin = group_end;
                             continue;
                         }
@@ -5741,14 +5740,14 @@ struct ProfileSessionReader::Impl {
                             const std::size_t             candidate_index = candidate_order[order_index];
                             const RootPartitionCandidate& candidate =
                                 root_partition_candidates[candidate_index];
-                            const std::uint64_t chain_item_count =
-                                static_cast<std::uint64_t>(candidate.chain_end - candidate.chain_begin);
+                            const uint64 chain_item_count =
+                                static_cast<uint64>(candidate.chain_end - candidate.chain_begin);
                             if (!charge_topology_work(chain_item_count)) {
                                 return false;
                             }
 
-                            std::uint64_t required_split_records = 0;
-                            std::uint64_t first_unshared_slot    = candidate.child_local_order_deadline;
+                            uint64        required_split_records = 0;
+                            uint64        first_unshared_slot    = candidate.child_local_order_deadline;
                             bool          reached_unshared_task  = false;
                             bool          candidate_feasible     = true;
                             for (std::size_t chain_index = candidate.chain_begin;
@@ -5776,10 +5775,10 @@ struct ProfileSessionReader::Impl {
                                 continue;
                             }
 
-                            std::vector<std::uint64_t> candidate_reserved_slots;
-                            std::uint64_t              cursor    = first_unshared_slot;
-                            std::uint64_t              root_slot = kInvalidSessionIndex;
-                            for (std::uint64_t record = 0; record < required_split_records; ++record) {
+                            std::vector<uint64> candidate_reserved_slots;
+                            uint64              cursor    = first_unshared_slot;
+                            uint64              root_slot = kInvalidSessionIndex;
+                            for (uint64 record = 0; record < required_split_records; ++record) {
                                 if (CheckStopOnly()) {
                                     return false;
                                 }
@@ -5824,7 +5823,7 @@ struct ProfileSessionReader::Impl {
                                 if (!ChargeTopologyLinearWork(candidate_reserved_slots.size())) {
                                     return false;
                                 }
-                                for (const std::uint64_t slot : candidate_reserved_slots) {
+                                for (const uint64 slot : candidate_reserved_slots) {
                                     if (CheckStopOnly()) {
                                         return false;
                                     }
@@ -5835,7 +5834,7 @@ struct ProfileSessionReader::Impl {
                                 candidate_split_root_slot[candidate_index] = root_slot;
                                 task_has_concrete_split[root_task_index]   = 1;
                             } else {
-                                for (const std::uint64_t slot : candidate_reserved_slots) {
+                                for (const uint64 slot : candidate_reserved_slots) {
                                     if (CheckStopOnly()) {
                                         return false;
                                     }
@@ -5851,16 +5850,16 @@ struct ProfileSessionReader::Impl {
                 }
 
                 struct RootComponent {
-                    std::uint64_t local_order{0};
-                    std::uint64_t subtree_end_local{0};
+                    uint64        local_order{0};
+                    uint64        subtree_end_local{0};
                     bool          flexible{false};
-                    std::uint64_t begin_tick{0};
-                    std::uint64_t duration{0};
-                    std::uint64_t atomic_duration{0};
+                    uint64        begin_tick{0};
+                    uint64        duration{0};
+                    uint64        atomic_duration{0};
                 };
                 std::vector<RootComponent> root_components;
                 std::vector<RootComponent> split_root_components;
-                std::set<std::uint64_t>    used_split_slots;
+                std::set<uint64>           used_split_slots;
                 root_components.reserve(static_cast<std::size_t>(source->scope_count) + tasks.size());
                 split_root_components.reserve(
                     static_cast<std::size_t>(source->scope_count) + tasks.size() +
@@ -5892,13 +5891,13 @@ struct ProfileSessionReader::Impl {
                 }
                 std::size_t         candidate_order_index = 0;
                 bool                has_split_plan        = false;
-                const std::uint32_t source_valid_bits =
+                const uint32        source_valid_bits =
                     scopes[static_cast<std::size_t>(source->first_scope)].valid_bits;
-                const std::uint64_t source_timestamp_mask    = TimestampMask(source_valid_bits);
-                const std::uint64_t source_half_range        = source_valid_bits == 64 ?
-                                                                   (std::uint64_t{1} << 63) :
-                                                                   (std::uint64_t{1} << (source_valid_bits - 1));
-                const std::uint64_t source_maximum_root_step = source_half_range - 1;
+                const uint64 source_timestamp_mask    = TimestampMask(source_valid_bits);
+                const uint64 source_half_range        = source_valid_bits == 64 ?
+                                                            (uint64{1} << 63) :
+                                                            (uint64{1} << (source_valid_bits - 1));
+                const uint64 source_maximum_root_step = source_half_range - 1;
                 if (!ChargeTopologyLinearWork(tasks.size()) ||
                     !ChargeTopologyLinearWork(root_partition_candidates.size())) {
                     return false;
@@ -5971,7 +5970,7 @@ struct ProfileSessionReader::Impl {
                         }
                         const std::size_t             candidate_index = candidate_order[order_index];
                         const RootPartitionCandidate& candidate = root_partition_candidates[candidate_index];
-                        const std::uint64_t split_root_slot     = candidate_split_root_slot[candidate_index];
+                        const uint64                  split_root_slot = candidate_split_root_slot[candidate_index];
                         if (split_root_slot != kInvalidSessionIndex &&
                             split_component.duration <= source_maximum_root_step) {
                             has_split_plan = true;
@@ -5998,7 +5997,7 @@ struct ProfileSessionReader::Impl {
                             continue;
                         }
 
-                        const std::uint64_t member_begin_offset =
+                        const uint64 member_begin_offset =
                             (candidate.member_begin_tick - split_component.begin_tick) &
                             source_timestamp_mask;
                         if (member_begin_offset < split_component.duration ||
@@ -6067,12 +6066,12 @@ struct ProfileSessionReader::Impl {
                     return false;
                 }
                 if (!root_components.empty()) {
-                    const std::uint32_t valid_bits =
+                    const uint32 valid_bits =
                         scopes[static_cast<std::size_t>(source->first_scope)].valid_bits;
-                    const std::uint64_t timestamp_mask = TimestampMask(valid_bits);
-                    const std::uint64_t half_range =
-                        valid_bits == 64 ? (std::uint64_t{1} << 63) : (std::uint64_t{1} << (valid_bits - 1));
-                    const std::uint64_t maximum_root_step  = half_range - 1;
+                    const uint64 timestamp_mask = TimestampMask(valid_bits);
+                    const uint64 half_range =
+                        valid_bits == 64 ? (uint64{1} << 63) : (uint64{1} << (valid_bits - 1));
+                    const uint64        maximum_root_step  = half_range - 1;
                     const auto          fail_root_sequence = [&]() {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
@@ -6083,7 +6082,7 @@ struct ProfileSessionReader::Impl {
                     };
                     bool       topology_limit_failed  = false;
                     const auto validate_root_sequence = [&](const std::vector<RootComponent>& _components,
-                                                            const std::vector<std::uint64_t>&
+                                                            const std::vector<uint64>&
                                                                 _occupied_local_orders) {
                         if (_components.empty()) {
                             return true;
@@ -6120,7 +6119,7 @@ struct ProfileSessionReader::Impl {
                                 },
                         };
                         if (first_component.flexible) {
-                            const std::uint64_t maximum_duration =
+                            const uint64 maximum_duration =
                                 _components.size() == 1 ? timestamp_mask : maximum_root_step;
                             if (first_component.duration > maximum_duration || !AddSerialTickDelta(
                                                                                    initial_state.begin,
@@ -6164,16 +6163,16 @@ struct ProfileSessionReader::Impl {
                             const auto occupied_end = std::lower_bound(
                                 occupied_begin, _occupied_local_orders.end(), component.local_order
                             );
-                            const std::uint64_t span =
+                            const uint64 span =
                                 component.local_order - previous_component.subtree_end_local - 1;
-                            const std::uint64_t occupied_count =
-                                static_cast<std::uint64_t>(occupied_end - occupied_begin);
+                            const uint64 occupied_count =
+                                static_cast<uint64>(occupied_end - occupied_begin);
                             if (occupied_count > span) {
                                 return false;
                             }
-                            const std::uint64_t free_root_count = span - occupied_count;
+                            const uint64        free_root_count = span - occupied_count;
                             const bool          final_component = index + 1 == _components.size();
-                            const std::uint64_t maximum_duration =
+                            const uint64        maximum_duration =
                                 final_component ? timestamp_mask : maximum_root_step;
                             if (component.flexible && component.duration > maximum_duration) {
                                 return false;
@@ -6196,7 +6195,7 @@ struct ProfileSessionReader::Impl {
                                     continue;
                                 }
                                 bool window_overflow = false;
-                                for (std::uint64_t step = 0; step < free_root_count; ++step) {
+                                for (uint64 step = 0; step < free_root_count; ++step) {
                                     if (CheckStopOnly()) {
                                         return false;
                                     }
@@ -6235,7 +6234,7 @@ struct ProfileSessionReader::Impl {
                                             .begin = occurrence,
                                             .end   = occurrence_end,
                                         });
-                                        if (occurrence.epoch == std::numeric_limits<std::uint64_t>::max()) {
+                                        if (occurrence.epoch == std::numeric_limits<uint64>::max()) {
                                             break;
                                         }
                                         ++occurrence.epoch;
@@ -6243,7 +6242,7 @@ struct ProfileSessionReader::Impl {
                                     continue;
                                 }
 
-                                const std::uint64_t begin_slack = maximum_duration - component.duration;
+                                const uint64        begin_slack = maximum_duration - component.duration;
                                 SerialTick          latest_envelope{};
                                 if (!AddSerialTickDelta(
                                         window_upper, begin_slack, valid_bits, latest_envelope
@@ -6283,7 +6282,7 @@ struct ProfileSessionReader::Impl {
                                         }
                                     }
                                     if (envelope_occurrence.epoch ==
-                                        std::numeric_limits<std::uint64_t>::max()) {
+                                        std::numeric_limits<uint64>::max()) {
                                         break;
                                     }
                                     ++envelope_occurrence.epoch;
@@ -6339,17 +6338,17 @@ struct ProfileSessionReader::Impl {
                             !ChargeTopologyLinearWork(used_split_slots.size())) {
                             return false;
                         }
-                        std::vector<std::uint64_t> split_occupied_local_orders;
+                        std::vector<uint64> split_occupied_local_orders;
                         split_occupied_local_orders.reserve(
                             occupied_local_orders.size() + used_split_slots.size()
                         );
-                        for (const std::uint64_t slot : occupied_local_orders) {
+                        for (const uint64 slot : occupied_local_orders) {
                             if (CheckStopOnly()) {
                                 return false;
                             }
                             split_occupied_local_orders.push_back(slot);
                         }
-                        for (const std::uint64_t slot : used_split_slots) {
+                        for (const uint64 slot : used_split_slots) {
                             if (CheckStopOnly()) {
                                 return false;
                             }
@@ -6374,10 +6373,10 @@ struct ProfileSessionReader::Impl {
                         return fail_root_sequence();
                     }
                     if (used_split_plan) {
-                        std::uint64_t required_parent_record_count = 0;
+                        uint64 required_parent_record_count = 0;
                         if (AddOverflow(
                                 source->required_parent_record_count,
-                                static_cast<std::uint64_t>(used_split_slots.size()),
+                                static_cast<uint64>(used_split_slots.size()),
                                 required_parent_record_count
                             ) ||
                             required_parent_record_count > source->local_hole_count) {
@@ -6389,7 +6388,7 @@ struct ProfileSessionReader::Impl {
                             return false;
                         }
                         source->required_parent_record_count = required_parent_record_count;
-                        const std::uint64_t frame_index =
+                        const uint64 frame_index =
                             scopes[static_cast<std::size_t>(source->first_scope)].frame_index;
                         if (frame_index == kInvalidSessionIndex || frame_index >= frames.size()) {
                             Fail(
@@ -6409,12 +6408,12 @@ struct ProfileSessionReader::Impl {
                     return false;
                 }
                 struct VirtualSequenceTaskState {
-                    std::uint64_t canonical_task_index{kInvalidSessionIndex};
+                    uint64        canonical_task_index{kInvalidSessionIndex};
                     bool          canonical_is_direct{false};
                 };
                 struct VirtualSequenceTaskKey {
-                    std::uint32_t depth{0};
-                    std::uint64_t first_allowed_slot{0};
+                    uint32 depth{0};
+                    uint64 first_allowed_slot{0};
 
                     [[nodiscard]] bool operator<(const VirtualSequenceTaskKey& _right) const noexcept {
                         return std::tie(depth, first_allowed_slot) <
@@ -6422,26 +6421,26 @@ struct ProfileSessionReader::Impl {
                     }
                 };
                 struct VirtualSequenceTask {
-                    std::uint64_t first_allowed_slot{0};
-                    std::uint64_t deadline_slot{0};
-                    std::uint64_t deadline_sequence{0};
-                    std::uint32_t depth{0};
+                    uint64 first_allowed_slot{0};
+                    uint64 deadline_slot{0};
+                    uint64 deadline_sequence{0};
+                    uint32 depth{0};
                 };
 
                 if (!ChargeTopologyLinearWork(depth_coordinates.size()) ||
                     !ChargeTopologyLinearWork(source_scope_count)) {
                     return false;
                 }
-                std::vector<std::uint64_t> structural_barrier_tree(depth_coordinates.size() + 1, 0);
+                std::vector<uint64>        structural_barrier_tree(depth_coordinates.size() + 1, 0);
                 const auto                 observe_structural_barrier = [&](std::size_t _scope_index) {
                     const GpuScopeRecord& scope      = scopes[_scope_index];
                     const std::size_t     coordinate = static_cast<std::size_t>(
                         std::lower_bound(depth_coordinates.begin(), depth_coordinates.end(), scope.depth) -
                         depth_coordinates.begin()
                     );
-                    std::uint64_t local_order_after = 0;
+                    uint64 local_order_after = 0;
                     if (AddOverflow(
-                            structural_subtree_end_local[_scope_index], std::uint64_t{1}, local_order_after
+                            structural_subtree_end_local[_scope_index], uint64{1}, local_order_after
                         )) {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
@@ -6457,12 +6456,12 @@ struct ProfileSessionReader::Impl {
                     }
                     return true;
                 };
-                const auto latest_structural_barrier_after = [&](std::uint32_t _depth) {
+                const auto latest_structural_barrier_after = [&](uint32 _depth) {
                     std::size_t tree_index = static_cast<std::size_t>(
                         std::upper_bound(depth_coordinates.begin(), depth_coordinates.end(), _depth) -
                         depth_coordinates.begin()
                     );
-                    std::uint64_t latest = 0;
+                    uint64 latest = 0;
                     while (tree_index != 0) {
                         latest = std::max(latest, structural_barrier_tree[tree_index]);
                         tree_index &= tree_index - 1;
@@ -6495,12 +6494,12 @@ struct ProfileSessionReader::Impl {
                 }
 
                 std::map<VirtualSequenceTaskKey, VirtualSequenceTaskState> virtual_task_states;
-                std::map<std::uint32_t, std::uint64_t>                     previous_missing_direct_end;
+                std::map<uint32, uint64>                                   previous_missing_direct_end;
                 std::vector<VirtualSequenceTask>                           virtual_sequence_tasks;
                 std::size_t                                                completed_structural_index = 0;
-                const auto add_virtual_sequence_task = [&](std::uint32_t                _depth,
-                                                           const MissingParentContract& _contract,
-                                                           bool                         _direct) {
+                const auto                                                 add_virtual_sequence_task  = [&](uint32                       _depth,
+                                                                                                            const MissingParentContract& _contract,
+                                                                                                            bool                         _direct) {
                     if (_contract.earliest_child_sequence == 0) {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
@@ -6513,15 +6512,15 @@ struct ProfileSessionReader::Impl {
                         !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                         return false;
                     }
-                    std::uint64_t first_allowed_slot = latest_structural_barrier_after(_depth);
+                    uint64 first_allowed_slot = latest_structural_barrier_after(_depth);
                     if (_direct) {
                         if (!ChargeTopologyBinarySearchWork(previous_missing_direct_end.size())) {
                             return false;
                         }
                         const auto previous_direct = previous_missing_direct_end.find(_depth);
                         if (previous_direct != previous_missing_direct_end.end()) {
-                            std::uint64_t direct_epoch = 0;
-                            if (AddOverflow(previous_direct->second, std::uint64_t{1}, direct_epoch)) {
+                            uint64 direct_epoch = 0;
+                            if (AddOverflow(previous_direct->second, uint64{1}, direct_epoch)) {
                                 Fail(
                                     SessionLoadStatus::ProtocolViolation,
                                     SessionErrorCode::GpuScopeIdentityInvalid,
@@ -6573,13 +6572,13 @@ struct ProfileSessionReader::Impl {
                         return true;
                     }
 
-                    std::uint64_t next_task_edge_count = 0;
+                    uint64 next_task_edge_count = 0;
                     if (AddOverflow(
-                            static_cast<std::uint64_t>(joint_virtual_tasks.size()),
-                            static_cast<std::uint64_t>(virtual_sequence_tasks.size()),
+                            static_cast<uint64>(joint_virtual_tasks.size()),
+                            static_cast<uint64>(virtual_sequence_tasks.size()),
                             next_task_edge_count
                         ) ||
-                        AddOverflow(next_task_edge_count, std::uint64_t{1}, next_task_edge_count) ||
+                        AddOverflow(next_task_edge_count, uint64{1}, next_task_edge_count) ||
                         next_task_edge_count > options.limits.max_topology_flow_edges) {
                         Fail(
                             SessionLoadStatus::LimitExceeded,
@@ -6593,8 +6592,8 @@ struct ProfileSessionReader::Impl {
                     if (!ChargeTopologyWork(1)) {
                         return false;
                     }
-                    const std::uint64_t task_index =
-                        static_cast<std::uint64_t>(virtual_sequence_tasks.size());
+                    const uint64 task_index =
+                        static_cast<uint64>(virtual_sequence_tasks.size());
                     virtual_sequence_tasks.push_back({
                         .first_allowed_slot = first_allowed_slot,
                         .deadline_slot      = _contract.child_local_order_deadline,
@@ -6617,13 +6616,13 @@ struct ProfileSessionReader::Impl {
                 };
 
                 std::size_t   observed_index              = static_cast<std::size_t>(source->first_scope);
-                std::uint64_t hidden_ancestor_lower_bound = 0;
-                std::map<std::uint32_t, std::uint32_t> required_prefix_depth_intervals;
-                std::uint32_t                          exposed_prefix_depth                = 0;
-                std::uint64_t                          required_prefix_depth_count         = 0;
-                std::uint64_t                          matched_required_direct_depth_count = 0;
+                uint64                                 hidden_ancestor_lower_bound = 0;
+                std::map<uint32, uint32>               required_prefix_depth_intervals;
+                uint32                                 exposed_prefix_depth                = 0;
+                uint64                                 required_prefix_depth_count         = 0;
+                uint64                                 matched_required_direct_depth_count = 0;
                 bool                                   prefix_budget_failed                = false;
-                const auto                             prefix_depth_was_required = [&](std::uint32_t _depth) {
+                const auto                             prefix_depth_was_required           = [&](uint32 _depth) {
                     if (!ChargeTopologyBinarySearchWork(required_prefix_depth_intervals.size())) {
                         prefix_budget_failed = true;
                         return false;
@@ -6635,19 +6634,19 @@ struct ProfileSessionReader::Impl {
                     const auto& candidate = *std::prev(interval);
                     return _depth >= candidate.first && _depth < candidate.second;
                 };
-                const auto prefix_direct_depth_count_in_range = [&](std::uint32_t _begin,
-                                                                    std::uint32_t _end) {
+                const auto prefix_direct_depth_count_in_range = [&](uint32 _begin,
+                                                                    uint32 _end) {
                     if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                         !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                         !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                         !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                         prefix_budget_failed = true;
-                        return std::uint64_t{0};
+                        return uint64{0};
                     }
                     return covered_depth_count_before(_end, prefix_covered_depth_tree) -
                            covered_depth_count_before(_begin, prefix_covered_depth_tree);
                 };
-                const auto add_required_prefix_range = [&](std::uint32_t _begin, std::uint32_t _end) {
+                const auto add_required_prefix_range = [&](uint32 _begin, uint32 _end) {
                     if (_begin >= _end) {
                         return;
                     }
@@ -6664,9 +6663,9 @@ struct ProfileSessionReader::Impl {
                         }
                     }
 
-                    std::uint32_t merged_begin = _begin;
-                    std::uint32_t merged_end   = _end;
-                    std::uint32_t cursor       = _begin;
+                    uint32 merged_begin = _begin;
+                    uint32 merged_end   = _end;
+                    uint32 cursor       = _begin;
                     while (interval != required_prefix_depth_intervals.end() && interval->first <= merged_end
                     ) {
                         if (!ChargeTopologyWork(1)) {
@@ -6674,9 +6673,9 @@ struct ProfileSessionReader::Impl {
                             return;
                         }
                         if (cursor < _end && cursor < interval->first) {
-                            const std::uint32_t uncovered_end = std::min(_end, interval->first);
-                            required_prefix_depth_count += static_cast<std::uint64_t>(uncovered_end - cursor);
-                            const std::uint64_t direct_depth_count =
+                            const uint32 uncovered_end = std::min(_end, interval->first);
+                            required_prefix_depth_count += static_cast<uint64>(uncovered_end - cursor);
+                            const uint64 direct_depth_count =
                                 prefix_direct_depth_count_in_range(cursor, uncovered_end);
                             if (prefix_budget_failed) {
                                 return;
@@ -6689,8 +6688,8 @@ struct ProfileSessionReader::Impl {
                         interval     = required_prefix_depth_intervals.erase(interval);
                     }
                     if (cursor < _end) {
-                        required_prefix_depth_count += static_cast<std::uint64_t>(_end - cursor);
-                        const std::uint64_t direct_depth_count =
+                        required_prefix_depth_count += static_cast<uint64>(_end - cursor);
+                        const uint64 direct_depth_count =
                             prefix_direct_depth_count_in_range(cursor, _end);
                         if (prefix_budget_failed) {
                             return;
@@ -6704,8 +6703,8 @@ struct ProfileSessionReader::Impl {
                     }
                     required_prefix_depth_intervals.emplace(merged_begin, merged_end);
                 };
-                const auto charge_and_add_required_prefix_range = [&](std::uint32_t _begin,
-                                                                      std::uint32_t _end) {
+                const auto charge_and_add_required_prefix_range = [&](uint32 _begin,
+                                                                      uint32 _end) {
                     if (_begin >= _end) {
                         return true;
                     }
@@ -6713,7 +6712,7 @@ struct ProfileSessionReader::Impl {
                     return !prefix_budget_failed;
                 };
 
-                std::vector<std::uint32_t> observed_ancestor_depths;
+                std::vector<uint32> observed_ancestor_depths;
                 observed_ancestor_depths.reserve(std::min<std::size_t>(
                     static_cast<std::size_t>(options.limits.max_scope_depth),
                     source_end_index - static_cast<std::size_t>(source->first_scope)
@@ -6763,7 +6762,7 @@ struct ProfileSessionReader::Impl {
 
                     observed_ancestor_depths.clear();
                     if (timing_topology_trusted) {
-                        std::uint64_t ancestor_index = contract.observed_ancestor_index;
+                        uint64 ancestor_index = contract.observed_ancestor_index;
                         while (ancestor_index != kInvalidSessionIndex) {
                             if (CheckStopOnly()) {
                                 return false;
@@ -6837,10 +6836,10 @@ struct ProfileSessionReader::Impl {
                         }
                     }
 
-                    if (!ChargeTopologyWork(static_cast<std::uint64_t>(contract.parent_depth))) {
+                    if (!ChargeTopologyWork(static_cast<uint64>(contract.parent_depth))) {
                         return false;
                     }
-                    for (std::uint32_t depth = 0; depth < contract.parent_depth; ++depth) {
+                    for (uint32 depth = 0; depth < contract.parent_depth; ++depth) {
                         if (CheckStopOnly()) {
                             return false;
                         }
@@ -6863,10 +6862,10 @@ struct ProfileSessionReader::Impl {
                         !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                         return false;
                     }
-                    std::uint64_t covered_ancestor_depths =
+                    uint64 covered_ancestor_depths =
                         covered_depth_count_before(contract.parent_depth, covered_depth_tree);
                     if (timing_topology_trusted) {
-                        for (const std::uint32_t depth : observed_ancestor_depths) {
+                        for (const uint32 depth : observed_ancestor_depths) {
                             if (CheckStopOnly()) {
                                 return false;
                             }
@@ -6882,13 +6881,13 @@ struct ProfileSessionReader::Impl {
                             }
                         }
                     }
-                    const std::uint64_t hidden_ancestors =
-                        static_cast<std::uint64_t>(contract.parent_depth) - covered_ancestor_depths;
+                    const uint64 hidden_ancestors =
+                        static_cast<uint64>(contract.parent_depth) - covered_ancestor_depths;
                     hidden_ancestor_lower_bound = std::max(hidden_ancestor_lower_bound, hidden_ancestors);
 
                     if (timing_topology_trusted) {
-                        std::uint32_t interval_begin = 0;
-                        for (const std::uint32_t depth : observed_ancestor_depths) {
+                        uint32 interval_begin = 0;
+                        for (const uint32 depth : observed_ancestor_depths) {
                             if (CheckStopOnly()) {
                                 return false;
                             }
@@ -6901,7 +6900,7 @@ struct ProfileSessionReader::Impl {
                             return false;
                         }
                     } else if (contract.parent_depth > exposed_prefix_depth) {
-                        std::uint32_t interval_begin = exposed_prefix_depth;
+                        uint32 interval_begin = exposed_prefix_depth;
                         if (!ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                             return false;
                         }
@@ -6928,12 +6927,12 @@ struct ProfileSessionReader::Impl {
                         exposed_prefix_depth = contract.parent_depth;
                     }
 
-                    const std::uint64_t parent_ordinal =
-                        static_cast<std::uint64_t>(index - contract_begin + 1);
-                    const std::uint64_t unmatched_required_prefix_depths =
+                    const uint64 parent_ordinal =
+                        static_cast<uint64>(index - contract_begin + 1);
+                    const uint64 unmatched_required_prefix_depths =
                         required_prefix_depth_count - matched_required_direct_depth_count;
-                    std::uint64_t       required_prefix_slots = 0;
-                    const std::uint64_t available_local_order_slots =
+                    uint64       required_prefix_slots = 0;
+                    const uint64 available_local_order_slots =
                         contract.child_local_order_deadline - contract.observed_local_orders_before_deadline;
                     if (AddOverflow(
                             parent_ordinal, unmatched_required_prefix_depths, required_prefix_slots
@@ -6954,13 +6953,13 @@ struct ProfileSessionReader::Impl {
                         contract.last_child_subtree_end_local;
                 }
 
-                const std::uint64_t direct_parent_count =
-                    static_cast<std::uint64_t>(contract_end - contract_begin);
+                const uint64 direct_parent_count =
+                    static_cast<uint64>(contract_end - contract_begin);
                 hidden_ancestor_lower_bound = std::max(
                     hidden_ancestor_lower_bound,
                     required_prefix_depth_count - matched_required_direct_depth_count
                 );
-                std::uint64_t depth_required_parent_records = 0;
+                uint64 depth_required_parent_records = 0;
                 if (AddOverflow(
                         direct_parent_count, hidden_ancestor_lower_bound, depth_required_parent_records
                     )) {
@@ -6979,8 +6978,8 @@ struct ProfileSessionReader::Impl {
                     );
                     return false;
                 }
-                const std::uint64_t sequence_required_parent_records =
-                    static_cast<std::uint64_t>(virtual_sequence_tasks.size());
+                const uint64 sequence_required_parent_records =
+                    static_cast<uint64>(virtual_sequence_tasks.size());
                 if (sequence_required_parent_records < depth_required_parent_records) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
@@ -7015,10 +7014,10 @@ struct ProfileSessionReader::Impl {
                     );
                     return false;
                 }
-                std::uint64_t task_edge_lower_bound = 0;
+                uint64 task_edge_lower_bound = 0;
                 if (AddOverflow(
-                        static_cast<std::uint64_t>(joint_virtual_tasks.size()),
-                        static_cast<std::uint64_t>(virtual_sequence_tasks.size()),
+                        static_cast<uint64>(joint_virtual_tasks.size()),
+                        static_cast<uint64>(virtual_sequence_tasks.size()),
                         task_edge_lower_bound
                     ) ||
                     task_edge_lower_bound > options.limits.max_topology_flow_edges) {
@@ -7043,13 +7042,13 @@ struct ProfileSessionReader::Impl {
                     });
                 }
 
-                std::uint64_t       boundary_capacity = 1;
-                const std::uint64_t task_count = static_cast<std::uint64_t>(virtual_sequence_tasks.size());
+                uint64       boundary_capacity = 1;
+                const uint64 task_count        = static_cast<uint64>(virtual_sequence_tasks.size());
                 if (AddOverflow(boundary_capacity, task_count, boundary_capacity) ||
                     AddOverflow(boundary_capacity, task_count, boundary_capacity) ||
-                    AddOverflow(boundary_capacity, static_cast<std::uint64_t>(source_scope_count), boundary_capacity) ||
-                    AddOverflow(boundary_capacity, static_cast<std::uint64_t>(source_scope_count), boundary_capacity) ||
-                    boundary_capacity > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
+                    AddOverflow(boundary_capacity, static_cast<uint64>(source_scope_count), boundary_capacity) ||
+                    AddOverflow(boundary_capacity, static_cast<uint64>(source_scope_count), boundary_capacity) ||
+                    boundary_capacity > static_cast<uint64>(std::numeric_limits<std::size_t>::max()) ||
                     !ChargeTopologyWork(boundary_capacity)) {
                     Fail(
                         SessionLoadStatus::LimitExceeded,
@@ -7060,7 +7059,7 @@ struct ProfileSessionReader::Impl {
                     );
                     return false;
                 }
-                std::vector<std::uint64_t> local_boundaries;
+                std::vector<uint64> local_boundaries;
                 local_boundaries.reserve(static_cast<std::size_t>(boundary_capacity));
                 local_boundaries.push_back(0);
                 for (const VirtualSequenceTask& task : virtual_sequence_tasks) {
@@ -7092,14 +7091,14 @@ struct ProfileSessionReader::Impl {
                 }
                 local_boundaries.erase(unique_local_boundaries_end, local_boundaries.end());
 
-                std::vector<std::uint8_t> task_has_cell(virtual_sequence_tasks.size(), 0);
+                std::vector<uint8> task_has_cell(virtual_sequence_tasks.size(), 0);
                 for (std::size_t boundary_index = 0; boundary_index + 1 < local_boundaries.size();
                      ++boundary_index) {
                     if (CheckStopOnly()) {
                         return false;
                     }
-                    const std::uint64_t cell_begin = local_boundaries[boundary_index];
-                    const std::uint64_t cell_end   = local_boundaries[boundary_index + 1];
+                    const uint64 cell_begin = local_boundaries[boundary_index];
+                    const uint64 cell_end   = local_boundaries[boundary_index + 1];
                     if (cell_begin >= cell_end) {
                         continue;
                     }
@@ -7110,7 +7109,7 @@ struct ProfileSessionReader::Impl {
                         source_scope_begin,
                         source_scope_end,
                         cell_begin,
-                        [](const GpuScopeRecord& _scope, std::uint64_t _local_order) {
+                        [](const GpuScopeRecord& _scope, uint64 _local_order) {
                             return _scope.local_order < _local_order;
                         }
                     );
@@ -7122,11 +7121,11 @@ struct ProfileSessionReader::Impl {
                         continue;
                     }
 
-                    std::uint64_t predecessor_sequence = source->producer_predecessor_sequence;
+                    uint64 predecessor_sequence = source->producer_predecessor_sequence;
                     if (successor != source_scope_begin) {
                         predecessor_sequence = std::prev(successor)->sequence;
                     }
-                    if (predecessor_sequence == std::numeric_limits<std::uint64_t>::max()) {
+                    if (predecessor_sequence == std::numeric_limits<uint64>::max()) {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
                             SessionErrorCode::GpuFrameTotalsMismatch,
@@ -7134,9 +7133,9 @@ struct ProfileSessionReader::Impl {
                         );
                         return false;
                     }
-                    const std::uint64_t release_sequence =
+                    const uint64 release_sequence =
                         std::max(predecessor_sequence + 1, source_frame_release);
-                    const std::uint64_t deadline_sequence = successor->sequence - 1;
+                    const uint64 deadline_sequence = successor->sequence - 1;
                     if (release_sequence > deadline_sequence) {
                         continue;
                     }
@@ -7148,7 +7147,7 @@ struct ProfileSessionReader::Impl {
                         .release_sequence  = release_sequence,
                         .deadline_sequence = deadline_sequence,
                     };
-                    std::uint64_t accepted_task_count = 0;
+                    uint64 accepted_task_count = 0;
                     if (!ChargeTopologyLinearWork(virtual_sequence_tasks.size())) {
                         return false;
                     }
@@ -7167,12 +7166,12 @@ struct ProfileSessionReader::Impl {
                                 );
                                 return false;
                             }
-                            std::uint64_t next_accepted_task_count = 0;
-                            std::uint64_t proposed_task_edge_count = 0;
-                            std::uint64_t proposed_cell_count      = 0;
-                            std::uint64_t flow_edge_lower_bound    = 0;
+                            uint64 next_accepted_task_count = 0;
+                            uint64 proposed_task_edge_count = 0;
+                            uint64 proposed_cell_count      = 0;
+                            uint64 flow_edge_lower_bound    = 0;
                             if (AddOverflow(
-                                    accepted_task_count, std::uint64_t{1}, next_accepted_task_count
+                                    accepted_task_count, uint64{1}, next_accepted_task_count
                                 ) ||
                                 AddOverflow(
                                     joint_cell_task_edge_count,
@@ -7180,12 +7179,12 @@ struct ProfileSessionReader::Impl {
                                     proposed_task_edge_count
                                 ) ||
                                 AddOverflow(
-                                    static_cast<std::uint64_t>(joint_local_cells.size()),
-                                    std::uint64_t{1},
+                                    static_cast<uint64>(joint_local_cells.size()),
+                                    uint64{1},
                                     proposed_cell_count
                                 ) ||
                                 AddOverflow(
-                                    static_cast<std::uint64_t>(joint_virtual_tasks.size()),
+                                    static_cast<uint64>(joint_virtual_tasks.size()),
                                     proposed_cell_count,
                                     flow_edge_lower_bound
                                 ) ||
@@ -7210,7 +7209,7 @@ struct ProfileSessionReader::Impl {
                     if (accepted_task_count == 0) {
                         continue;
                     }
-                    cell.local_capacity = std::min<std::uint64_t>(cell_end - cell_begin, accepted_task_count);
+                    cell.local_capacity = std::min<uint64>(cell_end - cell_begin, accepted_task_count);
                     joint_cell_task_edge_count += accepted_task_count;
                     joint_local_cells.push_back(std::move(cell));
                 }
@@ -7218,7 +7217,7 @@ struct ProfileSessionReader::Impl {
                     return false;
                 }
                 bool missing_task_cell = false;
-                for (const std::uint8_t has_cell : task_has_cell) {
+                for (const uint8 has_cell : task_has_cell) {
                     if (CheckStopOnly()) {
                         return false;
                     }
@@ -7240,9 +7239,9 @@ struct ProfileSessionReader::Impl {
         }
 
         struct FrameLossEvidence {
-            std::uint64_t frame_id{0};
-            std::uint64_t local_hole_count{0};
-            std::uint64_t required_parent_record_count{0};
+            uint64 frame_id{0};
+            uint64 local_hole_count{0};
+            uint64 required_parent_record_count{0};
         };
         std::vector<FrameLossEvidence> frame_loss_evidence;
         if (!ChargeTopologyLinearWork(source_loss_evidence.size())) {
@@ -7285,8 +7284,8 @@ struct ProfileSessionReader::Impl {
                 continue;
             }
             FrameLossEvidence& aggregate        = frame_loss_evidence[frame_evidence_count - 1];
-            std::uint64_t      local_holes      = 0;
-            std::uint64_t      required_parents = 0;
+            uint64             local_holes      = 0;
+            uint64             required_parents = 0;
             if (AddOverflow(
                     aggregate.local_hole_count, frame_loss_evidence[index].local_hole_count, local_holes
                 ) ||
@@ -7306,12 +7305,12 @@ struct ProfileSessionReader::Impl {
             aggregate.required_parent_record_count = required_parents;
         }
         frame_loss_evidence.resize(frame_evidence_count);
-        const auto find_frame_loss_evidence = [&](std::uint64_t _frame_id) {
+        const auto find_frame_loss_evidence = [&](uint64 _frame_id) {
             const auto found = std::lower_bound(
                 frame_loss_evidence.begin(),
                 frame_loss_evidence.end(),
                 _frame_id,
-                [](const FrameLossEvidence& _evidence, std::uint64_t _value) {
+                [](const FrameLossEvidence& _evidence, uint64 _value) {
                     return _evidence.frame_id < _value;
                 }
             );
@@ -7340,7 +7339,7 @@ struct ProfileSessionReader::Impl {
         }
         missing_parent_keys.erase(unique_missing_parent_keys_end, missing_parent_keys.end());
 
-        const auto missing_parent_count = [&](std::uint64_t _frame_id) {
+        const auto missing_parent_count = [&](uint64 _frame_id) {
             const ScopeLookup first{
                 .frame_id    = _frame_id,
                 .scope_id    = 0,
@@ -7348,18 +7347,18 @@ struct ProfileSessionReader::Impl {
             };
             const ScopeLookup last{
                 .frame_id    = _frame_id,
-                .scope_id    = std::numeric_limits<std::uint64_t>::max(),
-                .scope_index = std::numeric_limits<std::uint64_t>::max(),
+                .scope_id    = std::numeric_limits<uint64>::max(),
+                .scope_index = std::numeric_limits<uint64>::max(),
             };
             const auto begin =
                 std::lower_bound(missing_parent_keys.begin(), missing_parent_keys.end(), first);
             const auto end = std::upper_bound(missing_parent_keys.begin(), missing_parent_keys.end(), last);
-            return static_cast<std::uint64_t>(end - begin);
+            return static_cast<uint64>(end - begin);
         };
 
-        std::uint64_t required_gpu_drops     = _required_cpu_drops;
-        const auto    add_required_gpu_drops = [&](std::uint64_t _count) {
-            std::uint64_t next = 0;
+        uint64     required_gpu_drops     = _required_cpu_drops;
+        const auto add_required_gpu_drops = [&](uint64 _count) {
+            uint64 next = 0;
             if (AddOverflow(required_gpu_drops, _count, next)) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
@@ -7380,11 +7379,11 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
             GpuFrameRecord&     frame  = frames[index];
-            const std::uint64_t errors = frame_error_counts[index];
+            const uint64        errors = frame_error_counts[index];
             const bool          observed_too_many =
                 frame.scope_count > frame.admitted_scope_count || errors > frame.error_scope_count;
-            const std::uint64_t observed_ready = errors <= frame.scope_count ? frame.scope_count - errors : 0;
-            const std::uint64_t declared_ready = frame.admitted_scope_count - frame.error_scope_count;
+            const uint64 observed_ready = errors <= frame.scope_count ? frame.scope_count - errors : 0;
+            const uint64 declared_ready = frame.admitted_scope_count - frame.error_scope_count;
             if (observed_too_many || observed_ready > declared_ready) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
@@ -7394,18 +7393,18 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
 
-            const std::uint64_t missing_scopes = frame.admitted_scope_count - frame.scope_count;
+            const uint64 missing_scopes = frame.admitted_scope_count - frame.scope_count;
             if (!ChargeTopologyBinarySearchWork(missing_parent_keys.size()) ||
                 !ChargeTopologyBinarySearchWork(missing_parent_keys.size()) ||
                 !ChargeTopologyBinarySearchWork(frame_loss_evidence.size())) {
                 return false;
             }
-            const std::uint64_t      missing_parents         = missing_parent_count(frame.frame_id);
+            const uint64             missing_parents         = missing_parent_count(frame.frame_id);
             const FrameLossEvidence* loss_evidence           = find_frame_loss_evidence(frame.frame_id);
-            const std::uint64_t      required_parent_records = std::max(
+            const uint64             required_parent_records = std::max(
                 missing_parents, loss_evidence != nullptr ? loss_evidence->required_parent_record_count : 0
             );
-            std::uint64_t explainable_local_holes = 0;
+            uint64 explainable_local_holes = 0;
             if (AddOverflow(missing_scopes, frame.dropped_scope_count, explainable_local_holes)) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
@@ -7427,7 +7426,7 @@ struct ProfileSessionReader::Impl {
             frame.export_missing_scope_count = missing_scopes;
             frame.materialization_complete   = missing_scopes == 0;
             if (frame.status == ProfileGpuFrameStatus::Complete) {
-                const std::uint64_t constrained_missing =
+                const uint64 constrained_missing =
                     frame_sequence_evidence[index].constrained_missing_scope_count;
                 if (constrained_missing > missing_scopes) {
                     Fail(
@@ -7437,9 +7436,9 @@ struct ProfileSessionReader::Impl {
                     );
                     return false;
                 }
-                const std::uint64_t unconstrained_missing = missing_scopes - constrained_missing;
+                const uint64 unconstrained_missing = missing_scopes - constrained_missing;
                 if (unconstrained_missing != 0) {
-                    if (frame.sequence == std::numeric_limits<std::uint64_t>::max()) {
+                    if (frame.sequence == std::numeric_limits<uint64>::max()) {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
                             SessionErrorCode::GpuFrameTotalsMismatch,
@@ -7486,12 +7485,12 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
             const FrameLossEvidence* loss_evidence = find_frame_loss_evidence(missing_frame.frame_id);
-            const std::uint64_t      required_parent_records = std::max(
+            const uint64             required_parent_records = std::max(
                 missing_parent_count(missing_frame.frame_id),
                 loss_evidence != nullptr ? loss_evidence->required_parent_record_count : 0
             );
-            std::uint64_t required_frame_records = 0;
-            if (AddOverflow(required_parent_records, std::uint64_t{1}, required_frame_records)) {
+            uint64 required_frame_records = 0;
+            if (AddOverflow(required_parent_records, uint64{1}, required_frame_records)) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
                     SessionErrorCode::GpuFrameTotalsMismatch,
@@ -7520,7 +7519,7 @@ struct ProfileSessionReader::Impl {
             }
         }
         if (session.impl_->summary.has_session_end) {
-            const std::uint64_t total_drop_budget        = session.impl_->summary.lost_record_count;
+            const uint64        total_drop_budget        = session.impl_->summary.lost_record_count;
             const bool          has_cpu_drop_requirement = _required_cpu_drops != 0;
             const bool          has_gpu_drop_requirement = required_gpu_drops > _required_cpu_drops;
             if (has_gpu_drop_requirement && required_gpu_drops > total_drop_budget) {
@@ -7536,7 +7535,7 @@ struct ProfileSessionReader::Impl {
             }
         }
 
-        std::uint64_t previous_root_index = kInvalidSessionIndex;
+        uint64 previous_root_index = kInvalidSessionIndex;
         if (!ChargeTopologyLinearWork(scopes.size())) {
             return false;
         }
@@ -7570,13 +7569,13 @@ struct ProfileSessionReader::Impl {
                         );
                         return false;
                     }
-                    const std::uint64_t begin_distance =
+                    const uint64 begin_distance =
                         (scope.begin_tick - previous.begin_tick) & TimestampMask(scope.valid_bits);
-                    const std::uint64_t previous_duration =
+                    const uint64 previous_duration =
                         TimestampDelta(previous.begin_tick, previous.end_tick, previous.valid_bits);
-                    const std::uint64_t half_range = scope.valid_bits == 64 ?
-                                                         (std::uint64_t{1} << 63) :
-                                                         (std::uint64_t{1} << (scope.valid_bits - 1));
+                    const uint64 half_range = scope.valid_bits == 64 ?
+                                                  (uint64{1} << 63) :
+                                                  (uint64{1} << (scope.valid_bits - 1));
                     if (begin_distance < previous_duration || begin_distance >= half_range) {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
@@ -7697,7 +7696,7 @@ struct ProfileSessionReader::Impl {
         // dropped. Unnotified SessionEnd attempts remain useful telemetry, but
         // cannot justify a missing CPU/GPU record.
         const bool    allow_missing      = _forensic || session.impl_->summary.lost_record_count != 0;
-        std::uint64_t required_cpu_drops = 0;
+        uint64                            required_cpu_drops = 0;
         std::vector<RecordSequenceDemand> cpu_sequence_demands;
         if (!BuildCpuTracks(allow_missing, required_cpu_drops, cpu_sequence_demands)) {
             return false;
@@ -7763,23 +7762,23 @@ struct ProfileSessionReader::Impl {
     }
 
     void ReleaseWorkingState() noexcept {
-        std::vector<std::uint8_t>{}.swap(packet_bytes);
-        std::unordered_map<std::uint64_t, SchemaEntry>{}.swap(schemas);
+        std::vector<uint8>{}.swap(packet_bytes);
+        std::unordered_map<uint64, SchemaEntry>{}.swap(schemas);
         std::unordered_map<std::string_view, SessionStringId>{}.swap(interned_strings);
-        std::vector<std::uint64_t>{}.swap(record_sequences);
+        std::vector<uint64>{}.swap(record_sequences);
         std::vector<JointVirtualTask>{}.swap(joint_virtual_tasks);
         std::vector<JointLocalCell>{}.swap(joint_local_cells);
         joint_cell_task_edge_count = 0;
     }
 
-    [[nodiscard]] SessionLoadResult Feed(std::span<const std::uint8_t> _bytes) noexcept {
+    [[nodiscard]] SessionLoadResult Feed(std::span<const uint8> _bytes) noexcept {
         if (!IsReading() || CheckCancellationNow() || _bytes.empty()) {
             return result;
         }
         try {
-            std::uint64_t next_input_bytes = 0;
+            uint64 next_input_bytes = 0;
             if (AddOverflow(
-                    result.input_bytes, static_cast<std::uint64_t>(_bytes.size()), next_input_bytes
+                    result.input_bytes, static_cast<uint64>(_bytes.size()), next_input_bytes
                 ) ||
                 next_input_bytes > options.limits.max_input_bytes) {
                 Fail(
@@ -7792,7 +7791,7 @@ struct ProfileSessionReader::Impl {
                 );
                 return result;
             }
-            const std::uint64_t feed_begin_offset = result.input_bytes;
+            const uint64 feed_begin_offset        = result.input_bytes;
             result.input_bytes                    = next_input_bytes;
 
             std::size_t cursor = 0;
@@ -7835,7 +7834,7 @@ struct ProfileSessionReader::Impl {
                         );
                         break;
                     }
-                    const std::uint32_t payload_bytes     = ReadU32LittleEndian(packet_bytes, 12);
+                    const uint32        payload_bytes     = ReadU32LittleEndian(packet_bytes, 12);
                     std::size_t         packet_wire_bytes = 0;
                     if (!Detail::TryPacketWireBytes(payload_bytes, packet_wire_bytes)) {
                         FailCodec(
@@ -7845,7 +7844,7 @@ struct ProfileSessionReader::Impl {
                         );
                         break;
                     }
-                    if (static_cast<std::uint64_t>(packet_wire_bytes) > options.limits.max_input_bytes) {
+                    if (static_cast<uint64>(packet_wire_bytes) > options.limits.max_input_bytes) {
                         Fail(
                             SessionLoadStatus::LimitExceeded,
                             SessionErrorCode::LimitExceeded,
@@ -7981,21 +7980,21 @@ struct ProfileSessionReader::Impl {
     const char*        diagnostic{"profile session reader is accepting input"};
     ProfileSession     session{};
 
-    std::vector<std::uint8_t> packet_bytes{};
+    std::vector<uint8>        packet_bytes{};
     std::size_t               expected_packet_bytes{0};
-    std::uint64_t             expected_packet_index{0};
+    uint64                    expected_packet_index{0};
     bool                      saw_session_begin{false};
     bool                      saw_session_end{false};
 
-    std::unordered_map<std::uint64_t, SchemaEntry>        schemas{};
+    std::unordered_map<uint64, SchemaEntry>               schemas{};
     std::unordered_map<std::string_view, SessionStringId> interned_strings{};
-    std::vector<std::uint64_t>                            record_sequences{};
+    std::vector<uint64>                                   record_sequences{};
     std::vector<JointVirtualTask>                         joint_virtual_tasks{};
     std::vector<JointLocalCell>                           joint_local_cells{};
-    std::uint64_t                                         joint_cell_task_edge_count{0};
-    std::uint64_t                                         schema_bytes{0};
-    std::uint64_t                                         string_bytes{0};
-    std::uint64_t                                         topology_work_items{0};
+    uint64                                                joint_cell_task_edge_count{0};
+    uint64                                                schema_bytes{0};
+    uint64                                                string_bytes{0};
+    uint64                                                topology_work_items{0};
 };
 
 ProfileSessionReader::ProfileSessionReader(const SessionLoadOptions& _options) noexcept :
@@ -8031,7 +8030,7 @@ ProfileSessionReader& ProfileSessionReader::operator=(ProfileSessionReader&& _ot
     return *this;
 }
 
-SessionLoadResult ProfileSessionReader::Feed(std::span<const std::uint8_t> _bytes) noexcept {
+SessionLoadResult ProfileSessionReader::Feed(std::span<const uint8> _bytes) noexcept {
     return impl_ != nullptr ? impl_->Feed(_bytes) : ResourceExhaustedResult();
 }
 
@@ -8102,7 +8101,7 @@ SessionLoadResult LoadProfileSessionFile(
             result.error_code = SessionErrorCode::FileReadFailed;
             return result;
         }
-        const std::uint64_t snapshot_bytes = static_cast<std::uint64_t>(snapshot);
+        const uint64 snapshot_bytes = static_cast<uint64>(snapshot);
         if (snapshot_bytes > _options.limits.max_input_bytes) {
             SessionLoadResult result{};
             result.status      = SessionLoadStatus::LimitExceeded;
@@ -8124,15 +8123,15 @@ SessionLoadResult LoadProfileSessionFile(
             return before_read;
         }
 
-        std::array<std::uint8_t, kReadBlockBytes> block{};
-        std::uint64_t                             remaining = snapshot_bytes;
+        std::array<uint8, kReadBlockBytes> block{};
+        uint64                             remaining = snapshot_bytes;
         while (remaining != 0) {
             const SessionLoadResult before_block = reader.Feed({});
             if (before_block.IsTerminal()) {
                 return before_block;
             }
             const std::size_t request =
-                static_cast<std::size_t>(std::min<std::uint64_t>(remaining, block.size()));
+                static_cast<std::size_t>(std::min<uint64>(remaining, block.size()));
             stream.read(reinterpret_cast<char*>(block.data()), static_cast<std::streamsize>(request));
             const std::streamsize read = stream.gcount();
             if (read != static_cast<std::streamsize>(request)) {
@@ -8140,7 +8139,7 @@ SessionLoadResult LoadProfileSessionFile(
                 result.status            = SessionLoadStatus::ReadFailed;
                 result.error_code        = SessionErrorCode::FileReadFailed;
                 result.input_bytes       = snapshot_bytes - remaining +
-                                     static_cast<std::uint64_t>(std::max<std::streamsize>(read, 0));
+                                           static_cast<uint64>(std::max<std::streamsize>(read, 0));
                 return result;
             }
 
@@ -8149,11 +8148,11 @@ SessionLoadResult LoadProfileSessionFile(
                 return after_read;
             }
             const SessionLoadResult fed =
-                reader.Feed(std::span<const std::uint8_t>(block.data(), static_cast<std::size_t>(read)));
+                reader.Feed(std::span<const uint8>(block.data(), static_cast<std::size_t>(read)));
             if (fed.IsTerminal()) {
                 return fed;
             }
-            remaining -= static_cast<std::uint64_t>(read);
+            remaining -= static_cast<uint64>(read);
         }
 
         const SessionLoadResult before_finish = reader.Feed({});

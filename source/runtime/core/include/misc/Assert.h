@@ -4,16 +4,16 @@
 #include "API_Macro.h"
 #include "platform/Platform.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
-#include <cstdint>
 #include <format>
 #include <string_view>
 #include <utility>
 
 namespace Moer::Diagnostics {
 
-enum class EFailureKind : std::uint8_t {
+enum class EFailureKind : uint8 {
     Assert,
     Ensure,
 };
@@ -22,7 +22,7 @@ inline constexpr std::size_t kFailureMessageCapacity = 1024;
 
 struct FailureMessage {
     std::array<char, kFailureMessageCapacity> bytes{};
-    std::uint32_t                             size{0};
+    uint32                                    size{0};
     bool                                      truncated{false};
 
     [[nodiscard]] std::string_view View() const noexcept {
@@ -35,8 +35,8 @@ struct FailureInfo {
     const char*    expression{nullptr};
     const char*    file{nullptr};
     const char*    function{nullptr};
-    std::uint32_t  line{0};
-    std::uint32_t  thread_id{0};
+    uint32         line{0};
+    uint32         thread_id{0};
     FailureMessage message{};
 };
 
@@ -48,12 +48,12 @@ CORE_API bool              HandleEnsureFailure(const FailureInfo& _info) noexcep
 
 namespace Detail {
 
-CORE_API void ClaimAssertFailureOwnership(std::uint32_t _thread_id) noexcept;
+CORE_API void ClaimAssertFailureOwnership(uint32 _thread_id) noexcept;
 
 inline FailureMessage FormattingFailureMessage() noexcept {
     constexpr std::string_view fallback = "failure message formatting failed";
     FailureMessage             message{};
-    message.size = static_cast<std::uint32_t>(std::min(fallback.size(), message.bytes.size() - 1));
+    message.size = static_cast<uint32>(std::min(fallback.size(), message.bytes.size() - 1));
     std::copy_n(fallback.data(), message.size, message.bytes.data());
     message.bytes[message.size] = '\0';
     return message;
@@ -68,7 +68,7 @@ FailureMessage FormatFailureMessage(std::format_string<Args...> _format, Args&&.
         );
         const std::size_t formatted_size = static_cast<std::size_t>(formatted.size);
         const std::size_t stored_size    = std::min(formatted_size, message.bytes.size() - 1);
-        message.size                     = static_cast<std::uint32_t>(stored_size);
+        message.size                     = static_cast<uint32>(stored_size);
         message.truncated                = formatted_size > stored_size;
         message.bytes[stored_size]       = '\0';
         return message;
@@ -83,12 +83,12 @@ template<typename... Args>
 [[noreturn]] inline void ReportAssertFailure(
     const char*                 _expression,
     const char*                 _file,
-    std::uint32_t               _line,
+    uint32                      _line,
     const char*                 _function,
     std::format_string<Args...> _format,
     Args&&... _args
 ) noexcept {
-    const std::uint32_t thread_id = Platform::GetCurrentThreadID();
+    const uint32 thread_id = Platform::GetCurrentThreadID();
     Detail::ClaimAssertFailureOwnership(thread_id);
     FailureInfo info{
         .kind       = EFailureKind::Assert,
@@ -106,7 +106,7 @@ template<typename... Args>
 inline bool ReportEnsureFailure(
     const char*                 _expression,
     const char*                 _file,
-    std::uint32_t               _line,
+    uint32                      _line,
     const char*                 _function,
     std::format_string<Args...> _format,
     Args&&... _args
@@ -134,7 +134,7 @@ inline bool ReportEnsureFailure(
             ::Moer::Diagnostics::ReportAssertFailure( \
                 #expr,                                \
                 __FILE__,                             \
-                static_cast<std::uint32_t>(__LINE__), \
+                static_cast<::Moer::uint32>(__LINE__), \
                 __func__,                             \
                 format_str __VA_OPT__(, ) __VA_ARGS__ \
             );                                        \
@@ -146,7 +146,7 @@ inline bool ReportEnsureFailure(
               ::Moer::Diagnostics::ReportEnsureFailure( \
                   #expr,                                \
                   __FILE__,                             \
-                  static_cast<std::uint32_t>(__LINE__), \
+                  static_cast<::Moer::uint32>(__LINE__), \
                   __func__,                             \
                   format_str __VA_OPT__(, ) __VA_ARGS__ \
               ))

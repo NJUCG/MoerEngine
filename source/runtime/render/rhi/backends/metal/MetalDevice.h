@@ -1,7 +1,8 @@
 #pragma once
 
-#include "taskgraph/Event.h"
+#include "misc/Types.h"
 #include "rhi/RHIImpl.h"
+#include "taskgraph/Event.h"
 
 #include <memory>
 
@@ -15,9 +16,9 @@ public:
     ~MetalDevice() override;
 
     FenceRef CreateFence() override;
-    BufferRef CreateBuffer(std::string_view, uint, uint, EBufferUsageFlags, EPixelFormat) override;
+    BufferRef             CreateBuffer(std::string_view, uint32, uint32, EBufferUsageFlags, EPixelFormat) override;
     TextureRef CreateTexture(std::string_view, const TextureInfo&) override;
-    BindlessArrayRef CreateBindlessArray(uint) override;
+    BindlessArrayRef      CreateBindlessArray(uint32) override;
     RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo&) override;
     RaytracingSceneRef CreateRaytracingScene() override;
     CommandQueue& GetCommandQueue(EQueueType) override;
@@ -28,7 +29,7 @@ public:
     PipelineHandle CreatePipeline(PipelineShaderInfo&&) override;
     void WaitIdle() override;
     bool SupportsTessellation() const override;
-    uint32_t GetMaxTessellationFactor() const override;
+    uint32                GetMaxTessellationFactor() const override;
 
 private:
     struct Native;
@@ -40,7 +41,7 @@ private:
 RENDER_API void* GetMetalNativeTexture(Texture* texture) noexcept;
 RENDER_API void* GetMetalNativeBuffer(Buffer* buffer) noexcept;
 RENDER_API void* GetMetalNativeBindlessIndexBuffer(BindlessArray* array) noexcept;
-RENDER_API void* GetMetalNativeBindlessArgumentBuffer(BindlessArray* array, uint set) noexcept;
+RENDER_API void* GetMetalNativeBindlessArgumentBuffer(BindlessArray* array, uint32 set) noexcept;
 RENDER_API void* GetMetalNativeComputePipeline(PipelineHandle pipeline) noexcept;
 
 } // namespace Moer::Render

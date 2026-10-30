@@ -1,6 +1,7 @@
 // 负责 Dear ImGui 上下文、GPU 资源、绘制数据复制以及多视口交换链的完整后端流程。
 
 #include "DearImGuiRenderer.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphUpload.h"
 
@@ -52,10 +53,10 @@ struct GuiViewportData;
 
 void InitializeGuiPlatformInterface();
 bool RefreshGuiViewportPresentation(
-    ImGuiViewport*                      viewport,
-    Moer::Render::GuiViewportData&      viewport_data,
-    Moer::Render::RenderDevice&         device,
-    uint32_t                            frames_in_flight
+    ImGuiViewport*                 viewport,
+    Moer::Render::GuiViewportData& viewport_data,
+    Moer::Render::RenderDevice&    device,
+    uint32                         frames_in_flight
 );
 void RenderGuiDrawPacket(
     const UiViewportDrawPacket& _draw_packet,
@@ -70,10 +71,10 @@ namespace Moer::Render {
 struct ImGuiDrawArgument {
     ImVec2 min_xy;
     ImVec2 max_xy;
-    uint   image_handle;
-    uint   padding;
-    uint   padding2;
-    uint   padding3;
+    uint32 image_handle;
+    uint32 padding;
+    uint32 padding2;
+    uint32 padding3;
 };
 
 enum class EFontType {
@@ -121,9 +122,9 @@ struct GuiViewportRenderResources final : UiViewportRenderResources {
 
     Array<GuiFrameRenderBuffers> render_buffers;
 
-    uint64_t frame_index = 0;
+    uint64 frame_index = 0;
 
-    explicit GuiViewportRenderResources(uint32_t _frame_in_flight) :
+    explicit GuiViewportRenderResources(uint32 _frame_in_flight) :
         presentation_feedback_mailbox(
             MakeShared<PresentFeedbackMailbox>()
         ),
@@ -146,15 +147,15 @@ struct GuiViewportRenderResources final : UiViewportRenderResources {
                presentation_feedback_mailbox->HasPendingRecovery();
     }
 
-    uint64_t GetPendingRecordingSlot() const noexcept override {
+    uint64 GetPendingRecordingSlot() const noexcept override {
         return frame_index;
     }
 
-    bool IsPendingRecordingSlot(uint64_t slot) const noexcept override {
+    bool IsPendingRecordingSlot(uint64 slot) const noexcept override {
         return slot == frame_index;
     }
 
-    void CommitRecordingSlot(uint64_t slot) noexcept override {
+    void CommitRecordingSlot(uint64 slot) noexcept override {
         assert(slot == frame_index);
         if (slot == frame_index) {
             ++frame_index;
@@ -169,10 +170,10 @@ struct GuiViewportData {
     WindowFrameSnapshot                   latest_window_frame;
     bool                                  presentation_refresh_pending = true;
 
-    uint32_t        viewport_index = 0;
-    static uint32_t viewport_count;
+    uint32        viewport_index = 0;
+    static uint32 viewport_count;
 
-    explicit GuiViewportData(uint32_t _frame_in_flight) :
+    explicit GuiViewportData(uint32 _frame_in_flight) :
         render_resources(MakeShared<GuiViewportRenderResources>(_frame_in_flight)),
         viewport_index(viewport_count++) {}
     ~GuiViewportData() {
@@ -185,7 +186,7 @@ struct ImGuiData {
     UnorderedMap<EPixelFormat, GuiPipeline> pipelines_by_format;
 
     TextureRef font_texture;
-    uint32_t frames_in_flight;
+    uint32     frames_in_flight;
 
     ImGuiRenderBackend* render_backend = nullptr;
 };
@@ -307,14 +308,14 @@ static void LoadImGuiLayout(ImGuiIO& _io, std::string& _owned_ini_filename) {
     ImGui::SaveIniSettingsToDisk(_io.IniFilename);
 }
 
-static uint UploadFontAtlasAndCreatePipelines(
+static uint32 UploadFontAtlasAndCreatePipelines(
     ImGuiRenderBackend& _backend,
     ImGuiData*          _backend_data,
     int                 _width,
     int                 _height,
     Array<byte>         _font_pixels
 ) {
-    uint font_texture_handle = 0;
+    uint32 font_texture_handle = 0;
     RunRenderThreadControlAndWait(
         [&_backend,
          _backend_data,
@@ -392,7 +393,7 @@ ImGuiRenderBackend::ImGuiRenderBackend(RenderDevice& _device) : device(_device) 
     LoadImGuiLayout(io, imgui_ini_filename);
 
     const auto&    config              = Moer::ConfigManager::GetInstance().GetConfig();
-    const uint32_t frames_in_flight    = config.engine.rhi.max_frame_in_flight;
+    const uint32   frames_in_flight           = config.engine.rhi.max_frame_in_flight;
     auto*          render_backend_data = MoerNew(ImGuiData)();
     render_backend_data->frames_in_flight     = frames_in_flight;
     render_backend_data->render_backend       = this;
@@ -405,7 +406,7 @@ ImGuiRenderBackend::ImGuiRenderBackend(RenderDevice& _device) : device(_device) 
 
     ImGui::GetMainViewport()->RendererUserData = MoerNew(GuiViewportData)(frames_in_flight);
 
-    uint8_t* font_atlas_pixels = nullptr;
+    uint8*   font_atlas_pixels = nullptr;
     int      font_atlas_width  = 0;
     int      font_atlas_height = 0;
     // 字体图集必须在创建首帧 GPU 资源前同步生成，避免首帧引用尚未就绪的纹理。
@@ -415,7 +416,7 @@ ImGuiRenderBackend::ImGuiRenderBackend(RenderDevice& _device) : device(_device) 
     Array<byte> font_pixels(font_byte_size);
     std::memcpy(font_pixels.data(), font_atlas_pixels, font_byte_size);
 
-    const uint font_texture_handle = UploadFontAtlasAndCreatePipelines(
+    const uint32 font_texture_handle = UploadFontAtlasAndCreatePipelines(
         *this, render_backend_data, font_atlas_width, font_atlas_height, std::move(font_pixels)
     );
     io.Fonts->SetTexID(font_texture_handle);
@@ -466,7 +467,7 @@ void ImGuiRenderBackend::RegisterImage(Texture* _texture, Sampler _sampler) {
     RunRenderThreadControlAndWait([this, texture, _sampler]() {
         auto iter = registered_images.try_emplace(texture.Get(), 0);
         if (iter.second) {
-            uint handle =
+            uint32 handle =
                 bindless_array->AllocateTexture(texture->GetView(0, texture->GetNumMips()), _sampler);
             iter.first->second = handle;
         }
@@ -531,7 +532,7 @@ CaptureViewportDrawPacket(ImDrawData* _draw_data, GuiViewportData* _viewport_dat
     size_t vertex_offset       = 0;
     size_t index_offset        = 0;
     uint32 total_command_count = 0;
-    for (int32_t list_index = 0; list_index < _draw_data->CmdListsCount; ++list_index) {
+    for (int32 list_index = 0; list_index < _draw_data->CmdListsCount; ++list_index) {
         const ImDrawList* draw_list = _draw_data->CmdLists[list_index];
         std::memcpy(
             packet.vertices.data() + vertex_offset,
@@ -551,7 +552,7 @@ CaptureViewportDrawPacket(ImDrawData* _draw_data, GuiViewportData* _viewport_dat
     packet.commands.reserve(total_command_count);
     uint32 global_vertex_offset = 0;
     uint32 global_index_offset  = 0;
-    for (int32_t list_index = 0; list_index < _draw_data->CmdListsCount; ++list_index) {
+    for (int32 list_index = 0; list_index < _draw_data->CmdListsCount; ++list_index) {
         const ImDrawList* draw_list = _draw_data->CmdLists[list_index];
         for (const ImDrawCmd& draw_command : draw_list->CmdBuffer) {
             if (draw_command.UserCallback != nullptr) {
@@ -756,7 +757,7 @@ TextureRef ImGuiRenderBackend::GetWindowFrameBuffer(void* _window) {
 
 } // namespace Moer::Render
 
-uint32_t GuiViewportData::viewport_count = 0;
+uint32 GuiViewportData::viewport_count = 0;
 
 static void EnsureGuiRenderBufferCapacity(
     GuiFrameRenderBuffers& _buffers,
@@ -1020,8 +1021,8 @@ bool CreateOrResizeViewportResources(
     const SharedPtr<GuiViewportRenderResources>& _resources,
     SwapchainSurfaceInfo                         _surface_info,
     WindowFrameSnapshot                          _window_frame,
-    uint32_t                                     _frame_in_flight,
-    uint32_t                                     _viewport_index
+    uint32                                       _frame_in_flight,
+    uint32                                       _viewport_index
 ) {
     assert(_resources);
     assert(!IsRenderThreadRunning() || IsCurrentlyRenderThread());
@@ -1087,7 +1088,7 @@ bool CreateOrResizeViewportResources(
 void ReleaseViewportResources(
     RenderDevice&                                _device,
     const SharedPtr<GuiViewportRenderResources>& _resources,
-    uint32_t                                     _viewport_index
+    uint32                                       _viewport_index
 ) {
     if (!_resources) {
         return;
@@ -1149,10 +1150,10 @@ ImGuiRenderBackend::~ImGuiRenderBackend() {
 }
 
 bool RefreshGuiViewportPresentation(
-    ImGuiViewport*    viewport,
-    GuiViewportData&  viewport_data,
-    RenderDevice&     device,
-    uint32_t          frames_in_flight
+    ImGuiViewport*   viewport,
+    GuiViewportData& viewport_data,
+    RenderDevice&    device,
+    uint32           frames_in_flight
 ) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
 

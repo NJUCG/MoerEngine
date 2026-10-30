@@ -2,6 +2,7 @@
 
 #include "renderer/common/UIRenderer.h"
 #include "DearImGuiRenderer.h"
+#include "misc/Types.h"
 #include "rhi/RHI.h"
 
 namespace Moer::Render {
@@ -209,7 +210,7 @@ void UiDrawFrameSlotClaim::Freeze(UiViewportDrawPacket& viewport) {
         return;
     }
 
-    const uint64_t pending_slot =
+    const uint64 pending_slot =
         viewport.render_resources->GetPendingRecordingSlot();
     viewport.recording_slot = pending_slot;
 

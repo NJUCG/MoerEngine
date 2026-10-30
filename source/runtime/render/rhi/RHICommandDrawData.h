@@ -1,24 +1,24 @@
 #pragma once
 
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "shaderheaders/shared/rhi/CommandDrawData.h"
-
 
 namespace Moer::Render {
 
 struct SingleDrawParam {
-    uint index_cnt;
-    uint instance_cnt;
-    uint first_index;
-    uint vertex_offset;
-    uint first_instance;
+    uint32 index_cnt;
+    uint32 instance_cnt;
+    uint32 first_index;
+    uint32 vertex_offset;
+    uint32 first_instance;
 };
 
 struct DrawCmdData {
-    uint vertex_cnt;
-    uint instance_cnt;
-    uint first_vtx;
-    uint first_instance;
+    uint32 vertex_cnt;
+    uint32 instance_cnt;
+    uint32 first_vtx;
+    uint32 first_instance;
 };
 
 } // namespace Moer::Render

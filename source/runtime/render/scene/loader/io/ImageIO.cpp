@@ -1,5 +1,6 @@
 #include "ImageIO.h"
 #include "KtxImageHelper.h"
+#include "misc/Types.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "contrib/stb/stb_image.h"
 #include "log/LogSystem.h"
@@ -14,7 +15,7 @@
 namespace Moer {
 
 struct MipmapDesc {
-    uint32_t level = 0;
+    uint32 level = 0;
 
     /// Byte offset used for uploading
     // uint32_t offset = 0;
@@ -183,7 +184,7 @@ EPixelFormat ConvertFormatFromDxgiFormat(DXGI_FORMAT format, bool alpha_flag) {
     }
 }
 
-EPixelFormat ConvertFormatFromDDSFormat(uint32_t format) {
+EPixelFormat ConvertFormatFromDDSFormat(uint32 format) {
     switch (format) {
         case GL_RGBA8:
             return EPixelFormat::PF_R8G8B8A8_UNORM;
@@ -238,13 +239,13 @@ static void Generatemipmaps(ImageReadDesc& _desc, bool _is_generate_mipmaps) {
     auto* mipmaps_mapped_data = new uint8[_desc.layers * mipmaps_size];
     // Generate mipmaps for each layer
     // TODO: #pragma omp parallel for
-    for (uint32_t layer = 0; layer < _desc.layers; ++layer) {
+    for (uint32 layer = 0; layer < _desc.layers; ++layer) {
         auto offset = layer * mipmaps_size;
         // Copy base mipmap (level 0)
         memcpy(mipmaps_mapped_data + offset, static_cast<uint8 const*>(_desc.data) + offset, base_image_size);
 
         // Generate lower mipmap levels
-        for (uint32_t mip = 1; mip < mip_level; ++mip) {
+        for (uint32 mip = 1; mip < mip_level; ++mip) {
             auto prev_mipmap_offset = offset + mip_offsets[mip - 1];
             auto next_mipmap_offset = offset + mip_offsets[mip];
 
@@ -278,7 +279,7 @@ static void Generatemipmaps(ImageReadDesc& _desc, bool _is_generate_mipmaps) {
 struct CallbackData final {
     ktxTexture*              texture;
     std::vector<MipmapDesc>* mipmaps;
-    std::vector<uint32_t>*   offsets;
+    std::vector<uint32>*     offsets;
 };
 
 static KTX_error_code KTXAPIENTRY CallBack(
@@ -322,7 +323,7 @@ bool ImageReadDesc::IsValid() {
 
 ImageReadDesc ImageIO::ReadFromFile(
     const std::filesystem::path& _path,
-    uint32_t                     _desired_channal,
+    uint32                       _desired_channal,
     EPixelFormat                 _fmt,
     bool                         _is_generate_mipmaps
 ) {
@@ -411,7 +412,7 @@ ImageReadDesc ImageIO::ReadFromFile(
 ImageReadDesc ImageIO::ReadFromMemory(
     const unsigned char* _memory_data,
     size_t               _len,
-    uint32_t             _desired_channal,
+    uint32               _desired_channal,
     bool                 _is_generate_mipmaps
 ) {
     ImageReadDesc desc;

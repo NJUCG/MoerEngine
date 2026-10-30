@@ -9,6 +9,7 @@
 #include "RasterConfig.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 #include "scene/GpuScene.h"
 #include "shaderheaders/shared/ShaderParameters.h"
@@ -31,25 +32,25 @@ namespace Moer::Render::Raster {
 class ProbeVolumeResource {
 public:
     struct UpdateJob {
-        uint             volume_index = 0;
-        uint             brick_index  = 0;
-        uint             probe_count  = 0;
+        uint32           volume_index = 0;
+        uint32           brick_index  = 0;
+        uint32           probe_count  = 0;
         ProbeUpdateParam param{};
     };
 
     struct UpdateInfo {
         bool                                                enabled               = false;
-        uint                                                volume_count          = 0;
-        uint                                                job_count             = 0;
-        uint                                                resident_brick_count  = 0;
-        uint                                                resident_probe_count  = 0;
-        uint                                                scheduled_probe_count = 0;
-        uint                                                deferred_brick_count  = 0;
-        uint                                                dirty_brick_count     = 0;
-        uint                                                scheduled_dirty_brick_count = 0;
-        uint                                                deferred_dirty_brick_count  = 0;
-        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> scheduled_level_brick_count{};
-        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> scheduled_dirty_level_brick_count{};
+        uint32                                                       volume_count                = 0;
+        uint32                                                       job_count                   = 0;
+        uint32                                                       resident_brick_count        = 0;
+        uint32                                                       resident_probe_count        = 0;
+        uint32                                                       scheduled_probe_count       = 0;
+        uint32                                                       deferred_brick_count        = 0;
+        uint32                                                       dirty_brick_count           = 0;
+        uint32                                                       scheduled_dirty_brick_count = 0;
+        uint32                                                       deferred_dirty_brick_count  = 0;
+        StaticArray<uint32, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> scheduled_level_brick_count{};
+        StaticArray<uint32, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> scheduled_dirty_level_brick_count{};
         StaticArray<UpdateJob, RASTER_PROBE_MAX_BRICK_COUNT> jobs{};
     };
 
@@ -122,191 +123,191 @@ public:
         return m_scene_data_buffer->GetView();
     }
 
-    uint GetProbeCount() const {
+    uint32 GetProbeCount() const {
         return m_snapshot.total_count;
     }
 
-    uint GetHierarchyProbeCount() const {
+    uint32 GetHierarchyProbeCount() const {
         return m_snapshot.hierarchy_probe_count;
     }
 
-    uint GetVolumeCount() const {
+    uint32 GetVolumeCount() const {
         return m_snapshot.volume_count;
     }
 
-    uint GetBrickCount() const {
+    uint32 GetBrickCount() const {
         return m_snapshot.brick_count;
     }
 
-    uint GetCellCount() const {
+    uint32 GetCellCount() const {
         return m_snapshot.cell_count;
     }
 
-    uint GetResidentBrickCount() const {
+    uint32 GetResidentBrickCount() const {
         return m_snapshot.resident_brick_count;
     }
 
-    uint GetResidentProbeCount() const {
+    uint32 GetResidentProbeCount() const {
         return m_snapshot.resident_probe_count;
     }
 
-    uint GetPublishedBrickCount() const {
+    uint32 GetPublishedBrickCount() const {
         return m_snapshot.published_brick_count;
     }
 
-    uint GetPendingLoadBrickCount() const {
+    uint32 GetPendingLoadBrickCount() const {
         return m_snapshot.pending_load_brick_count;
     }
 
-    uint GetCachedBrickCount() const {
+    uint32 GetCachedBrickCount() const {
         return m_snapshot.cached_brick_count;
     }
 
-    uint GetRetiringAllocationCount() const {
+    uint32 GetRetiringAllocationCount() const {
         return m_snapshot.retiring_allocation_count;
     }
 
-    uint GetRetiringProbeCount() const {
+    uint32 GetRetiringProbeCount() const {
         return m_snapshot.retiring_probe_count;
     }
 
-    uint GetStreamingLoadedBrickCount() const {
+    uint32 GetStreamingLoadedBrickCount() const {
         return m_snapshot.streaming_loaded_brick_count;
     }
 
-    uint GetStreamingEvictedBrickCount() const {
+    uint32 GetStreamingEvictedBrickCount() const {
         return m_snapshot.streaming_evicted_brick_count;
     }
 
-    uint GetStreamingReclaimedAllocationCount() const {
+    uint32 GetStreamingReclaimedAllocationCount() const {
         return m_snapshot.streaming_reclaimed_allocation_count;
     }
 
-    uint GetStreamingAllocationStallCount() const {
+    uint32 GetStreamingAllocationStallCount() const {
         return m_snapshot.streaming_allocation_stall_count;
     }
 
-    uint GetRequestedBrickCount() const {
+    uint32 GetRequestedBrickCount() const {
         return m_snapshot.requested_brick_count;
     }
 
-    uint GetRequestedProbeCount() const {
+    uint32 GetRequestedProbeCount() const {
         return m_snapshot.requested_probe_count;
     }
 
-    uint GetPhysicalProbeCapacity() const {
+    uint32 GetPhysicalProbeCapacity() const {
         return m_snapshot.physical_probe_capacity;
     }
 
-    uint GetPhysicalAllocatorCapacity() const {
+    uint32 GetPhysicalAllocatorCapacity() const {
         return m_snapshot.physical_allocator_capacity;
     }
 
-    uint GetAllocatedPhysicalProbeCount() const {
+    uint32 GetAllocatedPhysicalProbeCount() const {
         return m_snapshot.allocated_physical_probe_count;
     }
 
-    uint GetPhysicalAllocationCount() const {
+    uint32 GetPhysicalAllocationCount() const {
         return m_snapshot.physical_allocation_count;
     }
 
-    uint GetFreePhysicalProbeCount() const {
+    uint32 GetFreePhysicalProbeCount() const {
         return m_snapshot.free_physical_probe_count;
     }
 
-    uint GetCapacityEvictedBrickCount() const {
+    uint32 GetCapacityEvictedBrickCount() const {
         return m_snapshot.capacity_evicted_brick_count;
     }
 
-    uint GetClipmapVolumeCount() const {
+    uint32 GetClipmapVolumeCount() const {
         return m_snapshot.clipmap_volume_count;
     }
 
-    uint GetClipmapScrolledVolumeCount() const {
+    uint32 GetClipmapScrolledVolumeCount() const {
         return m_snapshot.clipmap_scrolled_volume_count;
     }
 
-    uint GetPrefetchedBrickCount() const {
+    uint32 GetPrefetchedBrickCount() const {
         return m_snapshot.prefetched_brick_count;
     }
 
-    uint GetClipmapReusedBrickCount() const {
+    uint32 GetClipmapReusedBrickCount() const {
         return m_snapshot.clipmap_reused_brick_count;
     }
 
-    uint GetScheduledBrickCount() const {
+    uint32 GetScheduledBrickCount() const {
         return m_last_scheduled_brick_count;
     }
 
-    uint GetScheduledProbeCount() const {
+    uint32 GetScheduledProbeCount() const {
         return m_last_scheduled_probe_count;
     }
 
-    uint GetDirtyBrickCount() const {
+    uint32 GetDirtyBrickCount() const {
         return m_last_dirty_brick_count;
     }
 
-    uint GetScheduledDirtyBrickCount() const {
+    uint32 GetScheduledDirtyBrickCount() const {
         return m_last_scheduled_dirty_brick_count;
     }
 
-    uint GetDeferredDirtyBrickCount() const {
+    uint32 GetDeferredDirtyBrickCount() const {
         return m_last_deferred_dirty_brick_count;
     }
 
-    uint GetDirtyRegionCount() const {
+    uint32 GetDirtyRegionCount() const {
         return m_last_dirty_region_count;
     }
 
-    uint GetGlobalDirtyReasons() const {
+    uint32 GetGlobalDirtyReasons() const {
         return m_last_global_dirty_reasons;
     }
 
-    const ProbeBrickGpuDesc& GetBrickDesc(uint brick_index) const {
+    const ProbeBrickGpuDesc& GetBrickDesc(uint32 brick_index) const {
         return m_gpu_brick_descs[brick_index];
     }
 
-    const ProbeCellGpuDesc& GetCellDesc(uint cell_index) const {
+    const ProbeCellGpuDesc& GetCellDesc(uint32 cell_index) const {
         return m_gpu_cell_descs[cell_index];
     }
 
-    const ProbeVolumeGpuDesc& GetVolumeDesc(uint volume_index) const {
+    const ProbeVolumeGpuDesc& GetVolumeDesc(uint32 volume_index) const {
         return m_gpu_volume_descs[volume_index];
     }
 
-    uint GetBufferHandle() const {
+    uint32 GetBufferHandle() const {
         return m_probe_buffer.hdl;
     }
 
-    uint GetVisibilityAtlasHandle() const {
+    uint32 GetVisibilityAtlasHandle() const {
         return m_visibility_atlas_buffer.hdl;
     }
 
-    uint GetIrradianceAtlasHandle() const {
+    uint32 GetIrradianceAtlasHandle() const {
         return m_irradiance_atlas_buffer.hdl;
     }
 
-    uint GetVisibilityAtlasTextureHandle() const {
+    uint32 GetVisibilityAtlasTextureHandle() const {
         return m_visibility_atlas_texture.hdl;
     }
 
-    uint GetIrradianceAtlasTextureHandle() const {
+    uint32 GetIrradianceAtlasTextureHandle() const {
         return m_irradiance_atlas_texture.hdl;
     }
 
-    uint GetVolumeBufferHandle() const {
+    uint32 GetVolumeBufferHandle() const {
         return m_volume_buffer.hdl;
     }
 
-    uint GetBrickBufferHandle() const {
+    uint32 GetBrickBufferHandle() const {
         return m_brick_buffer.hdl;
     }
 
-    uint GetCellBufferHandle() const {
+    uint32 GetCellBufferHandle() const {
         return m_cell_buffer.hdl;
     }
 
-    uint GetPageTableBufferHandle() const {
+    uint32 GetPageTableBufferHandle() const {
         return m_page_table_buffer.hdl;
     }
 
@@ -315,58 +316,58 @@ private:
         uint3 coord              = uint3(0u);
         int3  world_fine_coord   = int3(0);
         uint3 local_counts       = uint3(1u);
-        uint  volume_index       = 0;
-        uint  probe_offset       = RASTER_PROBE_PAGE_INVALID;
-        uint  probe_count        = 0;
-        uint  page_index         = 0;
-        uint  cell_index         = RASTER_PROBE_PAGE_INVALID;
-        uint  subdivision_level  = 0;
-        uint  parent_page_index  = RASTER_PROBE_PAGE_INVALID;
+        uint32 volume_index       = 0;
+        uint32 probe_offset       = RASTER_PROBE_PAGE_INVALID;
+        uint32 probe_count        = 0;
+        uint32 page_index         = 0;
+        uint32 cell_index         = RASTER_PROBE_PAGE_INVALID;
+        uint32 subdivision_level  = 0;
+        uint32 parent_page_index  = RASTER_PROBE_PAGE_INVALID;
         uint4 neighbor_pages_0   = uint4(RASTER_PROBE_PAGE_INVALID);
         uint4 neighbor_pages_1   = uint4(RASTER_PROBE_PAGE_INVALID);
         Box3D sample_bounds;
         bool  placement_requested = true;
         bool  requested_resident = true;
         bool  resident           = false;
-        uint  update_age         = 0;
-        uint  dirty_flags        = 0u;
-        uint  page_generation    = 1u;
-        uint  streaming_state    = RASTER_PROBE_STREAMING_UNMAPPED;
+        uint32 update_age           = 0;
+        uint32 dirty_flags          = 0u;
+        uint32 page_generation      = 1u;
+        uint32 streaming_state      = RASTER_PROBE_STREAMING_UNMAPPED;
         bool  cached             = false;
         bool  prefetched         = false;
         bool  clipmap_reused     = false;
-        uint  previous_brick_index = RASTER_PROBE_PAGE_INVALID;
+        uint32 previous_brick_index = RASTER_PROBE_PAGE_INVALID;
         uint64 last_requested_frame = 0u;
         uint64 last_reused_frame = 0u;
         float camera_distance_sq = 0.0f;
     };
 
     struct VolumeSnapshot {
-        uint   config_index         = 0;
-        uint   count_x              = 1;
-        uint   count_y              = 1;
-        uint   count_z              = 1;
-        uint   total_count          = 1;
-        uint   hierarchy_probe_count = 0;
-        uint   probe_offset         = 0;
-        uint   page_table_offset    = 0;
-        uint   brick_count          = 0;
-        uint   first_cell_index     = 0;
-        uint   cell_count           = 0;
-        uint   max_subdivision_level = 0;
-        uint   previous_volume_index = RASTER_PROBE_PAGE_INVALID;
-        uint   requested_brick_count = 0;
-        uint   requested_probe_count = 0;
-        uint   resident_brick_count = 0;
-        uint   resident_probe_count = 0;
-        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_brick_count{};
-        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_requested_brick_count{};
-        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_resident_brick_count{};
+        uint32                                                       config_index          = 0;
+        uint32                                                       count_x               = 1;
+        uint32                                                       count_y               = 1;
+        uint32                                                       count_z               = 1;
+        uint32                                                       total_count           = 1;
+        uint32                                                       hierarchy_probe_count = 0;
+        uint32                                                       probe_offset          = 0;
+        uint32                                                       page_table_offset     = 0;
+        uint32                                                       brick_count           = 0;
+        uint32                                                       first_cell_index      = 0;
+        uint32                                                       cell_count            = 0;
+        uint32                                                       max_subdivision_level = 0;
+        uint32                                                       previous_volume_index = RASTER_PROBE_PAGE_INVALID;
+        uint32                                                       requested_brick_count = 0;
+        uint32                                                       requested_probe_count = 0;
+        uint32                                                       resident_brick_count  = 0;
+        uint32                                                       resident_probe_count  = 0;
+        StaticArray<uint32, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_brick_count{};
+        StaticArray<uint32, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_requested_brick_count{};
+        StaticArray<uint32, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_resident_brick_count{};
         bool   camera_clipmap        = false;
         bool   clipmap_follow_y      = false;
         bool   clipmap_scrolled      = false;
-        uint   prefetched_brick_count = 0;
-        uint   clipmap_reused_brick_count = 0;
+        uint32                                                       prefetched_brick_count     = 0;
+        uint32                                                       clipmap_reused_brick_count = 0;
         int3   clipmap_anchor_cell   = int3(0);
         float3 configured_origin     = float3(0.0f);
         float3 clipmap_cell_step     = float3(1.0f);
@@ -380,18 +381,18 @@ private:
 
     struct CellSnapshot {
         uint3  coord                  = uint3(0u);
-        uint   volume_index           = 0;
-        uint   config_index           = 0;
-        uint   first_brick_index      = 0;
-        uint   brick_count            = 0;
-        uint   requested_brick_count  = 0;
-        uint   resident_brick_count   = 0;
-        uint   min_subdivision_level  = 0;
-        uint   max_subdivision_level  = 0;
-        uint   geometry_primitive_count = 0;
-        uint   occupied_voxel_count     = 0;
-        uint   desired_subdivision_level = RASTER_PROBE_MAX_SUBDIVISION_LEVEL;
-        uint   geometry_generation       = 0;
+        uint32 volume_index              = 0;
+        uint32 config_index              = 0;
+        uint32 first_brick_index         = 0;
+        uint32 brick_count               = 0;
+        uint32 requested_brick_count     = 0;
+        uint32 resident_brick_count      = 0;
+        uint32 min_subdivision_level     = 0;
+        uint32 max_subdivision_level     = 0;
+        uint32 geometry_primitive_count  = 0;
+        uint32 occupied_voxel_count      = 0;
+        uint32 desired_subdivision_level = RASTER_PROBE_MAX_SUBDIVISION_LEVEL;
+        uint32 geometry_generation       = 0;
         float3 origin                 = float3(0.0f);
         float3 extent                 = float3(0.0f);
         float  min_probe_spacing      = 0.0f;
@@ -404,50 +405,50 @@ private:
         bool   adaptive_placement_enabled = false;
         bool   hierarchy_enabled          = false;
         bool   dirty_tracking_enabled     = false;
-        uint   debug_mode                 = 0;
-        uint   volume_count               = 0;
-        uint   cell_count                 = 0;
-        uint   brick_count                = 0;
-        uint   max_subdivision_level      = 0;
-        uint   layout_generation          = 0;
-        uint   requested_brick_count      = 0;
-        uint   requested_probe_count      = 0;
-        uint   resident_brick_count       = 0;
-        uint   resident_probe_count       = 0;
-        uint   published_brick_count      = 0;
-        uint   pending_load_brick_count   = 0;
-        uint   cached_brick_count         = 0;
-        uint   retiring_brick_count       = 0;
-        uint   total_count                = 0;
-        uint   hierarchy_probe_count      = 0;
-        uint   physical_probe_capacity    = RASTER_PROBE_MAX_COUNT;
-        uint   physical_allocator_capacity = RASTER_PROBE_MAX_COUNT;
-        uint   allocated_physical_probe_count = 0;
-        uint   physical_allocation_count  = 0;
-        uint   free_physical_probe_count  = RASTER_PROBE_MAX_COUNT;
-        uint   retiring_allocation_count  = 0;
-        uint   retiring_probe_count       = 0;
-        uint   streaming_loaded_brick_count = 0;
-        uint   streaming_evicted_brick_count = 0;
-        uint   streaming_reclaimed_allocation_count = 0;
-        uint   streaming_allocation_stall_count = 0;
-        uint   capacity_evicted_brick_count = 0;
-        uint   clipmap_volume_count       = 0;
-        uint   clipmap_scrolled_volume_count = 0;
-        uint   prefetched_brick_count     = 0;
-        uint   clipmap_reused_brick_count = 0;
-        uint   geometry_generation        = 0;
-        uint   geometry_primitive_count   = 0;
-        uint   fine_cell_count            = 0;
-        uint   medium_cell_count          = 0;
-        uint   coarse_cell_count          = 0;
-        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_brick_count{};
-        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_requested_brick_count{};
-        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_resident_brick_count{};
+        uint32                                                       debug_mode                           = 0;
+        uint32                                                       volume_count                         = 0;
+        uint32                                                       cell_count                           = 0;
+        uint32                                                       brick_count                          = 0;
+        uint32                                                       max_subdivision_level                = 0;
+        uint32                                                       layout_generation                    = 0;
+        uint32                                                       requested_brick_count                = 0;
+        uint32                                                       requested_probe_count                = 0;
+        uint32                                                       resident_brick_count                 = 0;
+        uint32                                                       resident_probe_count                 = 0;
+        uint32                                                       published_brick_count                = 0;
+        uint32                                                       pending_load_brick_count             = 0;
+        uint32                                                       cached_brick_count                   = 0;
+        uint32                                                       retiring_brick_count                 = 0;
+        uint32                                                       total_count                          = 0;
+        uint32                                                       hierarchy_probe_count                = 0;
+        uint32                                                       physical_probe_capacity              = RASTER_PROBE_MAX_COUNT;
+        uint32                                                       physical_allocator_capacity          = RASTER_PROBE_MAX_COUNT;
+        uint32                                                       allocated_physical_probe_count       = 0;
+        uint32                                                       physical_allocation_count            = 0;
+        uint32                                                       free_physical_probe_count            = RASTER_PROBE_MAX_COUNT;
+        uint32                                                       retiring_allocation_count            = 0;
+        uint32                                                       retiring_probe_count                 = 0;
+        uint32                                                       streaming_loaded_brick_count         = 0;
+        uint32                                                       streaming_evicted_brick_count        = 0;
+        uint32                                                       streaming_reclaimed_allocation_count = 0;
+        uint32                                                       streaming_allocation_stall_count     = 0;
+        uint32                                                       capacity_evicted_brick_count         = 0;
+        uint32                                                       clipmap_volume_count                 = 0;
+        uint32                                                       clipmap_scrolled_volume_count        = 0;
+        uint32                                                       prefetched_brick_count               = 0;
+        uint32                                                       clipmap_reused_brick_count           = 0;
+        uint32                                                       geometry_generation                  = 0;
+        uint32                                                       geometry_primitive_count             = 0;
+        uint32                                                       fine_cell_count                      = 0;
+        uint32                                                       medium_cell_count                    = 0;
+        uint32                                                       coarse_cell_count                    = 0;
+        StaticArray<uint32, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_brick_count{};
+        StaticArray<uint32, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_requested_brick_count{};
+        StaticArray<uint32, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_resident_brick_count{};
         bool   allocator_compacted        = false;
         float  adaptive_geometry_padding  = 0.0f;
         float  adaptive_fine_occupancy    = 0.25f;
-        uint   adaptive_fine_primitives   = 64u;
+        uint32                                                       adaptive_fine_primitives    = 64u;
         float  adaptive_transition_width  = 1.5f;
         float  dirty_influence_scale      = 1.0f;
         float  brick_resident_distance    = 0.0f;
@@ -455,14 +456,14 @@ private:
         float  clipmap_anchor_hysteresis  = 0.0f;
         bool   motion_prefetch_enabled    = false;
         float  motion_prefetch_threshold  = 0.0f;
-        uint   motion_prefetch_keep_frames = 1u;
+        uint32                                                       motion_prefetch_keep_frames = 1u;
         bool   streaming_enabled          = true;
-        uint   streaming_load_budget      = 1u;
-        uint   streaming_eviction_budget  = 1u;
+        uint32                                                       streaming_load_budget       = 1u;
+        uint32                                                       streaming_eviction_budget   = 1u;
         bool   update_scheduler_enabled   = false;
-        uint   update_brick_budget        = 1;
+        uint32                                                       update_brick_budget         = 1;
         float  trace_distance             = 0.0f;
-        uint   trace_ray_count            = 1;
+        uint32                                                       trace_ray_count             = 1;
         float  visibility_bias            = 0.0f;
         float  visibility_power           = 1.0f;
         float  visibility_min_weight      = 0.0f;
@@ -479,7 +480,7 @@ private:
         StaticArray<VolumeSnapshot, RASTER_PROBE_VOLUME_MAX_COUNT> volumes{};
         StaticArray<CellSnapshot, RASTER_PROBE_MAX_CELL_COUNT> cells{};
         StaticArray<BrickSnapshot, RASTER_PROBE_MAX_BRICK_COUNT> bricks{};
-        StaticArray<uint, RASTER_PROBE_MAX_PAGE_COUNT> page_table{};
+        StaticArray<uint32, RASTER_PROBE_MAX_PAGE_COUNT>             page_table{};
     };
 
     Snapshot BuildSnapshot(const RasterConfig& config, float3 camera_position, uint64 frame_index) const;
@@ -487,13 +488,13 @@ private:
     void RefreshGlobalDirtyEvents(const SceneUpdateBatch& scene_updates, bool dirty_tracking_enabled);
     void ApplyDirtyEvents(Snapshot& snapshot);
     ProbeUpdateParam BuildUpdateParam(
-        const Snapshot& snapshot,
+        const Snapshot&       snapshot,
         const VolumeSnapshot& volume,
-        uint            volume_index,
-        uint            brick_index,
-        const GpuScene::Res& gpu_scene,
-        uint            light_count,
-        bool            history_valid
+        uint32                volume_index,
+        uint32                brick_index,
+        const GpuScene::Res&  gpu_scene,
+        uint32                light_count,
+        bool                  history_valid
     ) const;
     bool RequiresPhysicalAllocatorReset(const Snapshot& snapshot) const;
     void ApplyPhysicalResidency(
@@ -501,12 +502,12 @@ private:
         const StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT>& volume_history_reset
     );
     void RebindPhysicalAllocations(Snapshot& snapshot, bool allow_reuse);
-    void ResetPhysicalAllocator(uint physical_probe_capacity);
-    void RetirePhysicalAllocation(uint brick_index, uint virtual_page);
+    void   ResetPhysicalAllocator(uint32 physical_probe_capacity);
+    void   RetirePhysicalAllocation(uint32 brick_index, uint32 virtual_page);
     void CollectRetiredAllocations(Snapshot& snapshot);
-    uint AdvancePageGeneration(uint virtual_page);
+    uint32 AdvancePageGeneration(uint32 virtual_page);
     bool HasSnapshotChanged(const Snapshot& snapshot) const;
-    bool RequiresHistoryReset(const Snapshot& snapshot, uint volume_index) const;
+    bool   RequiresHistoryReset(const Snapshot& snapshot, uint32 volume_index) const;
     void StageVolumeUpload(const Snapshot& snapshot);
     void StageCellUpload(const Snapshot& snapshot);
     void StageBrickUpload(const Snapshot& snapshot);
@@ -534,11 +535,11 @@ private:
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_history_valid{};
     StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_last_update_frame{};
     StaticArray<ProbePhysicalAllocator::Allocation, RASTER_PROBE_MAX_BRICK_COUNT> m_physical_allocations{};
-    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> m_physical_allocation_pages{};
-    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> m_physical_allocation_generations{};
+    StaticArray<uint32, RASTER_PROBE_MAX_BRICK_COUNT>                             m_physical_allocation_pages{};
+    StaticArray<uint32, RASTER_PROBE_MAX_BRICK_COUNT>                             m_physical_allocation_generations{};
     StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_load_submission{};
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_load_awaiting_submission{};
-    StaticArray<uint, RASTER_PROBE_MAX_PAGE_COUNT> m_page_generations{};
+    StaticArray<uint32, RASTER_PROBE_MAX_PAGE_COUNT>                              m_page_generations{};
     ProbePhysicalAllocator m_physical_allocator;
     ProbeRetirementQueue   m_retirement_queue;
     struct GpuCompletionState {
@@ -546,11 +547,11 @@ private:
     };
     SharedPtr<GpuCompletionState> m_gpu_completion_state;
     uint64           m_last_submitted_submission = 0u;
-    uint             m_pending_physical_capacity = 0u;
+    uint32                                            m_pending_physical_capacity = 0u;
     Array<Box3D>     m_scene_geometry_bounds;
     Array<ProbeTrackedBounds> m_scene_geometry_instances;
     Array<ProbeDirtyRegion>   m_frame_dirty_regions;
-    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_pending_dirty_reasons{};
+    StaticArray<uint32, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_pending_dirty_reasons{};
     struct MainLightSnapshot {
         bool   exists    = false;
         float3 direction = float3(0.0f, -1.0f, 0.0f);
@@ -559,19 +560,19 @@ private:
     };
     MainLightSnapshot m_main_light_snapshot;
     bool             m_main_light_snapshot_valid = false;
-    uint             m_frame_global_dirty_reasons = 0u;
-    uint             m_frame_changed_geometry_count = 0u;
+    uint32            m_frame_global_dirty_reasons       = 0u;
+    uint32            m_frame_changed_geometry_count     = 0u;
     bool             m_frame_dirty_regions_collapsed = false;
     bool             m_scene_geometry_cache_valid = false;
-    uint             m_scene_geometry_generation  = 0;
-    uint             m_layout_generation         = 0;
-    uint             m_last_scheduled_brick_count = 0;
-    uint             m_last_scheduled_probe_count = 0;
-    uint             m_last_dirty_brick_count = 0;
-    uint             m_last_scheduled_dirty_brick_count = 0;
-    uint             m_last_deferred_dirty_brick_count = 0;
-    uint             m_last_dirty_region_count = 0;
-    uint             m_last_global_dirty_reasons = 0u;
+    uint32            m_scene_geometry_generation        = 0;
+    uint32            m_layout_generation                = 0;
+    uint32            m_last_scheduled_brick_count       = 0;
+    uint32            m_last_scheduled_probe_count       = 0;
+    uint32            m_last_dirty_brick_count           = 0;
+    uint32            m_last_scheduled_dirty_brick_count = 0;
+    uint32            m_last_deferred_dirty_brick_count  = 0;
+    uint32            m_last_dirty_region_count          = 0;
+    uint32            m_last_global_dirty_reasons        = 0u;
 };
 
 } // namespace Moer::Render::Raster

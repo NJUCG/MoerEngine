@@ -4,6 +4,7 @@
 #define MOER_ENGINE_DEAR_IMGUI_RENDERER_H
 
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "renderer/common/UIRenderer.h"
 #include "renderer/common/ui/ImGuiIOInput.h"
 #include "rhi/RHI.h"
@@ -12,7 +13,7 @@
 
 #include <string>
 
-#define ImTextureID uint64_t
+#define ImTextureID Moer::uint64
 
 namespace Moer::Render {
 class ImGuiRenderBackend : public UiDrawFrameBackend {
@@ -43,10 +44,10 @@ public:
 
     BindlessArrayRef             bindless_array;
     RenderDevice&                device;
-    UnorderedMap<Texture*, uint> registered_images;
+    UnorderedMap<Texture*, uint32> registered_images;
     void*                        backend_data = nullptr;
     std::string                  imgui_ini_filename;
-    uint64_t                     input_capture_sequence = 0;
+    uint64                         input_capture_sequence = 0;
     WindowInputSourceSnapshot    input_snapshot{};
 };
 } // namespace Moer::Render

@@ -4,14 +4,16 @@
 
 #ifndef MOERENGINE_COUNTABLEREF_H
 #define MOERENGINE_COUNTABLEREF_H
+
+#include "misc/Types.h"
 #include <atomic>
 #include <cassert>
 #include <type_traits>
 template<typename TCountable>
 concept concept_is_countable = requires(TCountable t) {
-    t.AddRef() + (uint32_t)1;
-    t.DeRef() + (uint32_t)1;
-    t.GetRefCount() + (uint32_t)1;
+    t.AddRef() + (Moer::uint32)1;
+    t.DeRef() + (Moer::uint32)1;
+    t.GetRefCount() + (Moer::uint32)1;
 };
 
 template<typename T>
@@ -27,44 +29,44 @@ template<typename T>
 struct IsCountableRef<CountableRef<T>> : std::true_type {};
 class Countable {
 public:
-    int32_t AddRef() {
+    Moer::int32 AddRef() {
         return m_counter.fetch_add(1) + 1;
     };
     virtual void Destroy() = 0;
-    int32_t      DeRef() {
+    Moer::int32  DeRef() {
         assert(m_counter >= 0);
-        int32_t current = m_counter.fetch_sub(1);
+        Moer::int32 current = m_counter.fetch_sub(1);
         if (current == 1) {
             Destroy();
         }
         return current - 1;
     };
-    int32_t GetRefCount() {
+    Moer::int32 GetRefCount() {
         return m_counter.load();
     }
 
 protected:
-    std::atomic<int32_t> m_counter;
+    std::atomic<Moer::int32> m_counter;
 };
 
-#define COUNTABLE_IMPLEMENTATION                  \
-    std::atomic<int32_t> m_counter{0};            \
-    inline int32_t       AddRef() {               \
-        return m_counter.fetch_add(1) + 1;  \
-    }                                             \
-    inline uint32_t DeRef() {                     \
-        assert(m_counter >= 0);                   \
-        int32_t current = m_counter.fetch_sub(1); \
-        if (current == 1) {                       \
-            Destroy();                            \
-        }                                         \
-        return current - 1;                       \
-    }                                             \
-    inline uint32_t GetRefCount() const {         \
-        return m_counter.load();                  \
-    }                                             \
-    inline void SetRefCount(uint32_t _count) {    \
-        m_counter.store(_count);                  \
+#define COUNTABLE_IMPLEMENTATION                      \
+    std::atomic<Moer::int32> m_counter{0};            \
+    inline Moer::int32       AddRef() {               \
+        return m_counter.fetch_add(1) + 1;            \
+    }                                                 \
+    inline Moer::uint32 DeRef() {                     \
+        assert(m_counter >= 0);                       \
+        Moer::int32 current = m_counter.fetch_sub(1); \
+        if (current == 1) {                           \
+            Destroy();                                \
+        }                                             \
+        return current - 1;                           \
+    }                                                 \
+    inline Moer::uint32 GetRefCount() const {         \
+        return m_counter.load();                      \
+    }                                                 \
+    inline void SetRefCount(Moer::uint32 _count) {    \
+        m_counter.store(_count);                      \
     }
 
 #define COUNTABLE_IMPLEMENTATION_AUTO_DESTROY \
@@ -203,7 +205,7 @@ public:
     inline bool operator==(const T* _other) {
         return ptr == _other;
     }
-    int32_t GetRefCount() {
+    Moer::int32 GetRefCount() {
         if (ptr == nullptr) {
             return 0;
         }
@@ -228,24 +230,24 @@ public:
     virtual ~CountableResource() = default;
 
 public:
-    uint32_t AddRef() {
+    Moer::uint32 AddRef() {
         //first AddRef() happens before DeRef
-        int32_t ref_count = flags.AddRef(std::memory_order_acquire);
+        Moer::int32 ref_count = flags.AddRef(std::memory_order_acquire);
         assert(ref_count > 0);
         return ref_count;
     };
 
-    uint32_t DeRef() {
-        int32_t ref_count = flags.DeRef(std::memory_order_release);
+    Moer::uint32 DeRef() {
+        Moer::int32 ref_count = flags.DeRef(std::memory_order_release);
         assert(ref_count >= 0);
         if (ref_count == 0) {
             Destroy();
         }
-        return (uint32_t)ref_count;
+        return (Moer::uint32)ref_count;
     };
     //only for look-up purposes, don't care about sequences
-    uint32_t GetRefCount() const {
-        return (uint32_t)flags.GetRefCount(std::memory_order_relaxed);
+    Moer::uint32 GetRefCount() const {
+        return (Moer::uint32)flags.GetRefCount(std::memory_order_relaxed);
     }
 
     bool IsValid() const {
@@ -261,35 +263,35 @@ protected:
 private:
     void Destroy() {}
     struct ResourceAtomicFlags {
-        std::atomic<uint32_t> packed;
+        std::atomic<Moer::uint32> packed;
 
-        static constexpr uint32_t s_mark_for_delete_mask = 1 << 31;
-        static constexpr uint32_t s_is_deleting_mask     = 1 << 30;
-        static constexpr uint32_t s_ref_count_mask       = s_is_deleting_mask - 1;
+        static constexpr Moer::uint32 s_mark_for_delete_mask = 1 << 31;
+        static constexpr Moer::uint32 s_is_deleting_mask     = 1 << 30;
+        static constexpr Moer::uint32 s_ref_count_mask       = s_is_deleting_mask - 1;
 
     public:
-        int32_t AddRef(std::memory_order memory_order) {
-            uint32_t current_packed = packed.fetch_add(1, memory_order);
+        Moer::int32 AddRef(std::memory_order memory_order) {
+            Moer::uint32 current_packed = packed.fetch_add(1, memory_order);
             assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
-            int32_t num_ref = (current_packed & s_ref_count_mask) + 1;
+            Moer::int32 num_ref = (current_packed & s_ref_count_mask) + 1;
             assert(num_ref < s_mark_for_delete_mask);
             return num_ref;
         }
-        int32_t DeRef(std::memory_order memory_order) {
-            uint32_t current_packed = packed.fetch_sub(1, memory_order);
+        Moer::int32 DeRef(std::memory_order memory_order) {
+            Moer::uint32 current_packed = packed.fetch_sub(1, memory_order);
             assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
-            int32_t num_ref = (current_packed & s_ref_count_mask) - 1;
+            Moer::int32 num_ref = (current_packed & s_ref_count_mask) - 1;
             assert(num_ref >= 0);
             return num_ref;
         }
         bool MarkToDelete(std::memory_order memory_order) {
-            uint32_t current_packed = packed.fetch_or(s_mark_for_delete_mask, memory_order);
+            Moer::uint32 current_packed = packed.fetch_or(s_mark_for_delete_mask, memory_order);
             assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
             return (current_packed & s_mark_for_delete_mask) != 0;
         }
 
         bool UnMarkToDelete(std::memory_order memory_order) {
-            uint32_t current_packed = packed.fetch_xor(s_mark_for_delete_mask, memory_order);
+            Moer::uint32 current_packed = packed.fetch_xor(s_mark_for_delete_mask, memory_order);
             assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
             bool current_mark_for_delete = (current_packed & s_mark_for_delete_mask) != 0;
             assert(current_mark_for_delete && "resource is not marked for deleting");
@@ -297,10 +299,10 @@ private:
         }
         bool IsDeleting() {
             /* make sure packed data processing sequence handled correctly - acquire-rel */
-            uint32_t current_packed = packed.load(std::memory_order_acquire);
+            Moer::uint32 current_packed = packed.load(std::memory_order_acquire);
             assert((current_packed & s_mark_for_delete_mask) != 0 && "resource not marked for deleting");
             assert((current_packed & s_is_deleting_mask) != 0 && "resource is currently deleting");
-            uint32_t num_ref = current_packed & s_ref_count_mask;
+            Moer::uint32 num_ref = current_packed & s_ref_count_mask;
             if (num_ref == 0) {
                 return true;
             }
@@ -308,14 +310,14 @@ private:
             return false;
         }
         bool IsValid(std::memory_order memory_order) {
-            uint32_t current_packed = packed.load(memory_order);
+            Moer::uint32 current_packed = packed.load(memory_order);
             return (current_packed & s_mark_for_delete_mask) == 0 && (current_packed & s_ref_count_mask) > 0;
         }
 
         bool IsMarkedForDeleting(std::memory_order memory_order) {
             return (packed.load(memory_order) & s_mark_for_delete_mask) != 0;
         }
-        int32_t GetRefCount(std::memory_order memory_order) {
+        Moer::int32 GetRefCount(std::memory_order memory_order) {
             return packed.load(memory_order) & s_ref_count_mask;
         }
     };

@@ -2,8 +2,8 @@
 
 #include "rhi/RHICommon.h"
 
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -15,7 +15,7 @@ namespace Moer::Render {
 
 // Translation is parallel by default. SerialControl is an explicit CPU-side
 // scheduling barrier; it does not change the queue on which GPU work executes.
-enum class ERHITranslateExecutionClass : uint8_t {
+enum class ERHITranslateExecutionClass : uint8 {
     Parallel      = 0,
     SerialControl = 1,
 };
@@ -31,8 +31,8 @@ struct RHISubmitSegment {
 };
 
 struct SourceSubmitKey {
-    uint64_t op_seq{0};
-    uint32_t submit_idx{0};
+    uint64 op_seq{0};
+    uint32 submit_idx{0};
 
     friend constexpr bool operator==(const SourceSubmitKey&, const SourceSubmitKey&) = default;
 
@@ -43,8 +43,8 @@ struct SourceSubmitKey {
 };
 
 struct SubmissionKey {
-    uint64_t op_seq{0};
-    uint32_t submit_idx{0};
+    uint64 op_seq{0};
+    uint32 submit_idx{0};
 
     friend constexpr bool operator==(const SubmissionKey&, const SubmissionKey&) = default;
 
@@ -56,8 +56,8 @@ struct SubmissionKey {
 
 struct SourceSubmitKeyHash {
     size_t operator()(const SourceSubmitKey& _key) const noexcept {
-        size_t hash = std::hash<uint64_t>{}(_key.op_seq);
-        hash ^= std::hash<uint32_t>{}(_key.submit_idx) + 0x9e3779b9u + (hash << 6u) +
+        size_t hash = std::hash<uint64>{}(_key.op_seq);
+        hash ^= std::hash<uint32>{}(_key.submit_idx) + 0x9e3779b9u + (hash << 6u) +
                 (hash >> 2u);
         return hash;
     }
@@ -65,8 +65,8 @@ struct SourceSubmitKeyHash {
 
 struct SubmissionKeyHash {
     size_t operator()(const SubmissionKey& _key) const noexcept {
-        size_t hash = std::hash<uint64_t>{}(_key.op_seq);
-        hash ^= std::hash<uint32_t>{}(_key.submit_idx) + 0x9e3779b9u + (hash << 6u) +
+        size_t hash = std::hash<uint64>{}(_key.op_seq);
+        hash ^= std::hash<uint32>{}(_key.submit_idx) + 0x9e3779b9u + (hash << 6u) +
                 (hash >> 2u);
         return hash;
     }
@@ -84,7 +84,7 @@ struct RHISourceSubmitDescription {
     bool has_side_effects{false};
 };
 
-enum class ERHISubmissionTopologyError : uint8_t {
+enum class ERHISubmissionTopologyError : uint8 {
     None = 0,
     InvalidRootQueue,
     InvalidExecutionClass,
@@ -97,7 +97,7 @@ enum class ERHISubmissionTopologyError : uint8_t {
 struct RHISubmissionSegmentPlan {
     SubmissionKey               key{};
     SourceSubmitKey             source_key{};
-    uint32_t                    source_segment_index{0};
+    uint32                      source_segment_index{0};
     RHISubmitSegment            segment{};
     ERHITranslateExecutionClass execution_class{
         ERHITranslateExecutionClass::Parallel
@@ -183,11 +183,11 @@ inline void AppendUnique(
 // monotonically increasing index across every retained segment.
 [[nodiscard]] inline RHISubmissionTopologyPlan BuildRHISubmissionTopology(
     std::span<const RHISourceSubmitDescription> _descriptions,
-    uint64_t                                    _op_seq_base
+    uint64                                      _op_seq_base
 ) {
     using namespace RHISubmissionTopologyDetail;
 
-    if (_descriptions.size() > std::numeric_limits<uint32_t>::max()) {
+    if (_descriptions.size() > std::numeric_limits<uint32>::max()) {
         return Fail(ERHISubmissionTopologyError::IndexOverflow, 0);
     }
 
@@ -215,7 +215,7 @@ inline void AppendUnique(
             ? std::span<const RHISubmitSegment>(&synthesized_segment, 1)
             : description.segments;
 
-        if (source_segments.size() > std::numeric_limits<uint32_t>::max()) {
+        if (source_segments.size() > std::numeric_limits<uint32>::max()) {
             return Fail(ERHISubmissionTopologyError::IndexOverflow, source_index);
         }
 
@@ -258,12 +258,12 @@ inline void AppendUnique(
         RHISourceSubmitPlan source_plan{
             .source_key = SourceSubmitKey{
                 _op_seq_base,
-                static_cast<uint32_t>(source_index),
+                static_cast<uint32>(source_index),
             },
-            .root_queue       = description.root_queue,
-            .command_count    = description.command_count,
-            .execution_class = description.execution_class,
-            .has_side_effects = description.has_side_effects,
+            .root_queue         = description.root_queue,
+            .command_count      = description.command_count,
+            .execution_class    = description.execution_class,
+            .has_side_effects   = description.has_side_effects,
             .segment_plan_begin = result.segments.size(),
             .segment_plan_count = 0,
         };
@@ -272,20 +272,20 @@ inline void AppendUnique(
             description.command_count == 0 && description.has_side_effects;
         const bool retain_segments = description.command_count != 0 || retain_empty_submit;
         if (retain_segments) {
-            if (result.segments.size() > std::numeric_limits<uint32_t>::max() -
-                    source_segments.size()) {
+            if (result.segments.size() > std::numeric_limits<uint32>::max() -
+                                             source_segments.size()) {
                 return Fail(ERHISubmissionTopologyError::IndexOverflow, source_index);
             }
 
             for (size_t segment_index = 0; segment_index < source_segments.size(); ++segment_index) {
                 const SubmissionKey key{
                     _op_seq_base,
-                    static_cast<uint32_t>(result.segments.size()),
+                    static_cast<uint32>(result.segments.size()),
                 };
                 RHISubmissionSegmentPlan segment_plan{
                     .key                  = key,
                     .source_key           = source_plan.source_key,
-                    .source_segment_index = static_cast<uint32_t>(segment_index),
+                    .source_segment_index = static_cast<uint32>(segment_index),
                     .segment              = source_segments[segment_index],
                     .execution_class      = description.execution_class,
                 };

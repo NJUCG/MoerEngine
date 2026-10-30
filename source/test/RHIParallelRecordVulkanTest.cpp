@@ -26,13 +26,13 @@
 #include "vulkan/VulkanSubmissionProbe.h"
 #include "vulkan/VulkanSubmissionTestHooks.h"
 
+#include "misc/Types.h"
 #include <algorithm>
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -177,7 +177,7 @@ public:
     DEFINE_COMPUTE_PIPELINE_CLASS(CompiledBindlessPipeline);
     DEFINE_SHADER_BUFFER(result);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_CONSTANT(uint, index);
+    DEFINE_SHADER_CONSTANT(uint32, index);
     DEFINE_SHADER_CONSTANT(float, scale);
     DEFINE_SHADER_ARGS(result, bdls, index, scale);
 };
@@ -186,7 +186,7 @@ struct CompiledBindlessParameters {
     RGBufferAccess<RenderGraph::AccessMode::Read, RenderGraph::BufferAccessType::ShaderRead>  input;
     RGTextureAccess<RenderGraph::AccessMode::Read, RenderGraph::TextureAccessType::Sampled>   texture;
     RGBufferAccess<RenderGraph::AccessMode::Write, RenderGraph::BufferAccessType::Storage>    output;
-    uint                                                                                      index = 0;
+    uint32                                                                                    index = 0;
     RGOptionalAccess<RGTokenAccess<RenderGraph::AccessMode::Read>> publication;
 
     void DeclareRGAccess(RGParameterAccessCollector& accesses) const {
@@ -206,7 +206,7 @@ bool IsExpectedZeroOcclusionResult(
     }
     return _precise ?
                _result->sample_count ==
-                   std::optional<std::uint64_t>{0} :
+                   std::optional<uint64>{0} :
                !_result->sample_count.has_value();
 }
 
@@ -1875,7 +1875,7 @@ void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel, bool 
     auto pipeline = manager.Compute<CompiledBindlessPipeline>("test/ShaderBindlessAddress.hlsl", "ComputeMain");
     const auto buffer_usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
                               EBufferUsageFlags::TRANSFER_SRC;
-    auto input   = device.CreateBuffer<uint>("compiled_bindless_input", 1, buffer_usage);
+    auto input   = device.CreateBuffer<uint32>("compiled_bindless_input", 1, buffer_usage);
     auto output  = device.CreateBuffer<float>("compiled_bindless_output", 1, buffer_usage);
     auto texture = device.CreateTexture(
         "compiled_bindless_texture",
@@ -1884,7 +1884,7 @@ void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel, bool 
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
     );
     auto       table = device.CreateBindlessArray();
-    const uint index = table->AllocateBuffer(input->GetView());
+    const uint32 index = table->AllocateBuffer(input->GetView());
     if (table->AllocateTexture(texture->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)) != index + 1) {
         throw std::runtime_error("bindless address fixture requires consecutive buffer/texture handles");
     }
@@ -2028,17 +2028,17 @@ void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
                        EBufferUsageFlags::TRANSFER_SRC;
     auto                          table          = device.CreateBindlessArray();
     auto                          selector       = device.CreateBuffer<uint32>("bindless_selector", 1, usage);
-    const uint                    selector_index = table->AllocateBuffer(selector->GetView());
+    const uint32                  selector_index = table->AllocateBuffer(selector->GetView());
     Array<BufferRef>              buffers;
     Array<TextureRef>             textures;
-    Array<uint>                   indices;
+    Array<uint32>                 indices;
     std::array<ReadbackFuture, 2> readbacks;
     size_t                        previous_count = 0;
-    for (uint generation = 0; generation < readbacks.size(); ++generation) {
+    for (uint32 generation = 0; generation < readbacks.size(); ++generation) {
         // Publish two candidates, then extend that same table while the first
         // graph may still be on the GPU. No host completion wait separates them.
-        const uint additions = generation == 0 ? 2 : 1;
-        for (uint i = 0; i < additions; ++i) {
+        const uint32 additions = generation == 0 ? 2 : 1;
+        for (uint32 i = 0; i < additions; ++i) {
             buffers.push_back(device.CreateBuffer<uint32>("bindless_candidate", 1, usage));
             textures.push_back(device.CreateTexture(
                 "bindless_candidate_texture",
@@ -2584,7 +2584,7 @@ void RunActiveRdgExplicitBarrierReadback(
 ) {
     auto&                   device    = RenderDevice::Get();
     const EBufferUsageFlags usage     = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
-    constexpr uint64_t      byte_size = sizeof(uint32) * kElementCount;
+    constexpr uint64        byte_size = sizeof(uint32) * kElementCount;
 
     BufferRef source      = device.CreateBuffer<uint32>("active_rdg_source", kElementCount, usage);
     BufferRef destination = device.CreateBuffer<uint32>("active_rdg_destination", kElementCount, usage);
@@ -2861,7 +2861,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
 
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
-    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    constexpr uint64 byte_size = sizeof(uint32) * kElementCount;
 
     struct QueueBuffer {
         BufferRef buffer{};
@@ -3603,7 +3603,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         return;
     }
 
-    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    constexpr uint64        byte_size = sizeof(uint32) * kElementCount;
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
     BufferRef source = device.CreateBuffer<uint32>(
@@ -4001,7 +4001,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
 }
 
 void RunActiveRdgTransientAliasReadback(bool _parallel) {
-    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    constexpr uint64            byte_size = sizeof(uint32) * kElementCount;
     const RGTransientBufferDesc transient_desc{
         .element_count = kElementCount,
         .stride        = sizeof(uint32),
@@ -10034,7 +10034,7 @@ void RunPresentSourceContractRejection() {
         bindless,
         "BindlessPresentAccessThenAdd"
     );
-    const uint access_then_add_slot =
+    const uint32 access_then_add_slot =
         bindless->AllocateTexture(
             bindless_access_then_add->GetView(),
             bindless_sampler
@@ -10073,7 +10073,7 @@ void RunPresentSourceContractRejection() {
     publish_bindless_source(
         bindless_add_then_access, "bindless Add->Access"
     );
-    const uint add_then_access_slot =
+    const uint32 add_then_access_slot =
         bindless->AllocateTexture(
             bindless_add_then_access->GetView(),
             bindless_sampler
@@ -10119,11 +10119,11 @@ void RunPresentSourceContractRejection() {
 
     // Two descriptor slots can reference one texture. Removing one slot must
     // retain membership; removing the final slot must close it.
-    const uint duplicate_slot_a =
+    const uint32 duplicate_slot_a =
         bindless->AllocateTexture(
             bindless_duplicate->GetView(), bindless_sampler
         );
-    const uint duplicate_slot_b =
+    const uint32 duplicate_slot_b =
         bindless->AllocateTexture(
             bindless_duplicate->GetView(), bindless_sampler
         );
@@ -10207,7 +10207,7 @@ void RunPresentSourceContractRejection() {
     );
 
     // Conversely, a rejected free preserves the last accepted membership.
-    const uint rejected_free_slot =
+    const uint32 rejected_free_slot =
         bindless->AllocateTexture(
             bindless_rejected_free->GetView(),
             bindless_sampler
@@ -10480,7 +10480,7 @@ void RunPresentSourceContractRejection() {
         "access after accepted bindless add prefix"
     );
 
-    const uint accepted_free_prefix_slot =
+    const uint32 accepted_free_prefix_slot =
         bindless->AllocateTexture(
             bindless_accepted_free_prefix->GetView(),
             bindless_sampler

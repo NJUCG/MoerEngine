@@ -1,13 +1,14 @@
 #pragma once
 
 #include "VulkanCommon.h"
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 
 namespace Moer::Render {
 
 struct VulkanPixelFormatInfo {
-    uint     stride; // Bytes per texel for linear formats, per block for compressed formats.
+    uint32   stride; // Bytes per texel for linear formats, per block for compressed formats.
     VkFormat format;
 };
 
@@ -21,7 +22,7 @@ public:
     static VkImageUsageFlags            METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
     static EPixelFormat                 VKToMEFormat(VkFormat _format);
     static VkBufferUsageFlags           METoVKBufferUsageFlags(EBufferUsageFlags _me_flags);
-    static VkSampleCountFlagBits        METoVKSampleCountFlagBits(uint32_t _me_count);
+    static VkSampleCountFlagBits        METoVKSampleCountFlagBits(uint32 _me_count);
     static VkImageAspectFlags           METoVKImageAspectFlags(ETextureAspectFlags _flags);
     static VkImageViewType              METoVKImageViewType(ETextureDimension _dim);
     static VkImageLayout                METoVKImageLayout(ETextureLayout _layout);

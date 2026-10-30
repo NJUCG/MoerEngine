@@ -6,6 +6,7 @@ extern "C" {
 __declspec(dllexport) extern const char8_t* D3D12SDKPath = u8".\\D3D12\\";
 }
 
+#include "misc/Types.h"
 #include <filesystem>
 // #include <vcruntime_string.h>
 #include "Core.h"
@@ -31,7 +32,7 @@ __declspec(dllexport) extern const char8_t* D3D12SDKPath = u8".\\D3D12\\";
 #include "taskgraph/TaskSystem.h"
 #include <iostream>
 
-constexpr uint32_t kNumBuffArr = 7;
+constexpr Moer::uint32 kNumBuffArr = 7;
 
 namespace Moer::Render {
 
@@ -45,13 +46,13 @@ public:
 };
 
 struct S0 {
-    uint   a;
-    uint   b;
+    uint32 a;
+    uint32 b;
     float2 _pad;
     float4 x;
 };
 struct S1 {
-    uint a;
+    uint32 a;
 };
 
 class TestComputePipeline : public ComputePipeline {
@@ -129,7 +130,7 @@ int main(int argc, char** argv) {
         auto sb1 = device.CreateBuffer<S1>(
             "sb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
         );
-        auto rb0 = device.CreateBuffer<uint>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto rb0 = device.CreateBuffer<uint32>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
         auto rb1 = device.CreateBuffer<float>(
             "rb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
         );

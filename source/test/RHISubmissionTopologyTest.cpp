@@ -1,4 +1,5 @@
 #include "rhi/RHISubmissionTopology.h"
+#include "misc/Types.h"
 
 #include <array>
 #include <iostream>
@@ -55,8 +56,7 @@ void StableInputOrderAndKeysArePreserved() {
                    lhs.segment.queue == rhs.segment.queue &&
                    lhs.segment.begin == rhs.segment.begin && lhs.segment.end == rhs.segment.end,
                "identical topology input produced unstable output");
-        Expect(lhs.key == SubmissionKey{42, static_cast<uint32_t>(index)},
-               "submission keys were not monotonic and unique");
+        Expect(lhs.key == SubmissionKey{42, static_cast<Moer::uint32>(index)}, "submission keys were not monotonic and unique");
         if (index != 0) {
             Expect(first.segments[index - 1].key < lhs.key,
                    "submission keys did not increase in source order");
@@ -194,11 +194,11 @@ void SerialControlCreatesStableFrontierBarriers() {
 
     const RHISubmissionTopologyPlan plan = BuildRHISubmissionTopology(descriptions, 11);
     Expect(plan.IsValid() && plan.segments.size() == 8, "serial-control topology failed");
-    const auto expect_dependencies = [&](size_t _segment, std::initializer_list<uint32_t> _indices) {
+    const auto expect_dependencies = [&](size_t _segment, std::initializer_list<Moer::uint32> _indices) {
         const std::vector<SubmissionKey>& dependencies = plan.segments[_segment].dependencies;
         Expect(dependencies.size() == _indices.size(), "dependency count was incorrect");
         size_t dependency_index = 0;
-        for (uint32_t index : _indices) {
+        for (Moer::uint32 index : _indices) {
             Expect(dependencies[dependency_index++] == SubmissionKey{11, index},
                    "dependency order or identity was incorrect");
         }

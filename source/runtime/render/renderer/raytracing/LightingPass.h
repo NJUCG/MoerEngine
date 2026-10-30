@@ -1,6 +1,8 @@
 #ifndef MOER_LIGHTING_PASS_H
 #define MOER_LIGHTING_PASS_H
 
+#include "misc/Types.h"
+
 // ReSTIR DI 预采样、时序/空间复用以及最终样本着色。
 
 #include "RaytracingGraphResources.h"
@@ -94,10 +96,10 @@ public:
 class LightingPass {
 public:
     struct LocalLightSamplingDecision {
-        uint configured_mode           = s_di_local_light_sample_mode_uniform;
-        uint effective_mode            = s_di_local_light_sample_mode_uniform;
+        uint32 configured_mode           = s_di_local_light_sample_mode_uniform;
+        uint32 effective_mode            = s_di_local_light_sample_mode_uniform;
         bool adaptive_fallback_applied = false;
-        uint local_light_count         = 0;
+        uint32 local_light_count         = 0;
     };
 
     struct PreparedCommand {
@@ -156,7 +158,7 @@ public:
     );
 
 private:
-    enum class ELightingDispatch : uint8_t {
+    enum class ELightingDispatch : uint8 {
         PresampleLight,
         PresampleEnvMap,
         PresampleLightGrid,

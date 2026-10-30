@@ -1,5 +1,5 @@
 #include "RaytracingFrameSetupPass.h"
-
+#include "misc/Types.h"
 #include "rhi/RHIImpl.h"
 
 #include <algorithm>
@@ -43,13 +43,13 @@ RenderGraph::TextureHandle ImportTexture(
 ) {
     RenderGraph::TextureAspect aspects = RenderGraph::TextureAspect::None;
     const auto                 rhi_aspects = texture->GetAspectFlags();
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Color;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Depth;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Stencil;
     }
     return graph.ImportTexture(
@@ -83,7 +83,7 @@ RaytracingFrameSetupPass::PreparedCommand RaytracingFrameSetupPass::Prepare(
     payload->scene_resources = rt_ctx.GetBindlessResources();
 
     if (build_tlas) {
-        for (uint index = 0; index < payload->scene->GetInstanceCount(); ++index) {
+        for (uint32 index = 0; index < payload->scene->GetInstanceCount(); ++index) {
             RaytracingInstance& instance = payload->scene->GetInstance(index);
             payload->scene->MarkModified(instance.instance_id);
         }

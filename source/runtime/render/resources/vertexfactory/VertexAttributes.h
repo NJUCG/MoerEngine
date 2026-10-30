@@ -1,6 +1,7 @@
 #pragma once
 
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "rhi/VertexFormat.h"
 
 namespace Moer {
@@ -11,11 +12,11 @@ namespace Moer {
 // *************************************************
 // * Vertex Attributes Table
 // *   Name, Type, VertexFormat
-#define VERTEX_ATTRIBUTES_TABLE                   \
-    X(VA_POSITION, float3, EVertexFormat::Float3)  \
-    X(VA_NORMAL, uint, EVertexFormat::UInt)        \
-    X(VA_TANGENT, uint, EVertexFormat::UInt)       \
-    X(VA_TEXCOORD0, float2, EVertexFormat::Float2) \
+#define VERTEX_ATTRIBUTES_TABLE                      \
+    X(VA_POSITION, float3, EVertexFormat::Float3)    \
+    X(VA_NORMAL, Moer::uint32, EVertexFormat::UInt)  \
+    X(VA_TANGENT, Moer::uint32, EVertexFormat::UInt) \
+    X(VA_TEXCOORD0, float2, EVertexFormat::Float2)   \
     X(VA_TEXCOORD1, float2, EVertexFormat::Float2)
 
 // EVertexAttributes

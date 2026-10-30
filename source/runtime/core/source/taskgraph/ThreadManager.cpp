@@ -1,4 +1,5 @@
 #include "taskgraph/ThreadManager.h"
+#include "misc/Types.h"
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
 #include <algorithm>
@@ -20,10 +21,10 @@
 #define RENDER_THREAD_NAME  "RenderThread"
 #define UNKNOWN_THREAD_NAME "UnknownThread"
 
-CORE_API uint32_t ThreadManager::g_game_thread_id   = 0;
-CORE_API uint32_t ThreadManager::g_render_thread_id = 0;
+CORE_API Moer::uint32 ThreadManager::g_game_thread_id   = 0;
+CORE_API Moer::uint32 ThreadManager::g_render_thread_id = 0;
 
-std::string GetPriorityStr(int32_t priority) {
+std::string GetPriorityStr(Moer::int32 priority) {
     assert(priority < EThread::PriorityCount);
     priority = priority << EThread::PRIORITY_SHEFT;
     switch (priority) {
@@ -40,7 +41,7 @@ std::string GetPriorityStr(int32_t priority) {
 ThreadManager::~ThreadManager() {
     ShutDown();
 }
-void ThreadManager::AddThread(uint32_t id, RunnableThread* thread) noexcept {
+void ThreadManager::AddThread(Moer::uint32 id, RunnableThread* thread) noexcept {
     try {
         if (m_threads.find(id) == m_threads.end()) {
             m_threads.emplace(id, thread);
@@ -61,17 +62,17 @@ void ThreadManager::RemoveThread(RunnableThread* thread) {
         m_thread_indexs.erase(thread->id);
     }
 }
-void ThreadManager::SetGameThreadID(uint32_t _game_thread_id) {
+void ThreadManager::SetGameThreadID(Moer::uint32 _game_thread_id) {
     g_game_thread_id = _game_thread_id;
 }
 
-void ThreadManager::SetRenderThreadID(uint32_t _render_thread_id) {
+void ThreadManager::SetRenderThreadID(Moer::uint32 _render_thread_id) {
     g_render_thread_id = _render_thread_id;
 }
-uint32_t ThreadManager::GetRenderThreadID() {
+Moer::uint32 ThreadManager::GetRenderThreadID() {
     return g_render_thread_id;
 }
-uint32_t ThreadManager::GetGameThreadID() {
+Moer::uint32 ThreadManager::GetGameThreadID() {
     return g_game_thread_id;
 }
 void ThreadManager::Tick() {}
@@ -81,15 +82,15 @@ void ThreadManager::Initialize() {
     Platform::SetCurrentThreadName(MAIN_THREAD_NAME);
     AddThread(g_game_thread_id, nullptr);
 }
-uint32_t ThreadManager::GetCurrentThreadID() {
+Moer::uint32 ThreadManager::GetCurrentThreadID() {
     return Platform::GetCurrentThreadID();
 }
 
-uint32_t ThreadManager::GetCurrentThreadIndex() {
+Moer::uint32 ThreadManager::GetCurrentThreadIndex() {
     return Instance().m_thread_indexs.at(Platform::GetCurrentThreadID());
 }
 
-const char* ThreadManager::GetThreadName(uint32_t id) {
+const char* ThreadManager::GetThreadName(Moer::uint32 id) {
 
     if (id == g_game_thread_id)
         return MAIN_THREAD_NAME;
@@ -111,21 +112,21 @@ void ThreadManager::ShutDown() {
     }
 }
 
-const char* ThreadManager::GetRunnableThreadName(uint32_t id) {
+const char* ThreadManager::GetRunnableThreadName(Moer::uint32 id) {
     auto target = m_threads.find(id);
     if (target != m_threads.end())
         return target->second->name.c_str();
     return UNKNOWN_THREAD_NAME;
 }
 
-RunnableThread* ThreadManager::GetRunnableThread(uint32_t id) {
+RunnableThread* ThreadManager::GetRunnableThread(Moer::uint32 id) {
     if (id == g_game_thread_id)
         return nullptr;
     const auto target = m_threads.find(id);
     return target == m_threads.end() ? nullptr : target->second;
 }
 
-void RunnableThread::Setup(uint64_t _affinity) {
+void RunnableThread::Setup(Moer::uint64 _affinity) {
     Platform::SetThreadAffinity((void*)m_thread->native_handle(), _affinity);
 }
 
@@ -207,13 +208,13 @@ RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attribu
     // SPDLOG_DEBUG("[{}] {} thread created", name, this->id);
 }
 
-uint32_t RunnableThread::Run() {
+Moer::uint32 RunnableThread::Run() {
     assert(m_runnable != nullptr);
     id = Platform::GetCurrentThreadID();
     m_create_event->Trigger();
     m_runnable->Init();
 
-    uint32_t exit_code = m_runnable->Run();
+    Moer::uint32 exit_code = m_runnable->Run();
 
     m_runnable->Exit();
     m_end_event->Trigger();
@@ -224,7 +225,7 @@ void RunnableThread::WaitUntilFinished() {
     m_end_event->Wait();
 }
 
-uint32_t TestRunnanble::Run() {
+Moer::uint32 TestRunnanble::Run() {
     SPDLOG_INFO("[{}] start running", Platform::GetCurrentThreadID());
     while (!m_stop) {
     }

@@ -2,6 +2,7 @@
 #define MOERENGINE_WINDOW_CONTEXT_H
 
 #include "RenderAPI.h"
+#include "misc/Types.h"
 
 #include "rhi/RHIWindowSurface.h"
 #include "window/WindowFrameSnapshot.h"
@@ -37,8 +38,8 @@ struct RENDER_API WindowHandle {
 
 struct RENDER_API SurfaceInitInfo {
     SurfaceInitInfo(
-        uint32_t           _width,
-        uint32_t           _height,
+        uint32             _width,
+        uint32             _height,
         const std::string& _title,
         bool               _full_screen,
         bool               _visible = true

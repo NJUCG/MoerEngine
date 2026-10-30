@@ -1,5 +1,5 @@
 #include "remote/RemoteRequestRegistry.h"
-
+#include "misc/Types.h"
 #include <format>
 #include <utility>
 
@@ -56,7 +56,7 @@ std::optional<RemoteRequestRecord> RemoteRequestRegistry::Find(std::string_view 
 }
 
 std::string RemoteRequestRegistry::NextRequestId() {
-    const uint64_t index = m_next_request_index.fetch_add(1, std::memory_order_relaxed);
+    const uint64 index = m_next_request_index.fetch_add(1, std::memory_order_relaxed);
     return std::format("remote-{0:06}", index);
 }
 

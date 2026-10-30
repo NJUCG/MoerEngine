@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "renderer/raster/RasterTool.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIImpl.h"
@@ -65,8 +66,8 @@ public:
     RaytracingInstance& AddInstance() override {
         throw std::logic_error("RetainedTestScene::AddInstance is not used");
     }
-    void FreeInstance(uint) override {}
-    void MarkModified(uint) override {}
+    void               FreeInstance(uint32) override {}
+    void               MarkModified(uint32) override {}
     UniquePtr<Command> UpdateScene() override {
         return {};
     }
@@ -261,7 +262,7 @@ void PointAndCsmMarkerNamesAreCompleteAndDisjoint() {
     std::set<std::string_view> point_faces;
     std::set<std::string_view> point_culling;
     std::set<std::string_view> point_draw;
-    for (uint face = 0; face < CUBE_FACE_Num; ++face) {
+    for (uint32 face = 0; face < CUBE_FACE_Num; ++face) {
         point_faces.emplace(RasterTool::GetPointShadowFaceMarkerName(face));
         point_culling.emplace(RasterTool::GetPointShadowCullingProfileScopeName(face));
         point_draw.emplace(RasterTool::GetPointShadowDrawProfileScopeName(face));
@@ -280,7 +281,7 @@ void PointAndCsmMarkerNamesAreCompleteAndDisjoint() {
 
     std::set<std::string_view> csm_culling;
     std::set<std::string_view> csm_draw;
-    for (uint cascade = 0; cascade < CSM_MAX_CASCADES; ++cascade) {
+    for (uint32 cascade = 0; cascade < CSM_MAX_CASCADES; ++cascade) {
         csm_culling.emplace(RasterTool::GetCsmShadowCullingProfileScopeName(cascade));
         csm_draw.emplace(RasterTool::GetCsmShadowDrawProfileScopeName(cascade));
     }
@@ -306,7 +307,7 @@ void PreparedRaytracingUpdatesAreNullSafeAndOneShot() {
         BufferRef{},
         RaytracingTlasRef{},
         Array<RaytracingGeometryRef>{},
-        Array<uint>{},
+        Array<uint32>{},
         Array<byte>{},
         0,
         false
@@ -352,7 +353,7 @@ void PreparedRaytracingUpdatesRetainEveryNativeInput() {
         scratch_buffer,
         tlas,
         Array<RaytracingGeometryRef>{geometry},
-        Array<uint>{0},
+        Array<uint32>{0},
         Array<byte>{},
         1,
         false

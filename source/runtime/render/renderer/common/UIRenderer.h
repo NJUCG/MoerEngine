@@ -6,12 +6,12 @@
 #include "RenderAPI.h"
 #include "misc/NumericLimits.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "renderer/common/PresentationSurface.h"
 #include "rhi/RHI.h"
 #include "window/WindowFrameSnapshot.h"
 #include "window/WindowInput.h"
 #include <atomic>
-#include <cstdint>
 #include <type_traits>
 
 namespace Moer::Render {
@@ -62,13 +62,13 @@ public:
      * so a read-only token can be frozen in the copied packet and committed
      * only after Fence::WaitSubmitted succeeds.
      */
-    [[nodiscard]] virtual uint64_t GetPendingRecordingSlot() const noexcept = 0;
+    [[nodiscard]] virtual uint64 GetPendingRecordingSlot() const noexcept = 0;
     [[nodiscard]] virtual bool
-    IsPendingRecordingSlot(uint64_t slot) const noexcept = 0;
-    virtual void CommitRecordingSlot(uint64_t slot) noexcept = 0;
+                 IsPendingRecordingSlot(uint64 slot) const noexcept = 0;
+    virtual void CommitRecordingSlot(uint64 slot) noexcept          = 0;
 };
 
-enum class EUiDrawExecutionThread : uint8_t {
+enum class EUiDrawExecutionThread : uint8 {
     Game,
     Render
 };
@@ -100,12 +100,12 @@ struct UiClipRect {
 using UiViewportPresentationSnapshot = PresentationSurfaceSnapshot;
 
 struct UiViewportDrawPacket {
-    static constexpr uint64_t InvalidRecordingSlot = MaxValue<uint64_t>;
+    static constexpr uint64 InvalidRecordingSlot = MaxValue<uint64>;
 
     float2 display_position{};
     float2 display_size{};
     float2 framebuffer_scale{1.f, 1.f};
-    uint64_t recording_slot = InvalidRecordingSlot;
+    uint64 recording_slot = InvalidRecordingSlot;
 
     Array<UiDrawVertex>  vertices;
     Array<UiDrawIndex>   indices;
@@ -178,7 +178,7 @@ IsUiViewportPresentationCurrent(const UiViewportDrawPacket& viewport) noexcept;
  */
 class RENDER_API UiDrawFrameSlotClaim final {
 public:
-    enum class EState : uint8_t {
+    enum class EState : uint8 {
         Pending,
         Accepted,
         Rejected,
@@ -202,7 +202,7 @@ public:
 private:
     struct Slot {
         SharedPtr<UiViewportRenderResources> resources;
-        uint64_t                             value = 0;
+        uint64                               value = 0;
     };
 
     void Freeze(UiViewportDrawPacket& viewport);

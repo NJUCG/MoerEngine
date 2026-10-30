@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math/Function.h"
+#include "misc/Types.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/ShaderParameters.h"
@@ -88,9 +89,9 @@ public:
     }
 
     [[nodiscard]] RecordParameters Prepare(
-        RasterContext&       context,
-        const RasterConfig&  ui_config,
-        uint                 ao_only_idx
+        RasterContext&      context,
+        const RasterConfig& ui_config,
+        uint32              ao_only_idx
     ) const {
         RecordParameters parameters{};
         parameters.enabled =
@@ -189,11 +190,11 @@ public:
     }
 
     void AddToGraph(
-        RenderGraph& graph,
-        RasterContext& context,
+        RenderGraph&        graph,
+        RasterContext&      context,
         const RasterConfig& ui_config,
-        uint ao_only_index,
-        GraphResources resources
+        uint32              ao_only_index,
+        GraphResources      resources
     );
 
     void CommitFrame(const RecordParameters& parameters) {
@@ -216,7 +217,7 @@ public:
         }
     }
 
-    uint ProcessInPlace(RasterContext& context, const RasterConfig& ui_config, uint ao_only_idx) {
+    uint32 ProcessInPlace(RasterContext& context, const RasterConfig& ui_config, uint32 ao_only_idx) {
         const RecordParameters parameters = Prepare(context, ui_config, ao_only_idx);
         Record(context.cmd_list, parameters);
         CommitFrame(parameters);

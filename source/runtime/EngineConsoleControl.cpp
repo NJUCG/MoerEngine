@@ -4,7 +4,7 @@
 #include "config/CVarSystem.h"
 #include "renderer/EditorConfig.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -86,7 +86,7 @@ Command::ESubmitStatus EngineCommandEndpoint::SubmitText(std::string_view text) 
 }
 
 Command::CommandOutputBatch
-EngineCommandEndpoint::PollOutput(std::uint64_t next_sequence, std::size_t max_count) const {
+EngineCommandEndpoint::PollOutput(uint64 next_sequence, std::size_t max_count) const {
     std::scoped_lock lock(impl->mutex);
     return impl->processor.PollOutput(next_sequence, max_count);
 }
@@ -139,7 +139,7 @@ struct EngineConsoleControl::Impl {
         const auto register_uint = [this](
                                        std::string name,
                                        std::string helper,
-                                       std::uint32_t EngineConsoleStartupConfig::* member
+                                       uint32 EngineConsoleStartupConfig::* member
                                    ) {
             const std::string registered_name = name;
             RequireRegistration(
@@ -150,11 +150,11 @@ struct EngineConsoleControl::Impl {
                         std::move(helper),
                         kStartupFlags,
                         0.0,
-                        static_cast<double>((std::numeric_limits<std::uint32_t>::max)())
+                        static_cast<double>((std::numeric_limits<uint32>::max)())
                     ),
                     startup_config.*member,
-                    [this, member](std::int64_t, std::int64_t value) {
-                        startup_config.*member = static_cast<std::uint32_t>(value);
+                    [this, member](int64, int64 value) {
+                        startup_config.*member = static_cast<uint32>(value);
                     }
                 ),
                 registered_name

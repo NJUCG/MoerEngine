@@ -1,4 +1,5 @@
 #include "GLFWWindowImpl.h"
+#include "misc/Types.h"
 
 #include "Core.h"
 #include "config/ConfigManager.h"
@@ -27,7 +28,7 @@
 namespace Moer {
 
 struct GLFWWindowSurfaceLeaseState {
-    std::atomic_uint32_t live_surface_leases{0};
+    std::atomic<uint32> live_surface_leases{0};
 };
 
 namespace {
@@ -69,7 +70,7 @@ public:
     GLFWWindowSurfaceSource(
         GLFWwindow*                            window,
         uintptr_t                              platform_window_handle,
-        uint64_t                               generation,
+        uint64                                 generation,
         SharedPtr<GLFWWindowSurfaceLeaseState> lease_state
     ) :
         identity{
@@ -267,7 +268,7 @@ void GLFWWindowImpl::ShutDown() {
         return;
     }
 
-    const uint32_t live_surface_leases =
+    const uint32 live_surface_leases =
         surface_lease_state->live_surface_leases.load(std::memory_order_acquire);
     if (live_surface_leases != 0) {
         LOG_ERROR(
@@ -425,9 +426,9 @@ GLFWWindowImpl::CaptureWindowFrameMetrics(const WindowHandle& window) const {
 
     return Render::WindowFrameMetrics{
         .logical_extent =
-            Extent2D(static_cast<uint32_t>(logical_width), static_cast<uint32_t>(logical_height)),
+            Extent2D(static_cast<uint32>(logical_width), static_cast<uint32>(logical_height)),
         .drawable_extent = Extent2D(
-            static_cast<uint32_t>(drawable_width), static_cast<uint32_t>(drawable_height)
+            static_cast<uint32>(drawable_width), static_cast<uint32>(drawable_height)
         ),
         .valid = true
     };
@@ -511,7 +512,7 @@ Render::SwapchainSurfaceInfo GLFWWindowImpl::CreateSwapchainSurfaceInfo(const Wi
     platform_window_handle = reinterpret_cast<uintptr_t>(glfwGetWin32Window(glfw_window));
 #endif
 
-    const uint64_t generation = next_surface_generation.fetch_add(1, std::memory_order_relaxed);
+    const uint64   generation = next_surface_generation.fetch_add(1, std::memory_order_relaxed);
     auto           source     = MakeShared<GLFWWindowSurfaceSource>(
         glfw_window, platform_window_handle, generation, surface_lease_state
     );

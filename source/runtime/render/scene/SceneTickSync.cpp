@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include "misc/Types.h"
 
 #include "RenderThread.h"
 #include "log/LogSystem.h"
@@ -63,16 +64,16 @@ SceneGeometrySnapshot CaptureGeometrySnapshot(const Scene& scene) {
 
             ++snapshot.renderable_instance_count;
             const auto& mesh = registry.get<const ecs::CMesh>(renderable.mesh_entt);
-            const uint leaf_count = mesh.num_leaf_clusters > 0u ?
-                                        Min(
-                                            mesh.num_leaf_clusters,
-                                            static_cast<uint>(mesh.primitive_entts.size())
-                                        ) :
-                                        static_cast<uint>(mesh.primitive_entts.size());
+            const uint32 leaf_count = mesh.num_leaf_clusters > 0u ?
+                                          Min(
+                                              mesh.num_leaf_clusters,
+                                              static_cast<uint32>(mesh.primitive_entts.size())
+                                          ) :
+                                          static_cast<uint32>(mesh.primitive_entts.size());
             snapshot.leaf_primitive_count += leaf_count;
 
             Box3D instance_bounds;
-            for (uint primitive_index = 0u; primitive_index < leaf_count; ++primitive_index) {
+            for (uint32 primitive_index = 0u; primitive_index < leaf_count; ++primitive_index) {
                 const entt::entity primitive_entity = mesh.primitive_entts[primitive_index];
                 if (!registry.valid(primitive_entity) ||
                     !registry.all_of<ecs::CPrimitive>(primitive_entity)) {

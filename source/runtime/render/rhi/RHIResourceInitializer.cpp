@@ -1,7 +1,8 @@
 #include "misc/Hash.h"
+#include "misc/Types.h"
 #include "rhi/RHIResourceInitilizer.h"
-uint32_t GetHash(const RHISamplerCreateInfo& target) {
-    uint32_t hash;
+Moer::uint32 GetHash(const RHISamplerCreateInfo& target) {
+    Moer::uint32 hash;
     HashCombine(hash, GetHash(target.filter));
     HashCombine(hash, GetHash(target.address_mode_u));
     HashCombine(hash, GetHash(target.address_mode_v));
@@ -22,8 +23,8 @@ bool operator==(const RHISamplerCreateInfo& lhs, const RHISamplerCreateInfo& rhs
            lhs.border_color == rhs.border_color && lhs.compare_op == rhs.compare_op;
 }
 
-uint32_t GetHash(const RHIDepthStencilStateInfo& target) {
-    uint32_t hash = 0;
+Moer::uint32 GetHash(const RHIDepthStencilStateInfo& target) {
+    Moer::uint32 hash = 0;
     HashCombine(hash, GetHash(target.b_enable_depth_write));
     HashCombine(hash, GetHash(target.depth_test_op));
     HashCombine(hash, GetHash(target.b_enable_front_face_stencil));
@@ -56,8 +57,8 @@ bool operator==(const RHIDepthStencilStateInfo& lhs, const RHIDepthStencilStateI
            lhs.stencil_readmask == rhs.stencil_readmask && lhs.stencil_writemask == rhs.stencil_writemask;
 }
 
-uint32_t GetHash(const RHIRasterizeInfo& target) {
-    uint32_t hash = 0;
+Moer::uint32 GetHash(const RHIRasterizeInfo& target) {
+    Moer::uint32 hash = 0;
     HashCombine(hash, GetHash(target.fill_mode));
     HashCombine(hash, GetHash(target.cull_mode));
     HashCombine(hash, GetHash(target.b_depth_bias));
@@ -75,8 +76,8 @@ bool operator==(const RHIRasterizeInfo& lhs, const RHIRasterizeInfo& rhs) {
            lhs.depth_bias_clamp == rhs.depth_bias_clamp &&
            lhs.depth_bias_slop_factor == rhs.depth_bias_slop_factor;
 }
-uint32_t GetHash(const RHIMultisampleStateInfo& target) {
-    uint32_t hash = 0;
+Moer::uint32 GetHash(const RHIMultisampleStateInfo& target) {
+    Moer::uint32 hash = 0;
     HashCombine(hash, GetHash(target.sample_count));
     HashCombine(hash, GetHash(target.b_sample_shading));
     HashCombine(hash, GetHash(target.b_alpha_to_converge));
@@ -89,8 +90,8 @@ bool operator==(const RHIMultisampleStateInfo& lhs, const RHIMultisampleStateInf
            lhs.b_alpha_to_converge == rhs.b_alpha_to_converge && lhs.b_alpha_to_one == rhs.b_alpha_to_one &&
            lhs.min_sample_shading == rhs.min_sample_shading;
 }
-uint32_t GetHash(const RHIBlendAttachmentInfo& target) {
-    uint32_t hash = 0;
+Moer::uint32 GetHash(const RHIBlendAttachmentInfo& target) {
+    Moer::uint32 hash = 0;
     HashCombine(hash, GetHash(target.color_blend_op));
     HashCombine(hash, GetHash(target.color_src_blend_factor));
     HashCombine(hash, GetHash(target.color_dst_blend_factor));
@@ -109,8 +110,8 @@ bool operator==(const RHIBlendAttachmentInfo& lhs, const RHIBlendAttachmentInfo&
            lhs.alpha_dst_blend_factor == rhs.alpha_dst_blend_factor &&
            lhs.color_write_mask == rhs.color_write_mask;
 }
-uint32_t GetHash(const RHIBlendStateInfo& target) {
-    uint32_t hash = 0;
+Moer::uint32 GetHash(const RHIBlendStateInfo& target) {
+    Moer::uint32 hash = 0;
     for (int i = 0; i < MAX_PASS_ATTACHMENT_COUNT; ++i) {
         HashCombine(hash, GetHash(target.attachments[i]));
     }

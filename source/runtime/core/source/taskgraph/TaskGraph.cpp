@@ -1,5 +1,6 @@
 #include "taskgraph/TaskGraph.h"
 #include "AnyThreadScheduler.h"
+#include "misc/Types.h"
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/ThreadManager.h"
@@ -54,11 +55,11 @@ TaskThreadBase& TaskGraph::GetThread(ThreadIndex index) {
     return *m_workers[index].task_thread;
 }
 
-void TaskGraph::WakeUpWorkerThread(int32_t threadIndex, QueueIndex index) noexcept {
+void TaskGraph::WakeUpWorkerThread(Moer::int32 threadIndex, QueueIndex index) noexcept {
     assert(threadIndex >= m_named_thread_count && threadIndex < m_thread_count);
     m_workers[threadIndex].task_thread->Wake(index);
 }
-void TaskGraph::WakeWorkerCallback(void* context, int32_t threadIndex) noexcept {
+void TaskGraph::WakeWorkerCallback(void* context, Moer::int32 threadIndex) noexcept {
     static_cast<TaskGraph*>(context)->WakeUpWorkerThread(threadIndex, EThread::MAIN_QUEUE);
 }
 void TaskGraph::SetCurrentWorkerThread(EThread::Type thread) noexcept {
@@ -78,18 +79,18 @@ void TaskGraph::WaitUntilTaskComplete(GraphEventRef&& task, EThread::Type curren
 };
 TaskGraph::TaskGraph() {
     assert(instance == nullptr);
-    const int32_t actual_thread_num = Platform::GetProcessorCoreCount();
+    const Moer::int32 actual_thread_num = Platform::GetProcessorCoreCount();
 
     m_named_thread_count                   = EThread::NamedThreadCount;
-    const int32_t min_worker_thread_per_priority = 1;
-    const int32_t min_thread_count =
+    const Moer::int32 min_worker_thread_per_priority = 1;
+    const Moer::int32 min_thread_count =
         min_worker_thread_per_priority * EThread::PriorityCount + m_named_thread_count;
 
     // EThread reserves the all-ones 8-bit index for UNKNOWN_THREAD, so valid
     // worker/named indices end at 254 even on very large server topologies.
     m_thread_count = std::min(
         std::max(min_thread_count, actual_thread_num),
-        static_cast<int32_t>(EThread::UNKNOWN_THREAD)
+        static_cast<Moer::int32>(EThread::UNKNOWN_THREAD)
     );
 
     m_worker_thread_count = m_thread_count - m_named_thread_count;
@@ -106,11 +107,11 @@ TaskGraph::TaskGraph() {
         this
     );
 
-    int32_t constructed_task_threads = 0;
+    Moer::int32 constructed_task_threads = 0;
     try {
-        for (int32_t i = 0; i < m_thread_count; i++) {
+        for (Moer::int32 i = 0; i < m_thread_count; i++) {
             EThread::Type type = EThread::SetThreadIndex(EThread::UNKNOWN_THREAD, i);
-            const int32_t priority_index =
+            const Moer::int32 priority_index =
                 i < m_named_thread_count ? 0 : GetThreadPriorityFromIndex(i);
             assert(priority_index >= 0 && priority_index < EThread::PriorityCount);
             const ThreadPriority priority = priority_index << EThread::PRIORITY_SHEFT;
@@ -124,8 +125,8 @@ TaskGraph::TaskGraph() {
 
         instance = this; // Worker entry resolves the graph through the singleton.
         // TODO: no handle for thread groups.
-        for (int32_t i = m_named_thread_count; i < m_thread_count; i++) {
-            const int32_t priority = GetThreadPriorityFromIndex(i);
+        for (Moer::int32 i = m_named_thread_count; i < m_thread_count; i++) {
+            const Moer::int32 priority = GetThreadPriorityFromIndex(i);
             const std::string name = "WorkerThread_" + GetPriorityStr(priority) + "_" +
                                      std::to_string(m_worker_topology.LocalIndex(i, priority));
             m_workers[i].actual_thread = RunnableThread::Create(
@@ -140,12 +141,12 @@ TaskGraph::TaskGraph() {
     } catch (...) {
         // Successfully-started workers still require the live singleton while
         // they observe their close signal and leave the scheduler loop.
-        for (int32_t i = m_named_thread_count; i < m_thread_count; ++i) {
+        for (Moer::int32 i = m_named_thread_count; i < m_thread_count; ++i) {
             if (m_workers[i].actual_thread != nullptr) {
                 m_workers[i].task_thread->RequestQuit(QUIT);
             }
         }
-        for (int32_t i = m_named_thread_count; i < m_thread_count; ++i) {
+        for (Moer::int32 i = m_named_thread_count; i < m_thread_count; ++i) {
             if (m_workers[i].actual_thread != nullptr) {
                 m_workers[i].actual_thread->WaitUntilFinished();
                 MoerDelete(m_workers[i].actual_thread);
@@ -155,7 +156,7 @@ TaskGraph::TaskGraph() {
         if (instance == this) {
             instance = nullptr;
         }
-        for (int32_t i = 0; i < constructed_task_threads; ++i) {
+        for (Moer::int32 i = 0; i < constructed_task_threads; ++i) {
             delete m_workers[i].task_thread;
             m_workers[i].task_thread = nullptr;
         }
@@ -170,10 +171,10 @@ TaskGraph::~TaskGraph() {
     // cross-priority continuations) has completed, then close the workers.
     m_any_thread_scheduler->BeginDrain();
     m_any_thread_scheduler->WaitUntilIdle();
-    for (int32_t i = 0; i < m_thread_count; i++) {
+    for (Moer::int32 i = 0; i < m_thread_count; i++) {
         m_workers[i].task_thread->RequestQuit(QUIT);
     }
-    for (int32_t i = 0; i < m_thread_count; i++) {
+    for (Moer::int32 i = 0; i < m_thread_count; i++) {
         if (i >= m_named_thread_count) {
             m_workers[i].actual_thread->WaitUntilFinished();
 
@@ -198,7 +199,7 @@ EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
         );
     }
 
-    const uint32_t current_thread_id = Platform::GetCurrentThreadID();
+    const Moer::uint32 current_thread_id = Platform::GetCurrentThreadID();
     if (current_thread_id == ThreadManager::g_game_thread_id)
         return EThread::Type(
             localQueue ? (EThread::EMainThread | EThread::LOCAL_QUEUE) : EThread::EMainThread
@@ -249,7 +250,7 @@ void TaskGraph::WaitUntilTasksComplete(const GraphEventArray& task_events, EThre
     if (is_named_thread && !IsThreadProcessingTask(current_thread_type)) {
         if (task_events.size() < 8) {
             bool pending = false;
-            for (int32_t index = 0; index < task_events.size(); index++) {
+            for (Moer::int32 index = 0; index < task_events.size(); index++) {
                 GraphEvent* task = task_events[index].Get();
                 if (task != nullptr && !task->IsComplete()) {
                     pending = true;
@@ -288,7 +289,7 @@ void TaskGraph::TriggerEventWhenTasksComplete(
         8) // don't bother to check for completion if there are lots of prereqs...too expensive to check
     {
         pending = false;
-        for (int32_t index = 0; index < task_events.size(); index++) {
+        for (Moer::int32 index = 0; index < task_events.size(); index++) {
             GraphEventRef task = task_events[index];
             if (task != nullptr && !task->IsComplete()) {
                 pending = true;
@@ -334,6 +335,6 @@ void TaskGraph::QueueTask(
         m_workers[index].task_thread->EnqueueFromExternThread(queue_index, task);
     }
 }
-BaseGraphTask* TaskGraph::DequeueTask(int32_t threadIndex) {
+BaseGraphTask* TaskGraph::DequeueTask(Moer::int32 threadIndex) {
     return m_any_thread_scheduler->DequeueOrPrepareToPark(threadIndex);
 }

@@ -2,6 +2,7 @@
 
 #include "GpuSceneUpdate.h"
 #include "RenderAPI.h"
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 
@@ -179,7 +180,7 @@ private:
     Res              m_res;
     BindlessArrayRef m_bindless_array; // TODO: 移动到RenderDevice里？
 
-    UnorderedMap<GpuSceneResourceKey, uint> m_map_texture_key_to_bindless_handle;
+    UnorderedMap<GpuSceneResourceKey, uint32> m_map_texture_key_to_bindless_handle;
 
     // RT Scene Cache: BLAS 按 CMesh 存储（1 CMesh = 1 BLAS，每个 CPrimitive 对应一个 geometry）
     UnorderedMap<GpuSceneResourceKey, RaytracingGeometryRef> m_mesh_key_to_blas;

@@ -2,6 +2,7 @@
 #define MOER_GLFW_CONTEXT_H
 
 #include "../WindowContextImpl.h"
+#include "misc/Types.h"
 #include "window/WindowContext.h"
 #include "window/WindowPlacementPersistence.h"
 
@@ -53,7 +54,7 @@ private:
 
     mutable std::mutex                                                                  surface_source_mutex;
     mutable UnorderedMap<WindowType*, std::weak_ptr<const Render::WindowSurfaceSource>> surface_sources;
-    mutable std::atomic_uint64_t                                                        next_surface_generation{1};
+    mutable std::atomic<uint64>                                                         next_surface_generation{1};
     SharedPtr<GLFWWindowSurfaceLeaseState>                                              surface_lease_state;
 };
 } // namespace Moer

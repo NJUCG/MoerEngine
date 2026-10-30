@@ -6,6 +6,7 @@
 #define VULKAN_MACRO_UTILS_H
 
 #include "VulkanCommon.h"
+#include "misc/Types.h"
 #include <format>
 #include <source_location>
 #include <stdexcept>
@@ -43,7 +44,7 @@ inline void CheckVulkanResult(
 #include <vulkan/vk_enum_string_helper.h>
 #define VK_TYPE_TO_STRING(type, value)  string_##type(value)
 #else
-#define VK_TYPE_TO_STRING(type, value)  std::to_string(static_cast<uint32_t>(value)).c_str()
+#define VK_TYPE_TO_STRING(type, value) std::to_string(static_cast<Moer::uint32>(value)).c_str()
 #endif
 
 #endif // VULKAN_MACRO_UTILS_H

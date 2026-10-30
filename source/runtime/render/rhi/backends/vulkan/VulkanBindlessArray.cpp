@@ -5,6 +5,7 @@
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
 #include "misc/RAII.h"
+#include "misc/Types.h"
 #include "rhi/RHIBindlessUpdateLifecycle.h"
 #include "rhi/executor/RHIExecutor.h"
 
@@ -40,7 +41,7 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
     BindlessArray(),
     VulkanDeviceObject(_device),
     texture_offset_in_buffer(GetBindlessTextureDescriptorOffset(*_device)),
-    handles(_max_size),
+    bindings(_max_size),
     g_heap(_device->GetGlobalDescriptorHeap()),
     texture_slot_offset(1),
     buffer_slot_offset(1),
@@ -74,8 +75,8 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
     );
     if (_device->GetDescriptorMode() == VulkanDescriptorMode::Sets)
         return;
-    const uint buffer_size = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-    const uint image_size  = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    const uint32 buffer_size = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    const uint32 image_size  = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     if (_device->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
         heap_lease = g_heap.CreateDescriptorBufferLease();
         try {
@@ -96,7 +97,7 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
         return;
     }
     // Query both layouts: implementations may add padding before binding 0.
-    auto table_size = [&](VkDescriptorType type, uint count, uint64& binding_offset) {
+    auto table_size = [&](VkDescriptorType type, uint32 count, uint64& binding_offset) {
         VkDescriptorSetLayoutBinding   binding{0, type, count, VK_SHADER_STAGE_ALL};
         const VkDescriptorBindingFlags flags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
                                                VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
@@ -121,7 +122,7 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
         vkGetDescriptorSetLayoutBindingOffsetEXT(_device->GetDevice(), layout, 0, &binding_offset);
         return size;
     };
-    const uint   table_capacity = RenderDevice::k_default_bindless_array_size;
+    const uint32 table_capacity = RenderDevice::k_default_bindless_array_size;
     const uint64 buffer_bytes =
         table_size(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, table_capacity, buffer_descriptors_byte_offset);
     uint64       image_binding_offset = 0;
@@ -140,9 +141,9 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
         VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
             VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
     );
-    const uint  sampler_stride = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLER);
+    const uint32 sampler_stride = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLER);
     Array<byte> sampler_data(VulkanDevice::bindless_sampler_count * sampler_stride);
-    for (uint i = 0; i < VulkanDevice::bindless_sampler_count; ++i)
+    for (uint32 i = 0; i < VulkanDevice::bindless_sampler_count; ++i)
         g_heap.CopyDescriptorToMemory(
             {VK_DESCRIPTOR_TYPE_SAMPLER, i},
             std::span(sampler_data).subspan(i * sampler_stride, sampler_stride)
@@ -163,15 +164,15 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 }
 
-void VulkanBindlessArray::CreateLegacySets(uint max_size) {
+void VulkanBindlessArray::CreateLegacySets(uint32 max_size) {
     legacy_sets                    = std::make_unique<LegacyDescriptorSets>(m_device->GetDevice());
     const VkDescriptorType types[] = {
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLER
     };
-    const uint           counts[] = {max_size, max_size, VulkanDevice::bindless_sampler_count};
+    const uint32         counts[] = {max_size, max_size, VulkanDevice::bindless_sampler_count};
     auto&                layouts  = legacy_sets->layouts;
     VkDescriptorPoolSize sizes[3]{};
-    for (uint i = 0; i < 3; ++i) {
+    for (uint32 i = 0; i < 3; ++i) {
         VkDescriptorSetLayoutBinding binding{
             0, types[i], i == 2 ? counts[i] : RenderDevice::k_default_bindless_array_size, VK_SHADER_STAGE_ALL
         };
@@ -210,7 +211,7 @@ void VulkanBindlessArray::CreateLegacySets(uint max_size) {
     allocate.pSetLayouts        = layouts;
     VK_CHECK_RESULT(vkAllocateDescriptorSets(m_device->GetDevice(), &allocate, legacy_sets->sets));
     Array<VkDescriptorImageInfo> samplers(counts[2]);
-    for (uint i = 0; i < counts[2]; ++i)
+    for (uint32 i = 0; i < counts[2]; ++i)
         samplers[i].sampler = m_device->GetImmutableSamplers()[i < m_device->ImmutableSamplerCount() ? i : 0];
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet          = legacy_sets->sets[2];
@@ -233,9 +234,9 @@ VkAccessFlags2 VulkanBindlessArray::GetDescriptorReadAccess() const {
                VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT;
 }
 
-static uint SamplerToIndex(const Sampler& _samp) {
-    uint idx = uint(_samp.filter) + uint(_samp.address_mode) * uint(SF_Num) +
-               uint(_samp.compare_function) * uint(SAM_Num) * uint(SF_Num);
+static uint32 SamplerToIndex(const Sampler& _samp) {
+    uint32 idx = uint32(_samp.filter) + uint32(_samp.address_mode) * uint32(SF_Num) +
+                 uint32(_samp.compare_function) * uint32(SAM_Num) * uint32(SF_Num);
     return idx;
 }
 
@@ -274,7 +275,7 @@ void VulkanBindlessArray::UntrackResource(uint64 _handle) {
     }
 }
 
-void VulkanBindlessArray::TrackTextureView(uint _array_idx, const TextureView& _view) {
+void VulkanBindlessArray::TrackTextureView(uint32 _array_idx, const TextureView& _view) {
     if (_array_idx >= texture_view_infos.size()) {
         throw std::runtime_error("bindless texture view slot is outside capacity");
     }
@@ -298,7 +299,7 @@ void VulkanBindlessArray::TrackTextureView(uint _array_idx, const TextureView& _
     ++ref_count;
 }
 
-void VulkanBindlessArray::UntrackTextureView(uint _array_idx) {
+void VulkanBindlessArray::UntrackTextureView(uint32 _array_idx) {
     if (_array_idx >= texture_view_infos.size()) {
         return;
     }
@@ -329,25 +330,23 @@ void VulkanBindlessArray::UntrackTextureView(uint _array_idx) {
 UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
     std::unique_lock<std::mutex> lk(mtx);
 
-    Array<std::pair<uint, uint>> array_indices_dat;
+    Array<std::pair<uint32, uint32>> array_indices_dat;
     Array<byte>                  array_dat;
-    Array<std::pair<uint, uint>> texture_indices_dat;
+    Array<std::pair<uint32, uint32>> texture_indices_dat;
     Array<byte>                  texture_dat;
-    Array<std::pair<uint, uint>> buffer_indices_dat;
+    Array<std::pair<uint32, uint32>> buffer_indices_dat;
     Array<byte>                  buffer_dat;
 
     {
         VulkanDescriptorHeap& heap   = m_device->GetGlobalDescriptorHeap();
         uint64 texture_handle_stride = heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
         uint64 buffer_handle_stride  = heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        uint64 array_handle_stride   = sizeof(uint);
+        uint64                array_handle_stride   = sizeof(uint32);
 
-        //update all cpu data here instead of during execution
-
-        //handle update data first
-        uint   array_idx            = 0;
-        uint   texture_cnt          = 0;
-        uint   buffer_cnt           = 0;
+        // Apply pending changes to CPU bindings before recording GPU updates.
+        uint32 array_idx            = 0;
+        uint32 texture_cnt          = 0;
+        uint32 buffer_cnt           = 0;
         uint64 update_command_token = 0;
         if (!update_cmds.empty()) {
             if (next_update_command_token == std::numeric_limits<uint64>::max()) {
@@ -364,17 +363,17 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
                     if constexpr (std::is_same_v<Tcmd, TextureUpdateInfo>) {
                         _cmd.command_token = update_command_token;
                         if (_cmd.free) {
-                            auto& handle = handles[_cmd.array_idx];
+                            auto& binding = bindings[_cmd.array_idx];
                             assert(
-                                handle.type == VulkanBindlessArray::Texture && handle.Ptr() &&
-                                "Invalid texture handle"
+                                binding.IsTexture() &&
+                                "Invalid texture binding"
                             );
                             assert(
-                                uint64(_cmd.texture.Get()) == handle.Ptr() &&
+                                _cmd.texture.Get() == binding.resource &&
                                 "Bindless texture release lost resource ownership"
                             );
 
-                            handle = Handle(0ull, 0, 0, 0);
+                            binding = BindingRecord{};
 
                         } else {
                             ++array_idx;
@@ -384,17 +383,17 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
                     } else if constexpr (std::is_same_v<Tcmd, BufferUpdateInfo>) {
                         _cmd.command_token = update_command_token;
                         if (_cmd.free) {
-                            auto& handle = handles[_cmd.array_idx];
+                            auto& binding = bindings[_cmd.array_idx];
                             assert(
-                                handle.type == VulkanBindlessArray::Buffer && handle.Ptr() &&
-                                "Invalid buffer handle"
+                                binding.IsBuffer() &&
+                                "Invalid buffer binding"
                             );
                             assert(
-                                uint64(_cmd.buffer.Get()) == handle.Ptr() &&
+                                _cmd.buffer.Get() == binding.resource &&
                                 "Bindless buffer release lost resource ownership"
                             );
 
-                            handle = Handle(0ull, 0, 0, 0);
+                            binding = BindingRecord{};
 
                         } else {
                             ++array_idx;
@@ -422,16 +421,18 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
         // implementation-provided byte offset. Slots therefore remain
         // relative to that binding and never truncate byte padding into a
         // descriptor index.
-        // The index table stores uint handles; the separate buffer stores descriptors.
+        // The index table stores encoded uint32 handles; descriptors live separately.
         for (const UpdateCmd& cmd : update_cmds) {
             std::visit(
                 [&](auto&& _cmd) {
                     using Tcmd = std::decay_t<decltype(_cmd)>;
                     if constexpr (std::is_same_v<Tcmd, TextureUpdateInfo>) {
                         if (!_cmd.free) {
-                            handles[_cmd.array_idx] = Handle(
-                                (uint64)_cmd.texture.Get(), _cmd.slot, 1, VulkanBindlessArray::Texture
-                            );
+                            bindings[_cmd.array_idx] = BindingRecord{
+                                .resource        = _cmd.texture.Get(),
+                                .descriptor_slot = _cmd.slot,
+                                .type            = EResourceType::Texture,
+                            };
                             VulkanTexture* vk_texture = ResourceCast(_cmd.texture.Get());
                             TextureView    view(vk_texture, _cmd.format, _cmd.mip_level, _cmd.num_mips);
                             if (_cmd.array_count > 0) {
@@ -464,8 +465,8 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
                                         .subspan(texture_cnt * texture_handle_stride, texture_handle_stride)
                                 );
                             }
-                            uint indirect_handle = (m_device->GetSamplerIndex(_cmd.sampler) & 0xff) |
-                                                   (_cmd.slot & 0xffffff) << 8;
+                            uint32 indirect_handle = (m_device->GetSamplerIndex(_cmd.sampler) & 0xff) |
+                                                     (_cmd.slot & 0xffffff) << 8;
                             memcpy(
                                 array_dat.data() + array_idx * array_handle_stride,
                                 &indirect_handle,
@@ -480,8 +481,11 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
 
                     } else if constexpr (std::is_same_v<Tcmd, BufferUpdateInfo>) {
                         if (!_cmd.free) {
-                            handles[_cmd.array_idx] =
-                                Handle((uint64)_cmd.buffer.Get(), _cmd.slot, 0, VulkanBindlessArray::Buffer);
+                            bindings[_cmd.array_idx] = BindingRecord{
+                                .resource        = _cmd.buffer.Get(),
+                                .descriptor_slot = _cmd.slot,
+                                .type            = EResourceType::Buffer,
+                            };
                             VulkanBuffer*    vk_buffer = ResourceCast(_cmd.buffer.Get());
                             VkDescriptorType type      = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                             if (_cmd.format != PF_UNDEFINED) {
@@ -510,7 +514,7 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
                                 );
                             }
                             memcpy(
-                                array_dat.data() + array_idx * array_handle_stride, &_cmd.slot, sizeof(uint)
+                                array_dat.data() + array_idx * array_handle_stride, &_cmd.slot, sizeof(uint32)
                             );
                             array_indices_dat[array_idx]   = {array_idx, _cmd.array_idx};
                             buffer_indices_dat[buffer_cnt] = {buffer_cnt, _cmd.slot};
@@ -546,11 +550,11 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
     return cmd;
 }
 
-uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
+uint32 VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
     std::unique_lock<std::mutex> lk(mtx);
-    const uint                   capacity              = static_cast<uint>(handles.size());
-    const uint                   reused_array_slot     = free_slots.Pop();
-    const uint                   reused_texture_slot   = free_texture_slots.Pop();
+    const uint32                 capacity              = static_cast<uint32>(bindings.size());
+    const uint32                 reused_array_slot     = free_slots.Pop();
+    const uint32                 reused_texture_slot   = free_texture_slots.Pop();
     auto                         rollback_reused_slots = [&] {
         if (reused_array_slot != 0 && reused_array_slot < capacity) {
             free_slots.Push(reused_array_slot);
@@ -570,8 +574,8 @@ uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _
         throw std::runtime_error("bindless texture capacity exhausted");
     }
 
-    const uint slot_idx     = reused_array_slot == 0 ? slot_offset++ : reused_array_slot;
-    const uint texture_slot = reused_texture_slot == 0 ? texture_slot_offset++ : reused_texture_slot;
+    const uint32 slot_idx     = reused_array_slot == 0 ? slot_offset++ : reused_array_slot;
+    const uint32 texture_slot = reused_texture_slot == 0 ? texture_slot_offset++ : reused_texture_slot;
     if (array_slot_generations[slot_idx] == std::numeric_limits<uint64>::max() ||
         texture_slot_generations[texture_slot] == std::numeric_limits<uint64>::max()) {
         free_slots.Push(slot_idx);
@@ -607,11 +611,11 @@ uint VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _
     return slot_idx;
 }
 
-uint VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
+uint32 VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
     std::unique_lock<std::mutex> lk(mtx);
-    const uint                   capacity              = static_cast<uint>(handles.size());
-    const uint                   reused_array_slot     = free_slots.Pop();
-    const uint                   reused_buffer_slot    = free_buffer_slots.Pop();
+    const uint32                 capacity              = static_cast<uint32>(bindings.size());
+    const uint32                 reused_array_slot     = free_slots.Pop();
+    const uint32                 reused_buffer_slot    = free_buffer_slots.Pop();
     auto                         rollback_reused_slots = [&] {
         if (reused_array_slot != 0 && reused_array_slot < capacity) {
             free_slots.Push(reused_array_slot);
@@ -631,8 +635,8 @@ uint VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
         throw std::runtime_error("bindless buffer capacity exhausted");
     }
 
-    const uint slot_idx    = reused_array_slot == 0 ? slot_offset++ : reused_array_slot;
-    const uint buffer_slot = reused_buffer_slot == 0 ? buffer_slot_offset++ : reused_buffer_slot;
+    const uint32 slot_idx    = reused_array_slot == 0 ? slot_offset++ : reused_array_slot;
+    const uint32 buffer_slot = reused_buffer_slot == 0 ? buffer_slot_offset++ : reused_buffer_slot;
     if (array_slot_generations[slot_idx] == std::numeric_limits<uint64>::max() ||
         buffer_slot_generations[buffer_slot] == std::numeric_limits<uint64>::max()) {
         free_slots.Push(slot_idx);
@@ -661,7 +665,7 @@ uint VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
     return slot_idx;
 }
 static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
-void                 VulkanBindlessArray::UnbindTexture(uint _array_idx) {
+void                 VulkanBindlessArray::UnbindTexture(uint32 _array_idx) {
     std::unique_lock<std::mutex> lk(mtx);
     // Entries in this map have not been captured by CreateUpdateCommand yet;
     // cancelling an allocation here is normal while the initial extent settles.
@@ -749,42 +753,42 @@ void                 VulkanBindlessArray::UnbindTexture(uint _array_idx) {
         return;
     }
 
-    if (_array_idx >= handles.size()) {
+    if (_array_idx >= bindings.size()) {
         LOG_WARNING("You are releasing an out-of-range bindless texture, array index: {}", _array_idx);
         return;
     }
-    const auto& handle = handles[_array_idx];
-    if (handle.Ptr() == 0) {
+    const auto& binding = bindings[_array_idx];
+    if (binding.resource == nullptr) {
         LOG_WARNING("You are releasing an empty bindless texture slot, array index: {}", _array_idx);
         return;
     }
-    if (handle.type == Texture) {
+    if (binding.IsTexture()) {
         update_cmds.emplace_back(
             TextureUpdateInfo{
-                TextureRef(reinterpret_cast<VulkanTexture*>(handle.Ptr())),
+                TextureRef(static_cast<Texture*>(binding.resource)),
                 s_spl,
                 PF_UNDEFINED,
                 _array_idx,
-                handle.slot,
+                binding.descriptor_slot,
                 0,
                 0,
                 0,
                 0,
                 array_slot_generations[_array_idx],
-                texture_slot_generations[handle.slot],
+                texture_slot_generations[binding.descriptor_slot],
                 0,
                 true
             }
         );
-    } else if (handle.type == Buffer) {
+    } else if (binding.IsBuffer()) {
         update_cmds.emplace_back(
             BufferUpdateInfo{
-                BufferRef(reinterpret_cast<VulkanBuffer*>(handle.Ptr())),
+                BufferRef(static_cast<Buffer*>(binding.resource)),
                 _array_idx,
-                handle.slot,
+                binding.descriptor_slot,
                 PF_UNDEFINED,
                 array_slot_generations[_array_idx],
-                buffer_slot_generations[handle.slot],
+                buffer_slot_generations[binding.descriptor_slot],
                 0,
                 true
             }
@@ -796,7 +800,7 @@ void                 VulkanBindlessArray::UnbindTexture(uint _array_idx) {
     temp_slot_to_cmd[_array_idx] = update_cmds.size() - 1;
 }
 
-void VulkanBindlessArray::UnbindBuffer(uint _array_idx) {
+void VulkanBindlessArray::UnbindBuffer(uint32 _array_idx) {
     std::unique_lock<std::mutex> lk(mtx);
 
     if (auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()) {
@@ -882,44 +886,42 @@ void VulkanBindlessArray::UnbindBuffer(uint _array_idx) {
         return;
     }
 
-    if (_array_idx >= handles.size()) {
+    if (_array_idx >= bindings.size()) {
         LOG_WARNING("You are releasing an out-of-range bindless buffer, array index: {}", _array_idx);
         return;
     }
-    const auto& handle = handles[_array_idx];
-    if (handle.Ptr() == 0) {
+    const auto& binding = bindings[_array_idx];
+    if (binding.resource == nullptr) {
         LOG_WARNING("You are releasing an empty bindless buffer slot, array index: {}", _array_idx);
         return;
     }
-    if (handle.type == Texture) {
-        // textures_freed.push_back(handle.slot);
+    if (binding.IsTexture()) {
         update_cmds.emplace_back(
             TextureUpdateInfo{
-                TextureRef(reinterpret_cast<VulkanTexture*>(handle.Ptr())),
+                TextureRef(static_cast<Texture*>(binding.resource)),
                 s_spl,
                 PF_UNDEFINED,
                 _array_idx,
-                handle.slot,
+                binding.descriptor_slot,
                 0,
                 0,
                 0,
                 0,
                 array_slot_generations[_array_idx],
-                texture_slot_generations[handle.slot],
+                texture_slot_generations[binding.descriptor_slot],
                 0,
                 true
             }
         );
-    } else if (handle.type == Buffer) {
-        // buffers_freed.push_back(handle.slot);
+    } else if (binding.IsBuffer()) {
         update_cmds.emplace_back(
             BufferUpdateInfo{
-                BufferRef(reinterpret_cast<VulkanBuffer*>(handle.Ptr())),
+                BufferRef(static_cast<Buffer*>(binding.resource)),
                 _array_idx,
-                handle.slot,
+                binding.descriptor_slot,
                 PF_UNDEFINED,
                 array_slot_generations[_array_idx],
-                buffer_slot_generations[handle.slot],
+                buffer_slot_generations[binding.descriptor_slot],
                 0,
                 true
             }
@@ -1053,9 +1055,9 @@ bool VulkanBindlessArray::BeginUpdateCommand(const Array<BindlessArray::UpdateCm
         );
     }
 
-    UnorderedSet<uint> global_claims;
-    UnorderedSet<uint> texture_claims;
-    UnorderedSet<uint> buffer_claims;
+    UnorderedSet<uint32> global_claims;
+    UnorderedSet<uint32> texture_claims;
+    UnorderedSet<uint32> buffer_claims;
     for (const BindlessArray::UpdateCmd& update : _updates) {
         std::visit(
             [&](const auto& _cmd) {
@@ -1109,9 +1111,9 @@ struct VulkanBindlessArray::UpdateCompletionPlan {
     UnorderedMap<uint64, uint32>                     resource_decrements;
     UnorderedMap<TextureSubresourceKeyT<VulkanTexture>, uint32, TextureSubresourceKeyHashT<VulkanTexture>>
                        view_decrements;
-    UnorderedSet<uint> global_claims;
-    UnorderedSet<uint> texture_claims;
-    UnorderedSet<uint> buffer_claims;
+    UnorderedSet<uint32> global_claims;
+    UnorderedSet<uint32> texture_claims;
+    UnorderedSet<uint32> buffer_claims;
 };
 
 void VulkanBindlessArray::FinalizeUpdateCommand(
@@ -1142,9 +1144,9 @@ void VulkanBindlessArray::DiscardUpdateCommand(const Array<UpdateCmd>& _updates)
 VulkanBindlessArray::UpdateCompletionPlan
 VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool gpu_update_succeeded) const {
     UpdateCompletionPlan plan;
-    UnorderedSet<uint>   global_slots;
-    UnorderedSet<uint>   texture_slots;
-    UnorderedSet<uint>   buffer_slots;
+    UnorderedSet<uint32> global_slots;
+    UnorderedSet<uint32> texture_slots;
+    UnorderedSet<uint32> buffer_slots;
 
     auto reserve_slot_mutation = [&](const auto& _cmd, bool _texture) {
         if (!global_slots.emplace(_cmd.array_idx).second) {
@@ -1190,7 +1192,7 @@ VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool
             [&](const auto& _cmd) {
                 using TCmd = std::decay_t<decltype(_cmd)>;
                 if constexpr (std::is_same_v<TCmd, TextureUpdateInfo>) {
-                    if (!_cmd.texture || _cmd.array_idx == 0 || _cmd.array_idx >= handles.size() ||
+                    if (!_cmd.texture || _cmd.array_idx == 0 || _cmd.array_idx >= bindings.size() ||
                         _cmd.slot == 0 || _cmd.slot >= texture_slot_generations.size()) {
                         throw std::runtime_error("invalid pending bindless texture retirement");
                     }
@@ -1209,11 +1211,11 @@ VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool
                         return;
                     }
 
-                    const Handle& handle = handles[_cmd.array_idx];
+                    const BindingRecord& binding = bindings[_cmd.array_idx];
                     if (action == BindlessUpdateFinalizationAction::Restore) {
-                        if (handle.Ptr() != 0 &&
-                            (handle.Ptr() != uint64(_cmd.texture.Get()) || handle.slot != _cmd.slot ||
-                             handle.type != VulkanBindlessArray::Texture)) {
+                        if (binding.resource != nullptr &&
+                            (binding.resource != _cmd.texture.Get() || binding.descriptor_slot != _cmd.slot ||
+                             binding.type != EResourceType::Texture)) {
                             throw std::runtime_error("rejected bindless texture release lost slot ownership");
                         }
                         const auto allocation = resource_allocation_counts.find(uint64(_cmd.texture.Get()));
@@ -1245,12 +1247,10 @@ VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool
                         return;
                     }
                     if (_cmd.free) {
-                        if (handle.Ptr() != 0) {
+                        if (binding.resource != nullptr) {
                             throw std::runtime_error("pending bindless texture release slot is not empty");
                         }
-                    } else if (handle.Ptr() != 0 &&
-                               (handle.Ptr() != uint64(_cmd.texture.Get()) || handle.slot != _cmd.slot ||
-                                handle.type != VulkanBindlessArray::Texture)) {
+                    } else if (binding.resource != nullptr && (binding.resource != _cmd.texture.Get() || binding.descriptor_slot != _cmd.slot || binding.type != EResourceType::Texture)) {
                         throw std::runtime_error("pending bindless texture cancellation lost slot ownership");
                     }
                     if (state == BindlessUpdateSlotState::Original) {
@@ -1265,7 +1265,7 @@ VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool
                     ++plan.view_decrements[key];
                     plan.texture_retirements.push_back(&_cmd);
                 } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>) {
-                    if (!_cmd.buffer || _cmd.array_idx == 0 || _cmd.array_idx >= handles.size() ||
+                    if (!_cmd.buffer || _cmd.array_idx == 0 || _cmd.array_idx >= bindings.size() ||
                         _cmd.slot == 0 || _cmd.slot >= buffer_slot_generations.size()) {
                         throw std::runtime_error("invalid pending bindless buffer retirement");
                     }
@@ -1284,11 +1284,11 @@ VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool
                         return;
                     }
 
-                    const Handle& handle = handles[_cmd.array_idx];
+                    const BindingRecord& binding = bindings[_cmd.array_idx];
                     if (action == BindlessUpdateFinalizationAction::Restore) {
-                        if (handle.Ptr() != 0 &&
-                            (handle.Ptr() != uint64(_cmd.buffer.Get()) || handle.slot != _cmd.slot ||
-                             handle.type != VulkanBindlessArray::Buffer)) {
+                        if (binding.resource != nullptr &&
+                            (binding.resource != _cmd.buffer.Get() || binding.descriptor_slot != _cmd.slot ||
+                             binding.type != EResourceType::Buffer)) {
                             throw std::runtime_error("rejected bindless buffer release lost slot ownership");
                         }
                         const auto allocation = resource_allocation_counts.find(uint64(_cmd.buffer.Get()));
@@ -1304,12 +1304,10 @@ VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool
                         return;
                     }
                     if (_cmd.free) {
-                        if (handle.Ptr() != 0) {
+                        if (binding.resource != nullptr) {
                             throw std::runtime_error("pending bindless buffer release slot is not empty");
                         }
-                    } else if (handle.Ptr() != 0 &&
-                               (handle.Ptr() != uint64(_cmd.buffer.Get()) || handle.slot != _cmd.slot ||
-                                handle.type != VulkanBindlessArray::Buffer)) {
+                    } else if (binding.resource != nullptr && (binding.resource != _cmd.buffer.Get() || binding.descriptor_slot != _cmd.slot || binding.type != EResourceType::Buffer)) {
                         throw std::runtime_error("pending bindless buffer cancellation lost slot ownership");
                     }
                     if (state == BindlessUpdateSlotState::Original) {
@@ -1330,9 +1328,9 @@ VulkanBindlessArray::BuildFinalizationPlan(const Array<UpdateCmd>& updates, bool
 VulkanBindlessArray::UpdateCompletionPlan
 VulkanBindlessArray::BuildDiscardPlan(const Array<UpdateCmd>& updates) const {
     UpdateCompletionPlan plan;
-    UnorderedSet<uint>   global_slots;
-    UnorderedSet<uint>   texture_slots;
-    UnorderedSet<uint>   buffer_slots;
+    UnorderedSet<uint32> global_slots;
+    UnorderedSet<uint32> texture_slots;
+    UnorderedSet<uint32> buffer_slots;
 
     auto reserve_slot = [&](const auto& _cmd, bool _texture) {
         if (!global_slots.emplace(_cmd.array_idx).second) {
@@ -1376,7 +1374,7 @@ VulkanBindlessArray::BuildDiscardPlan(const Array<UpdateCmd>& updates) const {
             [&](const auto& _cmd) {
                 using TCmd = std::decay_t<decltype(_cmd)>;
                 if constexpr (std::is_same_v<TCmd, TextureUpdateInfo>) {
-                    if (!_cmd.texture || _cmd.array_idx == 0 || _cmd.array_idx >= handles.size() ||
+                    if (!_cmd.texture || _cmd.array_idx == 0 || _cmd.array_idx >= bindings.size() ||
                         _cmd.slot == 0 || _cmd.slot >= texture_slot_generations.size()) {
                         throw std::runtime_error("invalid discarded bindless texture update");
                     }
@@ -1393,14 +1391,14 @@ VulkanBindlessArray::BuildDiscardPlan(const Array<UpdateCmd>& updates) const {
                         return;
                     }
 
-                    const Handle& handle = handles[_cmd.array_idx];
+                    const BindingRecord& binding = bindings[_cmd.array_idx];
                     if (_cmd.free) {
                         if (state != BindlessUpdateSlotState::Original) {
                             return;
                         }
-                        if (handle.Ptr() != 0 &&
-                            (handle.Ptr() != uint64(_cmd.texture.Get()) || handle.slot != _cmd.slot ||
-                             handle.type != VulkanBindlessArray::Texture)) {
+                        if (binding.resource != nullptr &&
+                            (binding.resource != _cmd.texture.Get() || binding.descriptor_slot != _cmd.slot ||
+                             binding.type != EResourceType::Texture)) {
                             throw std::runtime_error(
                                 "discarded bindless texture release lost slot ownership"
                             );
@@ -1410,9 +1408,9 @@ VulkanBindlessArray::BuildDiscardPlan(const Array<UpdateCmd>& updates) const {
                         return;
                     }
 
-                    if (handle.Ptr() != 0 &&
-                        (handle.Ptr() != uint64(_cmd.texture.Get()) || handle.slot != _cmd.slot ||
-                         handle.type != VulkanBindlessArray::Texture)) {
+                    if (binding.resource != nullptr &&
+                        (binding.resource != _cmd.texture.Get() || binding.descriptor_slot != _cmd.slot ||
+                         binding.type != EResourceType::Texture)) {
                         throw std::runtime_error("discarded bindless texture allocation lost slot ownership");
                     }
                     reserve_slot(_cmd, true);
@@ -1427,7 +1425,7 @@ VulkanBindlessArray::BuildDiscardPlan(const Array<UpdateCmd>& updates) const {
                     ++plan.view_decrements[key];
                     plan.texture_retirements.push_back(&_cmd);
                 } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>) {
-                    if (!_cmd.buffer || _cmd.array_idx == 0 || _cmd.array_idx >= handles.size() ||
+                    if (!_cmd.buffer || _cmd.array_idx == 0 || _cmd.array_idx >= bindings.size() ||
                         _cmd.slot == 0 || _cmd.slot >= buffer_slot_generations.size()) {
                         throw std::runtime_error("invalid discarded bindless buffer update");
                     }
@@ -1444,14 +1442,14 @@ VulkanBindlessArray::BuildDiscardPlan(const Array<UpdateCmd>& updates) const {
                         return;
                     }
 
-                    const Handle& handle = handles[_cmd.array_idx];
+                    const BindingRecord& binding = bindings[_cmd.array_idx];
                     if (_cmd.free) {
                         if (state != BindlessUpdateSlotState::Original) {
                             return;
                         }
-                        if (handle.Ptr() != 0 &&
-                            (handle.Ptr() != uint64(_cmd.buffer.Get()) || handle.slot != _cmd.slot ||
-                             handle.type != VulkanBindlessArray::Buffer)) {
+                        if (binding.resource != nullptr &&
+                            (binding.resource != _cmd.buffer.Get() || binding.descriptor_slot != _cmd.slot ||
+                             binding.type != EResourceType::Buffer)) {
                             throw std::runtime_error("discarded bindless buffer release lost slot ownership");
                         }
                         reserve_slot(_cmd, false);
@@ -1459,9 +1457,9 @@ VulkanBindlessArray::BuildDiscardPlan(const Array<UpdateCmd>& updates) const {
                         return;
                     }
 
-                    if (handle.Ptr() != 0 &&
-                        (handle.Ptr() != uint64(_cmd.buffer.Get()) || handle.slot != _cmd.slot ||
-                         handle.type != VulkanBindlessArray::Buffer)) {
+                    if (binding.resource != nullptr &&
+                        (binding.resource != _cmd.buffer.Get() || binding.descriptor_slot != _cmd.slot ||
+                         binding.type != EResourceType::Buffer)) {
                         throw std::runtime_error("discarded bindless buffer allocation lost slot ownership");
                     }
                     reserve_slot(_cmd, false);
@@ -1499,20 +1497,20 @@ void VulkanBindlessArray::ValidateReferenceDecrements(const UpdateCompletionPlan
 }
 
 void VulkanBindlessArray::ApplySlotClaims(
-    const UnorderedSet<uint>& array_slots,
-    const UnorderedSet<uint>& texture_slots,
-    const UnorderedSet<uint>& buffer_slots,
-    uint64                    command_token
+    const UnorderedSet<uint32>& array_slots,
+    const UnorderedSet<uint32>& texture_slots,
+    const UnorderedSet<uint32>& buffer_slots,
+    uint64                      command_token
 ) {
-    for (const uint slot : array_slots) {
+    for (const uint32 slot : array_slots) {
         ++array_slot_generations[slot];
         array_slot_claim_tokens[slot] = command_token;
     }
-    for (const uint slot : texture_slots) {
+    for (const uint32 slot : texture_slots) {
         ++texture_slot_generations[slot];
         texture_slot_claim_tokens[slot] = command_token;
     }
-    for (const uint slot : buffer_slots) {
+    for (const uint32 slot : buffer_slots) {
         ++buffer_slot_generations[slot];
         buffer_slot_claim_tokens[slot] = command_token;
     }
@@ -1538,8 +1536,11 @@ void VulkanBindlessArray::ApplyCompletionPlan(const UpdateCompletionPlan& plan, 
                        )) {
             throw std::runtime_error("rejected bindless texture release lost its lifecycle claim");
         }
-        handles[restore->array_idx] =
-            Handle(uint64(restore->texture.Get()), restore->slot, 1, VulkanBindlessArray::Texture);
+        bindings[restore->array_idx] = BindingRecord{
+            .resource        = restore->texture.Get(),
+            .descriptor_slot = restore->slot,
+            .type            = EResourceType::Texture,
+        };
     }
     for (const auto& [restore, claimed] : plan.buffer_restores) {
         if (claimed && !RollbackBindlessUpdateSlotClaim(
@@ -1553,17 +1554,20 @@ void VulkanBindlessArray::ApplyCompletionPlan(const UpdateCompletionPlan& plan, 
                        )) {
             throw std::runtime_error("rejected bindless buffer release lost its lifecycle claim");
         }
-        handles[restore->array_idx] =
-            Handle(uint64(restore->buffer.Get()), restore->slot, 0, VulkanBindlessArray::Buffer);
+        bindings[restore->array_idx] = BindingRecord{
+            .resource        = restore->buffer.Get(),
+            .descriptor_slot = restore->slot,
+            .type            = EResourceType::Buffer,
+        };
     }
 
     for (const TextureUpdateInfo* retirement : plan.texture_retirements) {
-        handles[retirement->array_idx] = Handle{};
+        bindings[retirement->array_idx] = BindingRecord{};
         UntrackResource(uint64(retirement->texture.Get()));
         UntrackTextureView(retirement->array_idx);
     }
     for (const BufferUpdateInfo* retirement : plan.buffer_retirements) {
-        handles[retirement->array_idx] = Handle{};
+        bindings[retirement->array_idx] = BindingRecord{};
         UntrackResource(uint64(retirement->buffer.Get()));
     }
     // Publish free slots only after every membership change is complete.

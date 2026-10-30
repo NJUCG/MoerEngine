@@ -1,4 +1,5 @@
 #include "window/WindowInput.h"
+#include "misc/Types.h"
 
 namespace Moer {
 namespace {
@@ -9,8 +10,8 @@ void Clear(ArrayT& values) {
 }
 
 bool IsValidKey(KeyButtons key) {
-    const auto index = static_cast<uint32_t>(key);
-    return index < static_cast<uint32_t>(KeyButtons::KeyButtonCount);
+    const auto index = static_cast<uint32>(key);
+    return index < static_cast<uint32>(KeyButtons::KeyButtonCount);
 }
 
 bool AnyMouseButtonDown(
@@ -63,7 +64,7 @@ bool WindowInputFrameTracker::BeginFrame(const WindowInputSourceSnapshot& source
     // use F (and future toggles) to decide scene_active in the same GT frame.
     // ImGui keyboard/text capture owns those edges and therefore blocks them.
     if (!source.want_capture_keyboard && !source.want_text_input) {
-        for (uint32_t i = 0; i < static_cast<uint32_t>(KeyButtons::KeyButtonCount); ++i) {
+        for (uint32 i = 0; i < static_cast<uint32>(KeyButtons::KeyButtonCount); ++i) {
             if (source.key_released[i]) {
                 m_key_toggle[i] = !m_key_toggle[i];
             }
@@ -74,14 +75,14 @@ bool WindowInputFrameTracker::BeginFrame(const WindowInputSourceSnapshot& source
 }
 
 bool WindowInputFrameTracker::IsKeyToggled(KeyButtons key) const {
-    return IsValidKey(key) ? m_key_toggle[static_cast<uint32_t>(key)] : false;
+    return IsValidKey(key) ? m_key_toggle[static_cast<uint32>(key)] : false;
 }
 
 void WindowInputFrameTracker::ClearKeyToggle(KeyButtons key) noexcept {
     if (!IsValidKey(key)) {
         return;
     }
-    const uint32_t index = static_cast<uint32_t>(key);
+    const uint32 index                = static_cast<uint32>(key);
     m_key_toggle[index]               = false;
     m_last_snapshot.key_toggle[index] = false;
 }

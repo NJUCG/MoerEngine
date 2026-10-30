@@ -4,6 +4,7 @@
 #include "VulkanDescriptorMode.h"
 #include "VulkanDeviceObject.h"
 #include "VulkanPipelineArgument.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 
 #include <optional>
@@ -17,17 +18,17 @@ struct VulkanDescriptorBindingInfo {
     int                          argument_index = 0;
 };
 struct VulkanDescriptorSetLayoutCreateInfo {
-    UnorderedMap<uint, VulkanDescriptorBindingInfo> bindings{};
+    UnorderedMap<uint32, VulkanDescriptorBindingInfo> bindings{};
     bool                                            is_bindless = false;
 };
 
 struct VulkanResourceBinding {
-    uint             binding_index;
-    uint             argument_index;
+    uint32           binding_index;
+    uint32           argument_index;
     VkDescriptorType descriptor_type;
-    uint             descriptor_count;
+    uint32           descriptor_count;
     uint64           byte_offset      = 0;          // Binding offset relative to the set start.
-    uint             heap_push_offset = UINT32_MAX; // Scalar buffer address or immutable sampler index.
+    uint32           heap_push_offset = UINT32_MAX; // Scalar buffer address or immutable sampler index.
 };
 struct VulkanResourceSetBindings {
     Array<VulkanResourceBinding> bindings;
@@ -44,8 +45,8 @@ struct VulkanBindlessBinding {
     );
     static constexpr VkDescriptorType descriptor_type = DescriptorType;
 
-    uint argument_index;   // Index in ArrayArguments.
-    uint descriptor_count; // Number of descriptors in this array binding.
+    uint32 argument_index;   // Index in ArrayArguments.
+    uint32 descriptor_count; // Number of descriptors in this array binding.
 };
 using VulkanBindlessBufferBinding  = VulkanBindlessBinding<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>;
 using VulkanBindlessImageBinding   = VulkanBindlessBinding<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>;
@@ -58,9 +59,9 @@ using VulkanSetResourceBindings = std::variant<
     VulkanBindlessSamplerBinding>;
 
 struct VulkanDescriptorSetBinding {
-    uint buffer_index = 0;
+    uint32 buffer_index     = 0;
     bool push             = false;
-    uint heap_push_offset = 0;
+    uint32 heap_push_offset = 0;
     // Ordinary sets: relative to the draw's resource allocation.
     // Bindless sets: absolute offset in the bound descriptor buffer.
     uint64                    byte_offset = 0;
@@ -68,8 +69,8 @@ struct VulkanDescriptorSetBinding {
 };
 
 struct VulkanBindlessIndexAddressBinding {
-    uint argument_index;
-    uint byte_offset;
+    uint32 argument_index;
+    uint32 byte_offset;
 };
 
 struct VulkanPipelineBindingTemplate {
@@ -81,9 +82,9 @@ struct VulkanPipelineBindingTemplate {
     VkShaderDescriptorSetAndBindingMappingInfoEXT heap_mapping_info{
         VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT
     };
-    uint heap_push_size = 0;
+    uint32 heap_push_size = 0;
     // Ascending order prevents lower-set rebinding from disturbing sets just bound above it.
-    Map<uint, VulkanDescriptorSetBinding> set_bindings;
+    Map<uint32, VulkanDescriptorSetBinding> set_bindings;
     // Native upload metadata for user bytes; stage visibility covers the whole block.
     VkPushConstantsInfoKHR push_constants_info{};
     // The user upload excludes this backend-owned 64-bit address.
@@ -124,7 +125,7 @@ public:
     VulkanDescriptorMode GetDescriptorMode() const {
         return binding_template->mode;
     }
-    VkDescriptorSetLayout GetDescriptorSetLayout(uint set) const {
+    VkDescriptorSetLayout GetDescriptorSetLayout(uint32 set) const {
         return descriptor_set_layouts.at(set);
     }
 
@@ -132,11 +133,11 @@ public:
         return b_uses_stencil_attachment;
     }
 
-    uint32_t GetViewMask() const {
+    uint32 GetViewMask() const {
         return view_mask;
     }
 
-    const VulkanArgumentInfo& GetArgumentInfo(uint argument_index) const {
+    const VulkanArgumentInfo& GetArgumentInfo(uint32 argument_index) const {
         return m_argument_infos[argument_index];
     }
 
@@ -157,10 +158,10 @@ public:
         }
     }
     void InitPipelineLayout(
-        UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
-        std::optional<VkPushConstantRange>                        push_constant_range,
-        uint                                                      user_constant_byte_size,
-        std::optional<VulkanBindlessIndexAddressBinding>          bindless_index_address
+        UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
+        std::optional<VkPushConstantRange>                          push_constant_range,
+        uint32                                                      user_constant_byte_size,
+        std::optional<VulkanBindlessIndexAddressBinding>            bindless_index_address
     );
 
 public:
@@ -168,8 +169,8 @@ public:
 
 private:
     UniquePtr<VulkanPipelineBindingTemplate> BuildPipelineBindingTemplate(
-        const UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
-        const std::optional<VkPushConstantRange>&                      push_constant_range
+        const UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
+        const std::optional<VkPushConstantRange>&                        push_constant_range
     );
     void CreatePipelineLayout(const std::optional<VkPushConstantRange>& push_constant_range);
 
@@ -181,7 +182,7 @@ protected:
     Array<VkDescriptorSetLayout> descriptor_set_layouts;
     EType                        m_type;
     bool                         b_uses_stencil_attachment = false;
-    uint32_t                     view_mask                 = 0;
+    uint32                       view_mask                 = 0;
 };
 
 } // namespace Moer::Render

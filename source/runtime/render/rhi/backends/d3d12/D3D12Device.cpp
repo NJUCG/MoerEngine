@@ -1,5 +1,5 @@
 #include "D3D12Device.h"
-
+#include "misc/Types.h"
 #include <string_view>
 
 #include "log/LogSystem.h"
@@ -140,7 +140,7 @@ Moer::Render::D3D12Device::D3D12Device(const D3D12RHIConfig&& _config) : config(
                                          LPCSTR                 pDescription,
                                          void*                  pContext) {
             LOG_ERROR(
-                "D3D12 VALIDATION: {},{},{},{}", uint(Category), uint(Severity), uint(ID), pDescription
+                "D3D12 VALIDATION: {},{},{},{}", uint32(Category), uint32(Severity), uint32(ID), pDescription
             );
         };
 
@@ -226,8 +226,8 @@ static bool CheckReflectionTypeMatch(
     return false;
 };
 
-uint D3D12PipelineState::PipelineLayout::RootDescriptorTable::GetTotalBindCount() const {
-    uint cnt = 0;
+uint32 D3D12PipelineState::PipelineLayout::RootDescriptorTable::GetTotalBindCount() const {
+    uint32 cnt = 0;
     for (const auto& e : entries) {
         ASSERT(e.bind_count > 0); // not consider bindless now
         cnt += e.bind_count;
@@ -257,7 +257,7 @@ void D3D12PipelineState::PipelineLayout::Add(
         ASSERT(
             !_resource_info.IsBindless()
         ); // maybe not consider user defined bindless. just builtin bindless array.
-        const uint bind_count = _resource_info.IsBindless() ? 0 : _resource_info.count;
+        const uint32 bind_count = _resource_info.IsBindless() ? 0 : _resource_info.count;
         if (!_resource_info.IsBindless()) {
             ASSERT(_resource_info.count == _arg_cpp_info.array_size);
         }
@@ -308,11 +308,11 @@ void D3D12PipelineState::PipelineLayout::Add(
 void D3D12PipelineState::BuildRootSignature(const PipelineLayout& _layout) {
     layout = _layout;
 
-    uint                             required_dword = 0; // due to root sig limit, max 64 dword, 256 bytes
+    uint32                           required_dword = 0; // due to root sig limit, max 64 dword, 256 bytes
     Array<CD3DX12_ROOT_PARAMETER1>   root_parameters;
     Array<CD3DX12_DESCRIPTOR_RANGE1> descriptor_ranges;
-    uint                             num_root_parameters   = 0;
-    uint                             num_descriptor_ranges = 0;
+    uint32                           num_root_parameters   = 0;
+    uint32                           num_descriptor_ranges = 0;
 
     {
         // first pass check size
@@ -393,7 +393,7 @@ void D3D12PipelineState::BuildRootSignature(const PipelineLayout& _layout) {
                 );
             }
         }
-        uint range_offset = 0;
+        uint32 range_offset = 0;
         if (layout.srv_table) {
             for (const auto& e : layout.srv_table->entries) {
                 descriptor_ranges[range_offset + e.idx_in_table].Init(
@@ -504,7 +504,7 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
         auto& resource_info = reflect_map_iter->second.GetDxilReflection();
         if (arg_info.type == EShaderArgType::SDA_Constant) {
             ASSERT(IsShaderVarConstantBuffer(resource_info));
-            resource_info.type = uint(ED3D12ShaderVariableType::RootConstant);
+            resource_info.type = uint32(ED3D12ShaderVariableType::RootConstant);
         }
 
         ASSERT2(
@@ -553,8 +553,8 @@ TextureRef D3D12Device::CreateTexture(
 
 BufferRef D3D12Device::CreateBuffer(
     std::string_view  _name,
-    uint              _element_cnt,
-    uint              _byte_stride,
+    uint32            _element_cnt,
+    uint32            _byte_stride,
     EBufferUsageFlags _usage,
     EPixelFormat      _format
 ) {
@@ -565,7 +565,7 @@ BufferRef D3D12Device::CreateBuffer(
     return BufferRef{buffer};
 }
 
-BindlessArrayRef D3D12Device::CreateBindlessArray(uint _max_size) {
+BindlessArrayRef D3D12Device::CreateBindlessArray(uint32 _max_size) {
     return nullptr;
 }
 
@@ -732,9 +732,9 @@ void D3D12Device::GetHardwareAdapter(
 
 D3D12_GPU_DESCRIPTOR_HANDLE
 D3D12Device::PushCsuDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap) {
-    const uint            count = _index_in_cpu_heap.size();
+    const uint32          count = _index_in_cpu_heap.size();
     const DescriptorIndex start = csu_heap_gpu->Allocate(count);
-    for (uint i = 0; i < count; ++i) {
+    for (uint32 i = 0; i < count; ++i) {
         device->CopyDescriptorsSimple(
             1,
             csu_heap_gpu->GetOffsetHandleCpu({start.index + i}),
@@ -747,9 +747,9 @@ D3D12Device::PushCsuDescriptor(std::span<const DescriptorIndex> _index_in_cpu_he
 
 D3D12_GPU_DESCRIPTOR_HANDLE
 D3D12Device::PushSamplerDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap) {
-    const uint            count = _index_in_cpu_heap.size();
+    const uint32          count = _index_in_cpu_heap.size();
     const DescriptorIndex start = sampler_heap_gpu->Allocate(count);
-    for (uint i = 0; i < count; ++i) {
+    for (uint32 i = 0; i < count; ++i) {
         device->CopyDescriptorsSimple(
             1,
             sampler_heap_gpu->GetOffsetHandleCpu({start.index + i}),
@@ -847,7 +847,7 @@ DescriptorIndex D3D12Buffer::CreateSrv(const BufferView& _range, ED3D12ShaderVar
         }
     }
 
-    const uint byte_stride =
+    const uint32 byte_stride =
         _type == ED3D12ShaderVariableType::ByteAddressBuffer ?
             4 :
             (_type == ED3D12ShaderVariableType::StructuredBuffer ?
@@ -893,7 +893,7 @@ DescriptorIndex D3D12Buffer::CreateUav(const BufferView& _range, ED3D12ShaderVar
         }
     }
 
-    const uint byte_stride =
+    const uint32 byte_stride =
         _type == ED3D12ShaderVariableType::RWByteAddressBuffer ?
             4 :
             (_type == ED3D12ShaderVariableType::RWStructuredBuffer ?
@@ -1219,10 +1219,10 @@ struct D3D12CommandPreprocessVisitor {
         const auto& pipeline = _cmd.Pipeline();
         const auto argument_infos = static_cast<D3D12PipelineState*>(pipeline.GetState())->GetArgumentInfos();
 
-        auto func = [&](const TArg& _arg, uint _idx) {
+        auto func = [&](const TArg& _arg, uint32 _idx) {
             VisitArgs(_arg, argument_infos[_idx]);
         };
-        auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+        auto bdls_post_func = [&](const TArg& _arg, uint32 _idx) {
             // todo
             FATAL("not implemented");
         };
@@ -1270,7 +1270,7 @@ struct D3D12CommandPreprocessVisitor {
                 break;
 
             default:
-                FATAL("not implemented cmdtype {}", Command::typenames[uint(_cmd->Type())]);
+                FATAL("not implemented cmdtype {}", Command::typenames[uint32(_cmd->Type())]);
         }
     }
 };
@@ -1449,7 +1449,7 @@ struct D3D12CommandVisitor {
                 //ClearResource,
                 //Scope,
             default:
-                FATAL("not implemented cmdtype {}", Command::typenames[uint(_cmd->Type())]);
+                FATAL("not implemented cmdtype {}", Command::typenames[uint32(_cmd->Type())]);
         }
     }
 };
@@ -1595,8 +1595,8 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     struct DescriptorPushFailureGuard {
         D3D12GpuDescriptorAllocator* csu{nullptr};
         D3D12GpuDescriptorAllocator* sampler{nullptr};
-        uint                         csu_chunk{0};
-        uint                         sampler_chunk{0};
+        uint32                       csu_chunk{0};
+        uint32                       sampler_chunk{0};
 
         void Disarm() noexcept {
             csu_chunk     = 0;
@@ -1856,18 +1856,18 @@ D3D12Fence::~D3D12Fence() {
     CloseHandle(event);
 }
 
-uint64_t D3D12Fence::GetValue() const {
+uint64 D3D12Fence::GetValue() const {
     //return current_value;
     return fence->GetCompletedValue();
 }
 
-void D3D12Fence::MarkSubmitted(uint64_t _value) {
+void D3D12Fence::MarkSubmitted(uint64 _value) {
     AtomicMaximum(submitted_value, _value);
     submission_cv.notify_all();
 }
 
 bool D3D12Fence::WaitSubmitted(
-    uint64_t                _value,
+    uint64                  _value,
     const std::atomic_bool* _continue_waiting
 ) {
     std::unique_lock lock(submission_mutex);
@@ -1881,7 +1881,7 @@ bool D3D12Fence::WaitSubmitted(
            !IsRejected(_value);
 }
 
-void D3D12Fence::Reject(uint64_t _value) noexcept {
+void D3D12Fence::Reject(uint64 _value) noexcept {
     {
         std::lock_guard lock(rejection_mutex);
         if (!reject_all_values) {
@@ -1967,8 +1967,8 @@ void D3D12CommandResourceAllocator::Reset() {
 }
 
 void D3D12CommandResourceAllocator::AdoptDescriptorChunks(
-    uint _csu_descriptor_chunk,
-    uint _sampler_descriptor_chunk
+    uint32 _csu_descriptor_chunk,
+    uint32 _sampler_descriptor_chunk
 ) noexcept {
     ASSERT(csu_descriptor_chunk == 0 && sampler_descriptor_chunk == 0);
     ASSERT(_csu_descriptor_chunk != 0 && _sampler_descriptor_chunk != 0);
@@ -2208,7 +2208,7 @@ void D3D12CommandList::BindDescriptors(const PipelineHandle& _pso_handle, const 
         FATAL("not implemented");
     }
 }
-void D3D12CommandList::Dispatch(uint _x, uint _y, uint _z) {
+void D3D12CommandList::Dispatch(uint32 _x, uint32 _y, uint32 _z) {
     list->Dispatch(_x, _y, _z);
 }
 void D3D12CommandList::CopyBuffer(
@@ -2631,16 +2631,16 @@ D3D12Texture::D3D12Texture(D3D12Device* _device, const TextureInfo& _info, Alloc
     Texture(_info),
     allocation(std::move(_allocation)) {}
 D3D12Texture::~D3D12Texture() {}
-uint D3D12Texture::QuerySubresourceIndex(uint _mip_level, uint _array_slice, uint _plane_slice) const {
+uint32 D3D12Texture::QuerySubresourceIndex(uint32 _mip_level, uint32 _array_slice, uint32 _plane_slice) const {
     return D3D12CalcSubresource(_mip_level, _array_slice, _plane_slice, GetNumMips(), GetNumArray());
 }
 void D3D12Texture::Destroy() {
     MoerDelete(this);
 }
-uint D3D12Texture::GetMipByteSize(uint _mip_level) const {
-    uint mip_width  = std::max(1u, GetWidth() >> _mip_level);
-    uint mip_height = std::max(1u, GetHeight() >> _mip_level);
-    uint mip_depth  = std::max(1u, GetDepth() >> _mip_level);
+uint32 D3D12Texture::GetMipByteSize(uint32 _mip_level) const {
+    uint32 mip_width  = std::max(1u, GetWidth() >> _mip_level);
+    uint32 mip_height = std::max(1u, GetHeight() >> _mip_level);
+    uint32 mip_depth  = std::max(1u, GetDepth() >> _mip_level);
     return mip_width * mip_height * mip_depth *
            D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(
                D3D12EnumTranslation::METoDxFormat(GetFormat())
@@ -2820,7 +2820,7 @@ DXGI_FORMAT METoDxFormat(EPixelFormat _format) {
                 case PF_R4G4B4A4_UNORM_PACK16:           return DXGI_FORMAT_A4B4G4R4_UNORM;
         // clang-format on
         default:
-            FATAL("Unsupported pixel format: {}", static_cast<uint32_t>(_format));
+            FATAL("Unsupported pixel format: {}", static_cast<uint32>(_format));
             return DXGI_FORMAT_UNKNOWN;
     }
 }
@@ -2835,7 +2835,7 @@ D3D12_RESOURCE_DIMENSION METoDxResourceDimension(ETextureDimension _dim) {
         case ETextureDimension::TEX_3D:
             return D3D12_RESOURCE_DIMENSION::D3D12_RESOURCE_DIMENSION_TEXTURE3D;
         default:
-            FATAL("Unsupported texture dimension: {}", static_cast<uint32_t>(_dim));
+            FATAL("Unsupported texture dimension: {}", static_cast<uint32>(_dim));
             return D3D12_RESOURCE_DIMENSION_UNKNOWN;
     }
 }
@@ -2874,7 +2874,7 @@ D3D12_RESOURCE_FLAGS METoDxTextureResourceFlags(ETextureUsageFlags _me_flags) {
                 | ETextureUsageFlags::VIDEO_ENCODE
                 | ETextureUsageFlags::PRESENT)) {
         // clang-format on
-        LOG_WARNING("Unsupported texture usage flags: {}", static_cast<uint32_t>(_me_flags));
+        LOG_WARNING("Unsupported texture usage flags: {}", static_cast<uint32>(_me_flags));
     }
     return ret;
 }
@@ -2948,8 +2948,8 @@ void D3D12ResourceStateTracker::RecordState(
         default:
             FATAL(
                 "Unsupported texture state: {} {}",
-                static_cast<uint32_t>(_state),
-                static_cast<uint32_t>(_pass_type),
+                static_cast<uint32>(_state),
+                static_cast<uint32>(_pass_type),
                 _is_write
             );
     }
@@ -3039,8 +3039,8 @@ void D3D12ResourceStateTracker::RecordState(
         default:
             FATAL(
                 "Unsupported buffer state: {} {}",
-                static_cast<uint32_t>(_state),
-                static_cast<uint32_t>(_pass_type),
+                static_cast<uint32>(_state),
+                static_cast<uint32>(_pass_type),
                 _is_write
             );
     }
@@ -3202,7 +3202,7 @@ void D3D12PipelineState::Destroy() {
 D3D12DescriptorHeapBase::D3D12DescriptorHeapBase(
     D3D12Device*               _device,
     D3D12_DESCRIPTOR_HEAP_TYPE _type,
-    uint32_t                   _num_descriptors,
+    uint32                     _num_descriptors,
     bool                       _is_shader_visible
 ) :
     D3D12DeviceChild(_device) {
@@ -3254,8 +3254,8 @@ void D3D12CpuDescriptorAllocator::Free(DescriptorIndex handle) {
 D3D12GpuDescriptorAllocator::D3D12GpuDescriptorAllocator(
     D3D12Device*               _device,
     D3D12_DESCRIPTOR_HEAP_TYPE _type,
-    uint32_t                   _num_descriptors_total,
-    uint32_t                   _max_descriptors_per_execution
+    uint32                     _num_descriptors_total,
+    uint32                     _max_descriptors_per_execution
 ) :
     D3D12GpuDescriptorHeap(
         _device,
@@ -3265,8 +3265,8 @@ D3D12GpuDescriptorAllocator::D3D12GpuDescriptorAllocator(
     max_descriptors_per_execution(std::min(_max_descriptors_per_execution, GetNumTotalDescriptors() / 3)),
     num_descriptor_chunk(GetNumTotalDescriptors() / max_descriptors_per_execution) {}
 
-uint D3D12GpuDescriptorAllocator::BeginPushDescriptors() {
-    uint idx = ready_chunk_indices.Pop(); // return 0, if empty. so our valid indices start from 1.
+uint32 D3D12GpuDescriptorAllocator::BeginPushDescriptors() {
+    uint32 idx = ready_chunk_indices.Pop(); // return 0, if empty. so our valid indices start from 1.
     if (idx) {
         current_chunk_index  = idx;
         current_chunk_offset = 0;
@@ -3278,13 +3278,13 @@ uint D3D12GpuDescriptorAllocator::BeginPushDescriptors() {
     return current_chunk_index;
 }
 
-void D3D12GpuDescriptorAllocator::EndPushDescriptors(uint _chunk_index) {
+void D3D12GpuDescriptorAllocator::EndPushDescriptors(uint32 _chunk_index) {
     ASSERT(_chunk_index != 0 && _chunk_index <= num_descriptor_chunk);
     ready_chunk_indices.Push(_chunk_index);
 }
 
-DescriptorIndex D3D12GpuDescriptorAllocator::Allocate(uint count) {
-    uint start = (current_chunk_index - 1) * max_descriptors_per_execution + current_chunk_offset;
+DescriptorIndex D3D12GpuDescriptorAllocator::Allocate(uint32 count) {
+    uint32 start = (current_chunk_index - 1) * max_descriptors_per_execution + current_chunk_offset;
     current_chunk_offset += count;
     ASSERT(current_chunk_offset <= max_descriptors_per_execution);
     return {start};

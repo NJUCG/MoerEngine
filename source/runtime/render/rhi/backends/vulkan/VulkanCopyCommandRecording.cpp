@@ -2,6 +2,7 @@
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanQueueInternal.h"
+#include "misc/Types.h"
 #if MOER_VULKAN_TEST_SUPPORT
 #include "vulkan/VulkanSubmissionTestHooksInternal.h"
 #endif
@@ -37,7 +38,7 @@ void VulkanCommandRecorder::Record(VulkanRecordedCopySubmission& _pending) noexc
                     "record: timeline={} reason={} VkResult={}",
                     _pending.logical_timeline,
                     _reason,
-                    static_cast<int32_t>(_outcome.result)
+                    static_cast<int32>(_outcome.result)
                 );
             } catch (...) {
             }

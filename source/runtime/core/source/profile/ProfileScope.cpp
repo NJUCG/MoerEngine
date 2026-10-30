@@ -1,5 +1,5 @@
 #include "profile/ProfileScope.h"
-
+#include "misc/Types.h"
 #include "platform/Platform.h"
 #include "profile/ProfileDumpTemplates.h"
 
@@ -15,27 +15,27 @@ namespace Moer::ProfileDump {
 
 namespace {
 
-std::atomic<std::uint64_t> g_active_schema_hash{0};
-std::atomic<std::uint64_t> g_active_generation{0};
+std::atomic<uint64>        g_active_schema_hash{0};
+std::atomic<uint64>        g_active_generation{0};
 std::mutex                 g_lifecycle_mutex{};
 
 struct ThreadScopeState {
-    std::uint64_t generation{0};
-    std::uint32_t depth{0};
+    uint64 generation{0};
+    uint32 depth{0};
 };
 
 thread_local ThreadScopeState g_thread_scope_state{};
 
-[[nodiscard]] std::uint64_t CurrentSteadyNanoseconds() noexcept {
+[[nodiscard]] uint64 CurrentSteadyNanoseconds() noexcept {
     const auto count =
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()
         )
             .count();
-    return count > 0 ? static_cast<std::uint64_t>(count) : 0;
+    return count > 0 ? static_cast<uint64>(count) : 0;
 }
 
-void DisableIfCurrent(std::uint64_t _generation) noexcept {
+void DisableIfCurrent(uint64 _generation) noexcept {
     try {
         std::lock_guard lock(g_lifecycle_mutex);
         if (g_active_generation.load(std::memory_order_acquire) == _generation) {
@@ -46,7 +46,7 @@ void DisableIfCurrent(std::uint64_t _generation) noexcept {
         // A producer failure must never escape a profiling scope destructor.
         // The generation is the authoritative active flag, so clearing it is
         // sufficient even if taking the cold-path lifecycle lock failed.
-        std::uint64_t expected = _generation;
+        uint64 expected = _generation;
         static_cast<void>(g_active_generation.compare_exchange_strong(
             expected, 0, std::memory_order_acq_rel, std::memory_order_acquire
         ));
@@ -71,7 +71,7 @@ CpuScopeActivationResult Activate(SchemaHandle _schema) noexcept {
             return CpuScopeActivationResult::StaleGeneration;
         }
 
-        const std::uint64_t expected_hash = ComputeSchemaHash(Templates::CpuScope());
+        const uint64 expected_hash = ComputeSchemaHash(Templates::CpuScope());
         if (_schema.hash != expected_hash) {
             return CpuScopeActivationResult::WrongSchema;
         }
@@ -87,9 +87,9 @@ CpuScopeActivationResult Activate(SchemaHandle _schema) noexcept {
             return CpuScopeActivationResult::StaleGeneration;
         }
 
-        const std::uint64_t active_generation =
+        const uint64 active_generation =
             g_active_generation.load(std::memory_order_acquire);
-        const std::uint64_t active_hash =
+        const uint64 active_hash =
             g_active_schema_hash.load(std::memory_order_relaxed);
         if (active_generation == _schema.generation && active_hash == _schema.hash) {
             return CpuScopeActivationResult::AlreadyActive;
@@ -117,7 +117,7 @@ void Deactivate() noexcept {
 }
 
 bool IsActive() noexcept {
-    const std::uint64_t generation = g_active_generation.load(std::memory_order_acquire);
+    const uint64        generation = g_active_generation.load(std::memory_order_acquire);
     const RuntimeState  state      = GetRuntimeState();
     if (generation == 0 ||
         (state != RuntimeState::Running && state != RuntimeState::Faulted)) {
@@ -140,11 +140,11 @@ ScopedCpuProfile::ScopedCpuProfile(std::string_view _prefix, std::string_view _n
 void ScopedCpuProfile::Begin(
     std::string_view _prefix, std::string_view _name, bool _join
 ) noexcept {
-    const std::uint64_t generation = g_active_generation.load(std::memory_order_acquire);
+    const uint64 generation = g_active_generation.load(std::memory_order_acquire);
     if (generation == 0) {
         return;
     }
-    const std::uint64_t schema_hash = g_active_schema_hash.load(std::memory_order_relaxed);
+    const uint64 schema_hash = g_active_schema_hash.load(std::memory_order_relaxed);
     if (schema_hash == 0) {
         return;
     }
@@ -167,7 +167,7 @@ void ScopedCpuProfile::Begin(
         g_thread_scope_state.generation = generation;
         g_thread_scope_state.depth      = 0;
     }
-    if (g_thread_scope_state.depth == std::numeric_limits<std::uint32_t>::max()) {
+    if (g_thread_scope_state.depth == std::numeric_limits<uint32>::max()) {
         return;
     }
 
@@ -180,10 +180,10 @@ void ScopedCpuProfile::Begin(
     }
 
     schema_      = {.hash = schema_hash, .generation = generation};
-    thread_id_   = static_cast<std::uint64_t>(Platform::GetCurrentThreadID());
+    thread_id_   = static_cast<uint64>(Platform::GetCurrentThreadID());
     begin_ns_    = CurrentSteadyNanoseconds();
     depth_       = g_thread_scope_state.depth;
-    name_bytes_  = static_cast<std::uint16_t>(joined_bytes);
+    name_bytes_  = static_cast<uint16>(joined_bytes);
     ++g_thread_scope_state.depth;
     active_ = true;
 }
@@ -207,7 +207,7 @@ ScopedCpuProfile::~ScopedCpuProfile() noexcept {
     }
 
     try {
-        const std::uint64_t end_ns = std::max(CurrentSteadyNanoseconds(), begin_ns_);
+        const uint64                        end_ns = std::max(CurrentSteadyNanoseconds(), begin_ns_);
         const std::array<FieldValueView, 5> values = {
             thread_id_,
             std::string_view(name_.data(), name_bytes_),

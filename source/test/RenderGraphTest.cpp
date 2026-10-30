@@ -8,12 +8,12 @@
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -118,7 +118,7 @@ RenderGraphGpuScopeConfig() {
 }
 
 [[nodiscard]] Moer::Render::TimestampQueryResult
-RenderGraphTimestamp(uint64_t begin_tick, uint64_t end_tick) {
+RenderGraphTimestamp(Moer::uint64 begin_tick, Moer::uint64 end_tick) {
     return Moer::Render::TimestampQueryResult{
         .begin_tick = begin_tick,
         .end_tick = end_tick,
@@ -130,8 +130,8 @@ RenderGraphTimestamp(uint64_t begin_tick, uint64_t end_tick) {
 
 [[nodiscard]] bool ResolveRenderGraphTimestamp(
     Moer::Render::CmdSubmit& submit,
-    uint64_t                 begin_tick,
-    uint64_t                 end_tick
+    Moer::uint64             begin_tick,
+    Moer::uint64             end_tick
 ) {
     return submit.query_tokens.size() == 1 &&
            Moer::Render::QueryBackendAccess::ResolveTimestamp(
@@ -646,7 +646,7 @@ void TestDependencyCyclesRejectRecording(TestSuite& suite) {
         // Add the backward edge only after both real pass handles exist.
         first_builder->DependsOn(second);
 
-        for (uint32_t attempt = 0; attempt < 2; ++attempt) {
+        for (Moer::uint32 attempt = 0; attempt < 2; ++attempt) {
             const bool compiled = graph.Compile();
             suite.Check(!compiled && !graph.IsCompiled(), test_name,
                         "a dependency cycle must not publish an executable plan");
@@ -1005,7 +1005,7 @@ void TestTypedTextureLayerAndAspectHazards(TestSuite& suite) {
         }
     );
 
-    auto make_range = [](RenderGraph::TextureAspect aspect, uint32_t layer) {
+    auto make_range = [](RenderGraph::TextureAspect aspect, Moer::uint32 layer) {
         auto range    = RenderGraph::TextureRange::Layers(layer, 1);
         range.aspects = aspect;
         return range;
@@ -1471,7 +1471,7 @@ void TestUnknownTextureAspectIsRejected(TestSuite& suite) {
     constexpr std::string_view test_name = "unknown texture descriptor aspect";
     RenderGraph                graph("UnknownTextureAspect");
     constexpr auto             invalid_aspects = static_cast<RenderGraph::TextureAspect>(
-        static_cast<uint8_t>(RenderGraph::TextureAspect::Color) | uint8_t{0x80}
+        static_cast<Moer::uint8>(RenderGraph::TextureAspect::Color) | Moer::uint8{0x80}
     );
     const auto texture = graph.CreateTransientTexture(
         "InvalidTexture",
@@ -1962,7 +1962,7 @@ void TestExplicitStateValidation(TestSuite& suite) {
          false},
     };
 
-    for (uint32_t index = 0; index < texture_cases.size(); ++index) {
+    for (Moer::uint32 index = 0; index < texture_cases.size(); ++index) {
         const auto& current = texture_cases[index];
         RenderGraph graph("TextureStateCase");
         int         physical = 0;
@@ -2035,7 +2035,7 @@ void TestExplicitStateValidation(TestSuite& suite) {
          false},
     };
 
-    for (uint32_t index = 0; index < buffer_cases.size(); ++index) {
+    for (Moer::uint32 index = 0; index < buffer_cases.size(); ++index) {
         const auto& current = buffer_cases[index];
         RenderGraph graph("BufferStateCase");
         int         physical = 0;
@@ -2606,7 +2606,7 @@ void TestUnspecifiedReadsPreserveAvailabilityFrontier(TestSuite& suite) {
         test_name,
         "Unspecified reads must inherit, preserve, and not bypass the transition availability frontier"
     );
-    const uint32_t transition_syncs = static_cast<uint32_t>(std::count_if(
+    const Moer::uint32 transition_syncs = static_cast<Moer::uint32>(std::count_if(
         plan.queue_syncs.begin(),
         plan.queue_syncs.end(),
         [&](const RenderGraph::CompiledQueueSync& sync) {
@@ -3593,7 +3593,7 @@ void TestFanInBarrierPlacementCoversEverySourceBatch(TestSuite& suite) {
     if (barrier_it == plan.barriers.end()) {
         return;
     }
-    const uint32_t barrier_index = static_cast<uint32_t>(barrier_it - plan.barriers.begin());
+    const Moer::uint32 barrier_index = static_cast<Moer::uint32>(barrier_it - plan.barriers.begin());
     suite.Check(
         plan.queue_batches.size() == 3 &&
             std::find(
@@ -3609,7 +3609,7 @@ void TestFanInBarrierPlacementCoversEverySourceBatch(TestSuite& suite) {
         test_name,
         "every cross-native source batch must receive the split-release placement hint"
     );
-    const uint32_t associated_syncs = static_cast<uint32_t>(std::count_if(
+    const Moer::uint32 associated_syncs = static_cast<Moer::uint32>(std::count_if(
         plan.queue_syncs.begin(),
         plan.queue_syncs.end(),
         [&](const RenderGraph::CompiledQueueSync& sync) {
@@ -4273,41 +4273,41 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
 class FakeUiViewportResources final :
     public Moer::Render::UiViewportRenderResources {
 public:
-    explicit FakeUiViewportResources(uint64_t pending_slot) :
+    explicit FakeUiViewportResources(Moer::uint64 pending_slot) :
         pending_slot(pending_slot) {}
 
-    [[nodiscard]] uint64_t
+    [[nodiscard]] Moer::uint64
     GetPendingRecordingSlot() const noexcept override {
         return pending_slot;
     }
 
     [[nodiscard]] bool
-    IsPendingRecordingSlot(uint64_t slot) const noexcept override {
+    IsPendingRecordingSlot(Moer::uint64 slot) const noexcept override {
         return slot == pending_slot;
     }
 
-    void CommitRecordingSlot(uint64_t slot) noexcept override {
+    void CommitRecordingSlot(Moer::uint64 slot) noexcept override {
         if (slot == pending_slot) {
             ++pending_slot;
             ++commit_count;
         }
     }
 
-    [[nodiscard]] uint64_t PendingSlot() const {
+    [[nodiscard]] Moer::uint64 PendingSlot() const {
         return pending_slot;
     }
 
-    [[nodiscard]] uint32_t CommitCount() const {
+    [[nodiscard]] Moer::uint32 CommitCount() const {
         return commit_count;
     }
 
-    void SetPendingSlot(uint64_t slot) {
+    void SetPendingSlot(Moer::uint64 slot) {
         pending_slot = slot;
     }
 
 private:
-    uint64_t pending_slot = 0;
-    uint32_t commit_count = 0;
+    Moer::uint64 pending_slot = 0;
+    Moer::uint32 commit_count = 0;
 };
 
 class FakeUiDrawBackend final : public Moer::Render::UiDrawFrameBackend {
@@ -4345,8 +4345,8 @@ public:
         ++present_count;
     }
 
-    uint32_t render_count = 0;
-    uint32_t present_count = 0;
+    Moer::uint32                         render_count              = 0;
+    Moer::uint32                         present_count             = 0;
     bool saw_valid_recording_slots = true;
     Moer::Render::EUiDrawExecutionThread last_execution_thread{
         Moer::Render::EUiDrawExecutionThread::Game
@@ -4370,7 +4370,7 @@ public:
         SetName(name);
     }
 
-    Moer::uint GetMipByteSize(Moer::uint) const override {
+    Moer::uint32 GetMipByteSize(Moer::uint32) const override {
         return 4;
     }
 
@@ -5538,7 +5538,7 @@ void TestWeightedParallelRecordingSharesStreams(TestSuite& suite, bool merge) {
     using namespace Moer::Render;
     const std::string test_name = std::string("weighted parallel recording: ") + (merge ? "merged" : "active");
     RenderGraph graph(test_name);
-    constexpr std::array<uint32_t, 5> workloads{1, 1, 6, 1, 7};
+    constexpr std::array<Moer::uint32, 5> workloads{1, 1, 6, 1, 7};
     std::array<CommandList*, 5> streams{};
     std::mutex mutex;
     std::condition_variable cv;
@@ -5597,7 +5597,7 @@ void TestSharedStreamGpuProfilingKeepsPassScopes(TestSuite& suite, bool merge) {
     using namespace Moer::Render;
     const std::string test_name = std::string("shared stream profiling: ") + (merge ? "merged" : "active");
     GpuScopeStream scope_stream(RenderGraphGpuScopeConfig());
-    auto frame = scope_stream.BeginFrame(9110 + static_cast<uint64_t>(merge));
+    auto              frame = scope_stream.BeginFrame(9110 + static_cast<Moer::uint64>(merge));
     RenderGraph graph(test_name);
     for (const auto name : {"First", "Second"}) {
         graph.AddRecordPass(name, [](RenderGraph::PassBuilder& pass) { pass.SideEffect(); },
@@ -5605,16 +5605,19 @@ void TestSharedStreamGpuProfilingKeepsPassScopes(TestSuite& suite, bool merge) {
     }
     int bind_calls = 0;
     const RenderGraph::GpuProfilingOptions profiling{
-        .try_bind_source = [&](const RenderGraph::ExecutedPassInfo& pass, CommandList& commands,
-                               RHIQueueBinding queue, uint64_t order) {
+        .try_bind_source = [&](const RenderGraph::ExecutedPassInfo& pass, CommandList& commands, RHIQueueBinding queue, Moer::uint64 order) {
             ++bind_calls;
             suite.Check(pass.name == "First" && order == 23 && commands.IsEmpty(), test_name,
                         "binding must use the stream's first compiled pass before recording");
             auto recorder = frame.CreateRecorder(queue, order);
-            if (!recorder.Valid()) { return false; }
+            if (!recorder.Valid()) {
+                return false;
+            }
             commands.SetGpuScopeRecorder(std::move(recorder));
             return true;
-        }, .source_order_base = 23};
+        },
+        .source_order_base = 23
+    };
     CommandList destination;
     Moer::Array<RHIRecordingSource> published;
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
@@ -5722,7 +5725,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         RenderGraphGpuScopeConfig()
     );
     auto gpu_scope_frame = gpu_scope_stream.BeginFrame(9101);
-    std::vector<uint64_t>    profiling_source_orders{};
+    std::vector<Moer::uint64> profiling_source_orders{};
     std::vector<std::string> profiling_pass_names{};
 
     const auto make_record = [&](int id) {
@@ -5930,7 +5933,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         "the test must exercise completion order different from source order"
     );
     suite.Check(
-        profiling_source_orders == std::vector<uint64_t>{73, 74} &&
+        profiling_source_orders == std::vector<Moer::uint64>{73, 74} &&
             profiling_pass_names ==
                 std::vector<std::string>{"FirstRecord", "SecondRecord"} &&
             profiling_submit_contract &&

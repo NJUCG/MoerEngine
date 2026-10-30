@@ -2,6 +2,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
@@ -34,8 +35,8 @@ public:
         BindlessArrayRef                                  bindless{};
         BufferWithHandle                                  cascade_buffer{};
         StaticArray<CsmGizmoCascadeData, CSM_MAX_CASCADES> cascade_data{};
-        uint                                              cascade_count{0};
-        uint                                              vertex_count{0};
+        uint32                                             cascade_count{0};
+        uint32                                             vertex_count{0};
         CsmGizmoParam                                     shader{};
         TextureWithHandle                                 output{};
     };
@@ -59,7 +60,7 @@ public:
 
         m_cascade_data_buffer.buf = context.device.CreateBuffer<byte>(
             "Raster::CsmGizmoCascadeData",
-            static_cast<uint>(sizeof(CsmGizmoCascadeData) * CSM_MAX_CASCADES),
+            static_cast<uint32>(sizeof(CsmGizmoCascadeData) * CSM_MAX_CASCADES),
             EBufferUsageFlags::UNORDERED_ACCESS
         );
         m_cascade_data_buffer.hdl = context.bdls->AllocateBuffer(m_cascade_data_buffer.buf->GetView());
@@ -79,7 +80,7 @@ public:
             return parameters;
         }
 
-        uint draw_flags = 0u;
+        uint32 draw_flags = 0u;
         if (gizmo_config.show_csm_split_frustums) {
             draw_flags |= RASTER_CSM_GIZMO_DRAW_SPLIT_FRUSTUM;
         }
@@ -90,14 +91,14 @@ public:
             return parameters;
         }
 
-        const uint cascade_count =
-            Min(static_cast<uint>(raster_config.shadow_csm_num_of_cascades), static_cast<uint>(CSM_MAX_CASCADES));
+        const uint32 cascade_count =
+            Min(static_cast<uint32>(raster_config.shadow_csm_num_of_cascades), static_cast<uint32>(CSM_MAX_CASCADES));
         if (cascade_count == 0u) {
             return parameters;
         }
 
-        uint valid_cascade_count = 0u;
-        for (uint cascade_index = 0u; cascade_index < cascade_count; ++cascade_index) {
+        uint32 valid_cascade_count = 0u;
+        for (uint32 cascade_index = 0u; cascade_index < cascade_count; ++cascade_index) {
             if ((gizmo_config.csm_cascade_visibility_mask & (1u << cascade_index)) == 0u) {
                 continue;
             }
@@ -207,26 +208,26 @@ public:
     }
 
 private:
-    static constexpr uint k_frustum_edge_count   = 12u;
-    static constexpr uint k_sphere_segment_count = 32u;
-    static constexpr uint k_sphere_circle_count  = 3u;
-    static constexpr uint k_vertices_per_edge    = 6u;
-    static constexpr uint k_frustum_vertex_count = k_frustum_edge_count * k_vertices_per_edge;
-    static constexpr uint k_sphere_vertex_count =
+    static constexpr uint32 k_frustum_edge_count   = 12u;
+    static constexpr uint32 k_sphere_segment_count = 32u;
+    static constexpr uint32 k_sphere_circle_count  = 3u;
+    static constexpr uint32 k_vertices_per_edge    = 6u;
+    static constexpr uint32 k_frustum_vertex_count = k_frustum_edge_count * k_vertices_per_edge;
+    static constexpr uint32 k_sphere_vertex_count =
         k_sphere_circle_count * k_sphere_segment_count * k_vertices_per_edge;
 
     static CsmGizmoCascadeData BuildCascadeData(
         const Camera& camera,
         float         near_ratio,
         float         far_ratio,
-        uint          cascade_index
+        uint32        cascade_index
     ) {
         CsmGizmoCascadeData data{};
         data.color = GetCsmGizmoCascadeColor(cascade_index);
 
         const auto corners = camera.GetFrustumCorners(near_ratio, far_ratio);
         float3     center  = float3(0.0f, 0.0f, 0.0f);
-        for (uint corner_index = 0u; corner_index < 8u; ++corner_index) {
+        for (uint32 corner_index = 0u; corner_index < 8u; ++corner_index) {
             const float3 corner = corners[corner_index];
             data.frustum_corners[corner_index] = float4(corner.x, corner.y, corner.z, 1.0f);
             center += corner;
@@ -234,7 +235,7 @@ private:
         center *= 1.0f / 8.0f;
 
         float radius = 0.0f;
-        for (uint corner_index = 0u; corner_index < 8u; ++corner_index) {
+        for (uint32 corner_index = 0u; corner_index < 8u; ++corner_index) {
             const float3 corner = corners[corner_index];
             radius = Max(radius, Lengthf(corner - center));
         }

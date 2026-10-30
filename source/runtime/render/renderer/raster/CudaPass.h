@@ -5,6 +5,8 @@
  */
 #pragma once
 
+#include "misc/Types.h"
+
 #if !defined(WITH_CUDA)
 #error "This header requires WITH_CUDA=1"
 #endif
@@ -74,7 +76,7 @@ public:
         cuda_res.CreateAllocate(context, previousPassOutputTexture);
     }
 
-    uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
+    uint32 Process(RasterContext& context, const RasterConfig& ui_config, uint32 input_image) {
         if (ui_config.ai_is_cuda_enabled == false)
             return input_image;
         if (!context.cmd_list.IsEmpty()) {

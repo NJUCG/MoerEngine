@@ -1,6 +1,8 @@
 #ifndef MOER_SHADER_PIPELINE_H
 #define MOER_SHADER_PIPELINE_H
 
+#include "misc/Types.h"
+
 // 定义 Shader 参数声明、参数打包以及各类渲染管线的通用基础设施。
 #include "math/Matrix.h"
 #include "misc/STL.h"
@@ -29,7 +31,7 @@ struct TDummy {};
 
 namespace Moer::Render {
 
-using TConstantArg = std::variant<int, float, bool, uint>;
+using TConstantArg = std::variant<int, float, bool, uint32>;
 using TScalarArg   = std::variant<float2, float3, float4, uint2, uint3, uint4>;
 using TMatrixArg   = std::variant<Matrix4x4f, Matrix3x3f, Matrix3x4f, Matrix3x4ui, Matrix3x4i>;
 template<typename T>
@@ -110,7 +112,7 @@ public:                                                                         
 #define GetStringType(name) String##name
 
 namespace Moer::Render {
-using TInvalidArg = uint;
+using TInvalidArg      = uint32;
 using TextureViewArray = Array<TextureView>;
 using BufferViewArray  = Array<BufferView>;
 using TArg        = std::variant<
@@ -126,12 +128,12 @@ using TArg        = std::variant<
 template<typename T>
 struct ShaderArgEnum {
     static constexpr EShaderArgType arg_type   = SDA_Constant;
-    static constexpr uint           array_size = 1;
+    static constexpr uint32         array_size = 1;
 };
 
 struct ArrayArguments {
     ArrayArguments() = default;
-    ArrayArguments(uint _arg_cnt, uint _const_size, bool _b_use_bdls) :
+    ArrayArguments(uint32 _arg_cnt, uint32 _const_size, bool _b_use_bdls) :
         args(_arg_cnt),
         constants(_const_size),
         b_use_bindless(_b_use_bdls) {}
@@ -140,19 +142,19 @@ struct ArrayArguments {
     ArrayArguments& operator=(ArrayArguments&&)      = default;
     ArrayArguments& operator=(const ArrayArguments&) = default;
 
-    TArg& operator[](uint _idx) {
+    TArg& operator[](uint32 _idx) {
         return args[_idx];
     }
-    const TArg& operator[](uint _idx) const {
+    const TArg& operator[](uint32 _idx) const {
         return args[_idx];
     }
-    uint Size() const {
+    uint32 Size() const {
         return args.size();
     }
     Array<TArg> args;
-    Array<uint> constants;
+    Array<uint32> constants;
 
-    Array<uint>&& StealConstants() {
+    Array<uint32>&& StealConstants() {
         return std::move(constants);
     }
     bool b_use_bindless = false;
@@ -163,7 +165,7 @@ struct ShaderArg {
     static constexpr std::string_view name         = arg_name::name;
     using type                                     = T;
     static constexpr EShaderArgType arg_type       = ShaderArgEnum<T>::arg_type;
-    static constexpr uint           max_array_size = ShaderArgEnum<T>::array_size;
+    static constexpr uint32         max_array_size = ShaderArgEnum<T>::array_size;
     ShaderArg() {}
     static constexpr std::string_view GetName() {
         return name;
@@ -179,7 +181,7 @@ using TShaderArgArray = std::variant<ArrayArguments, ArrayArgReference, TEmptySh
 using TCachedArgArray = Array<ArrayArguments>;
 struct NonConstant {};
 
-template<uint array_size>
+template<uint32 array_size>
 struct BufferArg {
     using type = NonConstant;
 };
@@ -188,7 +190,7 @@ struct ConstantBufferArg {
     using type = NonConstant;
 };
 
-template<uint array_size>
+template<uint32 array_size>
 struct TextureArg {
     using type = NonConstant;
 };
@@ -212,46 +214,46 @@ struct ReferenceArg {
     using type = NonConstant;
 };
 
-template<uint _array_size>
+template<uint32 _array_size>
 struct ShaderArgEnum<BufferArg<_array_size>> {
     static constexpr EShaderArgType arg_type   = SDA_Buffer;
-    static constexpr uint           array_size = _array_size;
+    static constexpr uint32         array_size = _array_size;
 };
 
 template<>
 struct ShaderArgEnum<ConstantBufferArg> {
     static constexpr EShaderArgType arg_type   = SDA_ConstantBuffer;
-    static constexpr uint           array_size = 1;
+    static constexpr uint32         array_size = 1;
 };
 
-template<uint _array_size>
+template<uint32 _array_size>
 struct ShaderArgEnum<TextureArg<_array_size>> {
     static constexpr EShaderArgType arg_type   = SDA_Texture;
-    static constexpr uint           array_size = _array_size;
+    static constexpr uint32         array_size = _array_size;
 };
 
 template<>
 struct ShaderArgEnum<SamplerArg> {
     static constexpr EShaderArgType arg_type   = SDA_Sampler;
-    static constexpr uint           array_size = 1;
+    static constexpr uint32         array_size = 1;
 };
 
 template<>
 struct ShaderArgEnum<BindlessArg> {
     static constexpr EShaderArgType arg_type   = SDA_BindlessArray;
-    static constexpr uint           array_size = 1;
+    static constexpr uint32         array_size = 1;
 };
 
 template<>
 struct ShaderArgEnum<TLASArg> {
     static constexpr EShaderArgType arg_type   = SDA_TLAS;
-    static constexpr uint           array_size = 1;
+    static constexpr uint32         array_size = 1;
 };
 
 template<>
 struct ShaderArgEnum<ReferenceArg> {
     static constexpr EShaderArgType arg_type   = SDA_Reference;
-    static constexpr uint           array_size = 1;
+    static constexpr uint32         array_size = 1;
 };
 
 class ShaderPipeline;
@@ -295,12 +297,12 @@ struct ShaderArgs {
     static constexpr size_t constant_count = (0 + ... + (Args::arg_type == SDA_Constant ? 1 : 0));
     struct StaticConstantLayout {
         std::array<ShaderConstantArgumentLayout, constant_count> arguments{};
-        uint byte_size = 0;
+        uint32                                                   byte_size = 0;
     };
 
     static consteval StaticConstantLayout MakeConstantLayout() {
         StaticConstantLayout layout;
-        uint argument_index = 0;
+        uint32               argument_index = 0;
         size_t constant_index = 0;
         const auto append = [&]<typename TArg>() {
             if constexpr (TArg::arg_type == SDA_Constant) {
@@ -311,21 +313,19 @@ struct ShaderArgs {
                               "Shader constants must have a plain, layout-compatible representation");
                 static_assert(!std::is_pointer_v<Payload> && !std::is_same_v<Payload, bool>,
                               "Use layout-compatible shader values; use uint for booleans");
-                static_assert(std::is_empty_v<Payload> || sizeof(Payload) % sizeof(uint) == 0,
-                              "Shader constant payloads must contain whole 32-bit words");
-                static_assert(!std::is_arithmetic_v<Payload> || sizeof(Payload) == sizeof(uint),
-                              "Only 32-bit scalar shader constants are supported");
+                static_assert(std::is_empty_v<Payload> || sizeof(Payload) % sizeof(uint32) == 0, "Shader constant payloads must contain whole 32-bit words");
+                static_assert(!std::is_arithmetic_v<Payload> || sizeof(Payload) == sizeof(uint32), "Only 32-bit scalar shader constants are supported");
                 // Empty legacy constant structs carry no shader data.
-                constexpr uint byte_size = std::is_empty_v<Payload> ? 0 : sizeof(Payload);
-                constexpr uint alignment = std::is_arithmetic_v<Payload> || byte_size == 0 ? 4 : 16;
+                constexpr uint32 byte_size = std::is_empty_v<Payload> ? 0 : sizeof(Payload);
+                constexpr uint32 alignment = std::is_arithmetic_v<Payload> || byte_size == 0 ? 4 : 16;
                 const uint64 offset = (uint64(layout.byte_size) + alignment - 1) & ~uint64(alignment - 1);
-                if (offset + byte_size > std::numeric_limits<uint>::max()) {
+                if (offset + byte_size > std::numeric_limits<uint32>::max()) {
                     throw "Shader constant layout is too large";
                 }
                 layout.arguments[constant_index++] = {
-                    argument_index, static_cast<uint>(offset), byte_size
+                    argument_index, static_cast<uint32>(offset), byte_size
                 };
-                layout.byte_size = static_cast<uint>(offset + byte_size);
+                layout.byte_size = static_cast<uint32>(offset + byte_size);
             }
             ++argument_index;
         };
@@ -340,10 +340,10 @@ struct ShaderArgs {
     }
 
     static constexpr uint32 GetConstantSize() {
-        return constant_layout.byte_size / sizeof(uint);
+        return constant_layout.byte_size / sizeof(uint32);
     }
 
-    static constexpr ShaderConstantArgumentLayout GetConstantArgumentLayout(uint argument_index) {
+    static constexpr ShaderConstantArgumentLayout GetConstantArgumentLayout(uint32 argument_index) {
         for (const auto& argument : constant_layout.arguments) {
             if (argument.argument_index == argument_index) return argument;
         }
@@ -410,7 +410,7 @@ struct ShaderArgs {
             constexpr auto layout = GetConstantArgumentLayout(index);
             if constexpr (layout.byte_size == 0) return;
             static_assert(std::is_empty_v<ValueType> || sizeof(ValueType) == layout.byte_size);
-            if (_arg_setter.constants.size() * sizeof(uint) < uint64(layout.byte_offset) + layout.byte_size) {
+            if (_arg_setter.constants.size() * sizeof(uint32) < uint64(layout.byte_offset) + layout.byte_size) {
                 throw std::invalid_argument("Shader constant argument exceeds the packed data buffer");
             }
             auto* data = reinterpret_cast<std::byte*>(_arg_setter.constants.data());
@@ -432,7 +432,7 @@ class ShaderPipeline {
 protected:
     struct InnerArgs {
         using tuple_helper             = std::tuple<>;
-        static constexpr uint arg_size = 0;
+        static constexpr uint32 arg_size = 0;
         void                  SetParams() {}
     };
 
@@ -542,7 +542,7 @@ concept is_shader_pipeline = requires {
 
 class ShaderAsset {
 public:
-    ShaderAsset() : path(""), entry_name(""), mutation_id(std::numeric_limits<uint>::max()) {}
+    ShaderAsset() : path(""), entry_name(""), mutation_id(std::numeric_limits<uint32>::max()) {}
     explicit ShaderAsset(std::string_view _path, std::string_view _entry = "main") :
         path(_path),
         entry_name(_entry),
@@ -578,7 +578,7 @@ public:
 public:
     std::string               path;
     std::string               entry_name;
-    uint                      mutation_id;
+    uint32                    mutation_id;
     ShaderCompilerEnvironment environment;
 };
 

@@ -1,18 +1,18 @@
 #pragma once
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <exception>
 #include <utility>
 
 namespace Moer::Render::VulkanSubmissionDetail {
 
-enum class EWorkerRequestKind : uint8_t {
+enum class EWorkerRequestKind : uint8 {
     Submit,
     Sync,
     Stop,
 };
 
-enum class EWorkerRequestFailurePhase : uint8_t {
+enum class EWorkerRequestFailurePhase : uint8 {
     Process,
     Reject,
     Complete,

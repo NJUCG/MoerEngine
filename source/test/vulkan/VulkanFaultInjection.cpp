@@ -1,6 +1,7 @@
 #include "VulkanFaultInjection.h"
-#include "rhi/backends/vulkan/VulkanDevice.h"
 #include "log/LogSystem.h"
+#include "misc/Types.h"
+#include "rhi/backends/vulkan/VulkanDevice.h"
 
 #include <atomic>
 #include <charconv>
@@ -13,7 +14,7 @@ namespace {
 uint64 present_trigger = 0;
 std::atomic<uint64> present_attempts{0};
 
-uint64_t ParseVulkanPresentSubmitFaultTrigger(int argc, const char** argv) {
+uint64 ParseVulkanPresentSubmitFaultTrigger(int argc, const char** argv) {
     constexpr std::string_view argument_name = "--vulkan-fault-inject";
     constexpr std::string_view prefix        = "--vulkan-fault-inject=";
     constexpr std::string_view point_prefix  = "present-submit@";
@@ -50,7 +51,7 @@ uint64_t ParseVulkanPresentSubmitFaultTrigger(int argc, const char** argv) {
     }
 
     const std::string_view count_text = specification->substr(point_prefix.size());
-    uint64_t               count      = 0;
+    uint64                 count      = 0;
     const auto [end, error] = std::from_chars(
         count_text.data(), count_text.data() + count_text.size(), count
     );

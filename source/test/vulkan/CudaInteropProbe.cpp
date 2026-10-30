@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "renderer/raster/CudaVulkanTools.h"
 #include "rhi/RHICommand.h"
 #include "rhi/executor/RHIExecutor.h"
@@ -19,7 +20,7 @@ void Check(cudaError_t result) {
 
 void RoundTrip(EPixelFormat format, ETextureUsageFlags usage, bool cuda_write) {
     auto&          device = RenderDevice::Get();
-    constexpr uint width = 64, height = 32;
+    constexpr uint32 width = 64, height = 32;
     // Keep a neighbouring allocation live to exercise nonzero VMA offsets.
     auto neighbour = device.CreateTexture("CudaInteropNeighbour", Extent3D(width, height, 1), format, usage);
     auto texture   = device.CreateTexture("CudaInteropReadback", Extent3D(width, height, 1), format, usage);
@@ -48,7 +49,7 @@ void RoundTrip(EPixelFormat format, ETextureUsageFlags usage, bool cuda_write) {
     const auto          view   = texture->GetView();
     const auto          aspect = texture->GetAspectFlags();
     std::vector<uint32> expected(width * height), actual(width * height);
-    for (uint iteration = 0; iteration != 3; ++iteration) {
+    for (uint32 iteration = 0; iteration != 3; ++iteration) {
         for (size_t i = 0; i != expected.size(); ++i)
             expected[i] = 0x3e800000u + uint32(i) + iteration;
         CommandList upload;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 
 #include <memory>
@@ -29,8 +30,8 @@ public:
     VulkanTemporaryBufferAllocator(VulkanTemporaryBufferAllocator&&)                 = delete;
     VulkanTemporaryBufferAllocator& operator=(VulkanTemporaryBufferAllocator&&)      = delete;
 
-    BufferView AllocateUploadBuffer(uint64 _size, uint _alignment);
-    BufferView AllocateReadbackBuffer(uint64 _size, uint _alignment);
+    BufferView AllocateUploadBuffer(uint64 _size, uint32 _alignment);
+    BufferView AllocateReadbackBuffer(uint64 _size, uint32 _alignment);
     BufferView AllocateScratch(uint64 _size);
     BufferView AllocateShaderBuffer(uint64 _size);
 
@@ -58,7 +59,7 @@ private:
             uint64                 _initial_capacity,
             double                 _growth_factor
         );
-        BufferSlice Allocate(uint64 _size, uint _alignment);
+        BufferSlice Allocate(uint64 _size, uint32 _alignment);
         void        Reset();
 
     private:

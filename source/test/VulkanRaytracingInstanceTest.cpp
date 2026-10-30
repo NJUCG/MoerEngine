@@ -1,4 +1,5 @@
 #include "rhi/backends/vulkan/VulkanRaytracingInstance.h"
+#include "misc/Types.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -8,9 +9,9 @@ int main() {
     using namespace Moer::Render;
     using namespace Moer::Render::VulkanRaytracingDetail;
     Array<RaytracingInstance> instances;
-    Array<uint> free_slots;
+    Array<uint32>             free_slots;
     auto check = [](bool value) { if (!value) throw std::runtime_error("instance slot contract failed"); };
-    for (uint i = 0; i < 3000; ++i) {
+    for (uint32 i = 0; i < 3000; ++i) {
         check(AddInstance(instances, free_slots).array_idx == i);
     }
     instances[5].custom_index = 99;

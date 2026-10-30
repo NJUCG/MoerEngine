@@ -1,4 +1,5 @@
 #include "ProfileTypes.h"
+#include "misc/Types.h"
 
 void FlameProfiler::Begin(const char* name) {
     GetStack().push_back({name, NowUs()});
@@ -18,7 +19,7 @@ void FlameProfiler::End() {
     e.name = name;
     e.start_us = start;
     e.duration_us = now - start;
-    e.thread_id = (uint32_t)std::hash<std::thread::id>{}(std::this_thread::get_id());
+    e.thread_id   = (Moer::uint32)std::hash<std::thread::id>{}(std::this_thread::get_id());
 
     std::lock_guard<std::mutex> lock(m_mutex);
     m_events.push_back(e);
@@ -53,7 +54,7 @@ const char* GetActionStr(MemoryAction a) {
     return (a == MemoryAction::Alloc) ? "ALLOC" : "FREE";
 }
 
-const char* GetVkUsageName(uint32_t usage) {
+const char* GetVkUsageName(Moer::uint32 usage) {
     static const char* labels[] = {
         "Upload",
         "Readback",
@@ -62,7 +63,7 @@ const char* GetVkUsageName(uint32_t usage) {
         "ShaderBuffer_Constant"
     };
 
-    if (usage < (uint32_t)EVkInternalBufferUsage::Count) {
+    if (usage < (Moer::uint32)EVkInternalBufferUsage::Count) {
         return labels[usage];
     }
     return "Unknown/ByName";

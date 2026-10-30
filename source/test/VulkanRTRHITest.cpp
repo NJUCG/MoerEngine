@@ -2,6 +2,7 @@
 // Created by 74535 on 2023/10/10.
 //
 
+#include "misc/Types.h"
 #include <GLFW/glfw3.h>
 
 #include "rhi/RHI.h"
@@ -73,7 +74,7 @@ void Init(int argc, char** argv) {
     g_rhi->PostInit();
 }
 
-RHIBufferRef CreateBufferFromData(uint64_t size, EBufferUsageFlags usage, void* data) {
+RHIBufferRef CreateBufferFromData(Moer::uint64 size, EBufferUsageFlags usage, void* data) {
     RHIBufferRef buffer = g_rhi->RHICreateBuffer<std::byte>(size, usage);
     void*        dst    = g_rhi->RHIMapBuffer(buffer, 0, size);
     std::memcpy(dst, data, size);
@@ -82,14 +83,14 @@ RHIBufferRef CreateBufferFromData(uint64_t size, EBufferUsageFlags usage, void* 
 }
 
 void Test() {
-    uint32_t       index_data[]  = {0, 1, 2};
+    Moer::uint32   index_data[]  = {0, 1, 2};
     Moer::Vector3f vertex_data[] = {
         {0, -0.5, 1},
         {-0.5, 0.5, 1},
         {0.5, 0.5, 1},
 
     };
-    RHIBufferRef index_buffer = g_rhi->RHICreateBuffer<uint32_t>(
+    RHIBufferRef index_buffer = g_rhi->RHICreateBuffer<Moer::uint32>(
         sizeof(index_data),
         EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE |
             EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT
@@ -211,8 +212,8 @@ void Test() {
 
     RHIFenceRef raytracing_finish_fence = g_rhi->RHICreateFence({EFenceUsageFlags::TIMELINE});
     RHIFenceRef copying_finish_fence    = g_rhi->RHICreateFence({EFenceUsageFlags::PRESENT});
-    uint64_t    raytracing_fence_value  = 0;
-    uint64_t    copying_fence_value     = 0;
+    Moer::uint64 raytracing_fence_value  = 0;
+    Moer::uint64 copying_fence_value     = 0;
 
     RHIViewportRef viewport = g_rhi->RHIGetMainViewport();
 
@@ -243,7 +244,7 @@ void Test() {
 
     while (1) {
         command_list->Reset();
-        uint32_t ref_cnt = as_view->GetRefCount();
+        Moer::uint32 ref_cnt = as_view->GetRefCount();
         LOG_INFO("ref count: {}", ref_cnt);
         command_list->BeginRecording();
         command_list->SetPipelineState(rt_pipeline);

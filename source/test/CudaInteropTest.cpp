@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "misc/Types.h"
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
@@ -23,7 +24,7 @@ int main(int argc, const char** argv) {
             config->raster_config.ao_mode            = EAoMode::RTAO;
             config->raster_config.ao_half_resolution = false;
             config->raster_config.probe_gi_enabled   = false;
-            uint ready_frames                        = 0;
+            uint32 ready_frames                      = 0;
             engine.Run(EngineHooks{.on_tick_test = [&](Scene& scene) {
                 if (!scene.IsReady())
                     return;

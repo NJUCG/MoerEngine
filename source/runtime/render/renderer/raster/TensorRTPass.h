@@ -5,6 +5,8 @@
  */
 #pragma once
 
+#include "misc/Types.h"
+
 #if !defined(WITH_CUDA)
 #error "This header requires WITH_CUDA=1"
 #endif
@@ -174,7 +176,7 @@ public:
                 dim3   blockSize(256);
                 dim3   gridSize((N - 1) / blockSize.x / Moer::Cuda::RANDOMS_PER_THREAD);
 
-                static uint64_t seed = 114514;
+                static uint64 seed = 114514;
 
                 Moer::Cuda::FillRandomHalf(
                     gridSize, blockSize, res.interop.stream_to_run, device_mem_addr_map[name], N, seed++
@@ -201,7 +203,7 @@ public:
     // MARK: Engine1 Load
     void Engine1_LoadTexturesToBuffers(
         TensorRTResource& res,
-        uint              ao_only_idx,
+        uint32            ao_only_idx,
         bool              is_verbose,
         bool              is_force_ldr
     ) {
@@ -542,7 +544,7 @@ private:
             }
 
             // 设置多线程构建
-            int32_t numThreads = std::thread::hardware_concurrency();
+            int32 numThreads = std::thread::hardware_concurrency();
             if (!builder->setMaxThreads(numThreads)) {
                 LOG_WARNING("Failed to set max threads to {}, using default", numThreads);
             } else {
@@ -643,9 +645,9 @@ private:
                 case DataType::kHALF:
                     return sizeof(__half);
                 case DataType::kINT8:
-                    return sizeof(int8_t);
+                    return sizeof(int8);
                 case DataType::kINT32:
-                    return sizeof(int32_t);
+                    return sizeof(int32);
                 default:
                     assert(false);
             };
@@ -826,7 +828,7 @@ public:
 
     */
 
-    TextureWithHandle Process(RasterContext& context, const RasterConfig& ui_config, uint ao_only_idx) {
+    TextureWithHandle Process(RasterContext& context, const RasterConfig& ui_config, uint32 ao_only_idx) {
         assert(ui_config.ai_is_cuda_enabled);
         if (!context.cmd_list.IsEmpty()) {
             throw std::logic_error("TensorRT requires a submitted compiled graphics prefix");

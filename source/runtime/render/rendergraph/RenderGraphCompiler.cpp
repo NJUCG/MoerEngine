@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraphCompiler.h"
+#include "misc/Types.h"
 #include "profile/ProfileScope.h"
 #include "profile/RdgDiagnostics.h"
 
@@ -19,8 +20,8 @@ using ResourceKind  = RenderGraph::ResourceKind;
 using TextureAspect = RenderGraph::TextureAspect;
 using ResourceRange = RenderGraph::ResourceRange;
 
-[[nodiscard]] constexpr uint8_t AspectMask(TextureAspect aspect) {
-    return static_cast<uint8_t>(aspect);
+[[nodiscard]] constexpr uint8 AspectMask(TextureAspect aspect) {
+    return static_cast<uint8>(aspect);
 }
 
 [[nodiscard]] bool HasAspect(TextureAspect mask, TextureAspect aspect) {
@@ -33,7 +34,7 @@ void SortUnique(std::vector<T, Allocator>& values) {
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
-[[nodiscard]] auto OutgoingEdges(const std::vector<RenderGraph::CompiledEdge>& edges, uint32_t pass_index) {
+[[nodiscard]] auto OutgoingEdges(const std::vector<RenderGraph::CompiledEdge>& edges, uint32 pass_index) {
     // Both callers consume the canonical edge order (source, then destination).
     return std::ranges::equal_range(edges, pass_index, {}, [](const auto& edge) {
         return edge.src.pass_id;
@@ -48,9 +49,9 @@ void SortUnique(std::vector<T, Allocator>& values) {
 [[nodiscard]] bool
 ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::CompiledEdgeReason& rhs) {
     const auto lhs_key =
-        std::tuple{static_cast<uint8_t>(lhs.kind), lhs.resource.resource_id, lhs.input_version, lhs.output_version};
+        std::tuple{static_cast<uint8>(lhs.kind), lhs.resource.resource_id, lhs.input_version, lhs.output_version};
     const auto rhs_key =
-        std::tuple{static_cast<uint8_t>(rhs.kind), rhs.resource.resource_id, rhs.input_version, rhs.output_version};
+        std::tuple{static_cast<uint8>(rhs.kind), rhs.resource.resource_id, rhs.input_version, rhs.output_version};
     if (lhs_key != rhs_key) {
         return lhs_key < rhs_key;
     }
@@ -99,13 +100,13 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
 
 [[nodiscard]] bool TextureAccessSupportsAspects(RenderGraph::TextureAccessType type, TextureAspect aspects) {
     using Type             = RenderGraph::TextureAccessType;
-    const uint8_t selected = AspectMask(aspects);
+    const uint8 selected   = AspectMask(aspects);
     switch (type) {
         case Type::ColorAttachment:
         case Type::Storage:
             return selected == AspectMask(TextureAspect::Color);
         case Type::DepthStencilAttachment: {
-            const uint8_t depth_stencil = AspectMask(TextureAspect::Depth) | AspectMask(TextureAspect::Stencil);
+            const uint8 depth_stencil = AspectMask(TextureAspect::Depth) | AspectMask(TextureAspect::Stencil);
             return selected != 0 && (selected & depth_stencil) == selected;
         }
         default:
@@ -194,7 +195,7 @@ void RetainCurrentOwnerFamilySources(
     RenderGraph::QueueRole                           owner_queue
 ) {
     assert(owner_queue != RenderGraph::QueueRole::None);
-    const uint32_t owner_family = topology.Resolve(owner_queue).family_id;
+    const uint32 owner_family = topology.Resolve(owner_queue).family_id;
     std::erase_if(sources, [&](const RenderGraph::CompiledBarrierSource& source) {
         return source.domain.queue == RenderGraph::QueueRole::None ||
                topology.Resolve(source.domain.queue).family_id != owner_family;
@@ -261,14 +262,14 @@ bool RenderGraphCompiler::ValidateQueueTopology() {
         RenderGraph::QueueRole::Copy,
     };
     std::array<RenderGraph::QueueBinding, 3> bindings{};
-    for (uint32_t index = 0; index < expected_roles.size(); ++index) {
+    for (uint32 index = 0; index < expected_roles.size(); ++index) {
         bindings[index] = graph.queue_topology.Resolve(expected_roles[index]);
         if (bindings[index].role != expected_roles[index]) {
             return Fail("queue topology contains a binding with the wrong logical role");
         }
     }
-    for (uint32_t lhs = 0; lhs < bindings.size(); ++lhs) {
-        for (uint32_t rhs = lhs + 1; rhs < bindings.size(); ++rhs) {
+    for (uint32 lhs = 0; lhs < bindings.size(); ++lhs) {
+        for (uint32 rhs = lhs + 1; rhs < bindings.size(); ++rhs) {
             if (bindings[lhs].native_queue_id == bindings[rhs].native_queue_id &&
                 bindings[lhs].family_id != bindings[rhs].family_id) {
                 return Fail("one native queue id cannot belong to multiple queue families");
@@ -281,7 +282,7 @@ bool RenderGraphCompiler::ValidateQueueTopology() {
 bool RenderGraphCompiler::NormalizeDeclarations() {
     MOER_PROFILE_SCOPE("RenderGraph.Compiler.NormalizeDeclarations");
     MOER_RDG_PHASE("RenderGraph.Compiler.NormalizeDeclarations");
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         if (!ValidateExecutionDomain(pass_index)) {
             return false;
         }
@@ -328,7 +329,7 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
         }
     }
 
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         auto normalize_states = [&](
                                     const std::vector<RenderGraph::StateDeclaration>& declarations,
@@ -419,8 +420,8 @@ bool RenderGraphCompiler::NormalizeRange(
     switch (resource.kind) {
         case ResourceKind::Texture: {
             const auto&   desc          = resource.texture_desc;
-            const uint8_t desc_aspects  = AspectMask(desc.aspects);
-            const uint8_t known_aspects = AspectMask(TextureAspect::All);
+            const uint8   desc_aspects  = AspectMask(desc.aspects);
+            const uint8   known_aspects = AspectMask(TextureAspect::All);
             if (desc.mip_count == 0 || desc.layer_count == 0 || desc_aspects == 0 ||
                 (desc_aspects & known_aspects) != desc_aspects) {
                 return Fail("texture resource has an invalid descriptor: " + resource.name);
@@ -430,8 +431,8 @@ bool RenderGraphCompiler::NormalizeRange(
             if (range.aspects == TextureAspect::All) {
                 range.aspects = desc.aspects;
             }
-            const uint8_t requested_aspects = AspectMask(range.aspects);
-            const uint8_t available_aspects = AspectMask(desc.aspects);
+            const uint8 requested_aspects = AspectMask(range.aspects);
+            const uint8 available_aspects = AspectMask(desc.aspects);
             if (requested_aspects == 0 || (requested_aspects & available_aspects) != requested_aspects) {
                 return Fail("texture range requests unavailable aspects on resource '" + resource.name + "'");
             }
@@ -483,7 +484,7 @@ bool RenderGraphCompiler::NormalizeRange(
     return true;
 }
 
-bool RenderGraphCompiler::ValidateExecutionDomain(uint32_t pass_index) {
+bool RenderGraphCompiler::ValidateExecutionDomain(uint32 pass_index) {
     const auto& pass   = graph.passes[pass_index];
     const auto  queue  = pass.domain.queue;
     const auto  work   = pass.domain.work;
@@ -510,7 +511,7 @@ bool RenderGraphCompiler::ValidateExecutionDomain(uint32_t pass_index) {
 }
 
 bool RenderGraphCompiler::ValidateAccessState(
-    uint32_t                                pass_index,
+    uint32                                  pass_index,
     const RenderGraph::ResourceDeclaration& resource,
     const RenderGraph::ResourceRange&       range,
     RenderGraph::AccessMode                 mode,
@@ -584,10 +585,10 @@ bool RenderGraphCompiler::BuildAtomicCells() {
     }
 
     // Endpoints are temporary; reuse their capacity across resources.
-    std::pmr::vector<uint32_t> mip_boundaries{&scratch_memory};
-    std::pmr::vector<uint32_t> layer_boundaries{&scratch_memory};
-    std::pmr::vector<uint64_t> boundaries{&scratch_memory};
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    std::pmr::vector<uint32> mip_boundaries{&scratch_memory};
+    std::pmr::vector<uint32> layer_boundaries{&scratch_memory};
+    std::pmr::vector<uint64> boundaries{&scratch_memory};
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         auto&       cells    = resource_cells[resource_index];
 
@@ -636,12 +637,12 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                 if (!HasAspect(resource.texture_desc.aspects, aspect)) {
                     continue;
                 }
-                for (uint32_t mip_index = 0; mip_index + 1 < mip_boundaries.size(); ++mip_index) {
-                    for (uint32_t layer_index = 0; layer_index + 1 < layer_boundaries.size(); ++layer_index) {
-                        const uint32_t mip_first   = mip_boundaries[mip_index];
-                        const uint32_t mip_end     = mip_boundaries[mip_index + 1];
-                        const uint32_t layer_first = layer_boundaries[layer_index];
-                        const uint32_t layer_end   = layer_boundaries[layer_index + 1];
+                for (uint32 mip_index = 0; mip_index + 1 < mip_boundaries.size(); ++mip_index) {
+                    for (uint32 layer_index = 0; layer_index + 1 < layer_boundaries.size(); ++layer_index) {
+                        const uint32 mip_first   = mip_boundaries[mip_index];
+                        const uint32 mip_end     = mip_boundaries[mip_index + 1];
+                        const uint32 layer_first = layer_boundaries[layer_index];
+                        const uint32 layer_end   = layer_boundaries[layer_index + 1];
                         if (mip_first == mip_end || layer_first == layer_end) {
                             continue;
                         }
@@ -684,7 +685,7 @@ bool RenderGraphCompiler::BuildAtomicCells() {
             }
             SortUnique(boundaries);
             cells.reserve(boundaries.size() - 1);
-            for (uint32_t index = 0; index + 1 < boundaries.size(); ++index) {
+            for (uint32 index = 0; index + 1 < boundaries.size(); ++index) {
                 if (boundaries[index] == boundaries[index + 1]) {
                     continue;
                 }
@@ -758,8 +759,8 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
     // current pass accesses. Unused resources have no per-pass state to merge.
     std::pmr::vector<std::pmr::vector<CellUsage>> usages{&scratch_memory};
     usages.resize(graph.resources.size());
-    std::pmr::vector<uint32_t> accessed_resources{&scratch_memory};
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+    std::pmr::vector<uint32> accessed_resources{&scratch_memory};
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         const auto& pass = graph.passes[pass_index];
         for (const auto dependency : pass.explicit_dependencies) {
             if (!graph.IsValidPass(dependency)) {
@@ -781,7 +782,7 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                 accessed_resources.push_back(access.resource.resource_id);
             }
             bool        matched         = false;
-            for (uint32_t cell_index = 0; cell_index < cells.size(); ++cell_index) {
+            for (uint32 cell_index = 0; cell_index < cells.size(); ++cell_index) {
                 MOER_RDG_COUNT(CellTests, 1);
                 if (!RangesOverlap(access.range, cells[cell_index].range)) {
                     continue;
@@ -803,23 +804,23 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
         // Keep the compiler's deterministic resource order independent of the
         // order in which a pass declared its accesses.
         std::sort(accessed_resources.begin(), accessed_resources.end());
-        for (const uint32_t resource_index : accessed_resources) {
+        for (const uint32 resource_index : accessed_resources) {
             auto&      resource_usages = usages[resource_index];
             const bool writes_resource =
                 std::any_of(resource_usages.begin(), resource_usages.end(), [](const CellUsage& usage) {
                     return usage.write;
                 });
-            const uint32_t output_version =
+            const uint32 output_version =
                 writes_resource ? ++resource_version_counts[resource_index] : RenderGraph::InvalidVersion;
 
-            for (uint32_t cell_index = 0; cell_index < resource_usages.size(); ++cell_index) {
+            for (uint32 cell_index = 0; cell_index < resource_usages.size(); ++cell_index) {
                 const CellUsage usage = resource_usages[cell_index];
                 if (!usage.read && !usage.write) {
                     continue;
                 }
 
                 auto&          cell            = resource_cells[resource_index][cell_index];
-                const uint32_t input_version   = cell.version;
+                const uint32   input_version   = cell.version;
                 const auto     resource_handle = RenderGraph::ResourceHandle{resource_index, graph.graph_id};
                 const auto&    resource        = graph.resources[resource_index];
                 const auto     access_mode     = ToAccessMode(usage.read, usage.write);
@@ -1092,7 +1093,7 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
         }
     }
 
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         if (!resource.imported && !resource_ever_written[resource_index]) {
             const auto& cells = resource_cells[resource_index];
@@ -1150,7 +1151,7 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
 }
 
 bool RenderGraphCompiler::MergeCellState(
-    uint32_t                                pass_index,
+    uint32                                  pass_index,
     const RenderGraph::ResourceDeclaration& resource,
     CellUsage&                              usage,
     const NormalizedAccess&                 access
@@ -1193,18 +1194,18 @@ bool RenderGraphCompiler::MergeCellState(
 }
 
 void RenderGraphCompiler::AddBarrier(
-    uint32_t                     resource_index,
-    const AtomicCell&            cell,
-    RenderGraph::PassHandle      dst_pass,
-    RenderGraph::ResourceState   next_state,
-    RenderGraph::ExecutionDomain next_domain,
-    RenderGraph::AccessMode      next_mode,
-    bool                         state_transition,
-    bool                         memory_dependency,
-    bool                         queue_ownership,
-    bool                         import_boundary,
-    bool                         export_boundary,
-    bool                         source_state_unknown,
+    uint32                                          resource_index,
+    const AtomicCell&                               cell,
+    RenderGraph::PassHandle                         dst_pass,
+    RenderGraph::ResourceState                      next_state,
+    RenderGraph::ExecutionDomain                    next_domain,
+    RenderGraph::AccessMode                         next_mode,
+    bool                                            state_transition,
+    bool                                            memory_dependency,
+    bool                                            queue_ownership,
+    bool                                            import_boundary,
+    bool                                            export_boundary,
+    bool                                            source_state_unknown,
     std::vector<RenderGraph::CompiledBarrierSource> sources
 ) {
     MOER_RDG_COUNT(BarrierSources, sources.size());
@@ -1267,7 +1268,7 @@ void RenderGraphCompiler::AddBarrier(
 bool RenderGraphCompiler::BuildFinalBarriers() {
     MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildFinalBarriers");
     MOER_RDG_PHASE("RenderGraph.Compiler.BuildFinalBarriers");
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         const auto& finals   = normalized_final_states[resource_index];
         if (finals.empty()) {
@@ -1352,7 +1353,7 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
 void RenderGraphCompiler::AuditStatePlanCompleteness() {
     MOER_PROFILE_SCOPE("RenderGraph.Compiler.AuditStatePlanCompleteness");
     MOER_RDG_PHASE("RenderGraph.Compiler.AuditStatePlanCompleteness");
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         if (resource.kind == ResourceKind::Token) {
             continue;
@@ -1377,7 +1378,7 @@ void RenderGraphCompiler::AuditStatePlanCompleteness() {
     }
 }
 
-void RenderGraphCompiler::AddEdge(uint32_t src, uint32_t dst, RenderGraph::CompiledEdgeReason reason) {
+void RenderGraphCompiler::AddEdge(uint32 src, uint32 dst, RenderGraph::CompiledEdgeReason reason) {
     MOER_RDG_COUNT(AddEdgeCalls, 1);
     if (src == dst || src == RenderGraph::InvalidIndex ||
         dst == RenderGraph::InvalidIndex) {
@@ -1386,7 +1387,7 @@ void RenderGraphCompiler::AddEdge(uint32_t src, uint32_t dst, RenderGraph::Compi
 
     const auto src_handle = RenderGraph::PassHandle{src, graph.graph_id};
     const auto dst_handle = RenderGraph::PassHandle{dst, graph.graph_id};
-    const uint64_t key = (uint64_t{src} << 32) | dst;
+    const uint64 key        = (uint64{src} << 32) | dst;
     const auto found = edge_indices.find(key);
     if (found == edge_indices.end()) {
         MOER_RDG_COUNT(ReasonAppends, 1);
@@ -1425,20 +1426,20 @@ bool RenderGraphCompiler::BuildExecutionOrder() {
     MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildExecutionOrder");
     MOER_RDG_PHASE("RenderGraph.Compiler.BuildExecutionOrder");
     SortEdges();
-    std::pmr::vector<uint32_t> indegree(graph.passes.size(), 0, &scratch_memory);
+    std::pmr::vector<uint32> indegree(graph.passes.size(), 0, &scratch_memory);
     for (size_t index = 0; index < graph.compiled_plan.edges.size(); ++index) {
         const auto& edge = graph.compiled_plan.edges[index];
         ++indegree[edge.dst.pass_id];
         // Alias planning still adds edges. Only this intermediate sort needs
         // to update the insertion lookup; the final sort has no later writer.
-        edge_indices.at((uint64_t{edge.src.pass_id} << 32) | edge.dst.pass_id) = index;
+        edge_indices.at((uint64{edge.src.pass_id} << 32) | edge.dst.pass_id) = index;
     }
 
     // Preserve the lowest declaration index tie-break without rescanning all passes.
-    std::priority_queue<uint32_t, std::pmr::vector<uint32_t>, std::greater<>> ready{
-        std::greater<>{}, std::pmr::vector<uint32_t>{&scratch_memory}
+    std::priority_queue<uint32, std::pmr::vector<uint32>, std::greater<>> ready{
+        std::greater<>{}, std::pmr::vector<uint32>{&scratch_memory}
     };
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         if (indegree[pass_index] == 0) {
             ready.push(pass_index);
         }
@@ -1446,9 +1447,9 @@ bool RenderGraphCompiler::BuildExecutionOrder() {
     execution_position.assign(graph.passes.size(), RenderGraph::InvalidIndex);
     graph.compiled_plan.execution_order.reserve(graph.passes.size());
     while (!ready.empty()) {
-        const uint32_t next = ready.top();
+        const uint32 next = ready.top();
         ready.pop();
-        execution_position[next] = static_cast<uint32_t>(graph.compiled_plan.execution_order.size());
+        execution_position[next] = static_cast<uint32>(graph.compiled_plan.execution_order.size());
         graph.compiled_plan.execution_order.push_back(RenderGraph::PassHandle{next, graph.graph_id});
         for (const auto& edge : OutgoingEdges(graph.compiled_plan.edges, next)) {
             assert(indegree[edge.dst.pass_id] > 0);
@@ -1466,7 +1467,7 @@ bool RenderGraphCompiler::BuildExecutionOrder() {
 void RenderGraphCompiler::BuildQueuePlan() {
     MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildQueuePlan");
     MOER_RDG_PHASE("RenderGraph.Compiler.BuildQueuePlan");
-    std::pmr::vector<uint32_t> pass_to_batch(
+    std::pmr::vector<uint32> pass_to_batch(
         graph.passes.size(), RenderGraph::InvalidIndex, &scratch_memory
     );
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
@@ -1474,8 +1475,8 @@ void RenderGraphCompiler::BuildQueuePlan() {
         const auto  binding = graph.queue_topology.Resolve(pass.domain.queue);
         if (graph.compiled_plan.queue_batches.empty() ||
             graph.compiled_plan.queue_batches.back().queue.role != binding.role) {
-            const uint32_t batch_id =
-                static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
+            const uint32 batch_id =
+                static_cast<uint32>(graph.compiled_plan.queue_batches.size());
             graph.compiled_plan.queue_batches.push_back(RenderGraph::CompiledQueueBatch{
                 .id = batch_id,
                 .queue = binding,
@@ -1487,17 +1488,17 @@ void RenderGraphCompiler::BuildQueuePlan() {
     }
 
     graph.compiled_plan.pass_barriers.reserve(graph.passes.size());
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         graph.compiled_plan.pass_barriers.push_back(RenderGraph::CompiledPassBarriers{
             .pass = RenderGraph::PassHandle{pass_index, graph.graph_id},
         });
     }
 
     auto add_batch_dependency = [&](
-                                    uint32_t signal_batch,
-                                    uint32_t wait_batch,
-                                    bool     gpu_wait_required,
-                                    uint32_t edge_index
+                                    uint32 signal_batch,
+                                    uint32 wait_batch,
+                                    bool   gpu_wait_required,
+                                    uint32 edge_index
                                 ) -> RenderGraph::CompiledQueueSync& {
         auto existing = std::find_if(
             graph.compiled_plan.queue_syncs.begin(),
@@ -1521,7 +1522,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
 
         auto& producer = graph.compiled_plan.queue_batches[signal_batch];
         auto& consumer = graph.compiled_plan.queue_batches[wait_batch];
-        const uint32_t sync_id = static_cast<uint32_t>(graph.compiled_plan.queue_syncs.size());
+        const uint32 sync_id  = static_cast<uint32>(graph.compiled_plan.queue_syncs.size());
         graph.compiled_plan.queue_syncs.push_back(RenderGraph::CompiledQueueSync{
             .id                = sync_id,
             .signal_pass       = producer.passes.back(),
@@ -1531,19 +1532,17 @@ void RenderGraphCompiler::BuildQueuePlan() {
             .signal_batch      = signal_batch,
             .wait_batch        = wait_batch,
             .gpu_wait_required = gpu_wait_required,
-            .dependency_edges  = edge_index == RenderGraph::InvalidIndex ?
-                                     std::vector<uint32_t>{} :
-                                     std::vector<uint32_t>{edge_index},
+            .dependency_edges  = edge_index == RenderGraph::InvalidIndex ? std::vector<uint32>{} : std::vector<uint32>{edge_index},
         });
         producer.signal_syncs.push_back(sync_id);
         consumer.wait_syncs.push_back(sync_id);
         return graph.compiled_plan.queue_syncs.back();
     };
 
-    for (uint32_t edge_index = 0; edge_index < graph.compiled_plan.edges.size(); ++edge_index) {
+    for (uint32 edge_index = 0; edge_index < graph.compiled_plan.edges.size(); ++edge_index) {
         const auto& edge = graph.compiled_plan.edges[edge_index];
-        const uint32_t signal_batch = pass_to_batch[edge.src.pass_id];
-        const uint32_t wait_batch   = pass_to_batch[edge.dst.pass_id];
+        const uint32 signal_batch = pass_to_batch[edge.src.pass_id];
+        const uint32 wait_batch   = pass_to_batch[edge.dst.pass_id];
         if (signal_batch == RenderGraph::InvalidIndex ||
             wait_batch == RenderGraph::InvalidIndex) {
             continue;
@@ -1561,11 +1560,11 @@ void RenderGraphCompiler::BuildQueuePlan() {
         );
     }
 
-    for (uint32_t wait_batch = 0; wait_batch < graph.compiled_plan.queue_batches.size(); ++wait_batch) {
+    for (uint32 wait_batch = 0; wait_batch < graph.compiled_plan.queue_batches.size(); ++wait_batch) {
         const auto native_queue_id =
             graph.compiled_plan.queue_batches[wait_batch].queue.native_queue_id;
-        for (uint32_t candidate = wait_batch; candidate > 0; --candidate) {
-            const uint32_t signal_batch = candidate - 1;
+        for (uint32 candidate = wait_batch; candidate > 0; --candidate) {
+            const uint32 signal_batch = candidate - 1;
             if (graph.compiled_plan.queue_batches[signal_batch].queue.native_queue_id ==
                 native_queue_id) {
                 add_batch_dependency(
@@ -1579,7 +1578,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
         }
     }
 
-    for (uint32_t barrier_index = 0; barrier_index < graph.compiled_plan.barriers.size();
+    for (uint32 barrier_index = 0; barrier_index < graph.compiled_plan.barriers.size();
          ++barrier_index) {
         const auto& barrier = graph.compiled_plan.barriers[barrier_index];
         if (barrier.import_boundary && !barrier.src_pass.IsValid()) {
@@ -1589,7 +1588,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
             graph.compiled_plan.epilogue_barriers.push_back(barrier_index);
         }
         if (barrier.dst_pass.IsValid()) {
-            const uint32_t dst_batch = pass_to_batch[barrier.dst_pass.pass_id];
+            const uint32 dst_batch = pass_to_batch[barrier.dst_pass.pass_id];
             graph.compiled_plan.pass_barriers[barrier.dst_pass.pass_id].before.push_back(barrier_index);
             if (!barrier.src_pass.IsValid() || barrier.queue_dependency) {
                 graph.compiled_plan.queue_batches[dst_batch].pre_barriers.push_back(barrier_index);
@@ -1599,8 +1598,8 @@ void RenderGraphCompiler::BuildQueuePlan() {
             if (!source_pass.IsValid() || !barrier.dst_pass.IsValid()) {
                 return;
             }
-            const uint32_t src_batch = pass_to_batch[source_pass.pass_id];
-            const uint32_t dst_batch = pass_to_batch[barrier.dst_pass.pass_id];
+            const uint32 src_batch = pass_to_batch[source_pass.pass_id];
+            const uint32 dst_batch = pass_to_batch[barrier.dst_pass.pass_id];
             if (graph.compiled_plan.queue_batches[src_batch].queue.native_queue_id ==
                 graph.compiled_plan.queue_batches[dst_batch].queue.native_queue_id) {
                 return;
@@ -1616,12 +1615,12 @@ void RenderGraphCompiler::BuildQueuePlan() {
         if (!barrier.dst_pass.IsValid() || !barrier.queue_dependency) {
             continue;
         }
-        const uint32_t dst_batch = pass_to_batch[barrier.dst_pass.pass_id];
+        const uint32 dst_batch      = pass_to_batch[barrier.dst_pass.pass_id];
         auto attach_to_sync = [&](RenderGraph::PassHandle source_pass) {
             if (!source_pass.IsValid()) {
                 return;
             }
-            const uint32_t src_batch = pass_to_batch[source_pass.pass_id];
+            const uint32 src_batch = pass_to_batch[source_pass.pass_id];
             if (graph.compiled_plan.queue_batches[src_batch].queue.native_queue_id ==
                 graph.compiled_plan.queue_batches[dst_batch].queue.native_queue_id) {
                 return;
@@ -1645,13 +1644,13 @@ void RenderGraphCompiler::BuildQueuePlan() {
     }
 }
 
-std::pmr::vector<uint32_t> RenderGraphCompiler::BuildDependencyLevels() {
+std::pmr::vector<uint32> RenderGraphCompiler::BuildDependencyLevels() {
     MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildDependencyLevels");
     MOER_RDG_PHASE("RenderGraph.Compiler.BuildDependencyLevels");
     // A pass enters the wave after its deepest predecessor. The validated
     // topological order also covers alias edges added after the initial sort.
-    std::pmr::vector<uint32_t> levels(graph.passes.size(), 0, &scratch_memory);
-    uint32_t max_level = 0;
+    std::pmr::vector<uint32> levels(graph.passes.size(), 0, &scratch_memory);
+    uint32                   max_level = 0;
     for (const auto pass : graph.compiled_plan.execution_order) {
         for (const auto& edge : OutgoingEdges(graph.compiled_plan.edges, pass.pass_id)) {
             auto& destination_level = levels[edge.dst.pass_id];
@@ -1660,7 +1659,7 @@ std::pmr::vector<uint32_t> RenderGraphCompiler::BuildDependencyLevels() {
         }
     }
     graph.compiled_plan.dependency_levels.resize(max_level + 1);
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         graph.compiled_plan.dependency_levels[levels[pass_index]].passes.push_back(
             RenderGraph::PassHandle{pass_index, graph.graph_id}
         );
@@ -1668,7 +1667,7 @@ std::pmr::vector<uint32_t> RenderGraphCompiler::BuildDependencyLevels() {
     return levels;
 }
 
-void RenderGraphCompiler::BuildFrontendRecordUnits(std::span<const uint32_t> dependency_levels) {
+void RenderGraphCompiler::BuildFrontendRecordUnits(std::span<const uint32> dependency_levels) {
     MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildFrontendRecordUnits");
     MOER_RDG_PHASE("RenderGraph.Compiler.BuildFrontendRecordUnits");
     // Preserve one stable frontend source identity per pass in execution order.
@@ -1677,7 +1676,7 @@ void RenderGraphCompiler::BuildFrontendRecordUnits(std::span<const uint32_t> dep
     );
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
         const auto& pass = graph.passes[pass_handle.pass_id];
-        const auto source_index = static_cast<uint32_t>(
+        const auto  source_index = static_cast<uint32>(
             graph.compiled_plan.frontend_record_units.size()
         );
         graph.compiled_plan.frontend_record_units.push_back(
@@ -1703,11 +1702,11 @@ void RenderGraphCompiler::BuildFrontendDispatchGroups() {
     // order frontend Record callbacks: every callback consumes immutable
     // prepared data and writes a private command stream. Only the declared CPU
     // recording policy creates a frontend dispatch boundary.
-    uint32_t unit_index = 0;
+    uint32 unit_index = 0;
     while (unit_index < graph.compiled_plan.frontend_record_units.size()) {
         const auto& first =
             graph.compiled_plan.frontend_record_units[unit_index];
-        uint32_t group_end = unit_index + 1;
+        uint32 group_end = unit_index + 1;
         if (first.record_policy ==
             RenderGraph::PassRecordPolicy::ParallelAllowed) {
             while (group_end <
@@ -1738,15 +1737,15 @@ void RenderGraphCompiler::BuildLifetimes() {
     MOER_RDG_PHASE("RenderGraph.Compiler.BuildLifetimes");
     for (const auto& access : graph.compiled_plan.accesses) {
         auto&          resource = graph.resources[access.resource.resource_id];
-        const uint32_t position = execution_position[access.pass.pass_id];
+        const uint32   position = execution_position[access.pass.pass_id];
         resource.first_use      = std::min(resource.first_use, position);
         resource.last_use       = resource.last_use == RenderGraph::InvalidIndex ?
                                       position :
                                       std::max(resource.last_use, position);
     }
 
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
-        const uint32_t position = execution_position[pass_index];
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+        const uint32 position = execution_position[pass_index];
         for (const auto reference : graph.passes[pass_index].references) {
             auto& resource = graph.resources[reference.resource_id];
             resource.first_use = std::min(resource.first_use, position);
@@ -1757,7 +1756,7 @@ void RenderGraphCompiler::BuildLifetimes() {
     }
 
     graph.compiled_plan.resources.reserve(graph.resources.size());
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         graph.compiled_plan.resources.push_back(RenderGraph::CompiledResource{
             .resource      = RenderGraph::ResourceHandle{resource_index, graph.graph_id},
@@ -1777,16 +1776,16 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
     using CompiledAccess = RenderGraph::CompiledAccess;
 
     struct Candidate {
-        uint32_t              resource_index = RenderGraph::InvalidIndex;
+        uint32                resource_index = RenderGraph::InvalidIndex;
         const CompiledAccess* first_access   = nullptr;
         const CompiledAccess* last_access    = nullptr;
         bool                  reusable       = false;
     };
 
     struct AliasSlot {
-        uint32_t                  id              = RenderGraph::InvalidIndex;
-        uint32_t                  tail_resource   = RenderGraph::InvalidIndex;
-        uint32_t                  available_after = RenderGraph::InvalidIndex;
+        uint32 id              = RenderGraph::InvalidIndex;
+        uint32 tail_resource   = RenderGraph::InvalidIndex;
+        uint32 available_after = RenderGraph::InvalidIndex;
     };
 
     const auto is_whole_range =
@@ -1809,7 +1808,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
         };
 
     const auto descriptors_match =
-        [&](uint32_t lhs_index, uint32_t rhs_index) {
+        [&](uint32 lhs_index, uint32 rhs_index) {
             const auto& lhs = graph.resources[lhs_index];
             const auto& rhs = graph.resources[rhs_index];
             if (lhs.kind != rhs.kind) {
@@ -1831,7 +1830,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
     std::pmr::vector<Candidate> candidates{&scratch_memory};
     candidates.reserve(graph.resources.size());
     std::pmr::vector<const CompiledAccess*> accesses{&scratch_memory};
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size();
+    for (uint32 resource_index = 0; resource_index < graph.resources.size();
          ++resource_index) {
         auto&       compiled_resource = graph.compiled_plan.resources[resource_index];
         const auto& resource          = graph.resources[resource_index];
@@ -1867,11 +1866,11 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
                 }
             );
 
-        uint32_t first_access_count = 0;
-        uint32_t last_access_count  = 0;
+        uint32   first_access_count = 0;
+        uint32   last_access_count  = 0;
         bool     accesses_are_safe  = !accesses.empty();
         for (const auto* access : accesses) {
-            const uint32_t position = execution_position[access->pass.pass_id];
+            const uint32 position = execution_position[access->pass.pass_id];
             if (position == compiled_resource.first_use) {
                 candidate.first_access = access;
                 ++first_access_count;
@@ -1910,7 +1909,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
         }
     );
 
-    uint32_t               next_slot = 0;
+    uint32                      next_slot = 0;
     std::pmr::vector<AliasSlot> reusable_slots{&scratch_memory};
     for (const auto& candidate : candidates) {
         auto& compiled_resource =
@@ -1969,13 +1968,13 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
         }
 
         RenderGraph::CompiledBarrier* alias_barrier       = nullptr;
-        uint32_t alias_barrier_index =
+        uint32                        alias_barrier_index =
             RenderGraph::InvalidIndex;
         if (selected_slot != nullptr && predecessor_cell != nullptr &&
             primary_source != nullptr &&
             execution_position[primary_source->pass.pass_id] <
                 compiled_resource.first_use) {
-            for (uint32_t barrier_index = 0;
+            for (uint32 barrier_index = 0;
                  barrier_index < graph.compiled_plan.barriers.size();
                  ++barrier_index) {
                 auto& barrier = graph.compiled_plan.barriers[barrier_index];
@@ -2087,7 +2086,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         return Fail("transient alias plan has an incomplete resource table");
     }
 
-    const auto descriptors_match = [&](uint32_t lhs_index, uint32_t rhs_index) {
+    const auto descriptors_match = [&](uint32 lhs_index, uint32 rhs_index) {
         const auto& lhs = graph.resources[lhs_index];
         const auto& rhs = graph.resources[rhs_index];
         if (lhs.kind != rhs.kind) {
@@ -2132,7 +2131,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
 
     // Semantic edges were validated when selecting execution_order. Every new
     // alias edge is checked against that same rank through its frontier below.
-    std::pmr::vector<uint32_t> alias_barrier_owners(plan.barriers.size(), 0, &scratch_memory);
+    std::pmr::vector<uint32> alias_barrier_owners(plan.barriers.size(), 0, &scratch_memory);
     for (const auto& alias : plan.alias_boundaries) {
         if (!graph.IsValidResource(alias.predecessor_resource) ||
             !graph.IsValidResource(alias.successor_resource) ||
@@ -2143,8 +2142,8 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
             return Fail("transient alias boundary contains an invalid handle or index");
         }
 
-        const uint32_t predecessor_index = alias.predecessor_resource.resource_id;
-        const uint32_t successor_index   = alias.successor_resource.resource_id;
+        const uint32 predecessor_index       = alias.predecessor_resource.resource_id;
+        const uint32 successor_index         = alias.successor_resource.resource_id;
         const auto& predecessor = plan.resources[predecessor_index];
         const auto& successor   = plan.resources[successor_index];
         const auto& predecessor_declaration = graph.resources[predecessor_index];
@@ -2179,7 +2178,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
             return Fail("transient alias boundary and barrier metadata disagree");
         }
 
-        for (uint32_t source_index = 0;
+        for (uint32 source_index = 0;
              source_index < alias.source_frontier.size();
              ++source_index) {
             const auto source = alias.source_frontier[source_index];
@@ -2207,9 +2206,9 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         }
     }
 
-    for (uint32_t barrier_index = 0; barrier_index < plan.barriers.size();
+    for (uint32 barrier_index = 0; barrier_index < plan.barriers.size();
          ++barrier_index) {
-        const uint32_t owner_count = alias_barrier_owners[barrier_index];
+        const uint32 owner_count = alias_barrier_owners[barrier_index];
         if ((plan.barriers[barrier_index].transient_alias && owner_count != 1) ||
             (!plan.barriers[barrier_index].transient_alias && owner_count != 0)) {
             return Fail(
@@ -2218,7 +2217,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         }
     }
 
-    uint32_t max_slot = 0;
+    uint32   max_slot = 0;
     bool     has_slot = false;
     for (const auto& resource : plan.resources) {
         if (resource.transient_slot != RenderGraph::InvalidIndex) {
@@ -2226,10 +2225,10 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
             has_slot = true;
         }
     }
-    std::pmr::vector<uint32_t> occupants{&scratch_memory};
-    for (uint32_t slot = 0; has_slot && slot <= max_slot; ++slot) {
+    std::pmr::vector<uint32> occupants{&scratch_memory};
+    for (uint32 slot = 0; has_slot && slot <= max_slot; ++slot) {
         occupants.clear();
-        for (uint32_t resource_index = 0; resource_index < plan.resources.size();
+        for (uint32 resource_index = 0; resource_index < plan.resources.size();
              ++resource_index) {
             if (plan.resources[resource_index].transient_slot == slot) {
                 occupants.push_back(resource_index);
@@ -2241,7 +2240,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         std::sort(
             occupants.begin(),
             occupants.end(),
-            [&](uint32_t lhs, uint32_t rhs) {
+            [&](uint32 lhs, uint32 rhs) {
                 const auto& lhs_resource = plan.resources[lhs];
                 const auto& rhs_resource = plan.resources[rhs];
                 return lhs_resource.first_use < rhs_resource.first_use ||
@@ -2249,7 +2248,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
                         lhs < rhs);
             }
         );
-        for (uint32_t index = 0; index < occupants.size(); ++index) {
+        for (uint32 index = 0; index < occupants.size(); ++index) {
             const auto resource_index = occupants[index];
             const auto& resource      = plan.resources[resource_index];
             if (resource.first_use == RenderGraph::InvalidIndex ||
@@ -2260,7 +2259,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
             if (index == 0) {
                 continue;
             }
-            const uint32_t predecessor_index = occupants[index - 1];
+            const uint32 predecessor_index = occupants[index - 1];
             const auto& predecessor = plan.resources[predecessor_index];
             if (predecessor.last_use >= resource.first_use ||
                 !descriptors_match(predecessor_index, resource_index)) {
@@ -2298,10 +2297,10 @@ bool RenderGraphCompiler::RangesOverlap(const ResourceRange& lhs, const Resource
         if ((AspectMask(left->aspects) & AspectMask(right.aspects)) == 0) {
             return false;
         }
-        const uint32_t lhs_mip_end   = left->mip_first + left->mip_count;
-        const uint32_t rhs_mip_end   = right.mip_first + right.mip_count;
-        const uint32_t lhs_layer_end = left->layer_first + left->layer_count;
-        const uint32_t rhs_layer_end = right.layer_first + right.layer_count;
+        const uint32 lhs_mip_end   = left->mip_first + left->mip_count;
+        const uint32 rhs_mip_end   = right.mip_first + right.mip_count;
+        const uint32 lhs_layer_end = left->layer_first + left->layer_count;
+        const uint32 rhs_layer_end = right.layer_first + right.layer_count;
         return left->mip_first < rhs_mip_end && right.mip_first < lhs_mip_end &&
                left->layer_first < rhs_layer_end && right.layer_first < lhs_layer_end;
     }

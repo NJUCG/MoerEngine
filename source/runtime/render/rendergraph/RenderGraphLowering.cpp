@@ -2,8 +2,8 @@
 #include "profile/ProfileScope.h"
 #include "profile/RdgDiagnostics.h"
 
+#include "misc/Types.h"
 #include <algorithm>
-#include <cstdint>
 #include <memory_resource>
 #include <sstream>
 #include <tuple>
@@ -37,7 +37,7 @@ using TextureBoundary   = RenderGraph::TextureBoundary;
 template<typename Enum>
 [[nodiscard]] constexpr Enum Or(Enum lhs, Enum rhs) {
     return static_cast<Enum>(
-        static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs)
+        static_cast<uint32>(lhs) | static_cast<uint32>(rhs)
     );
 }
 
@@ -265,14 +265,14 @@ template<typename Enum>
 
 [[nodiscard]] ETextureAspectFlags LowerAspects(TextureAspect aspects) {
     ETextureAspectFlags result = ETextureAspectFlags::NONE;
-    const auto mask = static_cast<uint8_t>(aspects);
-    if ((mask & static_cast<uint8_t>(TextureAspect::Color)) != 0) {
+    const auto          mask   = static_cast<uint8>(aspects);
+    if ((mask & static_cast<uint8>(TextureAspect::Color)) != 0) {
         result = Or(result, ETextureAspectFlags::COLOR);
     }
-    if ((mask & static_cast<uint8_t>(TextureAspect::Depth)) != 0) {
+    if ((mask & static_cast<uint8>(TextureAspect::Depth)) != 0) {
         result = Or(result, ETextureAspectFlags::DEPTH_SLICE);
     }
-    if ((mask & static_cast<uint8_t>(TextureAspect::Stencil)) != 0) {
+    if ((mask & static_cast<uint8>(TextureAspect::Stencil)) != 0) {
         result = Or(result, ETextureAspectFlags::STENCIL_SLICE);
     }
     return result;
@@ -280,20 +280,20 @@ template<typename Enum>
 
 [[nodiscard]] TextureAspect RaiseAspects(ETextureAspectFlags aspects) {
     TextureAspect result = TextureAspect::None;
-    const auto mask = static_cast<uint32_t>(aspects);
-    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::COLOR)) != 0) {
+    const auto    mask   = static_cast<uint32>(aspects);
+    if ((mask & static_cast<uint32>(ETextureAspectFlags::COLOR)) != 0) {
         result = static_cast<TextureAspect>(
-            static_cast<uint8_t>(result) | static_cast<uint8_t>(TextureAspect::Color)
+            static_cast<uint8>(result) | static_cast<uint8>(TextureAspect::Color)
         );
     }
-    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::DEPTH_SLICE)) != 0) {
+    if ((mask & static_cast<uint32>(ETextureAspectFlags::DEPTH_SLICE)) != 0) {
         result = static_cast<TextureAspect>(
-            static_cast<uint8_t>(result) | static_cast<uint8_t>(TextureAspect::Depth)
+            static_cast<uint8>(result) | static_cast<uint8>(TextureAspect::Depth)
         );
     }
-    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::STENCIL_SLICE)) != 0) {
+    if ((mask & static_cast<uint32>(ETextureAspectFlags::STENCIL_SLICE)) != 0) {
         result = static_cast<TextureAspect>(
-            static_cast<uint8_t>(result) | static_cast<uint8_t>(TextureAspect::Stencil)
+            static_cast<uint8>(result) | static_cast<uint8>(TextureAspect::Stencil)
         );
     }
     return result;
@@ -301,7 +301,7 @@ template<typename Enum>
 
 void AppendRange(std::ostringstream& stream, const RenderGraph::ResourceRange& range) {
     if (const auto* texture = std::get_if<RenderGraph::TextureRange>(&range)) {
-        stream << "aspect=" << static_cast<uint32_t>(texture->aspects)
+        stream << "aspect=" << static_cast<uint32>(texture->aspects)
                << ",mip=" << texture->mip_first << "+" << texture->mip_count
                << ",layer=" << texture->layer_first << "+" << texture->layer_count;
     } else if (const auto* buffer = std::get_if<RenderGraph::BufferRange>(&range)) {
@@ -315,30 +315,30 @@ void AppendInstruction(
     std::ostringstream&                                  stream,
     const RenderGraphLowering::LoweredInstruction& instruction
 ) {
-    stream << "kind=" << static_cast<uint32_t>(instruction.instruction_kind)
+    stream << "kind=" << static_cast<uint32>(instruction.instruction_kind)
            << " barrier=" << instruction.barrier_index
            << " correlation=" << instruction.correlation_id
            << " resource=" << instruction.resource.resource_id << " ";
     AppendRange(stream, instruction.range);
-    stream << " src_stage=" << static_cast<uint32_t>(instruction.source.stages)
-           << " src_access=" << static_cast<uint32_t>(instruction.source.access)
-           << " src_layout=" << static_cast<uint32_t>(instruction.source.layout)
-           << " dst_stage=" << static_cast<uint32_t>(instruction.destination.stages)
-           << " dst_access=" << static_cast<uint32_t>(instruction.destination.access)
-           << " dst_layout=" << static_cast<uint32_t>(instruction.destination.layout)
+    stream << " src_stage=" << static_cast<uint32>(instruction.source.stages)
+           << " src_access=" << static_cast<uint32>(instruction.source.access)
+           << " src_layout=" << static_cast<uint32>(instruction.source.layout)
+           << " dst_stage=" << static_cast<uint32>(instruction.destination.stages)
+           << " dst_access=" << static_cast<uint32>(instruction.destination.access)
+           << " dst_layout=" << static_cast<uint32>(instruction.destination.layout)
            << " discard=" << instruction.discard_previous_contents
            << " import=" << instruction.import_boundary
            << " export=" << instruction.export_boundary
            << " transient_alias=" << instruction.transient_alias
            << " queue_acquire=" << instruction.queue_acquire
            << " transfer_src_role="
-           << static_cast<uint32_t>(instruction.transfer_source.role)
+           << static_cast<uint32>(instruction.transfer_source.role)
            << " transfer_src_native="
            << instruction.transfer_source.native_queue_id
            << " transfer_src_family="
            << instruction.transfer_source.family_id
            << " transfer_dst_role="
-           << static_cast<uint32_t>(instruction.transfer_destination.role)
+           << static_cast<uint32>(instruction.transfer_destination.role)
            << " transfer_dst_native="
            << instruction.transfer_destination.native_queue_id
            << " transfer_dst_family="
@@ -399,14 +399,14 @@ std::string RenderGraphLowering::LoweredPlan::Dump() const {
                << " synthetic_ownership_join="
                << sync.synthetic_ownership_join
                << " ownership_joins=[";
-        for (uint32_t index = 0; index < sync.ownership_join_barriers.size(); ++index) {
+        for (uint32 index = 0; index < sync.ownership_join_barriers.size(); ++index) {
             if (index != 0) {
                 stream << ",";
             }
             stream << sync.ownership_join_barriers[index];
         }
         stream << "] ownership_transfers=[";
-        for (uint32_t index = 0;
+        for (uint32 index = 0;
              index < sync.ownership_transfer_barriers.size();
              ++index) {
             if (index != 0) {
@@ -423,7 +423,7 @@ std::string RenderGraphLowering::LoweredPlan::Dump() const {
     }
     for (const auto& pass : passes) {
         stream << "pass=" << pass.pass.pass_id << " keepalive=[";
-        for (uint32_t index = 0; index < pass.keepalive.size(); ++index) {
+        for (uint32 index = 0; index < pass.keepalive.size(); ++index) {
             if (index != 0) {
                 stream << ",";
             }
@@ -477,7 +477,7 @@ bool RenderGraphLowering::Lower(
     };
     std::pmr::monotonic_buffer_resource scratch;
     std::pmr::vector<bool> gpu_pass(graph.passes.size(), false, &scratch);
-    std::pmr::vector<uint32_t> pass_queue_batch(
+    std::pmr::vector<uint32>            pass_queue_batch(
         graph.passes.size(), RenderGraph::InvalidIndex, &scratch
     );
 
@@ -494,7 +494,7 @@ bool RenderGraphLowering::Lower(
     if (compiled.frontend_record_units.size() != compiled.execution_order.size()) {
         return fail("recording schedule does not cover the execution order");
     }
-    for (uint32_t unit_index = 0;
+    for (uint32 unit_index = 0;
          unit_index < compiled.frontend_record_units.size();
          ++unit_index) {
         const auto& unit = compiled.frontend_record_units[unit_index];
@@ -509,7 +509,7 @@ bool RenderGraphLowering::Lower(
             );
         }
     }
-    for (uint32_t batch_index = 0; batch_index < compiled.queue_batches.size();
+    for (uint32 batch_index = 0; batch_index < compiled.queue_batches.size();
          ++batch_index) {
         const auto& batch = compiled.queue_batches[batch_index];
         if (batch.id != batch_index || !batch.queue.available ||
@@ -544,11 +544,11 @@ bool RenderGraphLowering::Lower(
             return fail("execution-order GPU pass has no queue batch");
         }
     }
-    for (uint32_t batch_index = 0; batch_index < compiled.queue_batches.size();
+    for (uint32 batch_index = 0; batch_index < compiled.queue_batches.size();
          ++batch_index) {
         const auto& batch = compiled.queue_batches[batch_index];
         std::vector<bool> seen_signals(compiled.queue_syncs.size(), false);
-        for (const uint32_t sync_index : batch.signal_syncs) {
+        for (const uint32 sync_index : batch.signal_syncs) {
             if (sync_index >= compiled.queue_syncs.size() ||
                 seen_signals[sync_index] ||
                 compiled.queue_syncs[sync_index].signal_batch != batch_index) {
@@ -557,7 +557,7 @@ bool RenderGraphLowering::Lower(
             seen_signals[sync_index] = true;
         }
         std::vector<bool> seen_waits(compiled.queue_syncs.size(), false);
-        for (const uint32_t sync_index : batch.wait_syncs) {
+        for (const uint32 sync_index : batch.wait_syncs) {
             if (sync_index >= compiled.queue_syncs.size() ||
                 seen_waits[sync_index] ||
                 compiled.queue_syncs[sync_index].wait_batch != batch_index) {
@@ -568,7 +568,7 @@ bool RenderGraphLowering::Lower(
     }
     std::vector<QueueSyncInstruction> lowered_queue_syncs{};
     lowered_queue_syncs.reserve(compiled.queue_syncs.size());
-    for (uint32_t sync_index = 0; sync_index < compiled.queue_syncs.size();
+    for (uint32 sync_index = 0; sync_index < compiled.queue_syncs.size();
          ++sync_index) {
         const auto& sync = compiled.queue_syncs[sync_index];
         if (sync.id != sync_index ||
@@ -629,7 +629,7 @@ bool RenderGraphLowering::Lower(
             );
         }
         std::vector<bool> seen_edges(compiled.edges.size(), false);
-        for (const uint32_t edge_index : sync.dependency_edges) {
+        for (const uint32 edge_index : sync.dependency_edges) {
             if (edge_index >= compiled.edges.size() || seen_edges[edge_index]) {
                 return fail(
                     "queue synchronization has an invalid or duplicate dependency edge"
@@ -646,7 +646,7 @@ bool RenderGraphLowering::Lower(
             }
         }
         std::vector<bool> seen_barriers(compiled.barriers.size(), false);
-        for (const uint32_t barrier_index : sync.barriers) {
+        for (const uint32 barrier_index : sync.barriers) {
             if (barrier_index >= compiled.barriers.size() ||
                 seen_barriers[barrier_index]) {
                 return fail(
@@ -685,14 +685,14 @@ bool RenderGraphLowering::Lower(
             });
         }
     }
-    for (uint32_t edge_index = 0; edge_index < compiled.edges.size();
+    for (uint32 edge_index = 0; edge_index < compiled.edges.size();
          ++edge_index) {
         const auto& edge = compiled.edges[edge_index];
         if (!graph.IsValidPass(edge.src) || !graph.IsValidPass(edge.dst)) {
             return fail("compiled dependency edge references an invalid pass");
         }
-        const uint32_t signal_batch = pass_queue_batch[edge.src.pass_id];
-        const uint32_t wait_batch   = pass_queue_batch[edge.dst.pass_id];
+        const uint32 signal_batch = pass_queue_batch[edge.src.pass_id];
+        const uint32 wait_batch   = pass_queue_batch[edge.dst.pass_id];
         if (signal_batch == RenderGraph::InvalidIndex ||
             wait_batch == RenderGraph::InvalidIndex ||
             signal_batch == wait_batch) {
@@ -796,7 +796,7 @@ bool RenderGraphLowering::Lower(
         return true;
     };
 
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         if (resource.kind == ResourceKind::Token) {
             continue;
@@ -884,7 +884,7 @@ bool RenderGraphLowering::Lower(
         }
     }
 
-    std::pmr::vector<uint32_t> alias_barrier_owners(compiled.barriers.size(), 0, &scratch);
+    std::pmr::vector<uint32> alias_barrier_owners(compiled.barriers.size(), 0, &scratch);
     for (const auto& alias : compiled.alias_boundaries) {
         if (!graph.IsValidResource(alias.predecessor_resource) ||
             !graph.IsValidResource(alias.successor_resource) ||
@@ -928,7 +928,7 @@ bool RenderGraphLowering::Lower(
             barrier.export_boundary || barrier.source_state_unknown) {
             return fail("transient alias boundary disagrees with its compiled barrier");
         }
-        for (uint32_t source_index = 0;
+        for (uint32 source_index = 0;
              source_index < alias.source_frontier.size();
              ++source_index) {
             if (barrier.sources[source_index].pass !=
@@ -944,10 +944,10 @@ bool RenderGraphLowering::Lower(
             );
         }
     }
-    for (uint32_t barrier_index = 0;
+    for (uint32 barrier_index = 0;
          barrier_index < compiled.barriers.size();
          ++barrier_index) {
-        const uint32_t owner_count = alias_barrier_owners[barrier_index];
+        const uint32 owner_count = alias_barrier_owners[barrier_index];
         if ((compiled.barriers[barrier_index].transient_alias &&
              owner_count != 1) ||
             (!compiled.barriers[barrier_index].transient_alias &&
@@ -960,14 +960,14 @@ bool RenderGraphLowering::Lower(
 
     std::pmr::vector<bool> prologue(compiled.barriers.size(), false, &scratch);
     std::pmr::vector<bool> epilogue(compiled.barriers.size(), false, &scratch);
-    std::pmr::vector<uint32_t> before_occurrences(compiled.barriers.size(), 0, &scratch);
-    for (const uint32_t barrier_index : compiled.prologue_barriers) {
+    std::pmr::vector<uint32> before_occurrences(compiled.barriers.size(), 0, &scratch);
+    for (const uint32 barrier_index : compiled.prologue_barriers) {
         if (barrier_index >= compiled.barriers.size() || prologue[barrier_index]) {
             return fail("prologue contains an invalid or duplicate barrier index");
         }
         prologue[barrier_index] = true;
     }
-    for (const uint32_t barrier_index : compiled.epilogue_barriers) {
+    for (const uint32 barrier_index : compiled.epilogue_barriers) {
         if (barrier_index >= compiled.barriers.size() || epilogue[barrier_index]) {
             return fail("epilogue contains an invalid or duplicate barrier index");
         }
@@ -977,7 +977,7 @@ bool RenderGraphLowering::Lower(
         if (!graph.IsValidPass(pass_barriers.pass)) {
             return fail("pass barrier list references an invalid pass");
         }
-        for (const uint32_t barrier_index : pass_barriers.before) {
+        for (const uint32 barrier_index : pass_barriers.before) {
             if (barrier_index >= compiled.barriers.size()) {
                 return fail("pass barrier list contains an invalid barrier index");
             }
@@ -990,13 +990,13 @@ bool RenderGraphLowering::Lower(
     candidate.queue_syncs = std::move(lowered_queue_syncs);
     candidate.prologue.reserve(compiled.prologue_barriers.size());
     candidate.passes.reserve(compiled.execution_order.size());
-    std::pmr::vector<uint32_t> pass_instruction_indices(graph.passes.size(), RenderGraph::InvalidIndex, &scratch);
+    std::pmr::vector<uint32> pass_instruction_indices(graph.passes.size(), RenderGraph::InvalidIndex, &scratch);
     for (const auto pass : compiled.execution_order) {
         if (!graph.IsValidPass(pass)) {
             return fail("execution order references an invalid pass");
         }
         if (gpu_pass[pass.pass_id]) {
-            pass_instruction_indices[pass.pass_id] = static_cast<uint32_t>(candidate.passes.size());
+            pass_instruction_indices[pass.pass_id] = static_cast<uint32>(candidate.passes.size());
             candidate.passes.push_back(PassInstructions{.pass = pass});
         }
     }
@@ -1069,15 +1069,16 @@ bool RenderGraphLowering::Lower(
     }
 
     MOER_RDG_PHASE_NEXT("RenderGraph.Lower.ConvertAndPlaceBarriers");
-    std::pmr::vector<uint32_t> execution_position(
+    std::pmr::vector<uint32> execution_position(
         graph.passes.size(),
-        RenderGraph::InvalidIndex, &scratch
+        RenderGraph::InvalidIndex,
+        &scratch
     );
-    for (uint32_t position = 0; position < compiled.execution_order.size(); ++position) {
+    for (uint32 position = 0; position < compiled.execution_order.size(); ++position) {
         execution_position[compiled.execution_order[position].pass_id] = position;
     }
 
-    auto lower_instruction = [&](uint32_t barrier_index, LoweredInstruction& instruction) {
+    auto lower_instruction = [&](uint32 barrier_index, LoweredInstruction& instruction) {
         const auto& barrier = compiled.barriers[barrier_index];
         bool queue_acquire = false;
         if (!graph.IsValidResource(barrier.resource)) {
@@ -1111,9 +1112,9 @@ bool RenderGraphLowering::Lower(
                     error = "queue barrier contains an invalid source pass";
                     return false;
                 }
-                const uint32_t signal_batch =
+                const uint32 signal_batch =
                     pass_queue_batch[source.pass.pass_id];
-                const uint32_t wait_batch =
+                const uint32 wait_batch =
                     pass_queue_batch[barrier.dst_pass.pass_id];
                 if (signal_batch == RenderGraph::InvalidIndex ||
                     wait_batch == RenderGraph::InvalidIndex) {
@@ -1225,9 +1226,9 @@ bool RenderGraphLowering::Lower(
                     return false;
                 }
                 instruction.source_frontier.push_back(source.pass);
-                const uint32_t source_batch =
+                const uint32 source_batch =
                     pass_queue_batch[source.pass.pass_id];
-                const uint32_t destination_batch =
+                const uint32 destination_batch =
                     barrier.dst_pass.IsValid() ?
                         pass_queue_batch[barrier.dst_pass.pass_id] :
                         RenderGraph::InvalidIndex;
@@ -1300,32 +1301,32 @@ bool RenderGraphLowering::Lower(
         return true;
     };
 
-    uint32_t next_synthetic_sync_id =
-        static_cast<uint32_t>(compiled.queue_syncs.size());
+    uint32 next_synthetic_sync_id =
+        static_cast<uint32>(compiled.queue_syncs.size());
     auto find_lowered_sync =
-        [&](uint32_t signal_batch,
-            uint32_t wait_batch) -> QueueSyncInstruction* {
-            const auto found = std::find_if(
-                candidate.queue_syncs.begin(),
-                candidate.queue_syncs.end(),
-                [&](const QueueSyncInstruction& sync) {
-                    return sync.signal_batch == signal_batch &&
-                           sync.wait_batch == wait_batch;
-                }
-            );
-            return found == candidate.queue_syncs.end() ? nullptr : &*found;
-        };
+        [&](uint32 signal_batch,
+            uint32 wait_batch) -> QueueSyncInstruction* {
+        const auto found = std::find_if(
+            candidate.queue_syncs.begin(),
+            candidate.queue_syncs.end(),
+            [&](const QueueSyncInstruction& sync) {
+                return sync.signal_batch == signal_batch &&
+                       sync.wait_batch == wait_batch;
+            }
+        );
+        return found == candidate.queue_syncs.end() ? nullptr : &*found;
+    };
     auto append_unique_barrier =
-        [](std::vector<uint32_t>& barriers, uint32_t barrier_index) {
+        [](std::vector<uint32>& barriers, uint32 barrier_index) {
             if (std::find(barriers.begin(), barriers.end(), barrier_index) ==
                 barriers.end()) {
                 barriers.push_back(barrier_index);
             }
         };
     auto ensure_ownership_join =
-        [&](uint32_t signal_batch,
-            uint32_t wait_batch,
-            uint32_t barrier_index) {
+        [&](uint32 signal_batch,
+            uint32 wait_batch,
+            uint32 barrier_index) {
             if (signal_batch >= compiled.queue_batches.size() ||
                 wait_batch >= compiled.queue_batches.size() ||
                 signal_batch >= wait_batch) {
@@ -1364,7 +1365,7 @@ bool RenderGraphLowering::Lower(
             return true;
         };
 
-    for (uint32_t barrier_index = 0; barrier_index < compiled.barriers.size(); ++barrier_index) {
+    for (uint32 barrier_index = 0; barrier_index < compiled.barriers.size(); ++barrier_index) {
         const auto& barrier = compiled.barriers[barrier_index];
         if (prologue[barrier_index] && epilogue[barrier_index]) {
             return fail("one barrier cannot be both prologue and epilogue");
@@ -1388,7 +1389,7 @@ bool RenderGraphLowering::Lower(
             return fail("barrier " + std::to_string(barrier_index) + ": " + std::move(error));
         }
         if (barrier.queue_ownership) {
-            const uint32_t destination_batch =
+            const uint32 destination_batch =
                 pass_queue_batch[barrier.dst_pass.pass_id];
             if (destination_batch == RenderGraph::InvalidIndex ||
                 destination_batch >= compiled.queue_batches.size()) {
@@ -1400,18 +1401,18 @@ bool RenderGraphLowering::Lower(
                 compiled.queue_batches[destination_batch].queue;
 
             struct SourceNativeTail {
-                uint32_t native_queue_id = 0;
-                uint32_t batch = RenderGraph::InvalidIndex;
+                uint32 native_queue_id = 0;
+                uint32 batch           = RenderGraph::InvalidIndex;
             };
             std::vector<SourceNativeTail> source_tails{};
-            uint32_t source_family = RenderGraph::InvalidIndex;
+            uint32                        source_family = RenderGraph::InvalidIndex;
             for (const auto& source : barrier.sources) {
                 if (!graph.IsValidPass(source.pass)) {
                     return fail(
                         "ownership source frontier contains an invalid pass"
                     );
                 }
-                const uint32_t source_batch =
+                const uint32 source_batch =
                     pass_queue_batch[source.pass.pass_id];
                 if (source_batch == RenderGraph::InvalidIndex ||
                     source_batch >= compiled.queue_batches.size() ||
@@ -1467,7 +1468,7 @@ bool RenderGraphLowering::Lower(
                     return lhs.batch < rhs.batch;
                 }
             );
-            const uint32_t release_batch = release_tail->batch;
+            const uint32 release_batch = release_tail->batch;
             const auto& release_binding =
                 compiled.queue_batches[release_batch].queue;
             if (release_binding.family_id != source_family ||
@@ -1557,7 +1558,7 @@ bool RenderGraphLowering::Lower(
         }
         if (epilogue[barrier_index]) {
             RenderGraph::PassHandle latest{};
-            uint32_t latest_position = 0;
+            uint32                  latest_position = 0;
             bool found_source = false;
             for (const auto source : instruction.source_frontier) {
                 if (!graph.IsValidPass(source) ||
@@ -1602,7 +1603,7 @@ bool RenderGraphLowering::Lower(
     }
 
     MOER_RDG_PHASE_NEXT("RenderGraph.Lower.ValidateBoundariesAndTransfers");
-    std::pmr::vector<std::pmr::vector<uint32_t>> boundaries_by_resource(
+    std::pmr::vector<std::pmr::vector<uint32>> boundaries_by_resource(
         graph.resources.size(), &scratch
     );
     for (const auto barrier_index : compiled.prologue_barriers) {
@@ -1615,7 +1616,7 @@ bool RenderGraphLowering::Lower(
     }
     auto has_boundary = [&](const RenderGraph::CompiledAccess& access, bool initial) {
         const auto& indices = boundaries_by_resource[access.resource.resource_id];
-        return std::any_of(indices.begin(), indices.end(), [&](uint32_t barrier_index) {
+        return std::any_of(indices.begin(), indices.end(), [&](uint32 barrier_index) {
             MOER_RDG_COUNT(BoundaryTests, 1);
             const auto& barrier = compiled.barriers[barrier_index];
             return (initial ? prologue[barrier_index] : epilogue[barrier_index]) &&
@@ -1643,7 +1644,7 @@ bool RenderGraphLowering::Lower(
         }
     }
 
-    for (uint32_t barrier_index = 0;
+    for (uint32 barrier_index = 0;
          barrier_index < compiled.barriers.size();
          ++barrier_index) {
         if (!compiled.barriers[barrier_index].queue_ownership) {
@@ -1651,8 +1652,8 @@ bool RenderGraphLowering::Lower(
         }
         const LoweredInstruction* release = nullptr;
         const LoweredInstruction* acquire = nullptr;
-        uint32_t release_count = 0;
-        uint32_t acquire_count = 0;
+        uint32                    release_count = 0;
+        uint32                    acquire_count = 0;
         for (const auto& pass : candidate.passes) {
             for (const auto& instruction : pass.after) {
                 if (instruction.barrier_index == barrier_index &&
@@ -1705,7 +1706,7 @@ bool RenderGraphLowering::Lower(
                 "resource, or endpoints"
             );
         }
-        const uint32_t transfer_sync_count = static_cast<uint32_t>(
+        const uint32 transfer_sync_count = static_cast<uint32>(
             std::count_if(
                 candidate.queue_syncs.begin(),
                 candidate.queue_syncs.end(),

@@ -2,6 +2,7 @@
 
 #include "VulkanDeviceObject.h"
 #include "VulkanRHIResource.h"
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 
 namespace Moer::Render {
@@ -54,8 +55,8 @@ public:
     ~VulkanRaytracingScene() override = default;
     RaytracingInstance& AddInstance() override;
 
-    void MarkModified(uint _array_idx) override;
-    void FreeInstance(uint _array_idx) override;
+    void MarkModified(uint32 _array_idx) override;
+    void FreeInstance(uint32 _array_idx) override;
 
     RaytracingTlasRef GetTlas() const override;
     RaytracingTlasRef GetPrevTlas() const override;
@@ -64,16 +65,16 @@ public:
     void               AdvanceFrame() override;
 
 private:
-    VulkanBufferRef CreateInstanceBuffer(uint capacity);
+    VulkanBufferRef     CreateInstanceBuffer(uint32 capacity);
     void GrowInstanceBuffer();
     bool EnsureAccelerationStructureStorage();
     RaytracingSizeInfos CalculateSizeInfos();
 
     // Persistent scene slots and pending edits, consumed by UpdateScene.
-    Array<uint> free_instance_slots;
-    Array<uint> pending_instance_indices;
-    Set<uint> modified_instance_indices;
-    Set<uint> previous_modified_instance_indices;
+    Array<uint32> free_instance_slots;
+    Array<uint32> pending_instance_indices;
+    Set<uint32>   modified_instance_indices;
+    Set<uint32>   previous_modified_instance_indices;
 
     // Current/previous TLAS storage follows the existing AdvanceFrame boundary.
     VulkanAccelRef tlas;
@@ -82,9 +83,8 @@ private:
     VulkanBufferRef instance_buffer;
     RaytracingSizeInfos size_infos{};
     RaytracingSizeInfos prev_size_infos{};
-    uint instance_capacity = 1000;
-    uint prev_instance_capacity = 1000;
-
+    uint32              instance_capacity      = 1000;
+    uint32              prev_instance_capacity = 1000;
 };
 
 inline VulkanRaytracingGeometry* ResourceCast(RaytracingGeometry* resource) {

@@ -1,4 +1,5 @@
 #include "rhi/backends/metal/MetalDraw.h"
+#include "misc/Types.h"
 #include "rhi/backends/metal/MetalBindless.h"
 #include "rhi/backends/metal/MetalResource.h"
 
@@ -14,7 +15,7 @@ struct TessellationBuffers {
     id<MTLBuffer> control_points{nil};
     id<MTLBuffer> hull_points{nil};
     id<MTLBuffer> factors{nil};
-    uint32_t patch_count{0};
+    uint32        patch_count{0};
 };
 
 void BindTessComputeArgs(
@@ -38,7 +39,7 @@ void BindTessComputeArgs(
         if (table == nil) throw std::runtime_error("Cannot allocate Metal tessellation arguments");
         [staging_buffers addObject:table];
         [arguments setArgumentBuffer:table offset:0];
-        for (uint index = 0; index < layout.scalar_bindings.size(); ++index) {
+        for (uint32 index = 0; index < layout.scalar_bindings.size(); ++index) {
             const auto& binding = layout.scalar_bindings[index];
             if (!binding.active || binding.set != set) continue;
             if ((binding.kind != SDA_Buffer && binding.kind != SDA_ConstantBuffer) ||
@@ -75,8 +76,8 @@ TessellationBuffers EncodeTessellation(
         param.vertex_offset != 0 || param.first_instance != 0) {
         Unsupported("Metal tessellation draw range");
     }
-    const uint64_t vertex_count = uint64_t(param.index_cnt) * param.instance_cnt;
-    const uint64_t patch_count = vertex_count / pipeline.PatchPoints();
+    const uint64 vertex_count = uint64(param.index_cnt) * param.instance_cnt;
+    const uint64 patch_count  = vertex_count / pipeline.PatchPoints();
     if (patch_count > UINT32_MAX ||
         vertex_count > SIZE_MAX / pipeline.PointStride() ||
         patch_count > SIZE_MAX / sizeof(MTLTriangleTessellationFactorsHalf)) {
@@ -93,9 +94,9 @@ TessellationBuffers EncodeTessellation(
         allocate(vertex_count * pipeline.PointStride()),
         allocate(vertex_count * pipeline.PointStride()),
         allocate(patch_count * sizeof(MTLTriangleTessellationFactorsHalf)),
-        uint32_t(patch_count)
+        uint32(patch_count)
     };
-    const uint32_t params[2] = {pipeline.PatchPoints(), buffers.patch_count};
+    const uint32 params[2] = {pipeline.PatchPoints(), buffers.patch_count};
 
     id<MTLComputeCommandEncoder> vertex = [command_buffer computeCommandEncoder];
     if (vertex == nil) throw std::runtime_error("Cannot encode Metal tessellation vertex stage");
@@ -105,7 +106,7 @@ TessellationBuffers EncodeTessellation(
         pipeline.TessVertexBindingsLayout(), draw, staging_buffers);
     [vertex setBuffer:buffers.control_points offset:0 atIndex:28];
     // MSL uint3 has 16-byte alignment even though it holds only three values.
-    const uint32_t grid_size[4] = {param.index_cnt, param.instance_cnt, 1, 0};
+    const uint32 grid_size[4] = {param.index_cnt, param.instance_cnt, 1, 0};
     [vertex setBytes:grid_size length:sizeof(grid_size) atIndex:30];
     [vertex dispatchThreadgroups:MTLSizeMake(param.index_cnt / 3, param.instance_cnt, 1)
       threadsPerThreadgroup:MTLSizeMake(3, 1, 1)];
@@ -149,7 +150,7 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
         );
     }
     MetalBindlessArray* bindless = nullptr;
-    for (uint arg_index = 0; arg_index < draw.Args().args.size(); ++arg_index) {
+    for (uint32 arg_index = 0; arg_index < draw.Args().args.size(); ++arg_index) {
         const TArg& argument = draw.Args().args[arg_index];
         if (const auto* array = std::get_if<BindlessArrayRef>(&argument)) {
             if (bindless != nullptr) Unsupported("multiple graphics bindless arrays");
@@ -190,9 +191,10 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
         Unsupported("missing graphics bindless array");
     }
     const auto validate_texel_bindings = [&](const MetalRenderBindings& layout) {
-        for (uint index = 0; index < layout.scalar_bindings.size(); ++index) {
+        for (uint32 index = 0; index < layout.scalar_bindings.size(); ++index) {
             const auto& binding = layout.scalar_bindings[index];
-            if (!binding.active || !binding.texel_buffer) continue;
+            if (!binding.active || !binding.texel_buffer)
+                continue;
             const auto* view = std::get_if<BufferView>(&draw.Args().args[index]);
             auto* buffer = view == nullptr ? nullptr :
                 dynamic_cast<MetalBuffer*>(view->GetBuffer());
@@ -209,7 +211,7 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
         validate_texel_bindings(pipeline->TessVertexBindingsLayout());
         validate_texel_bindings(pipeline->HullBindingsLayout());
     }
-    if (draw.Args().constants.size() * sizeof(uint) > 4096) {
+    if (draw.Args().constants.size() * sizeof(uint32) > 4096) {
         Unsupported("this graphics push constant size");
     }
     const ColorAttachment* first_color = pass.color_attachments.empty() ?
@@ -218,15 +220,15 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
     auto* target = dynamic_cast<MetalTexture*>(
         first_color != nullptr ? first_color->target : depth.target
     );
-    const uint reference_mip = first_color != nullptr ? first_color->mip_level : depth.mip_level;
-    const uint reference_layer = first_color != nullptr ? first_color->array_layer : depth.array_layer;
+    const uint32 reference_mip   = first_color != nullptr ? first_color->mip_level : depth.mip_level;
+    const uint32 reference_layer = first_color != nullptr ? first_color->array_layer : depth.array_layer;
     if (target == nullptr || pipeline->ColorFormats().size() > 8 ||
         reference_mip >= target->GetNumMips() ||
         reference_layer >= target->GetNumArray() ||
         pass.render_area.offset.x < 0 || pass.render_area.offset.y < 0 ||
-        uint(pass.render_area.offset.x) + pass.render_area.extent.width >
+        uint32(pass.render_area.offset.x) + pass.render_area.extent.width >
             std::max(1u, target->GetWidth() >> reference_mip) ||
-        uint(pass.render_area.offset.y) + pass.render_area.extent.height >
+        uint32(pass.render_area.offset.y) + pass.render_area.extent.height >
             std::max(1u, target->GetHeight() >> reference_mip)) {
         Unsupported("this graphics attachment extent");
     }
@@ -236,7 +238,7 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
          GetStoreOp(first_color->action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE)) {
         Unsupported("this graphics color attachment");
     }
-    for (uint index = 1; index < pass.color_attachments.size(); ++index) {
+    for (uint32 index = 1; index < pass.color_attachments.size(); ++index) {
         const ColorAttachment& color = pass.color_attachments[index];
         auto* color_target = dynamic_cast<MetalTexture*>(color.target);
         if (color_target == nullptr ||
@@ -286,12 +288,12 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
             const IndirectDrawParam& indirect = *mesh.indirect_draw_param;
             auto* buffer = dynamic_cast<MetalBuffer*>(indirect.buffer.GetBuffer());
             const bool indexed = std::holds_alternative<IndexBuffer>(mesh.idx_view);
-            const uint argument_size = indexed ?
-                sizeof(MTLDrawIndexedPrimitivesIndirectArguments) :
-                sizeof(MTLDrawPrimitivesIndirectArguments);
+            const uint32             argument_size = indexed ?
+                                                         sizeof(MTLDrawIndexedPrimitivesIndirectArguments) :
+                                                         sizeof(MTLDrawPrimitivesIndirectArguments);
             if (buffer == nullptr || indirect.stride < argument_size ||
-                indirect.stride % alignof(uint32_t) != 0 ||
-                indirect.buffer.GetByteOffset() % alignof(uint32_t) != 0 ||
+                indirect.stride % alignof(uint32) != 0 ||
+                indirect.buffer.GetByteOffset() % alignof(uint32) != 0 ||
                 indirect.buffer.GetByteOffset() > buffer->GetByteSize() ||
                 indirect.buffer.GetByteSize() >
                     buffer->GetByteSize() - indirect.buffer.GetByteOffset() ||
@@ -301,8 +303,8 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
             if (indirect.count_buffer) {
                 const BufferView& count_view = *indirect.count_buffer;
                 auto* count_buffer = dynamic_cast<MetalBuffer*>(count_view.GetBuffer());
-                if (count_buffer == nullptr || count_view.GetByteSize() != sizeof(uint32_t) ||
-                    count_view.GetByteOffset() % alignof(uint32_t) != 0 ||
+                if (count_buffer == nullptr || count_view.GetByteSize() != sizeof(uint32) ||
+                    count_view.GetByteOffset() % alignof(uint32) != 0 ||
                     count_view.GetByteOffset() > count_buffer->GetByteSize() ||
                     count_view.GetByteSize() >
                         count_buffer->GetByteSize() - count_view.GetByteOffset()) {
@@ -342,10 +344,11 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
 }
 
 void EncodeSimpleDraw(
-    id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd& draw,
-    std::span<const uint> indirect_counts,
-    NSMutableArray<id<MTLBuffer>>* staging_buffers,
-    NSMutableArray<id<MTLTexture>>* texture_views,
+    id<MTLCommandBuffer>                 command_buffer,
+    const SetDrawStateCmd&               draw,
+    std::span<const uint32>              indirect_counts,
+    NSMutableArray<id<MTLBuffer>>*       staging_buffers,
+    NSMutableArray<id<MTLTexture>>*      texture_views,
     NSMutableArray<id<MTLSamplerState>>* sampler_states
 ) {
     auto*                     pipeline   = static_cast<MetalPipelineState*>(draw.Pipeline().GetState());
@@ -353,7 +356,7 @@ void EncodeSimpleDraw(
     const TessellationBuffers tess = pipeline->IsTessellation() ?
         EncodeTessellation(command_buffer, draw, *pipeline, staging_buffers) : TessellationBuffers{};
     MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-    for (uint index = 0; index < pass.color_attachments.size(); ++index) {
+    for (uint32 index = 0; index < pass.color_attachments.size(); ++index) {
         const ColorAttachment& attachment = pass.color_attachments[index];
         auto* target = static_cast<MetalTexture*>(attachment.target);
         auto* color = descriptor.colorAttachments[index];
@@ -441,7 +444,7 @@ void EncodeSimpleDraw(
             if (table == nil) throw std::runtime_error("Cannot allocate Metal graphics arguments");
             [staging_buffers addObject:table];
             [arguments setArgumentBuffer:table offset:0];
-            for (uint index = 0; index < layout.scalar_bindings.size(); ++index) {
+            for (uint32 index = 0; index < layout.scalar_bindings.size(); ++index) {
                 const auto& binding = layout.scalar_bindings[index];
                 if (!binding.active || binding.set != set) continue;
                 if (binding.kind == SDA_Buffer || binding.kind == SDA_ConstantBuffer) {
@@ -532,7 +535,7 @@ void EncodeSimpleDraw(
     }
     {
         const void* data = draw.Args().constants.data();
-        const NSUInteger length = draw.Args().constants.size() * sizeof(uint);
+        const NSUInteger length          = draw.Args().constants.size() * sizeof(uint32);
         const auto& vertex_layout = pipeline->VertexBindingsLayout();
         const auto& fragment_layout = pipeline->FragmentBindingsLayout();
         if (length < vertex_layout.constant_byte_size || length < fragment_layout.constant_byte_size) {
@@ -559,7 +562,7 @@ void EncodeSimpleDraw(
                          raster.cull_mode == RCM_BACK ? MTLCullModeBack : MTLCullModeNone];
     [encoder setTriangleFillMode:raster.fill_mode == FM_LINE ?
         MTLTriangleFillModeLines : MTLTriangleFillModeFill];
-    for (uint mesh_index = 0; mesh_index < draw.DrawData().size(); ++mesh_index) {
+    for (uint32 mesh_index = 0; mesh_index < draw.DrawData().size(); ++mesh_index) {
         const MeshDrawData& mesh = draw.DrawData()[mesh_index];
         if (pipeline->IsTessellation()) {
             [encoder drawPatches:pipeline->PatchPoints() patchStart:0
@@ -567,20 +570,20 @@ void EncodeSimpleDraw(
          patchIndexBufferOffset:0 instanceCount:1 baseInstance:0];
             continue;
         }
-        for (uint index = 0; index < mesh.vtx_views.size(); ++index) {
+        for (uint32 index = 0; index < mesh.vtx_views.size(); ++index) {
             const VertexBuffer& vertex = mesh.vtx_views[index];
             auto* buffer = static_cast<MetalBuffer*>(vertex.buffer);
             [encoder setVertexBuffer:buffer->Native() offset:vertex.offset atIndex:16 + index];
         }
         if (const auto* indexed = std::get_if<IndexBuffer>(&mesh.idx_view)) {
             auto* buffer = static_cast<MetalBuffer*>(indexed->buffer.GetBuffer());
-            const uint stride = indexed->stride == IET_UINT16 ? 2 : 4;
+            const uint32       stride = indexed->stride == IET_UINT16 ? 2 : 4;
             const MTLIndexType type = indexed->stride == IET_UINT16 ?
                 MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
             if (mesh.indirect_draw_param) {
                 const IndirectDrawParam& indirect = *mesh.indirect_draw_param;
                 auto* arguments = static_cast<MetalBuffer*>(indirect.buffer.GetBuffer());
-                for (uint i = 0; i < indirect_counts[mesh_index]; ++i) {
+                for (uint32 i = 0; i < indirect_counts[mesh_index]; ++i) {
                     [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexType:type
                         indexBuffer:buffer->Native()
                         indexBufferOffset:indexed->buffer.GetByteOffset()
@@ -600,7 +603,7 @@ void EncodeSimpleDraw(
             if (mesh.indirect_draw_param) {
                 const IndirectDrawParam& indirect = *mesh.indirect_draw_param;
                 auto* arguments = static_cast<MetalBuffer*>(indirect.buffer.GetBuffer());
-                for (uint i = 0; i < indirect_counts[mesh_index]; ++i) {
+                for (uint32 i = 0; i < indirect_counts[mesh_index]; ++i) {
                     [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                         indirectBuffer:arguments->Native()
                         indirectBufferOffset:indirect.buffer.GetByteOffset() + i * indirect.stride];
@@ -633,7 +636,7 @@ MetalPipelineState* ValidateComputeDispatch(
     const ArrayArguments& args = dispatch.Args(cached_args);
     const auto& bindings = pipeline->ComputeBindings();
     if (args.args.size() != bindings.size()) Unsupported("this compute argument count");
-    for (uint index = 0; index < bindings.size(); ++index) {
+    for (uint32 index = 0; index < bindings.size(); ++index) {
         const MetalComputeBinding& binding = bindings[index];
         if (binding.constant) {
             if ((pipeline->GetActiveArgumentBits() & (uint64(1) << index)) && args.constants.empty()) {
@@ -648,9 +651,10 @@ MetalPipelineState* ValidateComputeDispatch(
             throw std::runtime_error(
                 "Metal RHI has not implemented compute shader argument " + dispatch.name +
                 " (index=" + std::to_string(index) +
-                ", kind=" + std::to_string(static_cast<uint>(binding.kind)) +
+                ", kind=" + std::to_string(static_cast<uint32>(binding.kind)) +
                 ", set=" + std::to_string(binding.set) +
-                ", binding=" + std::to_string(binding.binding) + ")");
+                ", binding=" + std::to_string(binding.binding) + ")"
+            );
         }
         if (binding.kind == SDA_Texture) {
             const auto* view = std::get_if<TextureView>(&args.args[index]);
@@ -736,7 +740,7 @@ void EncodeComputeDispatch(
         if (table == nil) throw std::runtime_error("Cannot allocate Metal compute arguments");
         [staging_buffers addObject:table];
         [arguments setArgumentBuffer:table offset:0];
-        for (uint index = 0; index < bindings.size(); ++index) {
+        for (uint32 index = 0; index < bindings.size(); ++index) {
             const auto& binding = bindings[index];
             if (!binding.active || binding.set != set) continue;
             if (binding.kind == SDA_Texture) {
@@ -776,8 +780,8 @@ void EncodeComputeDispatch(
         }
         [encoder setBuffer:table offset:0 atIndex:set];
     }
-    const uint constant_byte_size = pipeline->ComputeBindingsLayout().constant_byte_size;
-    if (args.constants.size() * sizeof(uint) < constant_byte_size) {
+    const uint32 constant_byte_size = pipeline->ComputeBindingsLayout().constant_byte_size;
+    if (args.constants.size() * sizeof(uint32) < constant_byte_size) {
         throw std::invalid_argument("Metal compute constant upload exceeds the source data buffer");
     }
     if (constant_byte_size != 0) {

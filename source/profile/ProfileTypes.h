@@ -15,23 +15,22 @@
     #include <unistd.h>
     #include <fstream>
 #endif
+#include "concurrentqueue.h"
+#include "misc/Types.h"
+#include "vulkan/vulkan.h"
 #include <algorithm>
 #include <chrono>
-#include <cstdint>
 #include <deque>
-#include <fstream>
 #include <filesystem>
-#include <vector>
+#include <fstream>
 #include <iostream>
-#include <string>
-#include <queue>
 #include <mutex>
+#include <queue>
+#include <shared_mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
-#include <shared_mutex>
-#include "vulkan/vulkan.h"
-#include "concurrentqueue.h"
-
+#include <vector>
 
 static constexpr int    MAX_FRAMES           = 64;
 static constexpr size_t RING_CAPACITY        = 1 << 20;
@@ -43,7 +42,7 @@ struct FlameEvent {
     const char* name;
     long long start_us;
     long long duration_us;
-    uint32_t thread_id;
+    Moer::uint32 thread_id;
 };
 
 class FlameProfiler {
@@ -91,7 +90,7 @@ struct FlameScope {
 //------------------------------------
 struct StackKey {
     void* frames[MAX_FRAMES];
-    uint16_t frame_count;
+    Moer::uint16   frame_count;
     mutable size_t cached_hash = 0;
 
     bool operator==(const StackKey& o) const {
@@ -113,7 +112,7 @@ struct StackKeyHash {
 };
 
 //------------------------------------
-enum class MemorySource : uint8_t {
+enum class MemorySource : Moer::uint8 {
     Editor = 0,
     Vulkan,
     VulkanTmp,
@@ -123,7 +122,7 @@ static constexpr int SOURCE_COUNT = (int)MemorySource::MAX_SOURCES;
 
 const char* GetSourceStr(MemorySource s);
 
-enum class MemoryAction : uint8_t {
+enum class MemoryAction : Moer::uint8 {
     Alloc = 0,
     Free
 };
@@ -138,7 +137,7 @@ enum class EVkInternalBufferUsage {
     Count
 };
 
-const char* GetVkUsageName(uint32_t usage);
+const char* GetVkUsageName(Moer::uint32 usage);
 
 //-----------------------------------UI
 struct SourceUIConfig {
@@ -192,32 +191,32 @@ struct SymbolResult {
 //-----------------------------------Hook
 struct EventRecord 
 {
-    uint64_t ts_us;                          // timestamp
+    Moer::uint64 ts_us; // timestamp
     MemorySource source;
     MemoryAction action;
     USHORT frame_count;                      // number of frames captured
     size_t size;                             // allocation size
     void* ptr;                               // address returned
     void* frames[MAX_FRAMES];
-    uint64_t sequence;
+    Moer::uint64 sequence;
     //VkTmp
-    uint32_t usage; 
+    Moer::uint32 usage;
     char name[32];
 };
 
 struct RawPassTimer {
-    uint64_t start = 0;
-    uint64_t delta = 0;
+    Moer::uint64 start = 0;
+    Moer::uint64 delta = 0;
 
     void Start() {
 #if defined(_WIN32)
         LARGE_INTEGER li;
         QueryPerformanceCounter(&li);
-        start = (uint64_t)li.QuadPart;
+        start = (Moer::uint64)li.QuadPart;
 #else
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
-        start = (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+        start = (Moer::uint64)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 #endif
     }
 
@@ -225,16 +224,18 @@ struct RawPassTimer {
 #if defined(_WIN32)
         LARGE_INTEGER li;
         QueryPerformanceCounter(&li);
-        delta = (uint64_t)li.QuadPart - start;
+        delta = (Moer::uint64)li.QuadPart - start;
 #else
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
-        uint64_t now = (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+        Moer::uint64 now = (Moer::uint64)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
         delta = now - start;
 #endif
     }
 
-    uint64_t GetDelta() const { return delta; }
+    Moer::uint64 GetDelta() const {
+        return delta;
+    }
 };
 
 
@@ -242,7 +243,7 @@ struct PassProfile {
     char     name[64]        = {};
     char     parent_name[64] = {};
     float    gpu_render_ms   = 0.0f;
-    uint64_t cpu_record_clock = 0;
+    Moer::uint64 cpu_record_clock = 0;
     int      depth           = 0;
     int      parent_idx      = -1;
     int      query_idx       = 0;
@@ -261,13 +262,13 @@ struct CBState {
 };
 
 struct SubmitRecord {
-    uint64_t              signal_value = 0;
+    Moer::uint64           signal_value = 0;
     std::vector<CBState>   cb_snapshots; // 从 g_cb_states move 出来的数据
 };
 
 struct QueueState {
     VkSemaphore              timeline_sem   = VK_NULL_HANDLE;
-    uint64_t                 timeline_value = 0; // 单调递增，仅QueueSubmit2使用，Editor侧已经加锁，参见VulkanQueue.h:43
+    Moer::uint64             timeline_value = 0; // 单调递增，仅QueueSubmit2使用，Editor侧已经加锁，参见VulkanQueue.h:43
     std::deque<SubmitRecord> pending;            // 已提交未读取的历史submit2
 };
 
@@ -280,6 +281,6 @@ struct PassHistory {
     int   write_idx;       // 环形写入位置
     float avg_ms = 0;
     float max_ms = 0;
-    bool  active; 
-    uint64_t last_seen_frame;
+    bool         active;
+    Moer::uint64 last_seen_frame;
 };

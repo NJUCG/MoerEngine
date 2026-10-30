@@ -2,6 +2,7 @@
 #include "VulkanCommandList.h"
 #include "VulkanEnumTranslator.h"
 #include "VulkanRHIResource.h"
+#include "misc/Types.h"
 #include <stdexcept>
 
 namespace Moer::Render {
@@ -25,8 +26,8 @@ void VulkanBarrierRecorder::Append(
     uint64                     _offset,
     uint64                     _byte_size,
     EBarrierQueueTransferPhase _phase,
-    uint32_t                   _src_queue_family,
-    uint32_t                   _dst_queue_family,
+    uint32                     _src_queue_family,
+    uint32                     _dst_queue_family,
     VkPipelineStageFlags2      _src_stage,
     VkAccessFlags2             _src_access,
     VkPipelineStageFlags2      _dst_stage,
@@ -92,7 +93,6 @@ void VulkanBarrierRecorder::Append(
         explicit_released_buffer_ranges.emplace_back(transfer_range);
         return;
     }
-
 }
 
 void VulkanBarrierRecorder::Append(
@@ -103,8 +103,8 @@ void VulkanBarrierRecorder::Append(
     uint8                      _array_layer,
     uint8                      _array_count,
     EBarrierQueueTransferPhase _phase,
-    uint32_t                   _src_queue_family,
-    uint32_t                   _dst_queue_family,
+    uint32                     _src_queue_family,
+    uint32                     _dst_queue_family,
     VkPipelineStageFlags2      _src_stage,
     VkAccessFlags2             _src_access,
     VkImageLayout              _src_layout,
@@ -192,7 +192,6 @@ void VulkanBarrierRecorder::Append(
         explicit_released_texture_ranges.emplace_back(transfer_range);
         return;
     }
-
 }
 
 void VulkanBarrierRecorder::Flush(VulkanCommandList& commands) {

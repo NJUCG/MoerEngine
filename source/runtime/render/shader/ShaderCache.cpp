@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "shader/ShaderResourceManager.h"
 
 #include "log/LogSystem.h"
@@ -14,8 +15,8 @@ namespace Moer::Render {
 
 namespace {
 
-constexpr uint32_t k_shader_cache_magic          = 0x4D534443; // "MSDC"
-constexpr uint32_t k_shader_cache_format_version = 6;
+constexpr uint32 k_shader_cache_magic          = 0x4D534443; // "MSDC"
+constexpr uint32 k_shader_cache_format_version = 6;
 
 std::string GetCacheFileName(RenderDevice& device) {
     return std::string(ToString(device.GetShaderPlatform())) + ".sdc";
@@ -145,8 +146,8 @@ void ShaderManager::LoadCache(std::filesystem::path _path) {
     InputStream          stream(fs);
 
     try {
-        uint32_t cache_magic   = 0;
-        uint32_t cache_version = 0;
+        uint32 cache_magic   = 0;
+        uint32 cache_version = 0;
         stream >> cache_magic >> cache_version;
         if (fs.fail()) {
             LOG_WARNING(

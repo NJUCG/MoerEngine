@@ -1,4 +1,5 @@
 #include "rhi/RHICompletion.h"
+#include "misc/Types.h"
 #include "rhi/RHIThreadOwnership.h"
 
 #include <atomic>
@@ -10,10 +11,10 @@
 namespace Moer::Render {
 namespace {
 
-std::atomic<std::uint64_t> g_gpu_completion_publish_batch_id{1};
+std::atomic<uint64> g_gpu_completion_publish_batch_id{1};
 
-std::uint64_t NextGpuCompletionPublishBatchId() noexcept {
-    std::uint64_t id = g_gpu_completion_publish_batch_id.fetch_add(
+uint64 NextGpuCompletionPublishBatchId() noexcept {
+    uint64 id = g_gpu_completion_publish_batch_id.fetch_add(
         1, std::memory_order_relaxed
     );
     while (id == 0) {
@@ -53,7 +54,7 @@ struct GpuCompletionFuture::SharedState {
     GpuCompletionResult     result{};
     Array<Callback>         callbacks{};
     bool                    notification_released{false};
-    std::uint64_t           notification_owner{0};
+    uint64                  notification_owner{0};
 };
 
 struct GpuCompletionCancellationState {
@@ -62,7 +63,7 @@ struct GpuCompletionCancellationState {
     bool                     sealed{false};
     std::string              reason{};
     Array<GpuCompletionToken> tokens{};
-    std::uint64_t            notification_owner{0};
+    uint64                    notification_owner{0};
 };
 
 GpuCompletionFuture::GpuCompletionFuture(
@@ -71,7 +72,7 @@ GpuCompletionFuture::GpuCompletionFuture(
     state_(std::move(_state)) {}
 
 GpuCompletionFuture GpuCompletionFuture::Create(
-    std::uint64_t    _completion_id,
+    uint64           _completion_id,
     std::string_view _name
 ) {
     auto state                  = std::make_shared<SharedState>();
@@ -176,7 +177,7 @@ void GpuCompletionFuture::Then(Callback _callback) const {
 }
 
 bool GpuCompletionFuture::PublishReady(
-    std::uint64_t _notification_owner
+    uint64 _notification_owner
 ) const noexcept {
     if (!state_ || _notification_owner == 0) {
         return false;
@@ -197,7 +198,7 @@ bool GpuCompletionFuture::PublishReady(
 
 bool GpuCompletionFuture::PublishError(
     std::string_view _reason,
-    std::uint64_t    _notification_owner
+    uint64           _notification_owner
 ) const noexcept {
     if (!state_ || _notification_owner == 0) {
         return false;
@@ -226,7 +227,7 @@ bool GpuCompletionFuture::PublishError(
 }
 
 void GpuCompletionFuture::NotifyTerminal(
-    std::uint64_t _notification_owner
+    uint64 _notification_owner
 ) const noexcept {
     const std::shared_ptr<SharedState> state = state_;
     if (!state || _notification_owner == 0) {
@@ -250,7 +251,7 @@ void GpuCompletionFuture::NotifyTerminal(
 }
 
 GpuCompletionToken::GpuCompletionToken(
-    std::uint64_t    _id,
+    uint64           _id,
     std::string_view _name
 ) :
     id_(_id),
@@ -265,7 +266,7 @@ bool GpuCompletionToken::IsReady() const noexcept {
     return future_.IsReady();
 }
 
-std::uint64_t GpuCompletionToken::Id() const noexcept {
+uint64 GpuCompletionToken::Id() const noexcept {
     return id_;
 }
 
@@ -285,21 +286,21 @@ void GpuCompletionToken::Then(
 }
 
 bool GpuCompletionToken::PublishReady(
-    std::uint64_t _notification_owner
+    uint64 _notification_owner
 ) const noexcept {
     return Valid() && future_.PublishReady(_notification_owner);
 }
 
 bool GpuCompletionToken::PublishErrorIfPending(
     std::string_view _reason,
-    std::uint64_t    _notification_owner
+    uint64           _notification_owner
 ) const noexcept {
     return Valid() &&
            future_.PublishError(_reason, _notification_owner);
 }
 
 void GpuCompletionToken::NotifyTerminal(
-    std::uint64_t _notification_owner
+    uint64 _notification_owner
 ) const noexcept {
     future_.NotifyTerminal(_notification_owner);
 }
@@ -490,7 +491,7 @@ void GpuCompletionCancellationView::NotifyPublishedCancellation()
     }
 
     Array<GpuCompletionToken> tokens{};
-    std::uint64_t             notification_owner = 0;
+    uint64                    notification_owner = 0;
     {
         std::scoped_lock lock(state_->mutex);
         notification_owner = state_->notification_owner;
@@ -513,7 +514,7 @@ GpuCompletionCancellationView::TakePublishedCancellationBatch(
         return {};
     }
 
-    std::uint64_t notification_owner = 0;
+    uint64 notification_owner = 0;
     {
         std::scoped_lock lock(state_->mutex);
         state_->sealed     = true;

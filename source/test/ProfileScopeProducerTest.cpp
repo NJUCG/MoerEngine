@@ -5,11 +5,11 @@
 #include "profile/ProfileScope.h"
 #include "taskgraph/TaskSystem.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -38,10 +38,10 @@ void Expect(bool _condition, std::string_view _message) {
 class ScopedOutput {
 public:
     explicit ScopedOutput(std::string_view _stem) {
-        static std::atomic<std::uint64_t> next_id{0};
-        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
+        static std::atomic<Moer::uint64> next_id{0};
+        for (Moer::uint32 attempt = 0; attempt < 64; ++attempt) {
             const auto now =
-                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+                static_cast<Moer::uint64>(std::chrono::steady_clock::now().time_since_epoch().count());
             const std::filesystem::path candidate =
                 std::filesystem::temp_directory_path() /
                 (std::string(_stem) + "-" + std::to_string(now) + "-" +
@@ -118,12 +118,12 @@ void StopCpuProducer() {
     Expect(Shutdown() == ShutdownResult::Completed, "ProfileDump runtime failed to shut down");
 }
 
-std::vector<std::uint8_t> ReadBinaryFile(const std::filesystem::path& _path) {
+std::vector<Moer::uint8> ReadBinaryFile(const std::filesystem::path& _path) {
     std::ifstream stream(_path, std::ios::binary | std::ios::ate);
     Expect(stream.is_open(), "profile scope output could not be opened");
     const std::streamoff size = stream.tellg();
     Expect(size >= 0, "profile scope output size is invalid");
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+    std::vector<Moer::uint8> bytes(static_cast<std::size_t>(size));
     stream.seekg(0);
     if (!bytes.empty()) {
         stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -138,7 +138,7 @@ struct ParsedDump {
 };
 
 ParsedDump ParseDump(const std::filesystem::path& _path, const CodecLimits& _limits) {
-    const std::vector<std::uint8_t> bytes = ReadBinaryFile(_path);
+    const std::vector<Moer::uint8> bytes = ReadBinaryFile(_path);
     Expect(!bytes.empty(), "profile scope output is empty");
 
     ParsedDump  parsed;
@@ -147,7 +147,7 @@ ParsedDump ParseDump(const std::filesystem::path& _path, const CodecLimits& _lim
         PacketView  packet{};
         std::size_t consumed = 0;
         Expect(
-            DecodePacket(std::span<const std::uint8_t>(bytes).subspan(offset), _limits, packet, consumed) ==
+            DecodePacket(std::span<const Moer::uint8>(bytes).subspan(offset), _limits, packet, consumed) ==
                 DecodeStatus::Ok,
             "profile scope packet failed validation"
         );
@@ -178,21 +178,21 @@ ParsedDump ParseDump(const std::filesystem::path& _path, const CodecLimits& _lim
 }
 
 struct CpuRecordView {
-    std::uint64_t    thread_id{0};
+    Moer::uint64     thread_id{0};
     std::string_view name{};
-    std::uint64_t    begin_ns{0};
-    std::uint64_t    end_ns{0};
-    std::uint32_t    depth{0};
+    Moer::uint64     begin_ns{0};
+    Moer::uint64     end_ns{0};
+    Moer::uint32     depth{0};
 };
 
 CpuRecordView ViewCpuRecord(const DecodedRecord& _record) {
     Expect(_record.values.size() == 5, "CpuScope record has the wrong field count");
     return {
-        .thread_id = std::get<std::uint64_t>(_record.values[0]),
+        .thread_id = std::get<Moer::uint64>(_record.values[0]),
         .name      = std::get<ProfileString>(_record.values[1]),
-        .begin_ns  = std::get<std::uint64_t>(_record.values[2]),
-        .end_ns    = std::get<std::uint64_t>(_record.values[3]),
-        .depth     = std::get<std::uint32_t>(_record.values[4]),
+        .begin_ns  = std::get<Moer::uint64>(_record.values[2]),
+        .end_ns    = std::get<Moer::uint64>(_record.values[3]),
+        .depth     = std::get<Moer::uint32>(_record.values[4]),
     };
 }
 
@@ -363,7 +363,7 @@ void TestMultithreadedTlsDepth() {
 
     const ParsedDump dump = ParseDump(output.path, config.codec_limits);
     Expect(dump.records.size() == thread_count * 2, "multithreaded capture lost a scope");
-    std::unordered_set<std::uint64_t> thread_ids;
+    std::unordered_set<Moer::uint64> thread_ids;
     for (std::size_t index = 0; index < thread_count; ++index) {
         const std::string   suffix = std::to_string(index);
         const CpuRecordView outer  = ViewCpuRecord(FindRecord(dump, "Thread.Outer." + suffix));

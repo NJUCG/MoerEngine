@@ -1,4 +1,5 @@
 #include "rhi/backends/metal/MetalFormat.h"
+#include "misc/Types.h"
 
 #include <stdexcept>
 #include <string>
@@ -43,8 +44,7 @@ MTLPixelFormat ToMetalFormat(EPixelFormat format) {
         case PF_D32_SFLOAT_S8_UINT:
             return MTLPixelFormatDepth32Float_Stencil8;
         default:
-            throw std::runtime_error("Metal RHI has not implemented texture format " +
-                                     std::to_string(static_cast<uint>(format)));
+            throw std::runtime_error("Metal RHI has not implemented texture format " + std::to_string(static_cast<uint32>(format)));
     }
 }
 

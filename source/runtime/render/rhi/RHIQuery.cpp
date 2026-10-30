@@ -1,6 +1,6 @@
 #include "rhi/RHIQuery.h"
-
 #include "misc/STL.h"
+#include "misc/Types.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -10,10 +10,10 @@
 namespace Moer::Render {
 namespace {
 
-std::atomic<std::uint64_t> g_query_publish_batch_id{1};
+std::atomic<uint64> g_query_publish_batch_id{1};
 
-std::uint64_t NextQueryPublishBatchId() noexcept {
-    std::uint64_t id =
+uint64 NextQueryPublishBatchId() noexcept {
+    uint64 id =
         g_query_publish_batch_id.fetch_add(1, std::memory_order_relaxed);
     while (id == 0) {
         id = g_query_publish_batch_id.fetch_add(1, std::memory_order_relaxed);
@@ -51,7 +51,7 @@ struct QueryFuture::SharedState {
     QueryResult             result{};
     Array<Callback>         callbacks{};
     bool                    notification_released{false};
-    std::uint64_t           notification_owner{0};
+    uint64                  notification_owner{0};
 };
 
 struct QueryCancellationState {
@@ -60,7 +60,7 @@ struct QueryCancellationState {
     bool               sealed{false};
     std::string        reason{};
     Array<QueryToken>  tokens{};
-    std::uint64_t      notification_owner{0};
+    uint64             notification_owner{0};
 };
 
 QueryFuture::QueryFuture(std::shared_ptr<SharedState> _state) noexcept :
@@ -68,7 +68,7 @@ QueryFuture::QueryFuture(std::shared_ptr<SharedState> _state) noexcept :
 
 QueryFuture QueryFuture::Create(
     QueryKind        _kind,
-    std::uint64_t    _query_id,
+    uint64           _query_id,
     std::string_view _name
 ) {
     auto state             = std::make_shared<SharedState>();
@@ -164,7 +164,7 @@ void QueryFuture::Then(Callback _callback) const {
 
 bool QueryFuture::PublishTimestamp(
     const TimestampQueryResult& _result,
-    std::uint64_t               _notification_owner
+    uint64                      _notification_owner
 ) const noexcept {
     if (!state_ || _notification_owner == 0) {
         return false;
@@ -190,7 +190,7 @@ bool QueryFuture::PublishTimestamp(
 
 bool QueryFuture::PublishOcclusion(
     const OcclusionQueryResult& _result,
-    std::uint64_t               _notification_owner
+    uint64                      _notification_owner
 ) const noexcept {
     if (!state_ || _notification_owner == 0) {
         return false;
@@ -213,7 +213,7 @@ bool QueryFuture::PublishOcclusion(
 
 bool QueryFuture::PublishError(
     std::string_view _reason,
-    std::uint64_t    _notification_owner
+    uint64           _notification_owner
 ) const noexcept {
     if (!state_ || _notification_owner == 0) {
         return false;
@@ -243,7 +243,7 @@ bool QueryFuture::PublishError(
 }
 
 void QueryFuture::NotifyTerminal(
-    std::uint64_t _notification_owner
+    uint64 _notification_owner
 ) const noexcept {
     const std::shared_ptr<SharedState> state = state_;
     if (!state || _notification_owner == 0) {
@@ -267,9 +267,9 @@ void QueryFuture::NotifyTerminal(
 }
 
 QueryToken::QueryToken(
-    std::uint64_t    _id,
+    uint64           _id,
     QueryKind        _kind,
-    std::uint64_t    _owner_id,
+    uint64           _owner_id,
     std::string_view _name
 ) :
     id_(_id),
@@ -286,7 +286,7 @@ bool QueryToken::IsReady() const noexcept {
     return future_.IsReady();
 }
 
-std::uint64_t QueryToken::Id() const noexcept {
+uint64 QueryToken::Id() const noexcept {
     return id_;
 }
 
@@ -309,7 +309,7 @@ void QueryToken::Then(QueryFuture::Callback _callback) const {
 
 bool QueryToken::PublishTimestamp(
     const TimestampQueryResult& _result,
-    std::uint64_t               _notification_owner
+    uint64                      _notification_owner
 ) const noexcept {
     if (!Valid() || kind_ != QueryKind::Timestamp) {
         return false;
@@ -319,7 +319,7 @@ bool QueryToken::PublishTimestamp(
 
 bool QueryToken::PublishOcclusion(
     const OcclusionQueryResult& _result,
-    std::uint64_t               _notification_owner
+    uint64                      _notification_owner
 ) const noexcept {
     if (!Valid() || kind_ != QueryKind::Occlusion) {
         return false;
@@ -329,7 +329,7 @@ bool QueryToken::PublishOcclusion(
 
 bool QueryToken::PublishErrorIfPending(
     std::string_view _reason,
-    std::uint64_t    _notification_owner
+    uint64           _notification_owner
 ) const noexcept {
     if (!Valid()) {
         return false;
@@ -338,12 +338,12 @@ bool QueryToken::PublishErrorIfPending(
 }
 
 void QueryToken::NotifyTerminal(
-    std::uint64_t _notification_owner
+    uint64 _notification_owner
 ) const noexcept {
     future_.NotifyTerminal(_notification_owner);
 }
 
-std::uint64_t QueryToken::OwnerId() const noexcept {
+uint64 QueryToken::OwnerId() const noexcept {
     return owner_id_;
 }
 
@@ -531,7 +531,7 @@ void QueryCancellationView::NotifyPublishedCancellation() const noexcept {
     }
 
     Array<QueryToken> tokens{};
-    std::uint64_t     notification_owner = 0;
+    uint64            notification_owner = 0;
     {
         std::scoped_lock lock(state_->mutex);
         notification_owner = state_->notification_owner;
@@ -553,7 +553,7 @@ QueryPublishBatch QueryCancellationView::TakePublishedCancellationBatch(
         return {};
     }
 
-    std::uint64_t notification_owner = 0;
+    uint64 notification_owner = 0;
     {
         std::scoped_lock lock(state_->mutex);
         state_->sealed = true;

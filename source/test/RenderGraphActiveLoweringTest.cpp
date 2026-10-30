@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHIImpl.h"
@@ -73,16 +74,19 @@ private:
 class FakeTexture final : public Texture {
 public:
     FakeTexture(
-        uint8_t mips, uint16_t layers, ETextureAspectFlags aspects,
-        std::shared_ptr<bool> destroyed = {},
-        ETextureUsageFlags extra_usage = ETextureUsageFlags::UNDEFINED
-    ) : Texture(MakeInfo(mips, layers, aspects, extra_usage)), destroyed(std::move(destroyed)) {}
+        Moer::uint8           mips,
+        Moer::uint16          layers,
+        ETextureAspectFlags   aspects,
+        std::shared_ptr<bool> destroyed   = {},
+        ETextureUsageFlags    extra_usage = ETextureUsageFlags::UNDEFINED
+    ) : Texture(MakeInfo(mips, layers, aspects, extra_usage)),
+        destroyed(std::move(destroyed)) {}
 
     ~FakeTexture() override {
         if (destroyed) { *destroyed = true; }
     }
 
-    Moer::uint GetMipByteSize(Moer::uint) const override {
+    Moer::uint32 GetMipByteSize(Moer::uint32) const override {
         return 4;
     }
 
@@ -90,7 +94,7 @@ public:
 
 private:
     static TextureInfo
-    MakeInfo(uint8_t mips, uint16_t layers, ETextureAspectFlags aspects, ETextureUsageFlags extra_usage) {
+    MakeInfo(Moer::uint8 mips, Moer::uint16 layers, ETextureAspectFlags aspects, ETextureUsageFlags extra_usage) {
         TextureInfo info{};
         info.usage = ETextureUsageFlags::SAMPLED |
                      ETextureUsageFlags::UNORDERED_ACCESS |
@@ -109,14 +113,8 @@ private:
 
 class FakeBuffer final : public Buffer {
 public:
-    explicit FakeBuffer(uint64_t byte_size) :
-        Buffer(BufferInfo{
-            byte_size,
-            1,
-            EBufferUsageFlags::UNORDERED_ACCESS |
-                EBufferUsageFlags::TRANSFER_SRC |
-                EBufferUsageFlags::TRANSFER_DST
-        }) {}
+    explicit FakeBuffer(Moer::uint64 byte_size) :
+        Buffer(BufferInfo{byte_size, 1, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST}) {}
 
     void SetName(std::string_view) override {}
 };

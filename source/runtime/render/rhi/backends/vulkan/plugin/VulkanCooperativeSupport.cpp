@@ -1,4 +1,5 @@
 #include "VulkanCooperativeSupport.h"
+#include "misc/Types.h"
 
 #include "log/LogSystem.h"
 
@@ -13,22 +14,22 @@ CooperativeMatrixModeInfo BuildCooperativeMatrixModeInfo(const VkCooperativeMatr
     info.m_size                  = _mode.MSize;
     info.n_size                  = _mode.NSize;
     info.k_size                  = _mode.KSize;
-    info.a_type                  = static_cast<uint32_t>(_mode.AType);
-    info.b_type                  = static_cast<uint32_t>(_mode.BType);
-    info.c_type                  = static_cast<uint32_t>(_mode.CType);
-    info.result_type             = static_cast<uint32_t>(_mode.ResultType);
+    info.a_type                  = static_cast<uint32>(_mode.AType);
+    info.b_type                  = static_cast<uint32>(_mode.BType);
+    info.c_type                  = static_cast<uint32>(_mode.CType);
+    info.result_type             = static_cast<uint32>(_mode.ResultType);
     info.saturating_accumulation = (_mode.saturatingAccumulation == VK_TRUE);
-    info.scope                   = static_cast<uint32_t>(_mode.scope);
+    info.scope                   = static_cast<uint32>(_mode.scope);
     return info;
 }
 
 CooperativeVectorModeInfo BuildCooperativeVectorModeInfo(const VkCooperativeVectorPropertiesNV& _mode) {
     CooperativeVectorModeInfo info{};
-    info.input_type            = static_cast<uint32_t>(_mode.inputType);
-    info.input_interpretation  = static_cast<uint32_t>(_mode.inputInterpretation);
-    info.matrix_interpretation = static_cast<uint32_t>(_mode.matrixInterpretation);
-    info.bias_interpretation   = static_cast<uint32_t>(_mode.biasInterpretation);
-    info.result_type           = static_cast<uint32_t>(_mode.resultType);
+    info.input_type            = static_cast<uint32>(_mode.inputType);
+    info.input_interpretation  = static_cast<uint32>(_mode.inputInterpretation);
+    info.matrix_interpretation = static_cast<uint32>(_mode.matrixInterpretation);
+    info.bias_interpretation   = static_cast<uint32>(_mode.biasInterpretation);
+    info.result_type           = static_cast<uint32>(_mode.resultType);
     info.transpose             = (_mode.transpose == VK_TRUE);
     return info;
 }

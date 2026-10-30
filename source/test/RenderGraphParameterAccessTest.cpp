@@ -1,5 +1,6 @@
-#include "rendergraph/RenderGraphPassParameters.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraphLowering.h"
+#include "rendergraph/RenderGraphPassParameters.h"
 #include "rhi/RHIResource.h"
 #include "taskgraph/TaskSystem.h"
 
@@ -52,17 +53,17 @@ private:
 
 class FakeTexture final : public Texture {
 public:
-    FakeTexture(uint8_t mips, uint16_t layers) :
+    FakeTexture(Moer::uint8 mips, Moer::uint16 layers) :
         Texture(MakeInfo(mips, layers)) {}
 
-    Moer::uint GetMipByteSize(Moer::uint) const override {
+    Moer::uint32 GetMipByteSize(Moer::uint32) const override {
         return 4;
     }
 
     void SetName(std::string_view) override {}
 
 private:
-    static TextureInfo MakeInfo(uint8_t mips, uint16_t layers) {
+    static TextureInfo MakeInfo(Moer::uint8 mips, Moer::uint16 layers) {
         TextureInfo info{};
         info.usage = ETextureUsageFlags::SAMPLED |
                      ETextureUsageFlags::UNORDERED_ACCESS |
@@ -79,14 +80,8 @@ private:
 
 class FakeBuffer final : public Buffer {
 public:
-    explicit FakeBuffer(uint64_t byte_size) :
-        Buffer(BufferInfo{
-            byte_size,
-            1,
-            EBufferUsageFlags::UNORDERED_ACCESS |
-                EBufferUsageFlags::TRANSFER_SRC |
-                EBufferUsageFlags::TRANSFER_DST
-        }) {}
+    explicit FakeBuffer(Moer::uint64 byte_size) :
+        Buffer(BufferInfo{byte_size, 1, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST}) {}
 
     void SetName(std::string_view) override {}
 };

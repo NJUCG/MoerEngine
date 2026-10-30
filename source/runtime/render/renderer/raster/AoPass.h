@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math/Function.h"
+#include "misc/Types.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -81,8 +82,8 @@ public:
     };
 
     struct AoPassOutput {
-        uint ao_only;     // bindless hdl, for composite
-        uint ao_only_idx; // 0 or 1, for denoiser double-buffering
+        uint32 ao_only;     // bindless hdl, for composite
+        uint32 ao_only_idx; // 0 or 1, for denoiser double-buffering
     };
 
     struct AoTextureSet {
@@ -164,7 +165,7 @@ public:
         camera_mv_data_in_gpu.hdl = context.bdls->AllocateBuffer(camera_mv_data_in_gpu.buf->GetView());
     }
 
-    [[nodiscard]] uint NextAoOnlyIndex() const noexcept {
+    [[nodiscard]] uint32 NextAoOnlyIndex() const noexcept {
         return committed_ao_only_idx ^ 1u;
     }
 
@@ -179,7 +180,7 @@ public:
         const bool half_res = ui_config.ao_half_resolution;
         TextureWithHandle ao_only_full = context.textures.ao_output_ambient_only;
         TextureWithHandle ao_only_half = context.textures.ao_output_ambient_only_half;
-        const uint        ao_only_idx  = NextAoOnlyIndex();
+        const uint32      ao_only_idx  = NextAoOnlyIndex();
         if (ao_only_idx) {
             ao_only_full = context.textures.ao_output_ambient_only_1;
             ao_only_half = context.textures.ao_output_ambient_only_1_half;
@@ -344,15 +345,15 @@ public:
     );
 
     [[nodiscard]] CompositeRecordParameters PrepareComposite(
-        RasterContext&       context,
-        const RasterConfig&  ui_config,
-        uint                 ao_only_hdl
+        RasterContext&      context,
+        const RasterConfig& ui_config,
+        uint32              ao_only_hdl
     ) const {
         CompositeRecordParameters parameters{};
         auto& param = parameters.shader;
         param.ao_tex              = ao_only_hdl;
         param.color_tex           = context.textures.lighting_output.hdl;
-        param.ao_mode             = static_cast<uint>(ui_config.ao_mode);
+        param.ao_mode                   = static_cast<uint32>(ui_config.ao_mode);
         param.is_half_resolution  = ui_config.ao_half_resolution ? 1u : 0u;
         param.full_resolution     = float2(context.textures.ao_output.GetSize());
         param.inv_full_resolution = float2(1.0f) / param.full_resolution;
@@ -382,10 +383,10 @@ public:
     }
 
     void AddCompositeToGraph(
-        RenderGraph& graph,
-        RasterContext& context,
-        const RasterConfig& ui_config,
-        uint ao_only_handle,
+        RenderGraph&            graph,
+        RasterContext&          context,
+        const RasterConfig&     ui_config,
+        uint32                  ao_only_handle,
         CompositeGraphResources resources
     );
 
@@ -394,7 +395,7 @@ public:
         committed_ao_only_idx = parameters.output.ao_only_idx;
     }
 
-    void CommitFrame(const Matrix4x4f& view_proj, uint ao_only_idx) {
+    void CommitFrame(const Matrix4x4f& view_proj, uint32 ao_only_idx) {
         camera_mv_data_in_cpu.world2clip_prev = camera_mv_data_in_cpu.world2clip;
         camera_mv_data_in_cpu.world2clip      = Transpose(view_proj);
         committed_ao_only_idx                 = ao_only_idx;
@@ -412,7 +413,7 @@ public:
         return parameters.output;
     }
 
-    void CompositeAo(RasterContext& context, const RasterConfig& ui_config, uint ao_only_hdl) {
+    void CompositeAo(RasterContext& context, const RasterConfig& ui_config, uint32 ao_only_hdl) {
         const CompositeRecordParameters parameters =
             PrepareComposite(context, ui_config, ao_only_hdl);
         RecordComposite(context.cmd_list, parameters);
@@ -427,7 +428,7 @@ private:
 
     CameraMotionVectorData camera_mv_data_in_cpu{}; // mv: motion vector
     BufferWithHandle       camera_mv_data_in_gpu; // mv: motion vector
-    uint                    committed_ao_only_idx{0};
+    uint32                 committed_ao_only_idx{0};
 };
 
 } // namespace Moer::Render::Raster

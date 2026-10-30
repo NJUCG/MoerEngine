@@ -1,4 +1,5 @@
 #include "ToneMappingPass.h"
+#include "misc/Types.h"
 
 // 实现基于直方图的自动曝光，并执行全屏 Tone Mapping。
 
@@ -59,14 +60,14 @@ ToneMappingPass::ToneMappingPass(
         sizeof(ToneMappingParams),
         EBufferUsageFlags::CONSTANT_BUFFER
     );
-    owner->histogram = device.CreateBuffer<uint>(
+    owner->histogram = device.CreateBuffer<uint32>(
         "histogram_buffer",
-        std::max(info.histogram_bins, uint(HISTOGRAM_BINS)),
+        std::max(info.histogram_bins, uint32(HISTOGRAM_BINS)),
         EBufferUsageFlags::UNORDERED_ACCESS |
             EBufferUsageFlags::TEXTURE_BUFFER
     );
     owner->histogram->SetName("histogram_buffer");
-    owner->exposure = device.CreateBuffer<uint>(
+    owner->exposure = device.CreateBuffer<uint32>(
         "exposure_buffer",
         1,
         EBufferUsageFlags::UNORDERED_ACCESS |
@@ -76,7 +77,7 @@ ToneMappingPass::ToneMappingPass(
 
     color_lut = std::move(info.color_lut);
     if (color_lut) {
-        const uint height = color_lut->GetHeight();
+        const uint32 height = color_lut->GetHeight();
         if (height > 1 && height * height == color_lut->GetWidth()) {
             color_lut_size = height;
         }

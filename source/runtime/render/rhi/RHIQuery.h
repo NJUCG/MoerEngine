@@ -4,8 +4,8 @@
 #include "RenderAPI.h"
 #include "misc/STL.h"
 
+#include "misc/Types.h"
 #include <chrono>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -16,21 +16,21 @@
 
 namespace Moer::Render {
 
-enum class QueryKind : std::uint8_t {
+enum class QueryKind : uint8 {
     Timestamp = 0,
     Occlusion = 1,
 };
 
-enum class QueryStatus : std::uint8_t {
+enum class QueryStatus : uint8 {
     Pending = 0,
     Ready   = 1,
     Error   = 2,
 };
 
 struct TimestampQueryResult {
-    std::uint64_t begin_tick{0};
-    std::uint64_t end_tick{0};
-    std::uint32_t valid_bits{0};
+    uint64        begin_tick{0};
+    uint64        end_tick{0};
+    uint32        valid_bits{0};
     double        tick_period_ns{0.0};
     double        duration_ns{0.0};
 };
@@ -39,14 +39,14 @@ struct OcclusionQueryResult {
     // Exact only when the backend requested a precise native query. A
     // visibility-only backend leaves this empty instead of exposing an
     // implementation-defined nonzero value as a real sample count.
-    std::optional<std::uint64_t> sample_count{};
+    std::optional<uint64>        sample_count{};
     bool                         visible{false};
 };
 
 struct QueryResult {
     QueryKind   kind{QueryKind::Timestamp};
     QueryStatus status{QueryStatus::Pending};
-    std::uint64_t query_id{0};
+    uint64                                                                   query_id{0};
     std::string name{};
     std::variant<std::monostate, TimestampQueryResult, OcclusionQueryResult> payload{};
     std::string error_reason{};
@@ -90,24 +90,24 @@ private:
     explicit QueryFuture(std::shared_ptr<SharedState> _state) noexcept;
 
     static QueryFuture Create(
-        QueryKind       _kind,
-        std::uint64_t   _query_id,
+        QueryKind        _kind,
+        uint64           _query_id,
         std::string_view _name
     );
 
     bool PublishTimestamp(
         const TimestampQueryResult& _result,
-        std::uint64_t               _notification_owner
+        uint64                      _notification_owner
     ) const noexcept;
     bool PublishOcclusion(
         const OcclusionQueryResult& _result,
-        std::uint64_t               _notification_owner
+        uint64                      _notification_owner
     ) const noexcept;
     bool PublishError(
         std::string_view _reason,
-        std::uint64_t    _notification_owner
+        uint64           _notification_owner
     ) const noexcept;
-    void NotifyTerminal(std::uint64_t _notification_owner) const noexcept;
+    void NotifyTerminal(uint64 _notification_owner) const noexcept;
 
     std::shared_ptr<SharedState> state_{};
 
@@ -123,7 +123,7 @@ public:
 
     [[nodiscard]] bool Valid() const noexcept;
     [[nodiscard]] bool IsReady() const noexcept;
-    [[nodiscard]] std::uint64_t Id() const noexcept;
+    [[nodiscard]] uint64             Id() const noexcept;
     [[nodiscard]] QueryKind Kind() const noexcept;
     [[nodiscard]] const std::string& Name() const noexcept;
     [[nodiscard]] QueryFuture GetFuture() const noexcept;
@@ -132,30 +132,30 @@ public:
 
 private:
     QueryToken(
-        std::uint64_t   _id,
-        QueryKind       _kind,
-        std::uint64_t   _owner_id,
+        uint64           _id,
+        QueryKind        _kind,
+        uint64           _owner_id,
         std::string_view _name
     );
 
-    [[nodiscard]] std::uint64_t OwnerId() const noexcept;
-    bool PublishTimestamp(
+    [[nodiscard]] uint64 OwnerId() const noexcept;
+    bool                 PublishTimestamp(
         const TimestampQueryResult& _result,
-        std::uint64_t               _notification_owner
+        uint64                      _notification_owner
     ) const noexcept;
     bool PublishOcclusion(
         const OcclusionQueryResult& _result,
-        std::uint64_t               _notification_owner
+        uint64                      _notification_owner
     ) const noexcept;
     bool PublishErrorIfPending(
         std::string_view _reason,
-        std::uint64_t    _notification_owner
+        uint64           _notification_owner
     ) const noexcept;
-    void NotifyTerminal(std::uint64_t _notification_owner) const noexcept;
+    void NotifyTerminal(uint64 _notification_owner) const noexcept;
 
-    std::uint64_t id_{0};
+    uint64                             id_{0};
     QueryKind     kind_{QueryKind::Timestamp};
-    std::uint64_t owner_id_{0};
+    uint64                             owner_id_{0};
     std::shared_ptr<const std::string> name_{};
     QueryFuture   future_{};
 
@@ -176,10 +176,10 @@ public:
     }
 
 private:
-    explicit QueryPublishBatch(std::uint64_t _notification_owner) noexcept :
+    explicit QueryPublishBatch(uint64 _notification_owner) noexcept :
         notification_owner_(_notification_owner) {}
 
-    std::uint64_t notification_owner_{0};
+    uint64 notification_owner_{0};
 
     friend class QueryBackendAccess;
     friend class QueryCancellationDomain;

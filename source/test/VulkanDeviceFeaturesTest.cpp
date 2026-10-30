@@ -1,7 +1,7 @@
 #include "rhi/backends/vulkan/VulkanDeviceFeature.h"
 
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -78,7 +78,7 @@ T& ChainNode(void* _node, VkStructureType _expected_type) {
     return node;
 }
 
-void CheckOwnedChain(VulkanDeviceFeatures& _features, uint32_t _api_version) {
+void CheckOwnedChain(VulkanDeviceFeatures& _features, Moer::uint32 _api_version) {
     if (_api_version >= VK_API_VERSION_1_2) {
         Check(
             _features.GetCore11Features().pNext == &_features.GetCore12Features(), "wrong 1.2 node address"
@@ -102,24 +102,24 @@ void CheckOwnedChain(VulkanDeviceFeatures& _features, uint32_t _api_version) {
     );
     const auto begin      = reinterpret_cast<uintptr_t>(&_features);
     const auto end        = begin + sizeof(_features);
-    uint32_t   node_count = 0;
+    Moer::uint32 node_count = 0;
     for (auto* node = static_cast<const VkBaseOutStructure*>(create_info.pNext); node; node = node->pNext) {
         Check(node_count < 6, "feature chain contained a cycle");
         const auto address = reinterpret_cast<uintptr_t>(node);
         Check(address >= begin && address < end, "feature chain pointed outside its owning object");
         ++node_count;
     }
-    const uint32_t expected_count = _api_version >= VK_API_VERSION_1_3 ? 3 :
-                                    _api_version >= VK_API_VERSION_1_2 ? 2 :
-                                    _api_version >= VK_API_VERSION_1_1 ? 6 :
-                                                                         0;
+    const Moer::uint32 expected_count = _api_version >= VK_API_VERSION_1_3 ? 3 :
+                                        _api_version >= VK_API_VERSION_1_2 ? 2 :
+                                        _api_version >= VK_API_VERSION_1_1 ? 6 :
+                                                                             0;
     Check(node_count == expected_count, "feature chain used the wrong API version");
     if (_api_version >= VK_API_VERSION_1_2) {
         Check(create_info.pNext == &_features.GetCore11Features(), "wrong 1.1 node address");
     }
 }
 
-void CheckCopiesAndMoves(VulkanDeviceFeatures& _source, uint32_t _api_version) {
+void CheckCopiesAndMoves(VulkanDeviceFeatures& _source, Moer::uint32 _api_version) {
     VulkanDeviceFeatures copy = _source;
     CheckOwnedChain(copy, _api_version);
     Check(copy.SupportsAll(_source) && _source.SupportsAll(copy), "copy construction changed feature values");
@@ -192,7 +192,7 @@ void CheckVulkan10Chain() {
 }
 
 void CheckVulkan11Chain() {
-    const uint32_t       api_version = VK_MAKE_API_VERSION(0, 1, 1, 7);
+    const Moer::uint32   api_version = VK_MAKE_API_VERSION(0, 1, 1, 7);
     VulkanDeviceFeatures source(api_version);
     auto&                features     = NativeFeatures(source, &VulkanDeviceFeatures::GetCore11Features);
     features.storageBuffer16BitAccess = VK_TRUE;
@@ -261,7 +261,7 @@ void CheckVulkan11Chain() {
     CheckCopiesAndMoves(snapshot, api_version);
 }
 
-void CheckModernChain(uint32_t _api_version, bool _has_vulkan13) {
+void CheckModernChain(Moer::uint32 _api_version, bool _has_vulkan13) {
     VulkanDeviceFeatures source(_api_version);
     NativeFeatures(source, &VulkanDeviceFeatures::GetCore10Features).robustBufferAccess = VK_TRUE;
     NativeFeatures(source, &VulkanDeviceFeatures::GetCore11Features).multiview          = VK_TRUE;
@@ -320,10 +320,10 @@ void CheckModernChain(uint32_t _api_version, bool _has_vulkan13) {
     CheckCopiesAndMoves(snapshot, _api_version);
 }
 
-uint32_t mock_gpu_api_version   = VK_API_VERSION_1_3;
-uint32_t mock_query_api_version = VK_API_VERSION_1_3;
-uint32_t legacy_query_count     = 0;
-uint32_t extended_query_count   = 0;
+Moer::uint32 mock_gpu_api_version   = VK_API_VERSION_1_3;
+Moer::uint32 mock_query_api_version = VK_API_VERSION_1_3;
+Moer::uint32 legacy_query_count     = 0;
+Moer::uint32 extended_query_count   = 0;
 
 VKAPI_ATTR void VKAPI_CALL MockGetProperties(VkPhysicalDevice, VkPhysicalDeviceProperties* _properties) {
     *_properties            = {};
@@ -412,7 +412,7 @@ private:
     PFN_vkGetPhysicalDeviceFeatures2  features2  = vkGetPhysicalDeviceFeatures2;
 };
 
-void CheckSupportedQuery(uint32_t _requested_version, uint32_t _gpu_version, uint32_t _expected_version) {
+void CheckSupportedQuery(Moer::uint32 _requested_version, Moer::uint32 _gpu_version, Moer::uint32 _expected_version) {
     MockQueryFunctions mock;
     mock_gpu_api_version   = _gpu_version;
     mock_query_api_version = _expected_version;

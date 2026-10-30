@@ -4,8 +4,8 @@
 #include "RenderAPI.h"
 #include "misc/STL.h"
 
+#include "misc/Types.h"
 #include <chrono>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -15,7 +15,7 @@
 
 namespace Moer::Render {
 
-enum class GpuCompletionStatus : std::uint8_t {
+enum class GpuCompletionStatus : uint8 {
     Pending = 0,
     Ready   = 1,
     Error   = 2,
@@ -23,7 +23,7 @@ enum class GpuCompletionStatus : std::uint8_t {
 
 struct GpuCompletionResult {
     GpuCompletionStatus status{GpuCompletionStatus::Pending};
-    std::uint64_t       completion_id{0};
+    uint64              completion_id{0};
     std::string         name{};
     std::string         error_reason{};
 };
@@ -77,16 +77,16 @@ private:
     ) noexcept;
 
     static GpuCompletionFuture Create(
-        std::uint64_t    _completion_id,
+        uint64           _completion_id,
         std::string_view _name
     );
 
-    bool PublishReady(std::uint64_t _notification_owner) const noexcept;
+    bool PublishReady(uint64 _notification_owner) const noexcept;
     bool PublishError(
         std::string_view _reason,
-        std::uint64_t    _notification_owner
+        uint64           _notification_owner
     ) const noexcept;
-    void NotifyTerminal(std::uint64_t _notification_owner) const noexcept;
+    void NotifyTerminal(uint64 _notification_owner) const noexcept;
 
     std::shared_ptr<SharedState> state_{};
 
@@ -101,7 +101,7 @@ public:
 
     [[nodiscard]] bool Valid() const noexcept;
     [[nodiscard]] bool IsReady() const noexcept;
-    [[nodiscard]] std::uint64_t Id() const noexcept;
+    [[nodiscard]] uint64              Id() const noexcept;
     [[nodiscard]] const std::string& Name() const noexcept;
     [[nodiscard]] GpuCompletionFuture GetFuture() const noexcept;
 
@@ -109,18 +109,18 @@ public:
 
 private:
     GpuCompletionToken(
-        std::uint64_t    _id,
+        uint64           _id,
         std::string_view _name
     );
 
-    bool PublishReady(std::uint64_t _notification_owner) const noexcept;
+    bool PublishReady(uint64 _notification_owner) const noexcept;
     bool PublishErrorIfPending(
         std::string_view _reason,
-        std::uint64_t    _notification_owner
+        uint64           _notification_owner
     ) const noexcept;
-    void NotifyTerminal(std::uint64_t _notification_owner) const noexcept;
+    void NotifyTerminal(uint64 _notification_owner) const noexcept;
 
-    std::uint64_t                    id_{0};
+    uint64                             id_{0};
     std::shared_ptr<const std::string> name_{};
     GpuCompletionFuture              future_{};
 
@@ -141,11 +141,11 @@ public:
 
 private:
     explicit GpuCompletionPublishBatch(
-        std::uint64_t _notification_owner
+        uint64 _notification_owner
     ) noexcept :
         notification_owner_(_notification_owner) {}
 
-    std::uint64_t notification_owner_{0};
+    uint64 notification_owner_{0};
 
     friend class GpuCompletionBackendAccess;
     friend class GpuCompletionCancellationDomain;

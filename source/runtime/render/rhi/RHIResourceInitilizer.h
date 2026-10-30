@@ -1,11 +1,13 @@
 #ifndef RHI_RESOURCE_INITIALIZER_H
 #define RHI_RESOURCE_INITIALIZER_H
+
 #include "API_Macro.h"
 #include "PixelFormat.h"
 #include "RHICommon.h"
 #include "math/Math.h"
 #include "misc/Hash.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
 
 #include <cassert>
@@ -66,7 +68,7 @@ struct RHISamplerCreateInfo {
         float                               _min_mip_level  = 0,
         float                               _max_mip_level  = std::numeric_limits<float>::max(),
         float                               _max_anisotropy = 0,
-        uint32_t                            _border_color   = 0,
+        Moer::uint32                        _border_color   = 0,
         EnumInByte<ESamplerCompareFunction> _compare_op     = SCF_NEVER
     ) :
         filter(_filter),
@@ -90,7 +92,7 @@ struct RHISamplerCreateInfo {
     float                               min_mip_level  = 0;
     float                               max_mip_level  = std::numeric_limits<float>::max();
     int                                 max_anisotropy = 0;
-    uint32_t                            border_color   = 0;
+    Moer::uint32                        border_color   = 0;
     EnumInByte<ESamplerCompareFunction> compare_op     = SCF_NEVER;
 
     RHISamplerCreateInfo& SetFilter(ESamplerFilter _filter) {
@@ -126,7 +128,7 @@ struct RHISamplerCreateInfo {
         return *this;
     }
 
-    RENDER_API friend uint32_t GetHash(const RHISamplerCreateInfo& target);
+    RENDER_API friend Moer::uint32 GetHash(const RHISamplerCreateInfo& target);
     RENDER_API friend bool     operator==(const RHISamplerCreateInfo& lhs, const RHISamplerCreateInfo& rhs);
 };
 
@@ -146,8 +148,8 @@ struct RHIDepthStencilStateInfo {
     EnumInByte<EStencilOp>     back_face_depth_fail_stencil_op;
     EnumInByte<EStencilOp>     back_face_pass_stencil_op;
 
-    uint8_t stencil_readmask;
-    uint8_t stencil_writemask;
+    Moer::uint8 stencil_readmask;
+    Moer::uint8 stencil_writemask;
 
     explicit RHIDepthStencilStateInfo(
         bool           _b_enable_depth_write              = false,
@@ -162,8 +164,8 @@ struct RHIDepthStencilStateInfo {
         EStencilOp     _back_face_stencil_fail_stencil_op = SO_KEEP,
         EStencilOp     _back_face_depth_fail_stencil_op   = SO_KEEP,
         EStencilOp     _back_face_pass_stencil_op         = SO_KEEP,
-        uint8_t        _stencil_readmask                  = 0xFF,
-        uint8_t        _stencil_writemask                 = 0xFF
+        Moer::uint8    _stencil_readmask                  = 0xFF,
+        Moer::uint8    _stencil_writemask                 = 0xFF
     ) :
         b_enable_depth_write(_b_enable_depth_write),
         depth_test_op(_depth_test_op),
@@ -198,7 +200,7 @@ struct RHIDepthStencilStateInfo {
             static_assert(preset == Moer::Render::DepthStencil::NONE, "Invalid preset");
         }
     }
-    RENDER_API friend uint32_t GetHash(const RHIDepthStencilStateInfo& target);
+    RENDER_API friend Moer::uint32 GetHash(const RHIDepthStencilStateInfo& target);
     RENDER_API friend bool
     operator==(const RHIDepthStencilStateInfo& lhs, const RHIDepthStencilStateInfo& rhs);
 };
@@ -268,13 +270,13 @@ struct RHIRasterizeInfo {
         return *this;
     }
 
-    RENDER_API friend uint32_t GetHash(const RHIRasterizeInfo& target);
+    RENDER_API friend Moer::uint32 GetHash(const RHIRasterizeInfo& target);
     RENDER_API friend bool     operator==(const RHIRasterizeInfo& lhs, const RHIRasterizeInfo& rhs);
 };
 
 struct RHIMultisampleStateInfo {
 
-    uint32_t sample_count = 1;
+    Moer::uint32 sample_count = 1;
     /*enables per-sample shading to avoid shader aliasing */
     bool b_sample_shading = false;
     /*for alpha test, use msaa coverage to simulate transparency of transparent objects*/
@@ -300,7 +302,7 @@ struct RHIMultisampleStateInfo {
         }
     }
 
-    RHIMultisampleStateInfo& SetSampleCount(uint32_t count) {
+    RHIMultisampleStateInfo& SetSampleCount(Moer::uint32 count) {
         sample_count = count;
         return *this;
     }
@@ -325,7 +327,7 @@ struct RHIMultisampleStateInfo {
         return *this;
     }
 
-    RENDER_API friend uint32_t GetHash(const RHIMultisampleStateInfo& target);
+    RENDER_API friend Moer::uint32 GetHash(const RHIMultisampleStateInfo& target);
     RENDER_API friend bool operator==(const RHIMultisampleStateInfo& lhs, const RHIMultisampleStateInfo& rhs);
 };
 
@@ -407,7 +409,7 @@ struct RHIBlendAttachmentInfo {
         return *this;
     }
 
-    RENDER_API friend uint32_t GetHash(const RHIBlendAttachmentInfo& _attachment_desc);
+    RENDER_API friend Moer::uint32 GetHash(const RHIBlendAttachmentInfo& _attachment_desc);
     RENDER_API friend bool operator==(const RHIBlendAttachmentInfo& lhs, const RHIBlendAttachmentInfo& rhs);
 };
 struct RHIBlendStateInfo {
@@ -417,19 +419,19 @@ struct RHIBlendStateInfo {
         attachments[0] = _attachment_desc;
     }
 
-    template<uint32_t attachment_num>
+    template<Moer::uint32 attachment_num>
     explicit RHIBlendStateInfo(
         const Moer::StaticArray<RHIBlendAttachmentInfo, attachment_num>& _attachment_descs
     ) {
         static_assert(attachment_num < MAX_PASS_ATTACHMENT_COUNT);
-        for (uint32_t i = 0; i < attachment_num; i++) {
+        for (Moer::uint32 i = 0; i < attachment_num; i++) {
             attachments[i] = _attachment_descs[i];
         }
     }
 
     Moer::StaticArray<RHIBlendAttachmentInfo, MAX_PASS_ATTACHMENT_COUNT> attachments;
 
-    RENDER_API friend uint32_t GetHash(const RHIBlendStateInfo& Initializer);
+    RENDER_API friend Moer::uint32 GetHash(const RHIBlendStateInfo& Initializer);
     RENDER_API friend bool     operator==(const RHIBlendStateInfo& lhs, const RHIBlendStateInfo& rhs);
 };
 
@@ -492,7 +494,7 @@ struct RHIClearAttachment {
     }
     struct ClearDepthStencilValue {
         float    depth;
-        uint32_t stencil;
+        Moer::uint32 stencil;
         bool     operator==(const ClearDepthStencilValue& other) const {
             return depth == other.depth && stencil == other.stencil;
         }
@@ -500,8 +502,8 @@ struct RHIClearAttachment {
     struct ClearColorValue {
         union {
             float    float32[4];
-            int32_t  int32[4];
-            uint32_t uint32[4];
+            Moer::int32  int32[4];
+            Moer::uint32 uint32[4];
         };
         bool operator==(const ClearColorValue& other) const {
             return uint32[0] == other.uint32[0] && uint32[1] == other.uint32[1] &&
@@ -529,7 +531,7 @@ struct RHIClearAttachment {
                 break;
         }
     }
-    explicit RHIClearAttachment(float _depth, uint32_t _stencil = 0) :
+    explicit RHIClearAttachment(float _depth, Moer::uint32 _stencil = 0) :
         attachment(EClearAttachment::DEPTH_STENCIL) {
         value = ClearDepthStencilValue{_depth, _stencil};
     }
@@ -539,8 +541,8 @@ struct RHIClearAttachment {
         }
         return false;
     }
-    friend uint32_t GetHash(const RHIClearAttachment& _value) {
-        uint32_t hash = GetHash(_value.attachment);
+    friend Moer::uint32 GetHash(const RHIClearAttachment& _value) {
+        Moer::uint32 hash = GetHash(_value.attachment);
         std::visit(
             [&hash](auto&& _arg) -> void {
                 if constexpr (std::is_same_v<std::decay_t<decltype(_arg)>, ClearColorValue>) {
@@ -560,22 +562,22 @@ struct RHIClearAttachment {
 };
 //contains one mip subresource data
 struct RHISubresourceSlice {
-    const static uint8_t s_all = MAX_TEXTURE_MIP_COUNT;
+    const static Moer::uint8 s_all = MAX_TEXTURE_MIP_COUNT;
 
     ETextureAspectFlags aspect = ETextureAspectFlags::NONE;
-    uint8_t             mip_index;
-    uint8_t             array_index;
-    uint8_t             array_count;
-    uint8_t             plane_index;
-    uint8_t             plane_count;
+    Moer::uint8         mip_index;
+    Moer::uint8         array_index;
+    Moer::uint8         array_count;
+    Moer::uint8         plane_index;
+    Moer::uint8         plane_count;
 
     RHISubresourceSlice(
         ETextureAspectFlags _aspect,
-        uint8_t             _mip_index,
-        uint8_t             _array_index,
-        uint8_t             _array_count,
-        uint8_t             _plane_index = 0,
-        uint8_t             _plane_count = s_all
+        Moer::uint8         _mip_index,
+        Moer::uint8         _array_index,
+        Moer::uint8         _array_count,
+        Moer::uint8         _plane_index = 0,
+        Moer::uint8         _plane_count = s_all
     ) :
         aspect(_aspect),
         mip_index(_mip_index),
@@ -586,9 +588,9 @@ struct RHISubresourceSlice {
 
     RHISubresourceSlice(
         ETextureAspectFlags _aspect,
-        uint32_t            _mip_index,
-        uint32_t            _array_index,
-        uint32_t            _plane_index = 0
+        Moer::uint32        _mip_index,
+        Moer::uint32        _array_index,
+        Moer::uint32        _plane_index = 0
     ) :
         aspect(_aspect),
         mip_index(_mip_index),
@@ -626,30 +628,30 @@ struct RHISubresourceSlice {
 };
 struct RHISubresourceRange : public RHISubresourceSlice {
 
-    uint8_t num_mips = MAX_TEXTURE_MIP_COUNT;
+    Moer::uint8 num_mips = MAX_TEXTURE_MIP_COUNT;
 
     RHISubresourceRange(ETextureAspectFlags _aspect) : RHISubresourceSlice(_aspect, 0, 0) {};
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
-        uint32_t            _mip_index,
-        uint32_t            _num_mips,
-        uint32_t            _array_index,
-        uint32_t            _array_count,
-        uint32_t            _plane_index,
-        uint32_t            _plane_count
+        Moer::uint32        _mip_index,
+        Moer::uint32        _num_mips,
+        Moer::uint32        _array_index,
+        Moer::uint32        _array_count,
+        Moer::uint32        _plane_index,
+        Moer::uint32        _plane_count
     ) :
         RHISubresourceSlice(_aspect, _mip_index, _array_index, _array_count, _plane_index, _plane_count),
         num_mips(_num_mips) {}
 
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
-        uint32_t            _mip_index,
-        uint32_t            _array_index,
-        uint32_t            _plane_index
+        Moer::uint32        _mip_index,
+        Moer::uint32        _array_index,
+        Moer::uint32        _plane_index
     ) :
         RHISubresourceSlice(_aspect, _mip_index, _array_index, _plane_index) {}
 
-    RHISubresourceRange() : RHISubresourceRange(ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, (uint32_t)s_all) {}
+    RHISubresourceRange() : RHISubresourceRange(ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, (Moer::uint32)s_all) {}
     inline bool IsAllMips() const {
         return num_mips == s_all;
     }
@@ -683,8 +685,8 @@ struct RHISubresourceRange : public RHISubresourceSlice {
     inline bool operator!=(RHISubresourceRange const& rhs) const {
         return !(*this == rhs);
     }
-    uint64_t GetHash() {
-        uint64_t hash = 0;
+    Moer::uint64 GetHash() {
+        Moer::uint64 hash = 0;
         HashCombine(hash, aspect);
         HashCombine(hash, mip_index);
         HashCombine(hash, num_mips);
@@ -728,11 +730,11 @@ struct RHICopyTextureInfo {
 struct RHICopyTextureToBufferInfo {
     RHISubresourceSlice texture_slice;
 
-    uint64_t buffer_offset;
+    Moer::uint64 buffer_offset;
     /* The buffer_row_length is the number of pixels from one row to the next.
      * The buffer_texture_height is the number of rows from one texture layer to the next.*/
-    uint32_t buffer_row_length;
-    uint32_t buffer_texture_height;
+    Moer::uint32 buffer_row_length;
+    Moer::uint32 buffer_texture_height;
 
     Offset3D texture_offset;
     Extent3D texture_extent;
@@ -753,9 +755,9 @@ struct RHICopyTextureToBufferInfo {
         Offset3D            _texture_offset,
         Extent3D            _extent,
         RHISubresourceSlice _slice,
-        uint64_t            _buffer_offset,
-        uint32_t            _buffer_row_length     = 0,
-        uint32_t            _buffer_texture_height = 0
+        Moer::uint64        _buffer_offset,
+        Moer::uint32        _buffer_row_length     = 0,
+        Moer::uint32        _buffer_texture_height = 0
     ) :
         src_layout(_src_layout),
         texture_extent(_extent),
@@ -768,11 +770,11 @@ struct RHICopyTextureToBufferInfo {
 struct RHICopyBufferToTextureInfo {
 
     RHISubresourceSlice texture_slice;
-    uint64_t            buffer_offset;
+    Moer::uint64        buffer_offset;
     /* he buffer_row_length is the number of pixels from one row to the next.
      * The buffer_texture_height is the number of rows from one texture layer to the next.*/
-    uint32_t buffer_row_length;
-    uint32_t buffer_texture_height;
+    Moer::uint32 buffer_row_length;
+    Moer::uint32 buffer_texture_height;
 
     Offset3D texture_offset;
     Extent3D texture_extent;
@@ -793,9 +795,9 @@ struct RHICopyBufferToTextureInfo {
         Offset3D            _texture_offset,
         Extent3D            _extent,
         RHISubresourceSlice _slice,
-        uint64_t            _buffer_offset,
-        uint32_t            _buffer_row_length     = 0,
-        uint32_t            _buffer_texture_height = 0
+        Moer::uint64        _buffer_offset,
+        Moer::uint32        _buffer_row_length     = 0,
+        Moer::uint32        _buffer_texture_height = 0
     ) :
         dst_layout(_dst_layout),
         texture_extent(_extent),
@@ -806,9 +808,9 @@ struct RHICopyBufferToTextureInfo {
         texture_slice(_slice) {}
 };
 struct RHIBufferRegion {
-    uint32_t src_offset;
-    uint32_t dst_offset;
-    uint64_t size;
+    Moer::uint32 src_offset;
+    Moer::uint32 dst_offset;
+    Moer::uint64 size;
 };
 struct RHICopyBufferInfo {
     RHICopyBufferInfo() = default;
@@ -818,7 +820,7 @@ struct RHICopyBufferInfo {
 
 private:
     bool Validate() const {
-        uint64_t total_size = 0;
+        Moer::uint64 total_size = 0;
         for (auto& region : regions) {
             total_size += region.size;
         }
@@ -830,24 +832,24 @@ private:
 struct RHIResourceTransitionInfo {};
 
 struct RHIDispatchIndirectParameters {
-    uint32_t group_count_x;
-    uint32_t group_count_y;
-    uint32_t group_count_z;
+    Moer::uint32 group_count_x;
+    Moer::uint32 group_count_y;
+    Moer::uint32 group_count_z;
 };
 
 struct RHIDrawIndirectParameters {
-    uint32_t vertex_count;
-    uint32_t instance_count;
-    uint32_t start_vertex_location;
-    uint32_t start_instance_location;
+    Moer::uint32 vertex_count;
+    Moer::uint32 instance_count;
+    Moer::uint32 start_vertex_location;
+    Moer::uint32 start_instance_location;
 };
 
 struct RHIDrawIndexedIndirectParameters {
-    uint32_t index_count;
-    uint32_t instance_count;
-    uint32_t start_index_location;
-    int32_t  base_vertex_location;
-    uint32_t start_instance_location;
+    Moer::uint32 index_count;
+    Moer::uint32 instance_count;
+    Moer::uint32 start_index_location;
+    Moer::int32  base_vertex_location;
+    Moer::uint32 start_instance_location;
 };
 
 /* todo: transient constructor definitions */

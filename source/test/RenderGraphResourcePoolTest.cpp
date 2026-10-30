@@ -1,6 +1,7 @@
+#include "rendergraph/RenderGraphResourcePool.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
-#include "rendergraph/RenderGraphResourcePool.h"
 
 #include <algorithm>
 #include <iostream>
@@ -37,7 +38,7 @@ public:
     explicit FakeTexture(const RGTransientTextureDesc& desc) :
         Texture(MakeInfo(desc)) {}
 
-    Moer::uint GetMipByteSize(Moer::uint) const override {
+    Moer::uint32 GetMipByteSize(Moer::uint32) const override {
         return 4;
     }
 
@@ -52,9 +53,9 @@ private:
         info.usage        = desc.usage;
         info.format       = desc.format;
         info.extent       = {static_cast<int>(desc.extent.x), static_cast<int>(desc.extent.y)};
-        info.depth        = static_cast<uint16_t>(desc.extent.z);
-        info.array_size   = static_cast<uint16_t>(desc.PhysicalLayerCount());
-        info.num_mips     = static_cast<uint8_t>(desc.mip_count);
+        info.depth        = static_cast<Moer::uint16>(desc.extent.z);
+        info.array_size   = static_cast<Moer::uint16>(desc.PhysicalLayerCount());
+        info.num_mips     = static_cast<Moer::uint8>(desc.mip_count);
         info.aspect_flags = desc.aspect_flags;
         return info;
     }
@@ -81,10 +82,10 @@ private:
 };
 
 struct FactoryProbe {
-    uint32_t textures = 0;
-    uint32_t buffers  = 0;
+    Moer::uint32 textures = 0;
+    Moer::uint32 buffers  = 0;
 
-    RenderGraphResourcePool MakePool(uint32_t retire_after_idle_frames = 3) {
+    RenderGraphResourcePool MakePool(Moer::uint32 retire_after_idle_frames = 3) {
         return RenderGraphResourcePool(
             retire_after_idle_frames,
             [this](std::string_view, const RGTransientTextureDesc& desc) {
@@ -1038,12 +1039,12 @@ void TestAliasBarrierCoversCompleteReaderFrontier(TestSuite& suite) {
         "lowering dropped the alias barrier"
     );
     if (lowered_alias != before.end()) {
-        const uint32_t stages =
-            static_cast<uint32_t>(lowered_alias->source.stages);
-        const uint32_t ray_stage = static_cast<uint32_t>(
+        const Moer::uint32 stages =
+            static_cast<Moer::uint32>(lowered_alias->source.stages);
+        const Moer::uint32 ray_stage = static_cast<Moer::uint32>(
             ERHIPipelineStageFlags::PS_RAY_TRACING_SHADER
         );
-        const uint32_t graphics_stage = static_cast<uint32_t>(
+        const Moer::uint32 graphics_stage = static_cast<Moer::uint32>(
             ERHIPipelineStageFlags::PS_ALL_GRAPHICS
         );
         suite.Check(
@@ -1107,7 +1108,7 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
         return;
     }
     const auto& plan = graph.GetCompiledPlan();
-    const uint32_t slot = plan.resources[first.handle.resource_id].transient_slot;
+    const Moer::uint32 slot = plan.resources[first.handle.resource_id].transient_slot;
     suite.Check(
         slot != RenderGraph::InvalidIndex &&
             plan.resources[second.handle.resource_id].transient_slot == slot &&
@@ -1143,7 +1144,7 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
     };
     suite.Check(plan.dependency_levels.size() == expected_levels.size(), test,
                 "the alias-only successor must follow the complete preceding chain");
-    for (uint32_t level = 0; level < expected_levels.size(); ++level) {
+    for (Moer::uint32 level = 0; level < expected_levels.size(); ++level) {
         if (level < plan.dependency_levels.size()) {
             suite.Check(plan.dependency_levels[level].passes == expected_levels[level], test,
                         "final dependency levels must include both semantic and alias edges");

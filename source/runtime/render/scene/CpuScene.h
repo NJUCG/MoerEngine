@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/Types.h"
+
 /**
  * CpuScene数据
  * 
@@ -52,27 +54,27 @@ public:
      * @param primitive_entt CPrimitive 的 entity
      * @return primitive_id，如果不存在则返回无效值（需要调用者检查）
      */
-    uint GetPrimitiveId(entt::entity primitive_entt) const;
+    uint32 GetPrimitiveId(entt::entity primitive_entt) const;
 
     /**
      * 获取指定 Primitive 的第一个 Instance 在 m_instance_buf 中的索引
      * @param primitive_id Primitive ID
      * @return 第一个 Instance 的索引，如果不存在则返回 UINT_MAX
      */
-    uint GetFirstInstanceIndex(uint primitive_id) const;
+    uint32 GetFirstInstanceIndex(uint32 primitive_id) const;
 
     /**
      * 获取 Primitive 数量（用于确定数组大小）
      * @return Primitive 数量
      */
-    uint GetPrimitiveCount() const;
+    uint32 GetPrimitiveCount() const;
 
     /**
      * 获取指定 Primitive 的 Instance 数量（与 m_primitive_id_to_transform_entt_arrays[primitive_id].size() 一致）
      * @param primitive_id Primitive ID
      * @return 该 Primitive 的 Instance 数量，若 primitive_id 无效则返回 0
      */
-    uint GetInstanceCountForPrimitive(uint primitive_id) const;
+    uint32 GetInstanceCountForPrimitive(uint32 primitive_id) const;
 
     /**
      * 获取指定 Primitive 下第 instance_idx 个 GInstance（只读）
@@ -81,13 +83,13 @@ public:
      * @param instance_idx 该 Primitive 内的 Instance 索引 [0, GetInstanceCountForPrimitive(primitive_id))
      * @return 对应的 GInstance 引用
      */
-    const GInstance& GetInstanceForPrimitive(uint primitive_id, uint instance_idx) const;
+    const GInstance& GetInstanceForPrimitive(uint32 primitive_id, uint32 instance_idx) const;
 
     /**
      * 获取 Light 数量
      * @return Light 数量
      */
-    uint GetLightCount() const;
+    uint32 GetLightCount() const;
 
     Render::GpuSceneUpdate BuildGpuSceneUpdate(
         bool full_rebuild,
@@ -115,7 +117,7 @@ private:
     // light
     Array<GLight> m_light_buf;
 
-    UnorderedMap<entt::entity, uint> m_map_light_entity_to_id;
+    UnorderedMap<entt::entity, uint32> m_map_light_entity_to_id;
 
     void InitializeLights();
     // 创建带 CTagNeedCreateLight 的新 Light cache slot。
@@ -129,7 +131,7 @@ private:
     // material & texture
     Array<GMaterial> m_material_buf;
 
-    UnorderedMap<entt::entity, uint> m_map_material_entity_to_id;
+    UnorderedMap<entt::entity, uint32> m_map_material_entity_to_id;
 
     // Material必须在Mesh之前初始化，因为Mesh需要Material ID
     void InitializeMaterials();
@@ -147,9 +149,9 @@ private:
     Array<GClusterGroup> m_cluster_group_buf;
 
     struct InstanceSlot {
-        uint primitive_id              = UINT_MAX;
-        uint instance_idx_in_primitive = UINT_MAX;
-        uint flat_instance_idx         = UINT_MAX;
+        uint32 primitive_id              = UINT_MAX;
+        uint32 instance_idx_in_primitive = UINT_MAX;
+        uint32 flat_instance_idx         = UINT_MAX;
     };
 
     /**
@@ -164,10 +166,10 @@ private:
         return m_logical_scene.r().ctx().get<const ecs::CtxMegaBuffers>();
     }
 
-    UnorderedMap<entt::entity, uint>                m_map_primitive_entity_to_id;
+    UnorderedMap<entt::entity, uint32>              m_map_primitive_entity_to_id;
     UnorderedMap<entt::entity, Array<InstanceSlot>> m_map_transform_entity_to_instance_slots;
     Array<Array<GInstance>>                         m_primitive_id_to_transform_entt_arrays;
-    Array<uint>
+    Array<uint32>
         m_primitive_id_to_first_instance_idx; // m_primitive_id_to_transform_entt_arrays的前缀和，表示每个Primitive对应的第一个Instance在m_instance_buf中的索引
 
     // Mesh必须在Materials之后初始化，因为Primitive需要Material ID

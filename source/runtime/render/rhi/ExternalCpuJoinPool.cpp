@@ -1,5 +1,5 @@
 #include "ExternalCpuJoinPool.h"
-
+#include "misc/Types.h"
 #include <algorithm>
 
 namespace Moer::Render {
@@ -7,11 +7,11 @@ namespace {
 thread_local ExternalCpuJoinPool* g_active_external_join_pool = nullptr;
 }
 
-ExternalCpuJoinPool::ExternalCpuJoinPool(uint32_t _worker_count) {
-    const uint32_t worker_count = std::max(1u, _worker_count);
+ExternalCpuJoinPool::ExternalCpuJoinPool(uint32 _worker_count) {
+    const uint32 worker_count = std::max(1u, _worker_count);
     workers.reserve(worker_count);
     try {
-        for (uint32_t worker_index = 0; worker_index < worker_count; ++worker_index) {
+        for (uint32 worker_index = 0; worker_index < worker_count; ++worker_index) {
             workers.emplace_back([this] { WorkerMain(); });
         }
     } catch (...) {

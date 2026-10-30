@@ -4,10 +4,10 @@
 #include "rhi/RHIImpl.h"
 #include "profile/RdgDiagnostics.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <charconv>
 #include <chrono>
-#include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <memory_resource>
@@ -38,12 +38,12 @@ using Moer::Render::RenderGraph;
 using Moer::Render::RenderGraphLowering;
 
 struct Options {
-    uint32_t passes = 64;
-    uint32_t resources = 64;
-    uint32_t accesses = 16;
-    uint32_t warmup = 5;
-    uint32_t samples = 80;
-    uint32_t cpu = UINT32_MAX;
+    Moer::uint32 passes    = 64;
+    Moer::uint32 resources = 64;
+    Moer::uint32 accesses  = 16;
+    Moer::uint32 warmup    = 5;
+    Moer::uint32 samples   = 80;
+    Moer::uint32 cpu       = UINT32_MAX;
     bool subranges = false;
     bool lower = false;
     bool record = false;
@@ -83,7 +83,7 @@ Options ParseOptions(int argc, char** argv) {
             throw std::runtime_error("numeric options require an unsigned integer value");
         }
         const std::string_view text = argv[++index];
-        uint32_t value = 0;
+        Moer::uint32           value = 0;
         const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
         if (error != std::errc{} || end != text.data() + text.size()) {
             throw std::runtime_error("invalid unsigned integer: " + std::string(text));
@@ -121,7 +121,9 @@ class BenchmarkTexture final : public Moer::Render::Texture {
 public:
     BenchmarkTexture() : Texture(MakeInfo()) {}
 
-    Moer::uint GetMipByteSize(Moer::uint) const override { return 4; }
+    Moer::uint32 GetMipByteSize(Moer::uint32) const override {
+        return 4;
+    }
     void SetName(std::string_view) override {}
 
 private:
@@ -146,10 +148,10 @@ struct PhysicalResources {
     std::vector<Moer::Render::TextureRef> textures;
     std::vector<Moer::Render::BufferRef> buffers;
 
-    explicit PhysicalResources(uint32_t count) {
+    explicit PhysicalResources(Moer::uint32 count) {
         textures.reserve(count);
         buffers.reserve(count);
-        for (uint32_t index = 0; index < count; ++index) {
+        for (Moer::uint32 index = 0; index < count; ++index) {
             textures.emplace_back(MoerNew(BenchmarkTexture)());
             buffers.emplace_back(MoerNew(BenchmarkBuffer)());
         }
@@ -157,10 +159,10 @@ struct PhysicalResources {
 };
 
 void BuildGraph(RenderGraph& graph, const Options& options, const PhysicalResources& physical,
-                uint32_t* recorded_passes = nullptr) {
+                Moer::uint32* recorded_passes = nullptr) {
     std::vector<RenderGraph::TextureHandle> textures(options.resources);
     std::vector<RenderGraph::BufferHandle> buffers(options.resources);
-    for (uint32_t index = 0; index < options.resources; ++index) {
+    for (Moer::uint32 index = 0; index < options.resources; ++index) {
         textures[index] = graph.ImportTexture(
             "Texture" + std::to_string(index), physical.textures[index], {.mip_count = 4, .layer_count = 2});
         graph.SetInitialState(textures[index], RenderGraph::TextureAccessType::Sampled,
@@ -174,20 +176,20 @@ void BuildGraph(RenderGraph& graph, const Options& options, const PhysicalResour
         graph.Export(buffers[index], RenderGraph::BufferAccessType::Storage,
             RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
     }
-    for (uint32_t pass = 0; pass < options.passes; ++pass) {
+    for (Moer::uint32 pass = 0; pass < options.passes; ++pass) {
         graph.AddRecordPass("Pass" + std::to_string(pass), [&](RenderGraph::PassBuilder& builder) {
-            for (uint32_t access = 0; access < options.accesses; ++access) {
-                const auto index = (uint64_t{pass} * 3 + access) % options.resources;
+            for (Moer::uint32 access = 0; access < options.accesses; ++access) {
+                const auto index         = (Moer::uint64{pass} * 3 + access) % options.resources;
                 auto texture_range = RenderGraph::TextureRange::Whole();
                 auto buffer_range = RenderGraph::BufferRange::Whole();
                 if (options.subranges) {
                     // Each touched resource has internal boundaries. Select from its
                     // eight mip/layer pairs and equal-sized buffer ranges without
                     // changing the number of accesses or the read/write pattern.
-                    const auto slice = static_cast<uint32_t>((uint64_t{pass} + access) % 8);
+                    const auto slice = static_cast<Moer::uint32>((Moer::uint64{pass} + access) % 8);
                     texture_range = {.mip_first = slice % 4, .mip_count = 1,
                                      .layer_first = slice / 4, .layer_count = 1};
-                    buffer_range = {.offset = uint64_t{slice} * 512, .size = 512};
+                    buffer_range     = {.offset = Moer::uint64{slice} * 512, .size = 512};
                 }
                 if (pass % 4 == 0) {
                     builder.Write(textures[index], RenderGraph::TextureAccessType::Storage, texture_range);
@@ -197,14 +199,18 @@ void BuildGraph(RenderGraph& graph, const Options& options, const PhysicalResour
                     builder.Read(buffers[index], RenderGraph::BufferAccessType::Storage, buffer_range);
                 }
             }
-        }, [recorded_passes](Moer::Render::CommandList&) {
-            if (recorded_passes) { ++*recorded_passes; }
-        }, RenderGraph::PassRecordPolicy::ParallelAllowed);
+        },
+                            [recorded_passes](Moer::Render::CommandList&) {
+                                if (recorded_passes) {
+                                    ++*recorded_passes;
+                                }
+                            },
+                            RenderGraph::PassRecordPolicy::ParallelAllowed);
     }
 }
 
-uint64_t Digest(std::string_view text) {
-    uint64_t digest = 14695981039346656037ull;
+Moer::uint64 Digest(std::string_view text) {
+    Moer::uint64 digest = 14695981039346656037ull;
     for (unsigned char value : text) {
         digest = (digest ^ value) * 1099511628211ull;
     }
@@ -212,11 +218,11 @@ uint64_t Digest(std::string_view text) {
 }
 
 struct MemoryCounts {
-    uint64_t allocations = 0;
-    uint64_t deallocations = 0;
-    uint64_t total_bytes = 0;
-    uint64_t live_bytes = 0;
-    uint64_t peak_bytes = 0;
+    Moer::uint64 allocations   = 0;
+    Moer::uint64 deallocations = 0;
+    Moer::uint64 total_bytes   = 0;
+    Moer::uint64 live_bytes    = 0;
+    Moer::uint64 peak_bytes    = 0;
 };
 
 class CountingResource final : public std::pmr::memory_resource {
@@ -257,11 +263,11 @@ private:
 };
 
 struct CrtCounts {
-    uint64_t allocation_requests = 0;
-    uint64_t free_requests = 0;
-    uint64_t reallocation_requests = 0;
-    uint64_t allocation_requested_bytes = 0;
-    uint64_t reallocation_requested_bytes = 0;
+    Moer::uint64 allocation_requests          = 0;
+    Moer::uint64 free_requests                = 0;
+    Moer::uint64 reallocation_requests        = 0;
+    Moer::uint64 allocation_requested_bytes   = 0;
+    Moer::uint64 reallocation_requested_bytes = 0;
 };
 
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -312,7 +318,7 @@ private:
 struct TimingResult {
     double p50_ms;
     double p95_ms;
-    uint64_t dump_digest;
+    Moer::uint64 dump_digest;
 };
 
 void MeasureLifecycle(const Options& options, const PhysicalResources& physical) {
@@ -324,8 +330,8 @@ void MeasureLifecycle(const Options& options, const PhysicalResources& physical)
     build_times.reserve(options.samples);
     execute_times.reserve(options.samples);
     total_times.reserve(options.samples);
-    for (uint64_t iteration = 0; iteration < uint64_t{options.warmup} + options.samples; ++iteration) {
-        uint32_t recorded_passes = 0;
+    for (Moer::uint64 iteration = 0; iteration < Moer::uint64{options.warmup} + options.samples; ++iteration) {
+        Moer::uint32 recorded_passes = 0;
         const auto begin = Clock::now();
         Clock::time_point built, executed;
         {
@@ -375,9 +381,9 @@ TimingResult MeasurePhase(const Options& options, const PhysicalResources& physi
     using Clock = std::chrono::steady_clock;
     std::vector<double> samples;
     samples.reserve(options.samples);
-    uint64_t digest = 0;
-    const uint64_t iterations = uint64_t{options.warmup} + options.samples;
-    for (uint64_t iteration = 0; iteration < iterations; ++iteration) {
+    Moer::uint64       digest     = 0;
+    const Moer::uint64 iterations = Moer::uint64{options.warmup} + options.samples;
+    for (Moer::uint64 iteration = 0; iteration < iterations; ++iteration) {
         // A fresh graph per iteration matches a frame, without timing graph setup.
         RenderGraph graph("CompilerBenchmark");
         BuildGraph(graph, options, physical);
@@ -413,11 +419,13 @@ struct AllocationResult {
     size_t accesses;
     size_t edges;
     size_t barriers;
-    uint64_t lowered_digest;
+    Moer::uint64 lowered_digest;
 };
 
 AllocationResult MeasureAllocations(
-    const Options& options, const PhysicalResources& physical, uint64_t expected_digest
+    const Options&           options,
+    const PhysicalResources& physical,
+    Moer::uint64             expected_digest
 ) {
     CountingResource memory;
     CrtCounts crt;

@@ -10,8 +10,8 @@
 #if defined(MOER_RHI_GPU_SCOPE_TEST_HOOKS)
 #include <atomic>
 #endif
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -24,7 +24,7 @@ struct RecorderState;
 struct StreamState;
 } // namespace GpuScopeDetail
 
-enum class GpuScopeTerminalStatus : std::uint8_t {
+enum class GpuScopeTerminalStatus : uint8 {
     Ready = 0,
     Error,
 };
@@ -38,64 +38,64 @@ struct GpuScopeStreamConfig {
     std::size_t max_resident_scopes{16384};
     std::size_t max_scopes_per_frame{4096};
     std::size_t max_sources_per_frame{1024};
-    std::uint32_t max_scope_depth{64};
+    uint32      max_scope_depth{64};
     std::size_t max_scope_name_bytes{256};
     std::size_t max_error_reason_bytes{512};
 };
 
 struct GpuScopeStreamStats {
     bool          accepting{false};
-    std::uint64_t frames_opened{0};
-    std::uint64_t frames_sealed{0};
-    std::uint64_t frames_ready{0};
-    std::uint64_t frames_popped{0};
-    std::uint64_t frames_dropped_resident_full{0};
-    std::uint64_t frames_dropped_pending_full{0};
-    std::uint64_t frames_dropped_duplicate_id{0};
-    std::uint64_t frames_dropped_resource_exhaustion{0};
-    std::uint64_t frames_abandoned_on_close{0};
+    uint64        frames_opened{0};
+    uint64        frames_sealed{0};
+    uint64        frames_ready{0};
+    uint64        frames_popped{0};
+    uint64        frames_dropped_resident_full{0};
+    uint64        frames_dropped_pending_full{0};
+    uint64        frames_dropped_duplicate_id{0};
+    uint64        frames_dropped_resource_exhaustion{0};
+    uint64        frames_abandoned_on_close{0};
 
-    std::uint64_t sources_opened{0};
-    std::uint64_t sources_dropped_capacity{0};
-    std::uint64_t sources_dropped_duplicate_order{0};
-    std::uint64_t sources_dropped_after_seal{0};
+    uint64 sources_opened{0};
+    uint64 sources_dropped_capacity{0};
+    uint64 sources_dropped_duplicate_order{0};
+    uint64 sources_dropped_after_seal{0};
 
-    std::uint64_t scopes_attempted{0};
-    std::uint64_t scopes_admitted{0};
-    std::uint64_t scopes_ready{0};
-    std::uint64_t scopes_error{0};
-    std::uint64_t scopes_dropped_resident_full{0};
-    std::uint64_t scopes_dropped_frame_full{0};
-    std::uint64_t scopes_dropped_name_too_large{0};
-    std::uint64_t scopes_dropped_invalid_hierarchy{0};
-    std::uint64_t scopes_dropped_suppressed_subtree{0};
-    std::uint64_t scopes_dropped_after_seal{0};
-    std::uint64_t scopes_dropped_resource_exhaustion{0};
+    uint64 scopes_attempted{0};
+    uint64 scopes_admitted{0};
+    uint64 scopes_ready{0};
+    uint64 scopes_error{0};
+    uint64 scopes_dropped_resident_full{0};
+    uint64 scopes_dropped_frame_full{0};
+    uint64 scopes_dropped_name_too_large{0};
+    uint64 scopes_dropped_invalid_hierarchy{0};
+    uint64 scopes_dropped_suppressed_subtree{0};
+    uint64 scopes_dropped_after_seal{0};
+    uint64 scopes_dropped_resource_exhaustion{0};
 
-    std::uint64_t resident_frames{0};
-    std::uint64_t resident_pending_frames{0};
-    std::uint64_t resident_ready_frames{0};
-    std::uint64_t resident_scopes{0};
-    std::uint64_t high_water_frames{0};
-    std::uint64_t high_water_pending_frames{0};
-    std::uint64_t high_water_ready_frames{0};
-    std::uint64_t high_water_scopes{0};
+    uint64 resident_frames{0};
+    uint64 resident_pending_frames{0};
+    uint64 resident_ready_frames{0};
+    uint64 resident_scopes{0};
+    uint64 high_water_frames{0};
+    uint64 high_water_pending_frames{0};
+    uint64 high_water_ready_frames{0};
+    uint64 high_water_scopes{0};
 };
 
 struct GpuScopeNode {
-    std::uint64_t scope_id{0};
-    std::uint64_t parent_scope_id{0};
-    std::uint64_t source_order{0};
-    std::uint64_t local_order{0};
-    std::uint32_t depth{0};
+    uint64          scope_id{0};
+    uint64          parent_scope_id{0};
+    uint64          source_order{0};
+    uint64          local_order{0};
+    uint32          depth{0};
     RHIQueueBinding queue_binding{};
     std::string     name{};
 
     GpuScopeTerminalStatus status{GpuScopeTerminalStatus::Error};
-    std::uint64_t          query_id{0};
-    std::uint64_t          begin_tick{0};
-    std::uint64_t          end_tick{0};
-    std::uint32_t          valid_bits{0};
+    uint64                 query_id{0};
+    uint64                 begin_tick{0};
+    uint64                 end_tick{0};
+    uint32                 valid_bits{0};
     double                 tick_period_ns{0.0};
     double                 total_duration_ns{0.0};
     double                 exclusive_duration_ns{0.0};
@@ -105,11 +105,11 @@ struct GpuScopeNode {
 };
 
 struct ResolvedGpuScopeFrame {
-    std::uint64_t frame_id{0};
+    uint64                             frame_id{0};
     bool          valid{false};
-    std::uint64_t admitted_scope_count{0};
-    std::uint64_t dropped_scope_count{0};
-    std::uint64_t error_scope_count{0};
+    uint64                             admitted_scope_count{0};
+    uint64                             dropped_scope_count{0};
+    uint64                             error_scope_count{0};
     std::array<Array<GpuScopeNode>, 3> queue_roots{};
 };
 
@@ -121,7 +121,7 @@ public:
     GpuScopeCompletionTicket() = default;
 
     [[nodiscard]] bool Valid() const noexcept;
-    [[nodiscard]] std::uint64_t ScopeId() const noexcept;
+    [[nodiscard]] uint64 ScopeId() const noexcept;
 
     void Resolve(const QueryResult& _result) const noexcept;
     void Fail(std::string_view _reason) const noexcept;
@@ -129,13 +129,13 @@ public:
 private:
     GpuScopeCompletionTicket(
         std::shared_ptr<GpuScopeDetail::FrameState> _frame,
-        std::uint32_t                               _slot,
-        std::uint64_t                               _scope_id
+        uint32                                      _slot,
+        uint64                                      _scope_id
     ) noexcept;
 
     std::shared_ptr<GpuScopeDetail::FrameState> frame_{};
-    std::uint32_t                               slot_{0};
-    std::uint64_t                               scope_id_{0};
+    uint32                                      slot_{0};
+    uint64                                      scope_id_{0};
 
     friend class GpuScopeRecorder;
     friend struct GpuScopeDetail::FrameState;
@@ -152,8 +152,8 @@ public:
     GpuScopeRecorder& operator=(GpuScopeRecorder&&) noexcept = default;
 
     [[nodiscard]] bool Valid() const noexcept;
-    [[nodiscard]] std::uint64_t FrameId() const noexcept;
-    [[nodiscard]] std::uint64_t SourceOrder() const noexcept;
+    [[nodiscard]] uint64          FrameId() const noexcept;
+    [[nodiscard]] uint64          SourceOrder() const noexcept;
     [[nodiscard]] RHIQueueBinding QueueBinding() const noexcept;
 
 private:
@@ -163,8 +163,8 @@ private:
 
     [[nodiscard]] GpuScopeCompletionTicket TryBeginScope(
         std::string_view _name,
-        std::uint64_t    _parent_scope_id,
-        std::uint32_t    _depth
+        uint64           _parent_scope_id,
+        uint32           _depth
     ) const noexcept;
     void RecordSuppressedScope() const noexcept;
     [[nodiscard]] bool IsBound() const noexcept;
@@ -181,11 +181,11 @@ public:
     GpuScopeFrameHandle() = default;
 
     [[nodiscard]] bool Valid() const noexcept;
-    [[nodiscard]] std::uint64_t FrameId() const noexcept;
+    [[nodiscard]] uint64 FrameId() const noexcept;
 
     [[nodiscard]] GpuScopeRecorder CreateRecorder(
         RHIQueueBinding _queue_binding,
-        std::uint64_t   _source_order
+        uint64          _source_order
     ) const noexcept;
 
 private:
@@ -212,7 +212,7 @@ public:
 
     [[nodiscard]] bool Valid() const noexcept;
     [[nodiscard]] GpuScopeFrameHandle BeginFrame(
-        std::uint64_t _frame_id
+        uint64 _frame_id
     ) noexcept;
     [[nodiscard]] bool SealFrame(
         const GpuScopeFrameHandle& _frame
@@ -245,8 +245,8 @@ private:
 // compile this gate.
 namespace GpuScopeTesting {
 RENDER_API void InstallAdmissionPause(
-    std::atomic_uint32_t& _entered_count,
-    std::atomic_bool&     _release
+    std::atomic<uint32>& _entered_count,
+    std::atomic_bool&    _release
 ) noexcept;
 RENDER_API void ClearAdmissionPause() noexcept;
 } // namespace GpuScopeTesting

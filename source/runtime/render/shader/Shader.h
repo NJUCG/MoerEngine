@@ -9,7 +9,7 @@
 #include "shader/ShaderMutation.h"
 #include "shader/ShaderParameterMacros.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 /**
  * @brief Contains Layout info of a shader parameter,
     contains offset and stride in parameter structure
@@ -28,11 +28,11 @@ struct ShaderParameterLayoutInfo {
         return !(slot == -1 || space == -1 || type == EShaderParameterType::UNKNOWN);
     }
     ShaderParameterLayoutInfo(
-        uint16_t                       _offset,
-        uint16_t                       _stride,
-        int8_t                         _slot          = -1,
-        int8_t                         _space         = -1,
-        int8_t                         _num           = -1,
+        Moer::uint16                   _offset,
+        Moer::uint16                   _stride,
+        Moer::int8                     _slot          = -1,
+        Moer::int8                     _space         = -1,
+        Moer::int8                     _num           = -1,
         EShaderParameterType           _type          = EShaderParameterType::UNKNOWN,
         EShaderCodeResourceBindingType _resource_type = EShaderCodeResourceBindingType::INVALID
     ) :
@@ -43,12 +43,12 @@ struct ShaderParameterLayoutInfo {
         num(_num),
         type(_type),
         resource_type(_resource_type) {}
-    uint16_t offset;
-    uint16_t stride;
+    Moer::uint16 offset;
+    Moer::uint16 stride;
 
-    int8_t               slot;
-    int8_t               space;
-    int8_t               num;
+    Moer::int8           slot;
+    Moer::int8           space;
+    Moer::int8           num;
     EShaderParameterType type;
 
     //only resources defined in shader root parameter struct have valid resource type, like srv, uav, cbv

@@ -185,6 +185,12 @@ MoerEngine开发早期使用 `.clang-tidy` 对命名风格进行规范，但强�
 
 此处规范和先前规范的主要区别在于：形参不应该以 `_` 开头；非POD成员变量应该以 `m_` 开头。此文档优先级高于 `.clang-tidy`
 
+#### 固定宽度整数
+
+引擎自有 C++ 代码统一使用 `misc/Types.h` 中的 `uint8 / uint16 / uint32 / uint64` 和 `int8 / int16 / int32 / int64`。这些名称直接别名到 `<cstdint>` 的对应类型；固定宽度原子整数写作 `std::atomic<uint32>` 等。命名空间外使用 `Moer::uint32` 等限定名。
+
+`size_t`、`uintptr_t`、`VkDeviceSize` 等具有具体用途的类型保留原名。第三方和生成代码沿用原有约定；CUDA 互操作边界保留其类型契约。HLSL 与双语言共享头继续使用 `uint`，C++ 侧兼容别名由 `misc/Traits.h` 提供。新增纯 C++ 代码使用 `uint32`。
+
 #### 命名规范 - 变量
 
 **变量均为 全小写 & 下划线 风格**。

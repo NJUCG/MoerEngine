@@ -13,6 +13,7 @@
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
 #include "misc/Timer.h"
+#include "misc/Types.h"
 #include "rhi/RHIMultiview.h"
 #include "shader/ShaderPipeline.h"
 #if MOER_VULKAN_TEST_SUPPORT
@@ -81,7 +82,7 @@ static bool PipelineUsesStencilAttachment(const PipelineHandle& pipeline) {
     return vk_pso->UsesStencilAttachment();
 }
 
-static uint32_t PipelineViewMask(const PipelineHandle& pipeline) {
+static uint32 PipelineViewMask(const PipelineHandle& pipeline) {
     if (!pipeline.IsValid()) {
         return 0;
     }
@@ -91,14 +92,14 @@ static uint32_t PipelineViewMask(const PipelineHandle& pipeline) {
 }
 
 static void ValidateRenderPassMultiview(const RenderPassInfo& pass_info) {
-    const uint32_t required_view_count = Multiview::RequiredViewCount(pass_info.view_mask);
-    auto           validate_attachment = [required_view_count, view_mask = pass_info.view_mask](
-                                   Texture*         texture,
-                                   uint32_t         mip_level,
-                                   uint32_t         base_layer,
-                                   uint32_t         layer_count,
-                                   std::string_view attachment_name
-                               ) {
+    const uint32 required_view_count = Multiview::RequiredViewCount(pass_info.view_mask);
+    auto         validate_attachment = [required_view_count, view_mask = pass_info.view_mask](
+                                           Texture*         texture,
+                                           uint32           mip_level,
+                                           uint32           base_layer,
+                                           uint32           layer_count,
+                                           std::string_view attachment_name
+                                       ) {
         if (texture == nullptr || mip_level >= texture->GetNumMips() ||
             !Multiview::IsAttachmentRangeValid(base_layer, layer_count, texture->GetNumArray())) {
             LOG_ERROR(
@@ -142,7 +143,7 @@ static void ValidateRenderPassMultiview(const RenderPassInfo& pass_info) {
 }
 
 static void ValidatePipelineViewMask(const PipelineHandle& pipeline, const RenderPassInfo& pass_info) {
-    const uint32_t pipeline_view_mask = PipelineViewMask(pipeline);
+    const uint32 pipeline_view_mask = PipelineViewMask(pipeline);
     if (!Multiview::PipelineMatchesRenderPass(pipeline_view_mask, pass_info.view_mask)) {
         LOG_ERROR(
             "Graphics pipeline view mask 0x{:x} does not match rendering view mask 0x{:x}.",
@@ -188,13 +189,13 @@ VkRenderingAttachmentInfo FromDepthAttachmentInfo(const DepthAttachment& _attach
     return attachment_info;
 }
 
-static std::optional<uint32_t> UniformRenderPassSampleCount(const RenderPassInfo& _pass_info) {
-    std::optional<uint32_t> sample_count;
+static std::optional<uint32> UniformRenderPassSampleCount(const RenderPassInfo& _pass_info) {
+    std::optional<uint32>   sample_count;
     auto                    merge_samples = [&](const Texture* _texture) {
         if (_texture == nullptr) {
             return false;
         }
-        const uint32_t attachment_samples = _texture->GetNumSamples();
+        const uint32 attachment_samples = _texture->GetNumSamples();
         if (sample_count.has_value() && sample_count.value() != attachment_samples) {
             return false;
         }
@@ -221,7 +222,7 @@ public:
     VulkanDynamicRenderingEnvelope(const RenderPassInfo& _pass_info, bool _uses_stencil_attachment) :
         pass_info(&_pass_info),
         uses_stencil_attachment(_uses_stencil_attachment) {
-        const std::optional<uint32_t> uniform_samples = UniformRenderPassSampleCount(_pass_info);
+        const std::optional<uint32> uniform_samples = UniformRenderPassSampleCount(_pass_info);
         if (!uniform_samples.has_value()) {
             throw std::logic_error("dynamic rendering attachments use incompatible sample counts");
         }
@@ -250,7 +251,7 @@ public:
                  .extent = {pass_info->render_area.extent.width, pass_info->render_area.extent.height}},
             .layerCount           = 1,
             .viewMask             = pass_info->view_mask,
-            .colorAttachmentCount = static_cast<uint32_t>(color_attachments.size()),
+            .colorAttachmentCount = static_cast<uint32>(color_attachments.size()),
             .pColorAttachments    = color_attachments.data(),
             .pDepthAttachment     = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
             .pStencilAttachment   = depth_stencil_attachment.has_value() && uses_stencil_attachment ?
@@ -265,7 +266,7 @@ public:
             .pNext                   = nullptr,
             .flags                   = 0,
             .viewMask                = pass_info->view_mask,
-            .colorAttachmentCount    = static_cast<uint32_t>(color_formats.size()),
+            .colorAttachmentCount    = static_cast<uint32>(color_formats.size()),
             .pColorAttachmentFormats = color_formats.data(),
             .depthAttachmentFormat   = depth_format,
             .stencilAttachmentFormat = stencil_format,
@@ -298,14 +299,14 @@ std::shared_ptr<const VulkanDescriptorRecordingPlan> PrepareDescriptorRecordingP
     const VulkanDescriptorBufferLease& _lease
 ) {
     auto                               plan = std::make_shared<VulkanDescriptorRecordingPlan>();
-    std::vector<std::vector<uint64_t>> requests;
+    std::vector<std::vector<uint64>>   requests;
     std::vector<const Command*>        commands;
     for (const auto& command : _submit.cmds) {
-        std::vector<uint64_t> binds;
+        std::vector<uint64>   binds;
         auto                  add = [&](const PipelineHandle& pipeline, size_t count = 1) {
             const auto* state = static_cast<const VulkanPipelineState*>(pipeline.GetState());
             if (state->GetDescriptorMode() != VulkanDescriptorMode::Sets) {
-                const uint64_t size = state->binding_template->resource_descriptor_allocation_size;
+                const uint64 size = state->binding_template->resource_descriptor_allocation_size;
                 if (size != 0) {
                     binds.insert(binds.end(), count, size);
                 }
@@ -737,7 +738,7 @@ public:
                         }
                     }
                 },
-                [&](uint) {
+                [&](uint32) {
                     for (const auto& draw_param : draw_data.draw_params) {
                         cmd_list.DrawInstanced(
                             draw_param.index_cnt,
@@ -791,8 +792,8 @@ public:
 
         const auto& pass_info = _cmd.RenderPassInfo();
 
-        uint tex_min_width  = pass_info.render_area.extent.width + pass_info.render_area.offset.x;
-        uint tex_min_height = pass_info.render_area.extent.height + pass_info.render_area.offset.y;
+        uint32 tex_min_width  = pass_info.render_area.extent.width + pass_info.render_area.offset.x;
+        uint32 tex_min_height = pass_info.render_area.extent.height + pass_info.render_area.offset.y;
 
         for (size_t i = 0; i < pass_info.color_attachments.size(); ++i) {
             if (pass_info.color_attachments[i].target->GetWidth() < tex_min_width ||
@@ -939,7 +940,7 @@ public:
                             [&](float4 _val) {
                                 value = VkClearColorValue{.float32 = {_val.x, _val.y, _val.z, _val.w}};
                             },
-                            [&](uint _val) {
+                            [&](uint32 _val) {
                                 value = VkClearColorValue{.uint32 = {_val, _val, _val, _val}};
                             }
                         },
@@ -1011,21 +1012,21 @@ public:
 
         //calculate all staging size and allocate buffer
         if (b_array) {
-            uint storage_alignment = 256u;
+            uint32 storage_alignment = 256u;
 
             //calculate all staging size
-            uint current_offset = 0;
-            uint staging_size = 0, array_staging_offset = 0, texture_staging_offset = 0, buffer_staging_offset = 0;
-            uint array_staging_size = 0, texture_staging_size = 0, buffer_staging_size = 0;
-            uint array_indices_offset = 0, texture_indices_offset = 0, buffer_indices_offset = 0;
-            uint array_indices_size = 0, texture_indices_size = 0, buffer_indices_size = 0;
+            uint32 current_offset = 0;
+            uint32 staging_size = 0, array_staging_offset = 0, texture_staging_offset = 0, buffer_staging_offset = 0;
+            uint32 array_staging_size = 0, texture_staging_size = 0, buffer_staging_size = 0;
+            uint32 array_indices_offset = 0, texture_indices_offset = 0, buffer_indices_offset = 0;
+            uint32 array_indices_size = 0, texture_indices_size = 0, buffer_indices_size = 0;
 
             if (b_array) {
                 array_staging_size   = array_data.size();
                 staging_size         = array_staging_size;
                 array_indices_offset = Moer::AlignUp(array_staging_size, storage_alignment);
 
-                array_indices_size = sizeof(uint) * (array_indices_dat.size()) * 2;
+                array_indices_size = sizeof(uint32) * (array_indices_dat.size()) * 2;
 
                 current_offset = Moer::AlignUp(array_indices_size + array_indices_offset, storage_alignment);
             }
@@ -1036,7 +1037,7 @@ public:
 
                 texture_indices_offset =
                     Moer::AlignUp(texture_staging_size + texture_staging_offset, storage_alignment);
-                texture_indices_size = sizeof(uint) * texture_indices_dat.size() * 2;
+                texture_indices_size = sizeof(uint32) * texture_indices_dat.size() * 2;
                 current_offset       = Moer::AlignUp(texture_indices_size + texture_indices_offset, storage_alignment);
             }
 
@@ -1044,7 +1045,7 @@ public:
                 buffer_staging_size   = buffer_data.size();
                 buffer_staging_offset = current_offset;
                 buffer_indices_offset = Moer::AlignUp(buffer_staging_size + buffer_staging_offset, storage_alignment);
-                buffer_indices_size   = sizeof(uint) * buffer_indices_dat.size() * 2;
+                buffer_indices_size   = sizeof(uint32) * buffer_indices_dat.size() * 2;
 
                 current_offset = Moer::AlignUp(buffer_indices_size + buffer_indices_offset, storage_alignment);
             }
@@ -1085,7 +1086,7 @@ public:
             {
                 //bindless array update
                 arg.component_cnt = array_indices_dat.size();
-                arg.stride        = sizeof(uint) >> 2;
+                arg.stride        = sizeof(uint32) >> 2;
 
                 cmd_list.BindShaderArguments(
                     shuffle_sd.handle,
@@ -1235,7 +1236,7 @@ public:
                 to_update.size() * sizeof(uint32) * 2
             );
 
-            Array<std::pair<uint, uint>> to_update_indices(to_update.size());
+            Array<std::pair<uint32, uint32>> to_update_indices(to_update.size());
 
             for (size_t i = 0; i < to_update.size(); ++i) {
                 const auto& id       = to_update[i];
@@ -1312,7 +1313,7 @@ public:
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR
         };
 
-        uint instance_count = _cmd.InstanceCount();
+        uint32 instance_count = _cmd.InstanceCount();
         vkGetAccelerationStructureBuildSizesKHR(
             m_device->GetDevice(),
             VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
@@ -1455,7 +1456,7 @@ void RecordCompiledBindlessUpdate(
         protect(
             table->GetBufferDescriptorBuffer(),
             table->buffer_descriptors_byte_offset,
-            table->handles.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+            table->bindings.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
             table->GetDescriptorReadAccess()
         );
     }
@@ -1463,7 +1464,7 @@ void RecordCompiledBindlessUpdate(
         protect(
             table->GetTextureSamplerDescriptorBuffer(),
             table->texture_offset_in_buffer,
-            table->handles.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+            table->bindings.size() * heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
             table->GetDescriptorReadAccess()
         );
     }
@@ -1597,14 +1598,14 @@ struct VulkanCommandPreparation {
             LOG_CRITICAL(
                 "Explicit BarrierCmd queue affinity mismatch: command={} "
                 "current={}",
-                static_cast<uint>(_cmd->GetSrcQueue()),
-                static_cast<uint>(current_queue)
+                static_cast<uint32>(_cmd->GetSrcQueue()),
+                static_cast<uint32>(current_queue)
             );
             throw std::logic_error("explicit barrier recorded on the wrong queue");
         }
 
         const auto resolve_transfer = [&](const BarrierQueueTransfer& transfer) {
-            std::pair<uint32_t, uint32_t> families{
+            std::pair<uint32, uint32> families{
                 VK_QUEUE_FAMILY_IGNORED,
                 VK_QUEUE_FAMILY_IGNORED,
             };
@@ -1629,8 +1630,8 @@ struct VulkanCommandPreparation {
                 if (family == VK_QUEUE_FAMILY_IGNORED) {
                     throw std::invalid_argument("Vulkan external ownership barrier has no native queue");
                 }
-                return release ? std::pair{family, uint32_t(VK_QUEUE_FAMILY_EXTERNAL)} :
-                                 std::pair{uint32_t(VK_QUEUE_FAMILY_EXTERNAL), family};
+                return release ? std::pair{family, uint32(VK_QUEUE_FAMILY_EXTERNAL)} :
+                                 std::pair{uint32(VK_QUEUE_FAMILY_EXTERNAL), family};
             }
             if ((transfer.src_queue != EQueueType::Graphics && transfer.src_queue != EQueueType::Compute &&
                  transfer.src_queue != EQueueType::Copy) ||

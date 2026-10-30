@@ -17,7 +17,7 @@
 #include "RasterTextures.h"
 #include "ProbeVolumeResource.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <utility>
 
 namespace Moer::Render::Raster {
@@ -25,14 +25,14 @@ namespace Moer::Render::Raster {
 struct PointLightShadowData {
     struct ShadowCubeResource {
         TextureRef  tex; // CubeMap (ArrayLayers=6)
-        uint        handle;
+        uint32      handle;
         std::string name;
         float       far_plane;  // 存下来，Shader 里做深度线性化时需要用到 (Far)
         float       near_plane; // 存下来 (Near)
     };
 
     // 支持多个点光源 (例如 4 个)
-    static constexpr uint                             MAX_POINT_SHADOWS = 1;
+    static constexpr uint32                           MAX_POINT_SHADOWS = 1;
     std::array<ShadowCubeResource, MAX_POINT_SHADOWS> shadow_cubes;
 };
 
@@ -93,7 +93,7 @@ public:
             float3   light_direction            = float3(0.f, 0.f, 0.f);
             float    absolute_light_z_min       = 0.0f;
             float    absolute_light_z_max       = 0.0f;
-            uint64_t last_update_frame          = 0; // TODO: 后续接入最大陈旧帧数刷新
+            uint64   last_update_frame          = 0; // TODO: 后续接入最大陈旧帧数刷新
         };
 
         float3                                                      light_dir;
@@ -102,16 +102,16 @@ public:
         StaticArray<ShadowCacheEntry, CSM_MAX_CASCADES>             shadow_cache_entries{};
         ShadowCacheConfigSnapshot                                   shadow_cache_config_snapshot{};
         bool     shadow_cache_config_snapshot_valid = false;
-        uint64_t shadow_cache_frame_counter         = 0;
+        uint64                                                      shadow_cache_frame_counter         = 0;
     } csm_data;
 
     struct PointShadowData {
         // 定义最大支持的点光源阴影数量
-        static constexpr uint MAX_POINT_SHADOWS = 1;
+        static constexpr uint32 MAX_POINT_SHADOWS = 1;
 
         struct ShadowCube {
             TextureRef  tex;        // CubeMap 资源
-            uint        handle = 0; // Bindless Handle
+            uint32      handle = 0; // Bindless Handle
             std::string name;       // Debug Name
 
             // 存储投影参数，供 Lighting Pass 做深度线性化或 VSM 计算
@@ -122,14 +122,14 @@ public:
 
         StaticArray<ShadowCube, MAX_POINT_SHADOWS> shadow_cubes;
 
-        uint active_count = 1;
+        uint32 active_count = 1;
     } point_shadow_data;
 
     GpuCullingBuffers gpu_culling_buffers;
 
     struct HiZData {
         bool     previous_valid = false;
-        uint     mip_count      = 0;
+        uint32   mip_count      = 0;
         float4x4 previous_view_proj{};
     } hiz_data;
 
@@ -311,7 +311,7 @@ public:
         return textures.GetDisplayableFrameBuffersView();
     }
 
-    TextureView GetSelectedFrameBufferView(uint selected_frame_buffer_index) {
+    TextureView GetSelectedFrameBufferView(uint32 selected_frame_buffer_index) {
         return textures.GetDisplayableFrameBuffersView()[selected_frame_buffer_index];
     }
 };

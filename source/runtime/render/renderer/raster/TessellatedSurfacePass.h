@@ -2,6 +2,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
@@ -34,7 +35,7 @@ public:
         TextureWithHandle      metal_rough_ao{};
         TextureView            depth{};
         Rect2D                 render_area{};
-        uint32_t               instance_count{0};
+        uint32                 instance_count{0};
     };
 
     explicit TessellatedSurfacePass(RasterContext& context);
@@ -63,7 +64,7 @@ public:
 private:
     TessellatedSurfacePipeline pipeline;
     BufferRef                  surface_data_buffer;
-    uint32_t                   device_max_tessellation_factor = 0;
+    uint32                     device_max_tessellation_factor = 0;
     bool                       supported                      = false;
 };
 

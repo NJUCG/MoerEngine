@@ -1,6 +1,7 @@
 #include "VulkanCommandProfiler.h"
 #include "VulkanDevice.h"
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 
 #include <cassert>
 #include <chrono>
@@ -22,7 +23,7 @@ void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
     }
     bool b_any_query_used = false;
     //maybe should use last frame
-    for (uint idx = 0; idx < s_max_num_profiler_queries_per_frame / 8; ++idx) {
+    for (uint32 idx = 0; idx < s_max_num_profiler_queries_per_frame / 8; ++idx) {
         if (queries_used[idx + cur_frame * s_max_num_profiler_queries_per_frame / 8]) {
             b_any_query_used = true;
             break;
@@ -55,8 +56,8 @@ void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
                     && query_pool_results[(sample.index * 2 + 1) * 2 + 1] != 0) {
                 // clang-format on
 
-                uint64_t begin = query_pool_results[sample.index * 2 * 2 + 0];
-                uint64_t end   = query_pool_results[(sample.index * 2 + 1) * 2 + 0];
+                uint64 begin = query_pool_results[sample.index * 2 * 2 + 0];
+                uint64 end   = query_pool_results[(sample.index * 2 + 1) * 2 + 0];
                 sample.Record(end - begin);
             } else {
                 // not valid
@@ -107,7 +108,7 @@ void ProfilerStorage::BeginProfilerSession(
     if (storage_index < 0) {
         return;
     }
-    uint idx = storage_index * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame;
+    uint32 idx = storage_index * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame;
     vkCmdWriteTimestamp(_cmd_list.GetHandle(), _stage, timestamp_pool.GetHandle(), idx);
     SetQueryUsed(idx);
     assert(IsQueryUsed(idx + 1) == false && "Query already used");
@@ -125,7 +126,7 @@ void ProfilerStorage::EndProfilerSession(
     if (storage_index < 0) {
         return;
     }
-    uint idx = storage_index * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame;
+    uint32 idx = storage_index * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame;
     vkCmdWriteTimestamp(_cmd_list.GetHandle(), _stage, timestamp_pool.GetHandle(), idx);
     SetQueryUsed(idx);
     assert(IsQueryUsed(idx - 1) == true && "Query not used");

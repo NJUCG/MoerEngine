@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <optional>
 #include <stdexcept>
 
@@ -8,7 +8,7 @@ namespace Moer::Render {
 
 // Pipelines use the device backend unless a concrete binding constraint requires
 // a fallback. Bindless resource access does not determine descriptor storage.
-enum class VulkanDescriptorMode : uint8_t {
+enum class VulkanDescriptorMode : uint8 {
     Sets,
     Buffer,
     Heap
@@ -19,8 +19,8 @@ struct VulkanDescriptorCapabilities {
     bool     buffer               = false;
     bool     push                 = false;
     bool     buffer_push          = false;
-    uint32_t max_push_descriptors = 0;
-    uint32_t max_push_data        = 0;
+    uint32   max_push_descriptors = 0;
+    uint32   max_push_data        = 0;
 };
 
 // No request uses the automatic preference; an explicit request must be available.

@@ -4,7 +4,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <functional>
 #include <mutex>
 #include <string_view>
@@ -26,10 +26,10 @@ struct RENDER_API RGTransientTextureDesc {
     EPixelFormat       format       = PF_UNDEFINED;
     ETextureUsageFlags usage        = ETextureUsageFlags::UNDEFINED;
     ETextureAspectFlags aspect_flags = ETextureAspectFlags::COLOR;
-    uint32_t           mip_count    = 1;
-    uint32_t           array_size   = 1;
+    uint32              mip_count    = 1;
+    uint32              array_size   = 1;
 
-    [[nodiscard]] uint32_t PhysicalLayerCount() const;
+    [[nodiscard]] uint32   PhysicalLayerCount() const;
     [[nodiscard]] bool     IsValid() const;
 
     friend bool operator==(const RGTransientTextureDesc&, const RGTransientTextureDesc&) = default;
@@ -37,12 +37,12 @@ struct RENDER_API RGTransientTextureDesc {
 
 /** Physical allocation description for a transient RDG buffer. */
 struct RENDER_API RGTransientBufferDesc {
-    uint32_t          element_count = 0;
-    uint32_t          stride        = 0;
+    uint32            element_count = 0;
+    uint32            stride        = 0;
     EBufferUsageFlags usage         = EBufferUsageFlags::NONE;
     EPixelFormat      format        = PF_UNDEFINED;
 
-    [[nodiscard]] uint64_t ByteSize() const;
+    [[nodiscard]] uint64   ByteSize() const;
     [[nodiscard]] bool     IsValid() const;
 
     friend bool operator==(const RGTransientBufferDesc&, const RGTransientBufferDesc&) = default;
@@ -66,7 +66,7 @@ public:
         std::function<BufferRef(std::string_view, const RGTransientBufferDesc&)>;
 
     explicit RenderGraphResourcePool(
-        uint32_t       retire_after_idle_frames = 3,
+        uint32         retire_after_idle_frames = 3,
         TextureFactory texture_factory          = {},
         BufferFactory  buffer_factory           = {}
     );
@@ -81,22 +81,22 @@ public:
     /** Drops the pool's references. In-flight users remain protected by their own refs. */
     void Reset();
 
-    [[nodiscard]] uint32_t TextureCount() const;
-    [[nodiscard]] uint32_t BufferCount() const;
-    [[nodiscard]] uint32_t AvailableTextureCount() const;
-    [[nodiscard]] uint32_t AvailableBufferCount() const;
+    [[nodiscard]] uint32 TextureCount() const;
+    [[nodiscard]] uint32 BufferCount() const;
+    [[nodiscard]] uint32 AvailableTextureCount() const;
+    [[nodiscard]] uint32 AvailableBufferCount() const;
 
 private:
     struct TextureEntry {
         RGTransientTextureDesc desc{};
         TextureRef            resource{};
-        uint32_t              idle_frames = 0;
+        uint32                 idle_frames = 0;
     };
 
     struct BufferEntry {
         RGTransientBufferDesc desc{};
         BufferRef             resource{};
-        uint32_t              idle_frames = 0;
+        uint32                idle_frames = 0;
     };
 
     TextureRef AcquireTextureLocked(std::string_view name, const RGTransientTextureDesc& desc);
@@ -105,7 +105,7 @@ private:
     mutable std::mutex       mutex{};
     std::vector<TextureEntry> textures{};
     std::vector<BufferEntry>  buffers{};
-    uint32_t                  retire_after_idle_frames = 3;
+    uint32                    retire_after_idle_frames = 3;
     TextureFactory            texture_factory{};
     BufferFactory             buffer_factory{};
 };

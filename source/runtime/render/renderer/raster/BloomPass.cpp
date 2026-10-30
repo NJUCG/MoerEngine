@@ -1,4 +1,5 @@
 #include "BloomPass.h"
+#include "misc/Types.h"
 
 // 实现 Bloom 的预过滤、下采样、上采样和加法合成阶段。
 #include "RasterResource.h"
@@ -82,12 +83,12 @@ BloomPass::RecordParameters BloomPass::Prepare(
         return parameters;
     }
 
-    const uint mip_count = parameters.downsample_chain.tex->GetNumMips();
+    const uint32 mip_count = parameters.downsample_chain.tex->GetNumMips();
     if (mip_count == 0 || parameters.upsample_chain.tex->GetNumMips() != mip_count) {
         throw std::invalid_argument("Bloom requires nonempty downsample/upsample chains with matching mips");
     }
     parameters.downsample_dispatches.reserve(mip_count > 0 ? mip_count - 1 : 0);
-    for (uint mip = 1; mip < mip_count; ++mip) {
+    for (uint32 mip = 1; mip < mip_count; ++mip) {
         DownsampleDispatch dispatch{};
         const uint2        source_size = parameters.downsample_chain.GetSize(mip - 1);
         dispatch.source                = parameters.downsample_chain.tex->GetView(mip - 1, 1);

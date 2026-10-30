@@ -1,11 +1,12 @@
 #ifndef TASK_PIPE_H
 #define TASK_PIPE_H
 
+#include "misc/LockFree.h"
+#include "misc/Types.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
-#include "misc/LockFree.h"
-#include <functional>
 #include <atomic>
+#include <functional>
 
 namespace Moer {
 
@@ -13,7 +14,7 @@ namespace TaskPipeImp {
 
 class TaskPool {
 public:
-    static constexpr size_t TASK_SIZE = sizeof(std::function<void()>) + sizeof(GraphEventArray) + sizeof(std::atomic<void*>) + sizeof(std::atomic<uint32_t>) + sizeof(EThread::Type) * 2 + sizeof(GraphEventRef);
+    static constexpr size_t TASK_SIZE         = sizeof(std::function<void()>) + sizeof(GraphEventArray) + sizeof(std::atomic<void*>) + sizeof(std::atomic<uint32>) + sizeof(EThread::Type) * 2 + sizeof(GraphEventRef);
     static constexpr size_t CACHELINE_SIZE = 64;
     static constexpr size_t ALIGNED_TASK_SIZE = ((TASK_SIZE + CACHELINE_SIZE - 1) / CACHELINE_SIZE) * CACHELINE_SIZE;
 
@@ -43,7 +44,7 @@ struct TaskNode {
     std::function<void()>  lambda;
     GraphEventArray        prereqs;
     std::atomic<TaskNode*> next{nullptr};
-    std::atomic<uint32_t>  ref_count{0};
+    std::atomic<uint32>    ref_count{0};
     EThread::Type          logical_thread{EThread::Invalid};
     EThread::Type          actual_thread{EThread::Invalid};
     GraphEventRef          event;

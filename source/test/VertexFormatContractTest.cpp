@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "resources/vertexfactory/VertexAttributes.h"
 #include "rhi/RHIResource.h"
 #include "rhi/backends/vulkan/VulkanVertexFormat.h"
@@ -16,7 +17,7 @@ static_assert(std::is_same_v<decltype(VertexElement::format), EVertexFormat>);
 static_assert(!std::is_assignable_v<decltype(VertexElement::format)&, EPixelFormat>);
 static_assert(std::is_same_v<decltype(Moer::Render::RaytracingGeometryInfo::vertex_format), EVertexFormat>);
 static_assert(
-    !std::is_constructible_v<VertexElement, uint8_t, uint8_t, EPixelFormat, uint8_t, uint16_t, EVertexInputRate>
+    !std::is_constructible_v<VertexElement, Moer::uint8, Moer::uint8, EPixelFormat, Moer::uint8, Moer::uint16, EVertexInputRate>
 );
 
 namespace {
@@ -37,13 +38,13 @@ int main() {
     struct UiVertex {
         float   position[2];
         float   uv[2];
-        uint8_t color[4];
+        uint8   color[4];
     };
     VertexStream ui_stream;
     ui_stream.EmplacePerVertex(
         {{EVertexFormat::Float2}, {EVertexFormat::Float2}, {EVertexFormat::UByte4Normalized}}
     );
-    uint32_t stride = 0;
+    uint32 stride = 0;
     for (const auto& element : ui_stream.bindings.front().vertex_elements) {
         stride += GetVertexFormatByteSize(element.format);
     }

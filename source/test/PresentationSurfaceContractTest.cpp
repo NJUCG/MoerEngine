@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "renderer/common/PresentationSurface.h"
 
 #include <cstdio>
@@ -43,7 +44,7 @@ private:
 };
 
 WindowSurfaceIdentity
-MakeIdentity(uintptr_t window_system_handle, uintptr_t platform_window_handle, uint64_t generation) {
+MakeIdentity(uintptr_t window_system_handle, uintptr_t platform_window_handle, Moer::uint64 generation) {
     return {
         .window_system          = EWindowSystemType::GLFW,
         .window_system_handle   = window_system_handle,
@@ -172,7 +173,7 @@ int main() {
             feedback_tracker.Advance(identity_a, MakeMetrics({800, 600}, {800, 600}));
         Require(feedback_state.Plan(surface_a, feedback_frame, false) == EPresentationSurfacePlan::Refresh);
         Require(feedback_state.Commit(feedback_frame, {800, 600}));
-        const uint64_t initial_epoch = feedback_state.GetCommittedEpoch();
+        const Moer::uint64 initial_epoch = feedback_state.GetCommittedEpoch();
         Require(initial_epoch != 0);
 
         PresentReceiptResult success{
@@ -206,7 +207,7 @@ int main() {
             EPresentationSurfacePlan::Refresh
         );
         Require(feedback_state.Commit(feedback_frame, {800, 600}));
-        const uint64_t replacement_epoch = feedback_state.GetCommittedEpoch();
+        const Moer::uint64 replacement_epoch = feedback_state.GetCommittedEpoch();
         Require(replacement_epoch > initial_epoch);
         Require(!feedback_state.ApplyPresentFeedback(current_out_of_date));
         Require(!feedback_state.HasRefreshPending());

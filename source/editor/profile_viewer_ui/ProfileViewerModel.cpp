@@ -1,5 +1,5 @@
 #include "profile_viewer_ui/ProfileViewerModel.h"
-
+#include "misc/Types.h"
 #include <algorithm>
 #include <iterator>
 #include <limits>
@@ -7,26 +7,26 @@
 namespace Moer {
 namespace {
 
-[[nodiscard]] std::uint64_t
-MulDivFloor(std::uint64_t _value, std::uint32_t _numerator, std::uint32_t _denominator) noexcept {
-    const std::uint64_t quotient  = _value / _denominator;
-    const std::uint64_t remainder = _value % _denominator;
+[[nodiscard]] uint64
+MulDivFloor(uint64 _value, uint32 _numerator, uint32 _denominator) noexcept {
+    const uint64 quotient  = _value / _denominator;
+    const uint64 remainder = _value % _denominator;
     return quotient * _numerator + (remainder * _numerator) / _denominator;
 }
 
-[[nodiscard]] std::uint64_t
-ScaleCeilSaturated(std::uint64_t _value, std::uint32_t _numerator, std::uint32_t _denominator) noexcept {
-    constexpr std::uint64_t maximum = std::numeric_limits<std::uint64_t>::max();
+[[nodiscard]] uint64
+ScaleCeilSaturated(uint64 _value, uint32 _numerator, uint32 _denominator) noexcept {
+    constexpr uint64 maximum = std::numeric_limits<uint64>::max();
 
-    const std::uint64_t quotient  = _value / _denominator;
-    const std::uint64_t remainder = _value % _denominator;
+    const uint64 quotient  = _value / _denominator;
+    const uint64 remainder = _value % _denominator;
     if (quotient > maximum / _numerator) {
         return maximum;
     }
 
-    const std::uint64_t whole             = quotient * _numerator;
-    const std::uint64_t remainder_product = remainder * _numerator;
-    const std::uint64_t partial =
+    const uint64 whole             = quotient * _numerator;
+    const uint64 remainder_product = remainder * _numerator;
+    const uint64 partial =
         remainder_product / _denominator + (remainder_product % _denominator != 0 ? 1 : 0);
     if (partial > maximum - whole) {
         return maximum;
@@ -34,14 +34,14 @@ ScaleCeilSaturated(std::uint64_t _value, std::uint32_t _numerator, std::uint32_t
     return whole + partial;
 }
 
-[[nodiscard]] std::uint64_t SignedMagnitude(std::int64_t _value) noexcept {
+[[nodiscard]] uint64 SignedMagnitude(int64 _value) noexcept {
     if (_value >= 0) {
-        return static_cast<std::uint64_t>(_value);
+        return static_cast<uint64>(_value);
     }
-    return static_cast<std::uint64_t>(-(_value + 1)) + 1;
+    return static_cast<uint64>(-(_value + 1)) + 1;
 }
 
-enum class EGpuFrameChoiceSearch : std::uint8_t {
+enum class EGpuFrameChoiceSearch : uint8 {
     AtOrAfter = 0,
     After,
     Before,
@@ -52,13 +52,13 @@ template<typename Iterator>
 [[nodiscard]] Iterator FindFrameInSortedRange(
     Iterator              _begin,
     Iterator              _end,
-    std::uint64_t         _frame_id,
+    uint64                _frame_id,
     EGpuFrameChoiceSearch _search
 ) noexcept {
-    const auto less = [](const auto& _frame, std::uint64_t _value) {
+    const auto less = [](const auto& _frame, uint64 _value) {
         return _frame.frame_id < _value;
     };
-    const auto reverse_less = [](std::uint64_t _value, const auto& _frame) {
+    const auto reverse_less = [](uint64 _value, const auto& _frame) {
         return _value < _frame.frame_id;
     };
 
@@ -105,7 +105,7 @@ template<typename Iterator, typename HasFrameRecord>
 void ConsiderGpuFrameRange(
     Iterator                                    _begin,
     Iterator                                    _end,
-    std::uint64_t                               _frame_id,
+    uint64                                      _frame_id,
     EGpuFrameChoiceSearch                       _search,
     HasFrameRecord                              _has_frame_record,
     std::optional<ProfileViewerGpuFrameChoice>& _best
@@ -126,7 +126,7 @@ void ConsiderGpuFrameRange(
 [[nodiscard]] std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrame(
     std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
     std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
-    std::uint64_t                                      _frame_id,
+    uint64                                             _frame_id,
     EGpuFrameChoiceSearch                              _search
 ) noexcept {
     std::optional<ProfileViewerGpuFrameChoice> best;
@@ -148,12 +148,12 @@ void ConsiderGpuFrameRange(
     // scan proportional to the scope/axis-frame count.
     auto group_begin = _axis_frames.begin();
     while (group_begin != _axis_frames.end()) {
-        const std::uint32_t axis_index = group_begin->axis_index;
-        const auto          group_end  = std::upper_bound(
+        const uint32 axis_index = group_begin->axis_index;
+        const auto   group_end  = std::upper_bound(
             group_begin,
             _axis_frames.end(),
             axis_index,
-            [](std::uint32_t _value, const ProfileDump::GpuTimelineAxisFrame& _frame) {
+            [](uint32 _value, const ProfileDump::GpuTimelineAxisFrame& _frame) {
                 return _value < _frame.axis_index;
             }
         );
@@ -179,11 +179,11 @@ void ConsiderGpuFrameRange(
 
 } // namespace
 
-std::uint64_t ProfileViewerMapFraction(
-    std::uint64_t _begin,
-    std::uint64_t _end,
-    std::uint32_t _numerator,
-    std::uint32_t _denominator
+uint64 ProfileViewerMapFraction(
+    uint64 _begin,
+    uint64 _end,
+    uint32 _numerator,
+    uint32 _denominator
 ) noexcept {
     if (_end <= _begin || _denominator == 0 || _numerator > _denominator || _numerator == 0) {
         return _begin;
@@ -198,7 +198,7 @@ std::uint64_t ProfileViewerMapFraction(
 std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAtOrAfter(
     std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
     std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
-    std::uint64_t                                      _frame_id
+    uint64                                             _frame_id
 ) noexcept {
     return FindProfileViewerGpuFrame(
         _recorded_frames, _axis_frames, _frame_id, EGpuFrameChoiceSearch::AtOrAfter
@@ -208,7 +208,7 @@ std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAtOrAfter(
 std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAfter(
     std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
     std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
-    std::uint64_t                                      _frame_id
+    uint64                                             _frame_id
 ) noexcept {
     return FindProfileViewerGpuFrame(_recorded_frames, _axis_frames, _frame_id, EGpuFrameChoiceSearch::After);
 }
@@ -216,7 +216,7 @@ std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAfter(
 std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameBefore(
     std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
     std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
-    std::uint64_t                                      _frame_id
+    uint64                                             _frame_id
 ) noexcept {
     return FindProfileViewerGpuFrame(
         _recorded_frames, _axis_frames, _frame_id, EGpuFrameChoiceSearch::Before
@@ -226,7 +226,7 @@ std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameBefore(
 std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAtOrBefore(
     std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
     std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
-    std::uint64_t                                      _frame_id
+    uint64                                             _frame_id
 ) noexcept {
     return FindProfileViewerGpuFrame(
         _recorded_frames, _axis_frames, _frame_id, EGpuFrameChoiceSearch::AtOrBefore
@@ -250,7 +250,7 @@ bool ProfileViewerSelection::Valid() const noexcept {
 EProfileViewerPublicationUpdate
 ProfileViewerModel::InspectSnapshot(const ProfileDump::ProfileDocumentLoaderSnapshot& _snapshot
 ) const noexcept {
-    const std::uint64_t observed_generation = _snapshot.published_generation;
+    const uint64 observed_generation = _snapshot.published_generation;
     if (observed_generation == ProfileDump::kInvalidProfileDocumentGeneration) {
         if (_snapshot.document) {
             return EProfileViewerPublicationUpdate::Invalid;
@@ -272,13 +272,13 @@ ProfileViewerModel::ObserveSnapshot(const ProfileDump::ProfileDocumentLoaderSnap
     if (update != EProfileViewerPublicationUpdate::Changed) {
         return update;
     }
-    const std::uint64_t observed_generation = _snapshot.published_generation;
+    const uint64 observed_generation        = _snapshot.published_generation;
     published_generation_                   = observed_generation;
     ResetPublicationState();
     return update;
 }
 
-std::uint64_t ProfileViewerModel::PublishedGeneration() const noexcept {
+uint64 ProfileViewerModel::PublishedGeneration() const noexcept {
     return published_generation_;
 }
 
@@ -286,27 +286,27 @@ ProfileViewerViewport ProfileViewerModel::CpuViewport() const noexcept {
     return cpu_viewport_;
 }
 
-bool ProfileViewerModel::FitCpu(std::uint64_t _domain_end) noexcept {
+bool ProfileViewerModel::FitCpu(uint64 _domain_end) noexcept {
     return published_generation_ != ProfileDump::kInvalidProfileDocumentGeneration &&
            FitViewport(cpu_viewport_, _domain_end);
 }
 
 bool ProfileViewerModel::ZoomCpu(
-    std::uint32_t _anchor_numerator,
-    std::uint32_t _anchor_denominator,
-    std::uint32_t _scale_numerator,
-    std::uint32_t _scale_denominator
+    uint32 _anchor_numerator,
+    uint32 _anchor_denominator,
+    uint32 _scale_numerator,
+    uint32 _scale_denominator
 ) noexcept {
     return ZoomViewport(
         cpu_viewport_, _anchor_numerator, _anchor_denominator, _scale_numerator, _scale_denominator
     );
 }
 
-bool ProfileViewerModel::PanCpu(std::int64_t _delta) noexcept {
+bool ProfileViewerModel::PanCpu(int64 _delta) noexcept {
     return PanViewport(cpu_viewport_, _delta);
 }
 
-bool ProfileViewerModel::FocusCpu(std::uint64_t _begin, std::uint64_t _end, std::uint64_t _margin) noexcept {
+bool ProfileViewerModel::FocusCpu(uint64 _begin, uint64 _end, uint64 _margin) noexcept {
     return FocusViewport(cpu_viewport_, _begin, _end, _margin);
 }
 
@@ -319,7 +319,7 @@ std::optional<ProfileViewerViewport> ProfileViewerModel::FindGpuViewport(Profile
     return slot->viewport;
 }
 
-bool ProfileViewerModel::FitGpu(ProfileViewerGpuViewportKey _key, std::uint64_t _domain_end) noexcept {
+bool ProfileViewerModel::FitGpu(ProfileViewerGpuViewportKey _key, uint64 _domain_end) noexcept {
     if (published_generation_ == ProfileDump::kInvalidProfileDocumentGeneration || !IsValidGpuKey(_key) ||
         _domain_end == 0) {
         return false;
@@ -331,10 +331,10 @@ bool ProfileViewerModel::FitGpu(ProfileViewerGpuViewportKey _key, std::uint64_t 
 
 bool ProfileViewerModel::ZoomGpu(
     ProfileViewerGpuViewportKey _key,
-    std::uint32_t               _anchor_numerator,
-    std::uint32_t               _anchor_denominator,
-    std::uint32_t               _scale_numerator,
-    std::uint32_t               _scale_denominator
+    uint32                      _anchor_numerator,
+    uint32                      _anchor_denominator,
+    uint32                      _scale_numerator,
+    uint32                      _scale_denominator
 ) noexcept {
     GpuViewportSlot* slot = FindGpuViewportSlot(_key);
     return slot != nullptr &&
@@ -343,26 +343,26 @@ bool ProfileViewerModel::ZoomGpu(
            );
 }
 
-bool ProfileViewerModel::PanGpu(ProfileViewerGpuViewportKey _key, std::int64_t _delta) noexcept {
+bool ProfileViewerModel::PanGpu(ProfileViewerGpuViewportKey _key, int64 _delta) noexcept {
     GpuViewportSlot* slot = FindGpuViewportSlot(_key);
     return slot != nullptr && PanViewport(slot->viewport, _delta);
 }
 
 bool ProfileViewerModel::FocusGpu(
     ProfileViewerGpuViewportKey _key,
-    std::uint64_t               _begin,
-    std::uint64_t               _end,
-    std::uint64_t               _margin
+    uint64                      _begin,
+    uint64                      _end,
+    uint64                      _margin
 ) noexcept {
     GpuViewportSlot* slot = FindGpuViewportSlot(_key);
     return slot != nullptr && FocusViewport(slot->viewport, _begin, _end, _margin);
 }
 
 bool ProfileViewerModel::SelectCpu(
-    std::uint64_t _timeline_track_index,
-    std::uint64_t _source_scope_index,
-    std::uint64_t _begin,
-    std::uint64_t _end
+    uint64 _timeline_track_index,
+    uint64 _source_scope_index,
+    uint64 _begin,
+    uint64 _end
 ) noexcept {
     if (published_generation_ == ProfileDump::kInvalidProfileDocumentGeneration ||
         _timeline_track_index == ProfileDump::kInvalidSessionIndex ||
@@ -386,10 +386,10 @@ bool ProfileViewerModel::SelectCpu(
 
 bool ProfileViewerModel::SelectGpu(
     ProfileViewerGpuViewportKey _key,
-    std::uint64_t               _timeline_track_index,
-    std::uint64_t               _source_scope_index,
-    std::uint64_t               _begin,
-    std::uint64_t               _end
+    uint64                      _timeline_track_index,
+    uint64                      _source_scope_index,
+    uint64                      _begin,
+    uint64                      _end
 ) noexcept {
     const GpuViewportSlot* slot = FindGpuViewportSlot(_key);
     if (published_generation_ == ProfileDump::kInvalidProfileDocumentGeneration ||
@@ -428,7 +428,7 @@ bool ProfileViewerModel::IsValidGpuKey(ProfileViewerGpuViewportKey _key) noexcep
     return _key.axis_index != 0 && _key.axis_index != ProfileDump::kInvalidTimelineAxis;
 }
 
-bool ProfileViewerModel::FitViewport(ProfileViewerViewport& _viewport, std::uint64_t _domain_end) noexcept {
+bool ProfileViewerModel::FitViewport(ProfileViewerViewport& _viewport, uint64 _domain_end) noexcept {
     if (_domain_end == 0) {
         return false;
     }
@@ -443,10 +443,10 @@ bool ProfileViewerModel::FitViewport(ProfileViewerViewport& _viewport, std::uint
 
 bool ProfileViewerModel::ZoomViewport(
     ProfileViewerViewport& _viewport,
-    std::uint32_t          _anchor_numerator,
-    std::uint32_t          _anchor_denominator,
-    std::uint32_t          _scale_numerator,
-    std::uint32_t          _scale_denominator
+    uint32                 _anchor_numerator,
+    uint32                 _anchor_denominator,
+    uint32                 _scale_numerator,
+    uint32                 _scale_denominator
 ) noexcept {
     if (!_viewport.valid || _viewport.domain_end == 0 || _viewport.view_begin >= _viewport.view_end ||
         _viewport.view_end > _viewport.domain_end || _anchor_denominator == 0 ||
@@ -454,34 +454,34 @@ bool ProfileViewerModel::ZoomViewport(
         return false;
     }
 
-    const std::uint64_t old_span = _viewport.view_end - _viewport.view_begin;
-    const std::uint64_t new_span = std::clamp(
+    const uint64 old_span = _viewport.view_end - _viewport.view_begin;
+    const uint64 new_span = std::clamp(
         ScaleCeilSaturated(old_span, _scale_numerator, _scale_denominator),
-        std::uint64_t{1},
+        uint64{1},
         _viewport.domain_end
     );
-    const std::uint64_t old_anchor_offset = MulDivFloor(old_span, _anchor_numerator, _anchor_denominator);
-    const std::uint64_t anchor            = _viewport.view_begin + old_anchor_offset;
-    const std::uint64_t new_anchor_offset = MulDivFloor(new_span, _anchor_numerator, _anchor_denominator);
+    const uint64 old_anchor_offset = MulDivFloor(old_span, _anchor_numerator, _anchor_denominator);
+    const uint64 anchor            = _viewport.view_begin + old_anchor_offset;
+    const uint64 new_anchor_offset = MulDivFloor(new_span, _anchor_numerator, _anchor_denominator);
 
-    std::uint64_t       new_begin     = anchor >= new_anchor_offset ? anchor - new_anchor_offset : 0;
-    const std::uint64_t maximum_begin = _viewport.domain_end - new_span;
+    uint64       new_begin            = anchor >= new_anchor_offset ? anchor - new_anchor_offset : 0;
+    const uint64 maximum_begin        = _viewport.domain_end - new_span;
     new_begin                         = std::min(new_begin, maximum_begin);
     _viewport.view_begin              = new_begin;
     _viewport.view_end                = new_begin + new_span;
     return true;
 }
 
-bool ProfileViewerModel::PanViewport(ProfileViewerViewport& _viewport, std::int64_t _delta) noexcept {
+bool ProfileViewerModel::PanViewport(ProfileViewerViewport& _viewport, int64 _delta) noexcept {
     if (!_viewport.valid || _viewport.domain_end == 0 || _viewport.view_begin >= _viewport.view_end ||
         _viewport.view_end > _viewport.domain_end) {
         return false;
     }
 
-    const std::uint64_t span          = _viewport.view_end - _viewport.view_begin;
-    const std::uint64_t maximum_begin = _viewport.domain_end - span;
-    const std::uint64_t magnitude     = SignedMagnitude(_delta);
-    std::uint64_t       new_begin     = _viewport.view_begin;
+    const uint64 span          = _viewport.view_end - _viewport.view_begin;
+    const uint64 maximum_begin = _viewport.domain_end - span;
+    const uint64 magnitude     = SignedMagnitude(_delta);
+    uint64       new_begin     = _viewport.view_begin;
     if (_delta >= 0) {
         new_begin = magnitude >= maximum_begin - new_begin ? maximum_begin : new_begin + magnitude;
     } else {
@@ -495,24 +495,24 @@ bool ProfileViewerModel::PanViewport(ProfileViewerViewport& _viewport, std::int6
 
 bool ProfileViewerModel::FocusViewport(
     ProfileViewerViewport& _viewport,
-    std::uint64_t          _begin,
-    std::uint64_t          _end,
-    std::uint64_t          _margin
+    uint64                 _begin,
+    uint64                 _end,
+    uint64                 _margin
 ) noexcept {
     if (!_viewport.valid || _viewport.domain_end == 0 || _viewport.view_begin >= _viewport.view_end ||
         _viewport.view_end > _viewport.domain_end) {
         return false;
     }
 
-    const std::uint64_t focus_begin = std::min(_begin, _viewport.domain_end - 1);
-    std::uint64_t       focus_end   = std::min(_end, _viewport.domain_end);
+    const uint64 focus_begin = std::min(_begin, _viewport.domain_end - 1);
+    uint64       focus_end   = std::min(_end, _viewport.domain_end);
     if (focus_end <= focus_begin) {
         focus_end = focus_begin + 1;
     }
 
-    const std::uint64_t view_begin = _margin > focus_begin ? 0 : focus_begin - _margin;
-    const std::uint64_t remaining  = _viewport.domain_end - focus_end;
-    const std::uint64_t view_end   = _margin >= remaining ? _viewport.domain_end : focus_end + _margin;
+    const uint64 view_begin        = _margin > focus_begin ? 0 : focus_begin - _margin;
+    const uint64 remaining         = _viewport.domain_end - focus_end;
+    const uint64 view_end          = _margin >= remaining ? _viewport.domain_end : focus_end + _margin;
     _viewport.view_begin           = view_begin;
     _viewport.view_end             = view_end;
     return true;
@@ -520,8 +520,8 @@ bool ProfileViewerModel::FocusViewport(
 
 bool ProfileViewerModel::ContainsInterval(
     const ProfileViewerViewport& _viewport,
-    std::uint64_t                _begin,
-    std::uint64_t                _end
+    uint64                       _begin,
+    uint64                       _end
 ) noexcept {
     return _viewport.valid && _viewport.domain_end != 0 && _viewport.view_begin < _viewport.view_end &&
            _viewport.view_end <= _viewport.domain_end && _begin <= _end && _begin < _viewport.domain_end &&

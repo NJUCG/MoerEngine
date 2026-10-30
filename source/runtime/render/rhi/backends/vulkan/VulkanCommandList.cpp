@@ -17,10 +17,10 @@
 
 #include "shader/ShaderPipeline.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <cstdint>
 #include <format>
 #include <limits>
 #include <optional>
@@ -34,7 +34,7 @@ VulkanCommandPool::VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_ty
     queue_type(_queue_type) {
     // Use the selected queue-role mapping, including vendor overrides, so the
     // command pool belongs to the same family as the actual submission queue.
-    const uint32_t family_index = m_device->GetQueueFamilyIndex(_queue_type);
+    const uint32 family_index = m_device->GetQueueFamilyIndex(_queue_type);
 
     VkCommandPoolCreateInfo pool_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -169,7 +169,7 @@ void VulkanCommandList::ExecuteSecondaryCommands(std::span<const VkCommandBuffer
         return;
     }
     vkCmdExecuteCommands(
-        command_buffer, static_cast<uint32_t>(_secondary_buffers.size()), _secondary_buffers.data()
+        command_buffer, static_cast<uint32>(_secondary_buffers.size()), _secondary_buffers.data()
     );
 }
 
@@ -193,8 +193,8 @@ namespace {
 template<typename View, typename WriteDescriptor>
 void WriteViewDescriptors(
     const TArg&       _argument,
-    uint              _descriptor_count,
-    uint              _descriptor_size,
+    uint32            _descriptor_count,
+    uint32            _descriptor_size,
     uint64            _binding_byte_offset,
     std::string_view  _resource_kind,
     WriteDescriptor&& _write_descriptor
@@ -214,7 +214,7 @@ void WriteViewDescriptors(
     }
     // Ordinary sets do not enable partial binding. Fill unused capacity with
     // the last provided view so every declared descriptor remains initialized.
-    for (uint element_index = 0; element_index < _descriptor_count; ++element_index) {
+    for (uint32 element_index = 0; element_index < _descriptor_count; ++element_index) {
         _write_descriptor(
             views[std::min<size_t>(element_index, views.size() - 1)],
             _binding_byte_offset + element_index * _descriptor_size
@@ -307,7 +307,7 @@ void WriteResourceSetDescriptors(
 ) {
     const uint64 active_argument_bits = _pipeline.GetActiveArgumentBits();
     for (const auto& binding : _resource_bindings.bindings) {
-        const uint argument_index = binding.argument_index;
+        const uint32 argument_index = binding.argument_index;
         if (binding.heap_push_offset != UINT32_MAX || binding.descriptor_count == 0 || argument_index >= 64 ||
             !(active_argument_bits & (uint64(1) << argument_index))) {
             continue;
@@ -365,7 +365,7 @@ void WriteShaderArgumentDescriptors(
 void PushShaderConstants(
     VkCommandBuffer               _command_buffer,
     const VkPushConstantsInfoKHR& _push_constants_info,
-    std::span<const uint>         _constants
+    std::span<const uint32>       _constants
 ) {
     if (_push_constants_info.size == 0) {
         return;
@@ -471,20 +471,20 @@ void VulkanCommandList::BindShaderArguments(
 
 // Vertex input and dynamic state.
 void VulkanCommandList::SetVertexBuffers(
-    uint32_t                      _first_binding,
+    uint32                        _first_binding,
     std::span<const VkBuffer>     _buffers,
     std::span<const VkDeviceSize> _offsets
 ) {
     if (_buffers.size() != _offsets.size()) {
         throw std::invalid_argument("Vertex buffer and offset counts must match");
     }
-    if (_buffers.size() > std::numeric_limits<uint32_t>::max()) {
+    if (_buffers.size() > std::numeric_limits<uint32>::max()) {
         throw std::out_of_range("Vertex buffer count exceeds uint32_t");
     }
     vkCmdBindVertexBuffers(
         command_buffer,
         _first_binding,
-        static_cast<uint32_t>(_buffers.size()),
+        static_cast<uint32>(_buffers.size()),
         _buffers.data(),
         _offsets.data()
     );
@@ -505,20 +505,20 @@ void VulkanCommandList::SetViewport(const VkViewport& _viewport) {
 
 // Draw and mesh commands.
 void VulkanCommandList::DrawInstanced(
-    uint32_t _vertex_count,
-    uint32_t _instance_count,
-    uint32_t _first_vertex,
-    uint32_t _first_instance
+    uint32 _vertex_count,
+    uint32 _instance_count,
+    uint32 _first_vertex,
+    uint32 _first_instance
 ) {
     vkCmdDraw(command_buffer, _vertex_count, _instance_count, _first_vertex, _first_instance);
 }
 
 void VulkanCommandList::DrawIndexedInstanced(
-    uint32_t _index_count,
-    uint32_t _instance_count,
-    uint32_t _first_index,
-    uint32_t _vertex_offset,
-    uint32_t _first_instance
+    uint32 _index_count,
+    uint32 _instance_count,
+    uint32 _first_index,
+    uint32 _vertex_offset,
+    uint32 _first_instance
 ) {
     vkCmdDrawIndexed(
         command_buffer, _index_count, _instance_count, _first_index, _vertex_offset, _first_instance
@@ -528,8 +528,8 @@ void VulkanCommandList::DrawIndexedInstanced(
 void VulkanCommandList::DrawIndirect(
     VulkanBuffer* _buffer,
     uint64        _offset,
-    uint32_t      _draw_count,
-    uint32_t      _stride
+    uint32        _draw_count,
+    uint32        _stride
 ) {
     vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_count, _stride);
 }
@@ -539,8 +539,8 @@ void VulkanCommandList::DrawIndirectCount(
     uint64        _commands_offset,
     VulkanBuffer* _count_buffer,
     uint64        _count_buffer_offset,
-    uint32_t      _max_draw_count,
-    uint32_t      _stride
+    uint32        _max_draw_count,
+    uint32        _stride
 ) {
     vkCmdDrawIndirectCount(
         command_buffer,
@@ -556,8 +556,8 @@ void VulkanCommandList::DrawIndirectCount(
 void VulkanCommandList::DrawIndexedIndirect(
     VulkanBuffer* _buffer,
     uint64        _offset,
-    uint32_t      _draw_count,
-    uint32_t      _stride
+    uint32        _draw_count,
+    uint32        _stride
 ) {
     vkCmdDrawIndexedIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_count, _stride);
 }
@@ -567,8 +567,8 @@ void VulkanCommandList::DrawIndexedIndirectCount(
     uint64        _commands_offset,
     VulkanBuffer* _count_buffer,
     uint64        _count_buffer_offset,
-    uint32_t      _max_draw_count,
-    uint32_t      _stride
+    uint32        _max_draw_count,
+    uint32        _stride
 ) {
     vkCmdDrawIndexedIndirectCount(
         command_buffer,
@@ -582,9 +582,9 @@ void VulkanCommandList::DrawIndexedIndirectCount(
 }
 
 void VulkanCommandList::DispatchMesh(
-    uint32_t _group_count_x,
-    uint32_t _group_count_y,
-    uint32_t _group_count_z
+    uint32 _group_count_x,
+    uint32 _group_count_y,
+    uint32 _group_count_z
 ) {
     vkCmdDrawMeshTasksEXT(command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
@@ -592,8 +592,8 @@ void VulkanCommandList::DispatchMesh(
 void VulkanCommandList::DispatchMeshIndirect(
     VulkanBuffer* _buffer,
     uint64        _offset,
-    uint32_t      _draw_count,
-    uint32_t      _stride
+    uint32        _draw_count,
+    uint32        _stride
 ) {
     vkCmdDrawMeshTasksIndirectEXT(command_buffer, _buffer->GetHandle(), _offset, _draw_count, _stride);
 }
@@ -603,8 +603,8 @@ void VulkanCommandList::DispatchMeshIndirectCount(
     uint64        _commands_offset,
     VulkanBuffer* _count_buffer,
     uint64        _count_buffer_offset,
-    uint32_t      _max_draw_count,
-    uint32_t      _stride
+    uint32        _max_draw_count,
+    uint32        _stride
 ) {
     vkCmdDrawMeshTasksIndirectCountEXT(
         command_buffer,
@@ -618,7 +618,7 @@ void VulkanCommandList::DispatchMeshIndirectCount(
 }
 
 // Compute commands.
-void VulkanCommandList::Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) {
+void VulkanCommandList::Dispatch(uint32 _group_count_x, uint32 _group_count_y, uint32 _group_count_z) {
     vkCmdDispatch(command_buffer, _group_count_x, _group_count_y, _group_count_z);
 }
 
@@ -683,9 +683,9 @@ VkBufferImageCopy MakeBufferImageCopy(
         .imageSubresource =
             {.aspectMask = aspect, .mipLevel = _mip_level, .baseArrayLayer = _array_layer, .layerCount = 1},
         .imageOffset =
-            {static_cast<int32_t>(_texture_offset.x),
-             static_cast<int32_t>(_texture_offset.y),
-             static_cast<int32_t>(_texture_offset.z)},
+            {static_cast<int32>(_texture_offset.x),
+             static_cast<int32>(_texture_offset.y),
+             static_cast<int32>(_texture_offset.z)},
         .imageExtent = {_extent.x, _extent.y, _extent.z}
     };
 }
@@ -757,19 +757,19 @@ void VulkanCommandList::CopyTexture(
         .srcSubresource =
             {.aspectMask = aspect, .mipLevel = _src_mip_level, .baseArrayLayer = 0, .layerCount = 1},
         .srcOffset =
-            {static_cast<int32_t>(_src_offset.x),
-             static_cast<int32_t>(_src_offset.y),
-             static_cast<int32_t>(_src_offset.z)},
+            {static_cast<int32>(_src_offset.x),
+             static_cast<int32>(_src_offset.y),
+             static_cast<int32>(_src_offset.z)},
         .dstSubresource =
             {.aspectMask = aspect, .mipLevel = _dst_mip_level, .baseArrayLayer = 0, .layerCount = 1},
         .dstOffset =
-            {static_cast<int32_t>(_dst_offset.x),
-             static_cast<int32_t>(_dst_offset.y),
-             static_cast<int32_t>(_dst_offset.z)},
+            {static_cast<int32>(_dst_offset.x),
+             static_cast<int32>(_dst_offset.y),
+             static_cast<int32>(_dst_offset.z)},
         .extent =
-            {static_cast<uint32_t>(_extent.x),
-             static_cast<uint32_t>(_extent.y),
-             static_cast<uint32_t>(_extent.z)}
+            {static_cast<uint32>(_extent.x),
+             static_cast<uint32>(_extent.y),
+             static_cast<uint32>(_extent.z)}
     };
 
     vkCmdCopyImage(

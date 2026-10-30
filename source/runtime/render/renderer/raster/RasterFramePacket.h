@@ -7,14 +7,14 @@
 #include "scene/Scene.h"
 #include "scene/camera/Camera.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <string>
 #include <type_traits>
 
 namespace Moer::Render::Raster {
 
 struct RasterFramePacket {
-    uint64_t                   frame_id = 0;
+    uint64                     frame_id = 0;
     WindowFrameSnapshot window{};
     RasterConfig               raster_config{};
     std::string                validation_selected_frame_buffer_name;
@@ -32,7 +32,7 @@ static_assert(std::is_move_constructible_v<RasterFramePacket>);
 static_assert(!std::is_copy_constructible_v<RasterFramePacket>);
 
 struct RasterFrameFeedback {
-    uint64_t                    frame_id = 0;
+    uint64                      frame_id = 0;
     PresentReceiptRef           main_present_receipt{};
     RasterConfig::CullingStats  culling_stats{};
     CooperativeOpsStatus        cooperative_ops_status{};

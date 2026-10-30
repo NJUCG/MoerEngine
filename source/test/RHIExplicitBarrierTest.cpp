@@ -1,6 +1,7 @@
+#include "misc/Types.h"
 #include "rhi/RHIImpl.h"
-#include "rhi/backends/vulkan/VulkanRHIResource.h"
 #include "rhi/backends/vulkan/VulkanBarrier.h"
+#include "rhi/backends/vulkan/VulkanRHIResource.h"
 
 #include <array>
 #include <iostream>
@@ -36,7 +37,7 @@ public:
     TestTexture(uint8 _num_mips, uint16 _num_arrays, ETextureAspectFlags _aspects) :
         Texture(MakeInfo(_num_mips, _num_arrays, _aspects)) {}
 
-    uint GetMipByteSize(uint) const override {
+    uint32 GetMipByteSize(uint32) const override {
         return 4;
     }
 

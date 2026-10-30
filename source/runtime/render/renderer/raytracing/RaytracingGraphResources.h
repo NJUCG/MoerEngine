@@ -2,6 +2,7 @@
 
 #include "RTResource.h"
 #include "RaytracingGraphTypes.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 
 #include <cassert>
@@ -55,13 +56,13 @@ inline RenderGraph::TextureAspect RTGraphTextureAspects(const TextureRef& textur
     assert(texture);
     RenderGraph::TextureAspect aspects = RenderGraph::TextureAspect::None;
     const auto rhi_aspects = texture->GetAspectFlags();
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Color;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Depth;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Stencil;
     }
     assert(aspects != RenderGraph::TextureAspect::None);

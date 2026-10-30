@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #ifdef DESCRIPTOR_VMA_CANDIDATE
 #include "vma_candidate.h"
 #else
@@ -52,7 +53,7 @@ int main() {
 #else
     using Allocator = Moer::Render::VulkanDescriptorBufferAllocator;
 #endif
-    constexpr uint64_t block = 64 * 1024, capacity = 6 * 1024 * 1024;
+    constexpr Moer::uint64 block = 64 * 1024, capacity = 6 * 1024 * 1024;
     try {
 #ifdef DESCRIPTOR_VMA_CANDIDATE
         Allocator allocator(capacity, 32, 32);

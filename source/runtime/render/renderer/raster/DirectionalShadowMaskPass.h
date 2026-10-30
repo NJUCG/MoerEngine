@@ -1,6 +1,7 @@
 // 构建延迟光照使用的屏幕空间方向光阴影因子。
 #pragma once
 
+#include "misc/Types.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
@@ -29,8 +30,8 @@ public:
     };
 
     struct RecordParameters {
-        uint             normal_handle{0};
-        uint             depth_handle{0};
+        uint32                                        normal_handle{0};
+        uint32                                        depth_handle{0};
         TextureRef       normal_owner{};
         DepthBufferRef   depth_owner{};
         StaticArray<DepthBufferRef, CSM_MAX_CASCADES> cascade_shadow_owners{};

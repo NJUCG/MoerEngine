@@ -1,5 +1,5 @@
 #include "rhi/ShaderConstantLayout.h"
-
+#include "misc/Types.h"
 #include <stdexcept>
 #include <string>
 
@@ -83,7 +83,7 @@ bool ValidateShaderConstantUsage(
 void ValidateBindlessIndexAddress(
     const PipelineArgumentMetadata& cpp_metadata,
     const ShaderParametersInfoMap&  shader_parameters,
-    uint                            max_constant_byte_size
+    uint32                          max_constant_byte_size
 ) {
     for (const auto& [name, parameter] : shader_parameters.reflect_map) {
         const auto* bindless = parameter.GetSpirvReflection().TryGetBindlessArray();
@@ -96,7 +96,7 @@ void ValidateBindlessIndexAddress(
         if (address.offset != expected_offset || address.size != sizeof(uint64)) {
             throw std::invalid_argument("Bindless index-table address disagrees with the constant layout");
         }
-        uint bindless_arguments = 0;
+        uint32 bindless_arguments = 0;
         for (const auto& argument : cpp_metadata.GetArguments()) {
             bindless_arguments += argument.cpp_info.type == SDA_BindlessArray;
         }
@@ -111,7 +111,7 @@ void ValidateBindlessIndexAddress(
 
 } // namespace
 
-uint ValidatePipelineConstants(const PipelineShaderInfo& pipeline_shader_info, uint max_constant_byte_size) {
+uint32 ValidatePipelineConstants(const PipelineShaderInfo& pipeline_shader_info, uint32 max_constant_byte_size) {
     const auto& cpp_metadata            = pipeline_shader_info.argument_metadata;
     bool        pipeline_uses_constants = false;
     for (const auto& shader : pipeline_shader_info.shaders) {
@@ -126,7 +126,7 @@ uint ValidatePipelineConstants(const PipelineShaderInfo& pipeline_shader_info, u
         }
     }
 
-    const uint upload_byte_size = pipeline_uses_constants ? cpp_metadata.GetConstantByteSize() : 0;
+    const uint32 upload_byte_size = pipeline_uses_constants ? cpp_metadata.GetConstantByteSize() : 0;
     if (upload_byte_size > max_constant_byte_size) {
         throw std::invalid_argument(
             "Pipeline constants exceed the device limit: " + std::to_string(upload_byte_size) + " > " +

@@ -2,6 +2,7 @@
 #define D3D12_DEVICE_H
 
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "taskgraph/Event.h"
 
 #include "rhi/RHIImpl.h"
@@ -49,18 +50,18 @@ inline std::string StringNarrow(std::wstring_view wstr) {
     return res;
 }
 
-inline uint64_t AlignUpToPowerOfTwo(uint64_t value, uint64_t alignment) {
-    const uint64_t mask = alignment - 1;
+inline uint64 AlignUpToPowerOfTwo(uint64 value, uint64 alignment) {
+    const uint64 mask = alignment - 1;
     return (value + mask) & ~mask;
 }
 
-inline uint64_t AlignConstantBuffer(uint64_t value) {
+inline uint64 AlignConstantBuffer(uint64 value) {
     return AlignUpToPowerOfTwo(value, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);
 }
-inline uint64_t AlignResourceByDefaultPlacement(uint64_t value) {
+inline uint64 AlignResourceByDefaultPlacement(uint64 value) {
     return AlignUpToPowerOfTwo(value, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
 }
-inline uint64_t AlignTextureResource(uint64_t value, bool msaa = false, bool _small = false) {
+inline uint64 AlignTextureResource(uint64 value, bool msaa = false, bool _small = false) {
     auto alignment = 0;
     if (msaa) {
         if (_small) {
@@ -148,8 +149,8 @@ D3D12_RESOURCE_FLAGS METoDxTextureResourceFlags(ETextureUsageFlags _me_flags);
 //static VkBuildAccelerationStructureModeKHR  METoVKBuildAccelerationStructureMode(ERaytracingBuildMode _mode);
 } // namespace D3D12EnumTranslation
 
-inline bool operator==(ED3D12ShaderVariableType x, uint y) {
-    return uint(x) == y;
+inline bool operator==(ED3D12ShaderVariableType x, uint32 y) {
+    return uint32(x) == y;
 }
 
 inline bool IsShaderVarRootConstant(ED3D12ShaderVariableType type) {
@@ -303,7 +304,7 @@ public:
             };
             Array<Entry> entries;
 
-            uint GetTotalBindCount() const;
+            uint32 GetTotalBindCount() const;
         };
 
         std::optional<RootConstant>          root_constant      = std::nullopt;
@@ -342,7 +343,7 @@ public:
         return layout;
     }
 
-    const D3D12ArgumentInfo& GetArgumentInfo(uint argument_index) const {
+    const D3D12ArgumentInfo& GetArgumentInfo(uint32 argument_index) const {
         return argument_infos[argument_index];
     }
 
@@ -362,7 +363,7 @@ public:
 
 struct DescriptorIndex {
     //D3D12DescriptorHeapBase* heap;
-    uint index;
+    uint32 index;
 };
 
 class D3D12DescriptorHeapBase : public D3D12DeviceChild {
@@ -370,15 +371,15 @@ protected:
     ComPtr<ID3D12DescriptorHeap> heap                  = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE  start_handle_cpu      = {0};
     D3D12_GPU_DESCRIPTOR_HANDLE  start_handle_gpu      = {0};
-    uint                         descriptor_size       = 0;
-    uint                         num_total_descriptors = 0;
+    uint32                       descriptor_size       = 0;
+    uint32                       num_total_descriptors = 0;
     D3D12_DESCRIPTOR_HEAP_TYPE   type;
 
 public:
     D3D12DescriptorHeapBase(
         D3D12Device*               _device,
         D3D12_DESCRIPTOR_HEAP_TYPE _type,
-        uint32_t                   _num_descriptors,
+        uint32                     _num_descriptors,
         bool                       _is_shader_visible
     );
 
@@ -394,10 +395,10 @@ public:
     ID3D12DescriptorHeap* Native() const {
         return heap.Get();
     }
-    uint GetDescriptorSize() const {
+    uint32 GetDescriptorSize() const {
         return descriptor_size;
     }
-    uint GetNumTotalDescriptors() const {
+    uint32 GetNumTotalDescriptors() const {
         return num_total_descriptors;
     }
     D3D12_DESCRIPTOR_HEAP_TYPE GetType() const {
@@ -417,7 +418,7 @@ public:
     D3D12CpuDescriptorHeap(
         D3D12Device*               _device,
         D3D12_DESCRIPTOR_HEAP_TYPE _type,
-        uint32_t                   _num_descriptors
+        uint32                     _num_descriptors
     ) :
         D3D12DescriptorHeapBase(_device, _type, _num_descriptors, false) {}
 
@@ -430,7 +431,7 @@ public:
     D3D12GpuDescriptorHeap(
         D3D12Device*               _device,
         D3D12_DESCRIPTOR_HEAP_TYPE _type,
-        uint32_t                   _num_descriptors
+        uint32                     _num_descriptors
     ) :
         D3D12DescriptorHeapBase(_device, _type, _num_descriptors, true) {}
 };
@@ -439,7 +440,7 @@ public:
 class D3D12CpuDescriptorAllocator : public D3D12CpuDescriptorHeap {
 private:
     std::queue<DescriptorIndex> free_queue;
-    uint                        num_descriptors_allocated = 0;
+    uint32                      num_descriptors_allocated = 0;
 
 public:
     using D3D12CpuDescriptorHeap::D3D12CpuDescriptorHeap;
@@ -454,25 +455,25 @@ public:
 // in ring buffer fashion. we copy needed descriptors every time, not consider descriptor cache
 class D3D12GpuDescriptorAllocator : public D3D12GpuDescriptorHeap {
 private:
-    uint                          max_descriptors_per_execution = 0; // const
-    uint                          num_descriptor_chunk          = 0; // const
-    uint                          num_used_chunks               = 0;
-    uint                          current_chunk_index           = 0;
-    uint                          current_chunk_offset          = 0;
-    LockFreeQueueBase<uint, true> ready_chunk_indices;
+    uint32                          max_descriptors_per_execution = 0; // const
+    uint32                          num_descriptor_chunk          = 0; // const
+    uint32                          num_used_chunks               = 0;
+    uint32                          current_chunk_index           = 0;
+    uint32                          current_chunk_offset          = 0;
+    LockFreeQueueBase<uint32, true> ready_chunk_indices;
 
 public:
     D3D12GpuDescriptorAllocator(
         D3D12Device*               _device,
         D3D12_DESCRIPTOR_HEAP_TYPE _type,
-        uint32_t                   _num_descriptors_total,
-        uint32_t                   _max_descriptors_per_execution
+        uint32                     _num_descriptors_total,
+        uint32                     _max_descriptors_per_execution
     );
 
-    [[nodiscard]] uint BeginPushDescriptors();
-    void               EndPushDescriptors(uint _chunk_index);
+    [[nodiscard]] uint32 BeginPushDescriptors();
+    void                 EndPushDescriptors(uint32 _chunk_index);
 
-    DescriptorIndex Allocate(uint count = 1); // now should only be called by device...
+    DescriptorIndex Allocate(uint32 count = 1); // now should only be called by device...
 };
 
 // todo: bindless array,  want keep those descriptor 'static'  (not need copy every time
@@ -534,8 +535,8 @@ public:
     struct ViewDesc {
         ED3D12ShaderVariableType type            = ED3D12ShaderVariableType::Texture2D;
         DXGI_FORMAT              format          = DXGI_FORMAT_UNKNOWN;
-        uint8_t                  first_mip_level = 0; // note we not care array/plane level subresource range
-        uint8_t                  num_mip_levels  = uint8_t(-1);
+        uint8                    first_mip_level   = 0; // note we not care array/plane level subresource range
+        uint8                    num_mip_levels    = uint8(-1);
         bool                     b_depth_read_only = false;
 
         auto operator<=>(const ViewDesc& other) const = default;
@@ -558,10 +559,10 @@ public:
     ID3D12Resource* Native() const {
         return allocation.resource;
     }
-    uint QuerySubresourceIndex(uint _mip_level, uint _array_slice, uint _plane_slice) const;
+    uint32 QuerySubresourceIndex(uint32 _mip_level, uint32 _array_slice, uint32 _plane_slice) const;
 
     void            Destroy() override;                             // from Texxture.RHIResource
-    uint            GetMipByteSize(uint _mip_idx) const override;   // from Texture
+    uint32          GetMipByteSize(uint32 _mip_idx) const override; // from Texture
     RENDER_API void SetName(const std::string_view _name) override; // from Texture
 };
 
@@ -625,14 +626,14 @@ public:
     ID3D12Fence* Native() const {
         return fence.Get();
     }
-    uint64_t GetValue() const override; // by default, get latest value, not cached 'current_value'
-    bool     Wait(uint64_t _value) override;
-    void     MarkSubmitted(uint64_t _value) override;
+    uint64             GetValue() const override; // by default, get latest value, not cached 'current_value'
+    bool               Wait(uint64 _value) override;
+    void               MarkSubmitted(uint64 _value) override;
     [[nodiscard]] bool WaitSubmitted(
-        uint64_t                _value,
+        uint64                  _value,
         const std::atomic_bool* _continue_waiting = nullptr
     ) override;
-    void     Reject(uint64_t _value) noexcept override;
+    void Reject(uint64 _value) noexcept override;
 
     bool IsFenceComplete(uint64 _value);
     bool IsRejected(uint64 _value) const override;
@@ -666,7 +667,7 @@ public:
     void SetPso(const PipelineHandle& _handle);
     void BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args);
 
-    void Dispatch(uint _x, uint _y, uint _z);
+    void Dispatch(uint32 _x, uint32 _y, uint32 _z);
 
     void
     CopyBuffer(D3D12Buffer* _src, D3D12Buffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
@@ -930,8 +931,8 @@ private:
     D3D12MultiBuddyAllocatorAutoFree upload_allocator;
     D3D12MultiBuddyAllocatorAutoFree readback_allocator;
     D3D12FastConstantAllocator       constant_allocator;
-    uint                            csu_descriptor_chunk{0};
-    uint                            sampler_descriptor_chunk{0};
+    uint32                           csu_descriptor_chunk{0};
+    uint32                           sampler_descriptor_chunk{0};
 
     // in terms of each buffer may need different state, this can't use manual sub-allocation from a big buffer
     // rather we prefer sub-allocation from a heap, which simply rely on D3D12MA
@@ -968,8 +969,8 @@ public:
 public:
     void Reset();
     void AdoptDescriptorChunks(
-        uint _csu_descriptor_chunk,
-        uint _sampler_descriptor_chunk
+        uint32 _csu_descriptor_chunk,
+        uint32 _sampler_descriptor_chunk
     ) noexcept;
     void ReleaseDescriptorChunks() noexcept;
     void AddOnComplete(std::function<void()>&& _func) {
@@ -1087,16 +1088,16 @@ public:
         return {};
     }
 
-    uint GetBackbufferIndex() const {
+    uint32 GetBackbufferIndex() const {
         return frame_index;
     }
     //DescriptorIndex GetBackbufferRTV() const { return m_backbufferRTVs[m_frameIndex]; }
     //GpuTexture*     GetBackbuffer() const { return m_backbufferTextures[m_frameIndex].get(); }
 
-    uint32_t GetWidth() const {
+    uint32 GetWidth() const {
         return width;
     }
-    uint32_t GetHeight() const {
+    uint32 GetHeight() const {
         return height;
     }
 
@@ -1109,9 +1110,9 @@ private:
     D3D12Device&                  device;
     ComPtr<IDXGISwapChain3>       swapchain;
     Array<ComPtr<ID3D12Resource>> backbuffers;
-    uint                          width;
-    uint                          height;
-    uint                          frame_index;
+    uint32                        width;
+    uint32                        height;
+    uint32                        frame_index;
     /*     DescriptorIndex             m_backbufferRTVs[FrameLatency];
         std::unique_ptr<GpuTexture> m_backbufferTextures[FrameLatency];*/
 };
@@ -1142,13 +1143,13 @@ public:
 
     BufferRef CreateBuffer(
         std::string_view  _name,
-        uint              _element_cnt,
-        uint              _byte_stride,
+        uint32            _element_cnt,
+        uint32            _byte_stride,
         EBufferUsageFlags _usage,
         EPixelFormat      _format
     ) override;
 
-    BindlessArrayRef CreateBindlessArray(uint _max_size) override;
+    BindlessArrayRef CreateBindlessArray(uint32 _max_size) override;
     FenceRef         CreateFence() override;
 
     // Raytracing
@@ -1176,7 +1177,7 @@ private:
 public:
     //void           EnqueueDeferredRelease(RHIResource* _object);
     //void           FlushDeferredReleases();
-    constexpr uint ImmutableSamplerCount() const {
+    constexpr uint32 ImmutableSamplerCount() const {
         return immutable_sampler_count;
     }
     //const VkSampler* GetImmutableSamplers() const { return immutable_samplers.data(); }
@@ -1218,7 +1219,7 @@ private:
     //UniquePtr<D3D12CommandQueue>              compute_queue{};
     //UniquePtr<D3D12CopyQueue>                          copy_queue{};
     //LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
-    static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
+    static constexpr uint32 immutable_sampler_count = uint32(SF_Num) * uint32(SAM_Num) * uint32(SCF_Num);
     //StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
 
 public:
@@ -1287,8 +1288,8 @@ public:
     // }
 
 public:
-    static constexpr uint bindless_sampler_cnt = 256;
-    static constexpr uint cmd_alloc_limits     = 3;
+    static constexpr uint32 bindless_sampler_cnt = 256;
+    static constexpr uint32 cmd_alloc_limits     = 3;
     //UniquePtr<DeviceInternalShaders> internal_shaders;
 
 private:
