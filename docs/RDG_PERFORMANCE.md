@@ -929,6 +929,8 @@ Lower 已验证输出 Pass 与编译执行顺序一致；merged 路径再核对�
 
 ## 16. 以本机 UE RDG 为参照的优化构建对照
 
+后续函数、分配及 UE 工作量归因见 [RDG CPU 开销归因记录](RDG_PROFILING_2026_10.md)。
+
 ### 16.1 计划与比较边界
 
 先建立可复现的 CPU 管理基准，再依据实际差距优化和复测；架构调整仍须另行征得同意。UE 使用本机 5.7.1 Development，Moer 使用独立目录的 MSVC Release，均保持校验可用、关闭采集与图内并行。Moer 当前仅有 Debug LibTorch，独立构建关闭未参与 RDG 基准的 CUDA/NRD 集成，不混用 Debug 第三方 ABI，不更改常用 Debug 配置。
