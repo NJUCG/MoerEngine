@@ -1453,9 +1453,16 @@ void TestSerialFailureStopsLaterRecordingStreams(TestSuite& suite) {
     }
 }
 
-void TestActiveRecordingLifetimeOutlivesUserCallbacks(TestSuite& suite) {
+void TestActiveRecordingLifetimeOutlivesUserCallbacks(TestSuite& suite, bool merge) {
     constexpr std::string_view test_name =
         "active recording lifetime outlives ordinary and success callbacks";
+    struct CopyCounter {
+        int* count;
+        explicit CopyCounter(int& value) : count(&value) {}
+        CopyCounter(const CopyCounter& other) : count(other.count) { ++*count; }
+    };
+    int copies = 0;
+    CopyCounter capture(copies);
     auto destroyed = std::make_shared<bool>(false);
     std::vector<int> callback_order{};
     Moer::Array<RHIRecordingSource> published{};
@@ -1481,7 +1488,7 @@ void TestActiveRecordingLifetimeOutlivesUserCallbacks(TestSuite& suite) {
                 builder.Write(data, RenderGraph::BufferAccessType::Storage)
                     .SideEffect();
             },
-            [&](CommandList& commands) {
+            [&, capture](CommandList& commands) {
                 commands.AddCallback([&, raw_buffer, destroyed] {
                     suite.Check(
                         !*destroyed && raw_buffer->GetByteSize() == 64,
@@ -1509,18 +1516,30 @@ void TestActiveRecordingLifetimeOutlivesUserCallbacks(TestSuite& suite) {
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        suite.Check(
-            graph.ExecuteFrontendRecordingPlan(
-                {},
-                false,
-                [&](Moer::Array<RHIRecordingSource>&& sources) {
-                    published = std::move(sources);
-                },
-                RenderGraph::ActiveRecordingOptions{.enabled = true}
-            ),
-            test_name,
-            graph.GetCompileError()
-        );
+        if (merge) {
+            RHIRecordingSource source;
+            source.command_list = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+            source.command_list->SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+            const int copies_before_recording = copies;
+            suite.Check(graph.RecordAndMergeFrontendCommands(*source.command_list, false),
+                        test_name, graph.GetCompileError());
+            suite.Check(copies == copies_before_recording, test_name,
+                        "one-shot recording should transfer callback captures without copying them");
+            published.push_back(std::move(source));
+        } else {
+            suite.Check(
+                graph.ExecuteFrontendRecordingPlan(
+                    {},
+                    false,
+                    [&](Moer::Array<RHIRecordingSource>&& sources) {
+                        published = std::move(sources);
+                    },
+                    RenderGraph::ActiveRecordingOptions{.enabled = true}
+                ),
+                test_name,
+                graph.GetCompileError()
+            );
+        }
     }
 
     suite.Check(
@@ -1641,7 +1660,8 @@ int main() {
     TestActiveRecordingGroupsCommitAtomically(suite, true);
     TestSerialFailureStopsLaterRecordingStreams(suite);
 
-    TestActiveRecordingLifetimeOutlivesUserCallbacks(suite);
+    TestActiveRecordingLifetimeOutlivesUserCallbacks(suite, false);
+    TestActiveRecordingLifetimeOutlivesUserCallbacks(suite, true);
 
     if (suite.FailureCount() != 0) {
         std::cerr << "TestRenderGraphActiveLowering: " << suite.FailureCount()

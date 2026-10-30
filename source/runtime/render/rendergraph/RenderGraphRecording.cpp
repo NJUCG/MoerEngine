@@ -8,6 +8,7 @@
 #include "taskgraph/TaskGraph.h"
 
 #include <algorithm>
+#include <cassert>
 #include <condition_variable>
 #include <exception>
 #include <limits>
@@ -280,6 +281,9 @@ private:
         if (destination.GetResourceStateOwnership() == ERHIResourceStateOwnership::Compiled) {
             if (!RenderGraphLowering::Lower(graph, lowered, graph.compile_error)) { return false; }
             if (!lowered.queue_syncs.empty()) { return Fail("merged recording cannot execute queue synchronization"); }
+            if (lowered.passes.size() != graph.compiled_plan.frontend_record_units.size()) {
+                return Fail("lowered passes do not cover the merged recording order");
+            }
             // Materialize before launching workers so invalid bindings cannot leave a partial frame.
             ProfileDump::ScopedCpuProfile materialize_scope("RenderGraph.MaterializeBarriers", graph.name);
             before.resize(graph.passes.size());
@@ -375,14 +379,23 @@ private:
 
                 auto lifetime = std::make_shared<FrontendRecordingLifetime>();
                 lifetime->callbacks.reserve(range.unit_count);
+                if (ownership == ERHIResourceStateOwnership::Compiled) {
+                    size_t capacity = 0;
+                    for (uint32_t offset = 0; offset < range.unit_count; ++offset) {
+                        capacity += lowered.passes[range.first_unit + offset].keepalive.size();
+                    }
+                    lifetime->keepalive.reserve(capacity);
+                }
                 for (uint32_t offset = 0; offset < range.unit_count; ++offset) {
                     const auto pass_handle =
                         graph.compiled_plan.frontend_record_units[range.first_unit + offset].pass;
-                    lifetime->callbacks.push_back(graph.passes[pass_handle.pass_id].record);
+                    // Execute is one-shot. The stream lifetime now owns the callback and its captures.
+                    lifetime->callbacks.push_back(std::move(graph.passes[pass_handle.pass_id].record));
                     if (ownership == ERHIResourceStateOwnership::Compiled) {
-                        const auto resources = lowered.Keepalive(pass_handle);
+                        const auto& pass = lowered.passes[range.first_unit + offset];
+                        assert(pass.pass == pass_handle); // Lower validates this execution order.
                         lifetime->keepalive.insert(
-                            lifetime->keepalive.end(), resources.begin(), resources.end()
+                            lifetime->keepalive.end(), pass.keepalive.begin(), pass.keepalive.end()
                         );
                     }
                 }

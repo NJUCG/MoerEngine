@@ -888,3 +888,41 @@ Lowering 的真实约束是每个 Pass 对每个物理资源保留一次强引�
 两次 Raster 运行各 130 秒，正常退出且无运行/validation 错误。主图 Lower p50 从 1.3119 降到 1.1487 ms（约 12.4%）；RenderFrame p50 从 16.5116 到 15.6214 ms。然而 PrepareFrame 从 2.5179 增至 7.0963 ms，FPS 从 52.06 降到 44.82。这组样本不支持整帧加速结论，必须保留帧准备与运行间波动，不能只挑 Lower 或 RenderFrame 报告。
 
 完整 Debug 构建和 9 项 RDG/RHI 契约通过。新增回归最初误用了 identity-only 导入重载，改为显式 BufferRef 后重跑 Lowering 契约通过；生产实现的校验未放宽。构建/契约日志为 `build/rdg-lowering-build.log`、`rdg-lowering-contracts.log`、`rdg-lowering-contract-recheck.log`。配对二进制、各次 JSON 与汇总在 `build/rdg-lowering-variants/`，执行脚本为 `build/run_rdg_lowering_benchmark.ps1`；Raster 数据位于 `build/rdg-bisect-results/lowering-{before,after}-raster/`。
+
+### 15.3 录制准备的所有权转移
+
+merged recording 在执行开始时已将 graph 标记为 executed，成功或失败后都不可重新执行。回调捕获对象原先从 graph 再复制到命令流 lifetime，现在直接移动给同一个 lifetime；所有权转移不改变命令完成前的存活要求。录制任务失败仍只销毁私有流，不向目标提交半张图。
+
+Lower 已验证输出 Pass 与编译执行顺序一致；merged 路径再核对数量后，按 record unit 的位置直接读取对应保活集合，避免每个 Pass 线性 FindPass。按范围内全部引用的数量一次预留 lifetime 容量，保留各 Pass 的强引用；并行任务不共享可写流。原有跨队列 ownership release 补充的 keepalive 也经过同一收集路径，未删除资源保活或同步校验。
+
+曾试验用每个范围的临时资源 ID 位表去除重复强引用。三组配对中，小图约快 0.7%，中、大图反而约慢 1.1% / 1.0%，CRT 请求只少 4 / 7 / 9 次。该结果不支持增加位表的维护与遍历成本，因此最终去掉范围内去重，仅保留已有所有权容器的容量预留。试验记录保存在 `build/rdg-record-prepare-dedup-experiment/`。
+
+已有 lifetime 回归扩展到 merged 路径，确认 graph 销毁后普通/成功回调仍可使用资源，completion payload 释放后资源才销毁；同时检查录制阶段不再复制捕获对象。基准新增 `--record`，先在计时外构图并 Compile，再测 compiled serial recording 公共入口，包含 Lower、校验、录制与合并，排除命令结果析构。前后基准均包含第一步 Lowering 优化，以隔离本步差异。
+
+### 15.4 录制结果与最终验证
+
+最终方案沿用 5 次预热、80 样本、三组前/后交替配对；表中为三次 p50 的中位数。回调为空，不能用该基准推算真实 Pass 捕获对象的复制成本。
+
+| Whole 输入 | Record 公共入口 p50 前→后 ms | CRT 分配请求前→后 |
+| --- | ---: | ---: |
+| 16/16/4 | 0.7968→0.7834 | 1172→1165 |
+| 64/64/16 | 8.3531→8.3179 | 15930→15920 |
+| 128/128/16 | 16.7154→16.4960 | 31636→31624 |
+
+改善约 0.4%～1.7%，幅度较小，不应包装成主要性能突破。18 次运行的同输入 Compile/Lowering Dump 摘要及访问、边、屏障数量一致，PMR 返回后 live bytes 均为 0。捕获对象复制减少由独立回归验证；未增加范围位表、跨帧缓存或新的资源生命周期机制。
+
+为复核 15.2 的 FPS 下降，在录制去重试验之后恢复原始 `620a0f43` 的整套匹配 EXE/DLL 再运行，随后恢复最终版本。所有运行条件与 15.2 相同，每次 130 秒、稳定窗口 30 秒。下表保留完整顺序；RenderFrame、PrepareFrame 是各自 p50，不能相加得到帧间隔均值。
+
+| 运行目录 | 实现 | FPS | RenderFrame p50 ms | PrepareFrame p50 ms |
+| --- | --- | ---: | ---: | ---: |
+| `lowering-before-raster` | 原始 `620a0f43` | 52.06 | 16.5116 | 2.5179 |
+| `lowering-after-raster` | Lowering 优化 | 44.82 | 15.6214 | 7.0963 |
+| `record-prepare-after-raster` | Lowering + 范围去重试验 | 44.19 | 15.6462 | 7.1156 |
+| `lowering-before-repeat-raster` | 原始二进制复测 | 43.83 | 16.1184 | 7.0625 |
+| `record-prepare-final-raster` | 最终两步优化 | 44.35 | 15.7230 | 7.1223 |
+
+原始二进制复测也出现约 7 ms PrepareFrame 和约 44 FPS，说明首轮整帧差异不能单独归因于本次优化；PrepareFrame 的变化原因仍未查明。主图 Lower p50 在原始两次为 1.3119 / 1.3180 ms，最终为 1.1818 ms。按完整帧归因，全部图 Lowering 从原始复测的 1.4388 降至 1.2969 ms；扣除嵌套 Compile、Lowering 和物化后的录制为 2.7400→2.6817 ms，但仅含第一步时已为 2.6627 ms，因此实际场景没有证明第二步带来独立、稳定的录制加速。全部图 Compile 最终仍约 2.8778 ms。局部重复工作有所减少，尚未恢复接管前的帧率。
+
+最终完整 Debug 构建、9 项 RDG/RHI 契约及真实 Vulkan `--parallel` 的 29 个用例全部通过，Vulkan 日志无失败用例或 validation 错误。五次 Raster 均正常退出、无运行/validation 错误，测试编辑器已关闭。两步保留原有依赖、图边界、屏障、队列和资源生命周期规则。
+
+最终构建、契约、Vulkan 日志分别为 `build/rdg-record-prepare-final-build.log`、`rdg-record-prepare-final-contracts.log`、`rdg-record-prepare-final-vulkan.log`。最终配对二进制与 18 个基准 JSON 在 `build/rdg-record-prepare-variants/`，汇总为其中的 `summary.json`，脚本为 `build/run_rdg_record_prepare_benchmark.ps1`。最终 Render DLL SHA-256 为 `221619AFB4B4FF7C2C2D3F1396A44E82E49C4057C03DE17CDE527853EEFA3320`；前置 Lowering 版为 `0A61AC359C498F0004FA8199A9308702E2734C3AD3BD179316F703F8CA740A1C`。Raster 证据位于 `build/rdg-bisect-results/` 的上述目录，逐帧归因为各目录的 `raster-frame-stages.json`。这些本机忽略目录用于复查，本文保留关键条件与结果。
