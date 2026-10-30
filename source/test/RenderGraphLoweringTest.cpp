@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -21,6 +22,10 @@ using Moer::Render::RenderGraphLowering;
 using Moer::Render::Texture;
 using Moer::Render::TextureInfo;
 using Moer::Render::TextureRef;
+
+// Growing a plan must transfer its resource ownership and source vectors, not copy them.
+static_assert(std::is_nothrow_move_constructible_v<RenderGraphLowering::PhysicalBinding>);
+static_assert(std::is_nothrow_move_constructible_v<RenderGraphLowering::LoweredInstruction>);
 
 template<typename Type>
 concept PassTextureAccessType = requires(RenderGraph::PassBuilder& builder, RenderGraph::TextureHandle texture, Type type) {

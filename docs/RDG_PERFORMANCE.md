@@ -954,3 +954,59 @@ Moer 构图中位数为 0.0225 / 0.1100 / 0.2241 ms，UE 为 0.0160 / 0.1606 / 0
 UE 小图第一轮为 0.0656 ms，后两轮约 0.0390 ms，存在运行状态差异。上表比例只是当前基准的参照，必须连同 16.1 的计时边界差异阅读。它证明优化构建下仍有差距，不能把此前 Debug 下的数毫秒直接解释成 UE 的若干倍。
 
 基准工程、调用脚本与口径说明位于 `tools/rdg_benchmark/`；Moer 新增 `--lifecycle` 模式。原始 JSON、UE 启动日志和 `baseline-summary.json` 位于 `build/rdg-ue-comparison/`。两端均已成功构建、运行；本步骤只新增测量能力，不调整生产 RDG。
+
+### 16.3 优先修复资源引用的移动契约
+
+读取热点数据结构时发现，`CountableRef` 的同类型和转换移动构造仅转移裸指针并清空源，却未声明 `noexcept`。这导致含资源引用的 `LoweredInstruction` 也不是 nothrow movable，vector 扩容为维护异常保证而选择复制；除多余引用计数外，还会复制 `source_frontier` 等嵌套容器。这个成本来自类型异常契约的遗漏，不是资源生命周期或图调度的要求。
+
+第一项修复只给这两个移动构造补充 `noexcept`，保持函数体及所有权规则不变。移动赋值会释放原引用、调用用户资源的 DeRef，本轮不一概标记 noexcept。新增通用引用回归检查容器扩容不增加获取/释放次数、转换移动清空源且只保留一个引用；RDG 回归在编译期检查物理绑定和 LoweredInstruction 可无异常移动。先独立测量此项，不混入其他预留容量或范围去重调整。
+
+### 16.4 固定 CPU 的配对结果
+
+初次修复前后对照未固定 CPU，某些未修改的 Compile 样本也出现较大差异：Whole 中图三次 p50 中位数为 0.5517→0.8485 ms，Subranges 大图完整生命周期为 1.8979→1.9265 ms。不能只选 Lowering 较快的结果宣布整体收益。这批 50 次预热、300 样本数据完整保存在 `build/rdg-nothrow-ab/`，没有覆盖或删去。
+
+随后两端基准都增加线程 affinity 选项，仅把测量线程固定到逻辑 CPU 2。UE 重测同一矩阵；Moer 使用同一个新版基准 EXE，分别加载完整的旧、新 DLL 集合。200 次预热、600 样本，三组前/后、后/前、前/后配对。此轮不与构建、编辑器或大 capture 解析并发。表中为三次 p50 的中位数。
+
+| Whole 输入 | UE 生命周期 ms | Moer 修复前→后 ms | Moer 生命周期改善 | 修复后 / UE |
+| --- | ---: | ---: | ---: | ---: |
+| 16/16/4 | 0.0385 | 0.1282→0.1156 | 9.8% | 3.00 |
+| 64/64/16 | 0.3668 | 0.9982→0.9192 | 7.9% | 2.51 |
+| 128/128/16 | 0.7477 | 2.1195→1.8624 | 12.1% | 2.49 |
+
+| Moer 输入 | Lower 前→后 ms | Lower 改善 | 生命周期前→后 ms |
+| --- | ---: | ---: | ---: |
+| Whole 16/16/4 | 0.0216→0.0173 | 19.9% | 0.1282→0.1156 |
+| Whole 64/64/16 | 0.3149→0.2170 | 31.1% | 0.9982→0.9192 |
+| Whole 128/128/16 | 0.6320→0.4330 | 31.5% | 2.1195→1.8624 |
+| Subranges 16/16/4 | 0.0381→0.0309 | 18.9% | 0.1717→0.1686 |
+| Subranges 64/64/16 | 0.2813→0.2169 | 22.9% | 0.8637→0.7845 |
+| Subranges 128/128/16 | 0.5633→0.4372 | 22.4% | 1.7875→1.5591 |
+
+Whole 中、大图 Compile 基本未变（0.4106→0.4130、0.8753→0.8751 ms），符合本次主要修复 LoweredInstruction 扩容复制的判断。Subranges 大图 Compile 中位数略增 3.8%，未改编译算法，仍需保留分配与运行波动。每种输入的 Compile/Lower Dump 摘要及访问、边、屏障数量在两版三轮中均一致，PMR 返回后 live bytes 全部为零。收益来自普通容器移动，PMR 峰值不因此下降，Release 也未采集 CRT 请求数。
+
+固定 CPU 后的 108 个 Moer 结果、9 个 UE 样本与 `summary.json` 在 `build/rdg-nothrow-pinned/`。两版二进制在 `build/rdg-ue-variants/{before,after}/`，配对脚本为 `build/run_rdg_nothrow_ab.ps1`。旧 Render DLL SHA-256 为 `77DB09F4CCBA66DB29F08F06FA8E465F26693C1F96B998D82895ADBE681B6DE3`，新 DLL 为 `CF98C03BC9B0A7702E07DF9A43A06CB872C12185ABFCA45D5A609256F14B7BAC`。仍须保留 16.1 的后端与析构计时差别，2.5 倍是这套 CPU 基准的结果，不是所有 UE 场景的固定比例。
+
+### 16.5 Raster 复核与验证
+
+在独立 Release 编辑器中复核 Sponza，Probe GI 关闭、串行录制、Vsync 和帧率锁关闭，窗口 1920×1080、场景视口 1500×1002。每次运行 130 秒，统计末尾稳定窗口 30 秒，启用完整 ProfileDump 与 Vulkan validation。以下保留全部四次 Release 运行；切回基线时替换匹配的 EXE/全部 engine DLL，复测完成后恢复优化版。
+
+| 运行目录 | FPS | RenderFrame p50 ms | PrepareFrame p50 ms | 主图 Lower p50 ms | PresentOnQueue p50 ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `ue-target-release-before-raster` | 677.88 | 1.2327 | 0.1384 | 0.0742 | 0.1633 |
+| `ue-target-nothrow-release-raster` | 379.88 | 1.0363 | 1.8508 | 0.0513 | 1.7846 |
+| `ue-target-release-before-repeat` | 745.52 | 1.1147 | 0.1251 | 0.0643 | 0.1496 |
+| `ue-target-nothrow-release-repeat` | 843.67 | 0.9846 | 0.1194 | 0.0503 | 0.1376 |
+
+两次优化版的主图 Lower 均较低，符合固定图基准的结果。不过首次优化版出现较长的 Present/帧准备等待，复测没有重现，原因尚未确定；不能把 745→844 FPS 单独作为稳定的整帧收益，也不能将第一次的帧率下降直接归因于本次改动。各 scope 的 p50 不可相加为帧时间。`Raster.GraphLifetime` 包含实际 Pass 回调工作，也不能将其整体视为 RDG 管理开销。
+
+常用 Debug 编辑器另跑一次功能验证，约 47.15 FPS、RenderFrame p50 17.608 ms，无运行或 validation 错误。它启用 Debug 容器和不同的第三方集成，不能与上述 Release 帧率直接比较，更不能据此宣布此前 Debug 性能问题已经解决。当前轮次也没有可配对的同版本 Debug 基线。
+
+完整 Debug 构建通过，10 项引用/RDG/RHI 契约通过；Release 编辑器与基准构建通过，CountableRef 和 Lowering 两项 Release 契约通过。真实 Vulkan `--parallel` 的 29 个用例通过，无失败或 validation 错误。最终 affinity 基准入口在 Debug 重新构建并完成小图 smoke。五次 Raster 均正常退出、运行/validation 错误为零，测试编辑器已关闭。
+
+构建及契约日志为 `build/rdg-nothrow-{debug,release}-{build,contracts}.log`，真实 Vulkan 日志为 `build/rdg-nothrow-vulkan.log`；Debug 基准日志为 `build/rdg-nothrow-debug-benchmark-{build,smoke}.log`。运行数据位于 `build/rdg-bisect-results/` 的表中目录及 `ue-target-nothrow-debug-raster/`，各目录保存配置、日志、capture 和 `capture.mpd.timings.json`。基线首轮在启动后补记 DLL 信息，未重启采样进程；基线复测 metadata 明确记录实际二进制为 `bbeafde9`，避免与当时工作区的测试代码提交混淆。
+
+### 16.6 剩余差距与下一步依据
+
+本轮确认了一项由实现契约遗漏引入的成本：资源保活本身必要，但 vector 扩容时复制引用和嵌套来源列表并非必要。补齐移动构造的异常保证即可消除它，无须新增缓存、所有权状态或调度机制。未改变图边界、依赖、屏障、队列和生命周期架构。
+
+在当前匹配输入的 CPU 基准中，优化后的中、大图仍约为 UE 的 2.5 倍，小图约为 3 倍；差距尚未消除。Whole 中、大图独立 Compile 为 0.4130 / 0.8751 ms，Lower 为 0.2170 / 0.4330 ms，编译与输出计划构造仍值得优先排查。后续应先用优化构建定位它们内部的遍历、复制和分配，再逐项验证，而不是从总比例推导某个架构必须重写。独立阶段中位数不构成严格的生命周期分解；UE 的 NullRHI、命令排空边界与 Moer 的 frontend 命令流差异也仍需纳入判断。任何跨帧缓存、图边界或队列架构调整继续先征得用户同意。

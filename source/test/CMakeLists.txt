@@ -226,6 +226,12 @@ add_executable(${test_target} "RenderGraphCompilerBenchmark.cpp")
 target_link_libraries(${test_target} PRIVATE Moer::Render)
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(test_target TestCountableRef)
+add_executable(${test_target} "CountableRefTest.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::Core)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME CountableRefContract COMMAND $<TARGET_FILE:${test_target}>)
+
 set(test_target TestRenderGraphParameterAccess)
 add_executable(${test_target} "RenderGraphParameterAccessTest.cpp")
 target_link_libraries(${test_target}

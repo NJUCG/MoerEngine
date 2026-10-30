@@ -116,12 +116,12 @@ public:
     }
     template<typename MoveType>
         requires std::is_convertible_v<MoveType, T>
-    CountableRef(CountableRef<MoveType>&& _move) {
+    CountableRef(CountableRef<MoveType>&& _move) noexcept {
         ptr       = _move.ptr;
         _move.ptr = nullptr;
     }
 
-    CountableRef(CountableRef&& _move) {
+    CountableRef(CountableRef&& _move) noexcept {
         ptr       = _move.ptr;
         _move.ptr = nullptr;
     }
