@@ -1,5 +1,6 @@
 #include "rendergraph/RenderGraphLowering.h"
 #include "profile/ProfileScope.h"
+#include "profile/RdgDiagnostics.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -107,6 +108,7 @@ template<typename Enum>
         error = "Unknown access cannot be lowered";
         return false;
     }
+    MOER_RDG_COUNT(MapScopeCalls, 1);
     if (RenderGraph::GetStateKind(state) == ResourceKind::Token) {
         error = "token state cannot produce a physical barrier";
         return false;
@@ -448,6 +450,7 @@ bool RenderGraphLowering::Lower(
     std::string&       error
 ) {
     ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Lower", graph.name);
+    MOER_RDG_PHASE_SEQUENCE("RenderGraph.Lower.ValidatePlan");
     output.Clear();
     error.clear();
     auto fail = [&](std::string message) {
@@ -982,6 +985,7 @@ bool RenderGraphLowering::Lower(
         }
     }
 
+    MOER_RDG_PHASE_NEXT("RenderGraph.Lower.BuildPassesAndKeepalive");
     LoweredPlan candidate{};
     candidate.queue_syncs = std::move(lowered_queue_syncs);
     candidate.prologue.reserve(compiled.prologue_barriers.size());
@@ -1059,10 +1063,12 @@ bool RenderGraphLowering::Lower(
         }
         pass_entry.keepalive.reserve(resources.size());
         for (const auto resource : resources) {
+            MOER_RDG_COUNT(KeepaliveBindings, 1);
             pass_entry.keepalive.push_back(binding_for(resource));
         }
     }
 
+    MOER_RDG_PHASE_NEXT("RenderGraph.Lower.ConvertAndPlaceBarriers");
     std::pmr::vector<uint32_t> execution_position(
         graph.passes.size(),
         RenderGraph::InvalidIndex, &scratch
@@ -1538,11 +1544,14 @@ bool RenderGraphLowering::Lower(
             if (keepalive == release_pass->keepalive.end()) {
                 release_pass->keepalive.push_back(instruction.physical);
             }
+            MOER_RDG_COUNT(InstructionGrowths, release_pass->after.size() == release_pass->after.capacity());
             release_pass->after.push_back(std::move(release));
+            MOER_RDG_COUNT(InstructionGrowths, acquire_pass->before.size() == acquire_pass->before.capacity());
             acquire_pass->before.push_back(std::move(acquire));
             continue;
         }
         if (prologue[barrier_index]) {
+            MOER_RDG_COUNT(InstructionGrowths, candidate.prologue.size() == candidate.prologue.capacity());
             candidate.prologue.push_back(std::move(instruction));
             continue;
         }
@@ -1580,6 +1589,7 @@ bool RenderGraphLowering::Lower(
             if (pass == nullptr) {
                 return fail("epilogue barrier source is not a GPU pass");
             }
+            MOER_RDG_COUNT(InstructionGrowths, pass->after.size() == pass->after.capacity());
             pass->after.push_back(std::move(instruction));
             continue;
         }
@@ -1587,9 +1597,11 @@ bool RenderGraphLowering::Lower(
         if (pass == nullptr) {
             return fail("barrier destination is not a GPU pass");
         }
+        MOER_RDG_COUNT(InstructionGrowths, pass->before.size() == pass->before.capacity());
         pass->before.push_back(std::move(instruction));
     }
 
+    MOER_RDG_PHASE_NEXT("RenderGraph.Lower.ValidateBoundariesAndTransfers");
     std::pmr::vector<std::pmr::vector<uint32_t>> boundaries_by_resource(
         graph.resources.size(), &scratch
     );
@@ -1604,6 +1616,7 @@ bool RenderGraphLowering::Lower(
     auto has_boundary = [&](const RenderGraph::CompiledAccess& access, bool initial) {
         const auto& indices = boundaries_by_resource[access.resource.resource_id];
         return std::any_of(indices.begin(), indices.end(), [&](uint32_t barrier_index) {
+            MOER_RDG_COUNT(BoundaryTests, 1);
             const auto& barrier = compiled.barriers[barrier_index];
             return (initial ? prologue[barrier_index] : epilogue[barrier_index]) &&
                    barrier.resource == access.resource && barrier.range == access.range &&
@@ -1713,6 +1726,7 @@ bool RenderGraphLowering::Lower(
         }
     }
 
+    MOER_RDG_PHASE_NEXT("RenderGraph.Lower.CommitAndDestroyScratch");
     output = std::move(candidate);
     error.clear();
     return true;

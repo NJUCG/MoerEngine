@@ -14,6 +14,7 @@
 #include <iostream>
 #include <map>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -23,6 +24,8 @@
 using Clock = std::chrono::steady_clock;
 
 std::wstring Quote(const std::wstring& text) {
+    // UE parses its raw command line: leave simple -Key=Value arguments unquoted.
+    if (!text.empty() && text.find_first_of(L" \t\"") == std::wstring::npos) { return text; }
     std::wstring result = L"\"";
     size_t slashes = 0;
     for (const auto value : text) {
@@ -68,7 +71,9 @@ std::string Symbol(HANDLE process, DWORD64 address) {
     if (SymFromAddr(process, address, &displacement, symbol)) {
         return std::string(module.ModuleName) + "!" + symbol->Name;
     }
-    return std::string(module.ModuleName) + "!0x" + std::to_string(address);
+    std::ostringstream name;
+    name << module.ModuleName << "!0x" << std::hex << address;
+    return name.str();
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -93,6 +98,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!command.empty()) { command += L' '; }
         command += Quote(argv[index]);
     }
+    { std::wofstream output(std::filesystem::path(prefix + L".command.txt")); output << command << '\n'; }
     SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
     const HANDLE log = CreateFileW((prefix + L".child.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ,
                                   &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

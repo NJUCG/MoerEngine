@@ -1,4 +1,5 @@
 #include "misc/MMemory.h"
+#include "profile/RdgDiagnostics.h"
 #if USE_MIMALLOC
 #include "mimalloc.h"
 #endif
@@ -17,30 +18,37 @@
 
 void* Memory::Malloc(size_t size) noexcept {
 #if USE_MIMALLOC
-    return mi_malloc(size);
+    void* result = mi_malloc(size);
 #else
-    return malloc(size);
+    void* result = malloc(size);
 #endif
+    MOER_RDG_ENGINE_ALLOC(result, size);
+    return result;
 }
 
 void* Memory::Calloc(size_t count, size_t size) noexcept {
 #if USE_MIMALLOC
-    return mi_calloc(count, size);
+    void* result = mi_calloc(count, size);
 #else
-    return calloc(count, size);
+    void* result = calloc(count, size);
 #endif
+    MOER_RDG_ENGINE_ALLOC(result, count * size);
+    return result;
 }
 
 void* Memory::ReAlloc(void* p, size_t newsize) noexcept {
 #if USE_MIMALLOC
 
-    return mi_realloc(p, newsize);
+    void* result = mi_realloc(p, newsize);
 #else
-    return realloc(p, newsize);
+    void* result = realloc(p, newsize);
 #endif
+    MOER_RDG_ENGINE_ALLOC(result, newsize);
+    return result;
 }
 
 void Memory::Free(void* p) noexcept {
+    MOER_RDG_FREE(p);
 #if USE_MIMALLOC
     mi_free(p);
 #else
@@ -49,6 +57,7 @@ void Memory::Free(void* p) noexcept {
 }
 
 void Memory::Free(void* p, size_t size) noexcept {
+    MOER_RDG_FREE(p);
 #if USE_MIMALLOC
     mi_free_size(p, size);
 #else
@@ -58,10 +67,12 @@ void Memory::Free(void* p, size_t size) noexcept {
 
 void* Memory::MallocAligned(size_t size, size_t alignment) noexcept {
 #if USE_MIMALLOC
-    return mi_malloc_aligned(size, alignment);
+    void* result = mi_malloc_aligned(size, alignment);
 #else
-    return _aligned_malloc(size, alignment);
+    void* result = _aligned_malloc(size, alignment);
 #endif
+    MOER_RDG_ENGINE_ALLOC(result, size);
+    return result;
 }
 
 void* Memory::MallocN(size_t count, size_t size) {
@@ -69,21 +80,24 @@ void* Memory::MallocN(size_t count, size_t size) {
         throw std::bad_array_new_length();
     }
 #if USE_MIMALLOC
-    return mi_new_n(count, size);
+    void* result = mi_new_n(count, size);
 #else
-    void* allocation = malloc(count * size);
-    if (allocation == nullptr && count != 0 && size != 0) {
+    void* result = malloc(count * size);
+    if (result == nullptr && count != 0 && size != 0) {
         throw std::bad_alloc();
     }
-    return allocation;
 #endif
+    MOER_RDG_ENGINE_ALLOC(result, count * size);
+    return result;
 }
 void* Memory::CallocAligned(size_t count, size_t size, size_t alignment) noexcept {
 #if USE_MIMALLOC
-    return mi_calloc_aligned(count, size, alignment);
+    void* result = mi_calloc_aligned(count, size, alignment);
 #else
-    return _aligned_malloc(count * size, alignment);
+    void* result = _aligned_malloc(count * size, alignment);
 #endif
+    MOER_RDG_ENGINE_ALLOC(result, count * size);
+    return result;
 }
 
 namespace Moer {

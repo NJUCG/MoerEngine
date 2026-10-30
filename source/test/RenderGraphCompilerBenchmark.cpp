@@ -2,6 +2,7 @@
 #include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIImpl.h"
+#include "profile/RdgDiagnostics.h"
 
 #include <algorithm>
 #include <charconv>
@@ -14,6 +15,14 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#if MOER_RDG_DIAGNOSTICS
+#include <Windows.h>
+#include <DbgHelp.h>
+#include <nlohmann/json.hpp>
+#include <map>
+#include <numeric>
+#include <optional>
+#endif
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -39,12 +48,21 @@ struct Options {
     bool lower = false;
     bool record = false;
     bool lifecycle = false;
+    std::string diagnose;
 };
 
 Options ParseOptions(int argc, char** argv) {
     Options options;
     for (int index = 1; index < argc; ++index) {
         const std::string_view option = argv[index];
+        if (option == "--diagnose" && index + 1 < argc) {
+            options.diagnose = argv[++index];
+            if (options.diagnose != "timing" && options.diagnose != "operations" &&
+                options.diagnose != "allocations" && options.diagnose != "selftest") {
+                throw std::runtime_error("--diagnose expects timing, operations, allocations or selftest");
+            }
+            continue;
+        }
         if (option == "--lifecycle") {
             options.lifecycle = true;
             continue;
@@ -88,6 +106,9 @@ Options ParseOptions(int argc, char** argv) {
     }
     if (int(options.lower) + int(options.record) + int(options.lifecycle) > 1) {
         throw std::runtime_error("choose one of --lower, --record or --lifecycle");
+    }
+    if (!options.diagnose.empty() && (options.lower || options.record || options.lifecycle)) {
+        throw std::runtime_error("--diagnose measures the full lifetime and cannot be combined with phase modes");
     }
     if (options.passes == 0 || options.resources == 0 || options.accesses == 0 ||
         options.accesses > options.resources || options.samples == 0) {
@@ -467,6 +488,10 @@ void PrintResult(const Options& options, const TimingResult& timing, const Alloc
         << ",\"reallocation_requested_bytes\":" << memory.crt.reallocation_requested_bytes << "}}\n";
 }
 
+#if MOER_RDG_DIAGNOSTICS
+#include "diagnostics/RdgBenchmarkDiagnostics.inl"
+#endif
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -480,6 +505,7 @@ int main(int argc, char** argv) {
         std::cout << "Usage: TestRenderGraphCompilerBenchmark [--passes 64] [--resources 64] "
                      "[--accesses 16] [--warmup 5] [--samples 80] [--cpu logical-index] [--subranges] [--lower | --record | --lifecycle]\n"
                      "--lifecycle includes build, Compile, compiled serial recording and destruction; no allocation probe.\n"
+                     "--diagnose timing|operations|allocations|selftest requires MOER_RDG_DIAGNOSTICS and runs separately from phase modes.\n"
                      "Outputs JSON. Rebuilds the graph for every Compile; excludes build, Dump and graph destruction. --lower or --record measures Lower or compiled serial recording after untimed Compile.\n"
                      "--subranges selects single mip/layer pairs and 512-byte buffer ranges instead of whole resources.\n"
                      "Timing includes phase scratch destruction and has no allocation hooks.\n"
@@ -501,6 +527,15 @@ int main(int argc, char** argv) {
 #endif
         }
         const PhysicalResources physical(options.resources);
+        if (!options.diagnose.empty()) {
+#if MOER_RDG_DIAGNOSTICS
+            if (options.diagnose == "selftest") { VerifyDiagnostics(); }
+            else { MeasureDiagnostics(options, physical); }
+            return 0;
+#else
+            throw std::runtime_error("--diagnose requires MOER_RDG_DIAGNOSTICS=ON");
+#endif
+        }
         if (options.lifecycle) {
             MeasureLifecycle(options, physical);
             return 0;

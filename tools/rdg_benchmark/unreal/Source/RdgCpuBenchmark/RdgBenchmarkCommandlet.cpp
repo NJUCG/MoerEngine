@@ -1,4 +1,5 @@
 #include "RdgBenchmarkCommandlet.h"
+#include "RdgPrivateStats.h"
 
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
@@ -27,6 +28,7 @@ struct FOptions
     int32 Warmup = 20;
     int32 Samples = 200;
     int32 Cpu = -1;
+    bool bWorkStats = false;
 };
 
 double Percentile(TArray<double> Values, double Fraction)
@@ -37,6 +39,7 @@ double Percentile(TArray<double> Values, double Fraction)
 
 FString Measure(FRHICommandListImmediate& Commands, const FOptions& Options)
 {
+    FPrivateRdgStats Stats(Options.bWorkStats);
     // Physical allocation is outside graph timing, matching Moer's imported fake resources.
     TArray<TRefCountPtr<IPooledRenderTarget>> Textures;
     TArray<TRefCountPtr<FRDGPooledBuffer>> Buffers;
@@ -51,7 +54,12 @@ FString Measure(FRHICommandListImmediate& Commands, const FOptions& Options)
             .SetInitialState(ERHIAccess::SRVCompute);
         Buffers.Add(new FRDGPooledBuffer(Commands, Commands.CreateBuffer(CreateDesc), BufferDesc, 1024, TEXT("BenchmarkBuffer")));
     }
-    TArray<double> BuildTimes, ExecuteTimes, TotalTimes;
+    TArray<double> BuildTimes, ExecuteTimes, TotalTimes, DestroyTimes, DrainTimes, DrainedTotalTimes;
+    for (auto* Times : { &BuildTimes, &ExecuteTimes, &TotalTimes, &DestroyTimes, &DrainTimes, &DrainedTotalTimes })
+    {
+        Times->Reserve(Options.Samples);
+    }
+    const auto StatsBefore = Stats.Read();
     for (int32 Iteration = 0; Iteration < Options.Warmup + Options.Samples; ++Iteration)
     {
         int32 RecordedPasses = 0;
@@ -87,19 +95,25 @@ FString Measure(FRHICommandListImmediate& Commands, const FOptions& Options)
             Executed = FPlatformTime::Seconds();
         }
         const double End = FPlatformTime::Seconds();
+        // Report this separately as well as including it in an additional total.
+        Commands.ImmediateFlush(EImmediateFlushType::FlushRHIThread);
+        const double Drained = FPlatformTime::Seconds();
         checkf(RecordedPasses == Options.Passes, TEXT("Benchmark passes must not be culled"));
         if (Iteration >= Options.Warmup)
         {
             BuildTimes.Add((Built - Begin) * 1000);
             ExecuteTimes.Add((Executed - Built) * 1000);
             TotalTimes.Add((End - Begin) * 1000);
+            DestroyTimes.Add((End - Executed) * 1000);
+            DrainTimes.Add((Drained - End) * 1000);
+            DrainedTotalTimes.Add((Drained - Begin) * 1000);
         }
-        // Drain native command storage outside graph timing. No GPU rendering in NullRHI.
-        Commands.ImmediateFlush(EImmediateFlushType::FlushRHIThread);
     }
-    return FString::Printf(TEXT("{\"engine\":\"UE5.7.1\",\"backend\":\"NullRHI\",\"passes\":%d,\"resources_per_kind\":%d,\"accesses_per_kind_per_pass\":%d,\"warmup\":%d,\"samples\":%d,\"cpu\":%d,\"build_p50_ms\":%.6f,\"execute_p50_ms\":%.6f,\"lifecycle_p50_ms\":%.6f,\"lifecycle_p95_ms\":%.6f}\n"),
+    const auto StatsAfter = Stats.Read();
+    return FString::Printf(TEXT("{\"engine\":\"UE5.7.1\",\"backend\":\"NullRHI\",\"passes\":%d,\"resources_per_kind\":%d,\"accesses_per_kind_per_pass\":%d,\"warmup\":%d,\"samples\":%d,\"cpu\":%d,\"build_p50_ms\":%.6f,\"execute_p50_ms\":%.6f,\"lifecycle_p50_ms\":%.6f,\"lifecycle_p95_ms\":%.6f,\"destruction_p50_ms\":%.6f,\"drain_p50_ms\":%.6f,\"lifecycle_with_drain_p50_ms\":%.6f,\"work_stats\":%s}\n"),
         Options.Passes, Options.Resources, Options.Accesses, Options.Warmup, Options.Samples, Options.Cpu,
-        Percentile(BuildTimes, .5), Percentile(ExecuteTimes, .5), Percentile(TotalTimes, .5), Percentile(TotalTimes, .95));
+        Percentile(BuildTimes, .5), Percentile(ExecuteTimes, .5), Percentile(TotalTimes, .5), Percentile(TotalTimes, .95),
+        Percentile(DestroyTimes, .5), Percentile(DrainTimes, .5), Percentile(DrainedTotalTimes, .5), *Stats.Json(StatsBefore, StatsAfter));
 }
 }
 
@@ -120,6 +134,7 @@ int32 URdgBenchmarkCommandlet::Main(const FString& Params)
     FParse::Value(*Params, TEXT("Warmup="), Options.Warmup);
     FParse::Value(*Params, TEXT("Samples="), Options.Samples);
     FParse::Value(*Params, TEXT("Cpu="), Options.Cpu);
+    Options.bWorkStats = FParse::Param(*Params, TEXT("WorkStats"));
     FString Output;
     FParse::Value(*Params, TEXT("Output="), Output);
     if (Options.Passes <= 0 || Options.Resources <= 0 || Options.Accesses <= 0 ||
@@ -163,5 +178,10 @@ int32 URdgBenchmarkCommandlet::Main(const FString& Params)
         }
     });
     FlushRenderingCommands();
-    return FFileHelper::SaveStringToFile(Result, *Output, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM) ? 0 : 1;
+    if (!FFileHelper::SaveStringToFile(Result, *Output, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+    {
+        UE_LOG(LogTemp, Error, TEXT("Failed to save RDG benchmark result to %s"), *Output);
+        return 1;
+    }
+    return 0;
 }

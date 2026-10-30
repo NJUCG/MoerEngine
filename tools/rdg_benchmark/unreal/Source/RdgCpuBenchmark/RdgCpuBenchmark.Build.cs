@@ -6,5 +6,6 @@ public class RdgCpuBenchmark : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PrivateDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "RenderCore", "RHI" });
+        PublicSystemLibraries.Add("dbghelp.lib");
     }
 }

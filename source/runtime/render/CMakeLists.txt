@@ -38,6 +38,9 @@ add_library(${target_name} SHARED
     ${render_shader_sources}
 )
 add_library(Moer::Render ALIAS ${target_name})
+if(MOER_RDG_DIAGNOSTICS)
+    target_sources(${target_name} PRIVATE "${moer_source_dir}/test/diagnostics/RdgAllocationOverrides.cpp")
+endif()
 
 # Test probes live with the tests and are absent from ordinary Render builds.
 # Compile inside Render only when enabled so backend-private symbols stay private.
