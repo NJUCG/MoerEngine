@@ -30,12 +30,17 @@ struct Options {
     uint32_t warmup = 5;
     uint32_t samples = 80;
     bool subranges = false;
+    bool lower = false;
 };
 
 Options ParseOptions(int argc, char** argv) {
     Options options;
     for (int index = 1; index < argc; ++index) {
         const std::string_view option = argv[index];
+        if (option == "--lower") {
+            options.lower = true;
+            continue;
+        }
         if (option == "--subranges") {
             options.subranges = true;
             continue;
@@ -265,7 +270,7 @@ struct TimingResult {
     uint64_t dump_digest;
 };
 
-TimingResult MeasureCompile(const Options& options, const PhysicalResources& physical) {
+TimingResult MeasurePhase(const Options& options, const PhysicalResources& physical) {
     using Clock = std::chrono::steady_clock;
     std::vector<double> samples;
     samples.reserve(options.samples);
@@ -275,12 +280,17 @@ TimingResult MeasureCompile(const Options& options, const PhysicalResources& phy
         // A fresh graph per iteration matches a frame, without timing graph setup.
         RenderGraph graph("CompilerBenchmark");
         BuildGraph(graph, options, physical);
-        const auto begin = Clock::now();
-        const bool compiled = graph.Compile();
-        const auto end = Clock::now();
-        // Public Compile returns after the temporary compiler and its arena die.
-        if (!compiled) {
+        if (options.lower && !graph.Compile()) {
             throw std::runtime_error(graph.GetCompileError());
+        }
+        RenderGraphLowering::LoweredPlan lowered;
+        std::string error;
+        const auto begin = Clock::now();
+        const bool compiled = options.lower ? RenderGraphLowering::Lower(graph, lowered, error) : graph.Compile();
+        const auto end = Clock::now();
+        // Both phases return after their scratch storage dies; output destruction is excluded.
+        if (!compiled) {
+            throw std::runtime_error(options.lower ? error : graph.GetCompileError());
         }
         if (iteration >= options.warmup) {
             samples.push_back(std::chrono::duration<double, std::milli>(end - begin).count());
@@ -310,27 +320,30 @@ AllocationResult MeasureAllocations(
     CrtCounts crt;
     RenderGraph graph("CompilerBenchmark");
     BuildGraph(graph, options, physical);
+    if (options.lower && !graph.Compile()) {
+        throw std::runtime_error(graph.GetCompileError());
+    }
+    RenderGraphLowering::LoweredPlan lowered;
+    std::string error;
     bool compiled = false;
     {
         ScopedDefaultResource resource_scope(memory);
 #if defined(_MSC_VER) && defined(_DEBUG)
         ScopedCrtAllocHook crt_scope(crt);
 #endif
-        compiled = graph.Compile();
+        compiled = options.lower ? RenderGraphLowering::Lower(graph, lowered, error) : graph.Compile();
     }
     if (!compiled) {
-        throw std::runtime_error(graph.GetCompileError());
+        throw std::runtime_error(options.lower ? error : graph.GetCompileError());
     }
     if (memory.counts.live_bytes != 0 || memory.counts.allocations != memory.counts.deallocations) {
-        throw std::runtime_error("Compile retained storage from the temporary PMR resource");
+        throw std::runtime_error("Measured phase retained storage from the temporary PMR resource");
     }
     const auto dump = graph.Dump();
     if (Digest(dump) != expected_digest) {
         throw std::runtime_error("allocation instrumentation changed the compiled plan");
     }
-    RenderGraphLowering::LoweredPlan lowered;
-    std::string error;
-    if (!RenderGraphLowering::Lower(graph, lowered, error)) {
+    if (!options.lower && !RenderGraphLowering::Lower(graph, lowered, error)) {
         throw std::runtime_error(error);
     }
     const auto lowered_dump = lowered.Dump();
@@ -353,13 +366,14 @@ void PrintResult(const Options& options, const TimingResult& timing, const Alloc
         << ",\"accesses_per_kind_per_pass\":" << options.accesses
         << ",\"subranges\":" << options.subranges
         << ",\"warmup\":" << options.warmup << ",\"samples\":" << options.samples
-        << ",\"compile_p50_ms\":" << timing.p50_ms << ",\"compile_p95_ms\":" << timing.p95_ms
+        << (options.lower ? ",\"lower_p50_ms\":" : ",\"compile_p50_ms\":") << timing.p50_ms
+        << (options.lower ? ",\"lower_p95_ms\":" : ",\"compile_p95_ms\":") << timing.p95_ms
         << ",\"dump_fnv1a\":\"" << timing.dump_digest << "\",\"lowered_dump_fnv1a\":\"" << memory.lowered_digest
         << "\",\"plan_accesses\":" << memory.accesses << ",\"plan_edges\":" << memory.edges
         << ",\"plan_barriers\":" << memory.barriers
         << ",\"pmr_default_resource\":{\"allocations\":" << memory.pmr.allocations
         << ",\"deallocations\":" << memory.pmr.deallocations << ",\"total_bytes\":" << memory.pmr.total_bytes
-        << ",\"peak_live_bytes\":" << memory.pmr.peak_bytes << ",\"live_bytes_after_compile\":" << memory.pmr.live_bytes
+        << ",\"peak_live_bytes\":" << memory.pmr.peak_bytes << (options.lower ? ",\"live_bytes_after_lower\":" : ",\"live_bytes_after_compile\":") << memory.pmr.live_bytes
         << "},\"crt\":{\"available\":" << crt_available
         << ",\"allocation_requests\":" << memory.crt.allocation_requests
         << ",\"free_requests\":" << memory.crt.free_requests
@@ -379,19 +393,19 @@ int main(int argc, char** argv) {
 #endif
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Usage: TestRenderGraphCompilerBenchmark [--passes 64] [--resources 64] "
-                     "[--accesses 16] [--warmup 5] [--samples 80] [--subranges]\n"
-                     "Outputs JSON. Rebuilds the graph for every Compile; excludes build, Dump, Lower and graph destruction.\n"
+                     "[--accesses 16] [--warmup 5] [--samples 80] [--subranges] [--lower]\n"
+                     "Outputs JSON. Rebuilds the graph for every Compile; excludes build, Dump and graph destruction. --lower measures Lower after untimed Compile.\n"
                      "--subranges selects single mip/layer pairs and 512-byte buffer ranges instead of whole resources.\n"
-                     "Timing includes compiler/arena destruction and has no allocation hooks.\n"
-                     "A separate Compile counts PMR default-resource requests (including any library proxies),\n"
-                     "and MSVC Debug CRT requests excluding CRT internal blocks. CRT counts include CompiledPlan,\n"
+                     "Timing includes phase scratch destruction and has no allocation hooks.\n"
+                     "A separate run of the selected phase counts PMR default-resource requests (including library proxies),\n"
+                     "and MSVC Debug CRT requests excluding CRT internal blocks. CRT counts include the selected phase output,\n"
                      "exclude allocators bypassing the CRT, and do not measure live/peak heap bytes.\n";
         return 0;
     }
     try {
         const auto options = ParseOptions(argc, argv);
         const PhysicalResources physical(options.resources);
-        const auto timing = MeasureCompile(options, physical);
+        const auto timing = MeasurePhase(options, physical);
         const auto memory = MeasureAllocations(options, physical, timing.dump_digest);
         PrintResult(options, timing, memory);
         return 0;

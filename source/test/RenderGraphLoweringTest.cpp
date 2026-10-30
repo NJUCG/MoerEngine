@@ -3,6 +3,7 @@
 #include "rhi/RHIResource.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -111,6 +112,58 @@ public:
 template<typename Enum>
 [[nodiscard]] bool HasFlag(Enum value, Enum flag) {
     return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flag)) != 0;
+}
+
+void TestKeepaliveCombinesCellsAndReferences(TestSuite& suite) {
+    constexpr std::string_view name = "keepalive combines cells and identity references";
+    RenderGraphLowering::LoweredPlan lowered;
+    std::string dump;
+    {
+        RenderGraph graph(name);
+        std::array<RenderGraph::BufferHandle, 3> handles;
+        for (uint32_t index = 0; index < handles.size(); ++index) {
+            BufferRef buffer = MoerNew(FakeBuffer)(256);
+            handles[index] = graph.ImportBuffer(
+                std::to_string(index), buffer, RenderGraph::BufferDesc{.byte_size = 256}
+            );
+            graph.SetInitialState(handles[index], RenderGraph::BufferAccessType::ShaderRead,
+                                  RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            graph.Export(handles[index], RenderGraph::BufferAccessType::ShaderRead,
+                                RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        }
+        for (const bool references : {true, false}) {
+            graph.AddRecordPass(
+                references ? "Referenced" : "CellsOnly",
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.Read(handles[2], RenderGraph::BufferAccessType::ShaderRead)
+                        .Read(handles[1], RenderGraph::BufferAccessType::ShaderRead,
+                              RenderGraph::BufferRange{0, 128})
+                        .Read(handles[1], RenderGraph::BufferAccessType::ShaderRead,
+                              RenderGraph::BufferRange{128, 128}).SideEffect();
+                    if (references) {
+                        builder.Reference(handles[2]).Reference(handles[0]).Reference(handles[1]);
+                    }
+                },
+                [](Moer::Render::CommandList&) {}, RenderGraph::PassRecordPolicy::Serial
+            );
+        }
+        suite.Check(graph.Compile(), name, graph.GetCompileError());
+        std::string error;
+        const bool success = RenderGraphLowering::Lower(graph, lowered, error);
+        suite.Check(success, name, error);
+        dump = lowered.Dump();
+    }
+    suite.Check(lowered.passes.size() == 2, name, "both passes must survive graph destruction");
+    if (lowered.passes.size() != 2) { return; }
+    for (size_t pass = 0; pass < lowered.passes.size(); ++pass) {
+        const auto& bindings = lowered.passes[pass].keepalive;
+        suite.Check(bindings.size() == 3 - pass, name, "retain each physical resource exactly once");
+        for (size_t index = 0; index < bindings.size(); ++index) {
+            suite.Check(bindings[index].resource.resource_id == index + pass && bindings[index].buffer,
+                        name, "bindings must stay owned and ordered, including reference-only resources");
+        }
+    }
+    suite.Check(lowered.Dump() == dump, name, "lowered output must outlive graph and scratch storage");
 }
 
 void TestReverseDependencyUsesCompiledOrder(TestSuite& suite) {
@@ -1759,6 +1812,7 @@ void TestFailClosedContracts(TestSuite& suite) {
 
 int main() {
     TestSuite suite;
+    TestKeepaliveCombinesCellsAndReferences(suite);
     TestReverseDependencyUsesCompiledOrder(suite);
     TestTextureFanInAndDeterminism(suite);
     TestShaderResourceAndSampledLayoutsRemainDistinct(suite);

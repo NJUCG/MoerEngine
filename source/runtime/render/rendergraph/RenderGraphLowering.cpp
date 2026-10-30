@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory_resource>
 #include <sstream>
 #include <tuple>
 
@@ -471,12 +472,13 @@ bool RenderGraphLowering::Lower(
                role == RenderGraph::QueueRole::Compute ||
                role == RenderGraph::QueueRole::Copy;
     };
-    std::vector<bool>     gpu_pass(graph.passes.size(), false);
-    std::vector<uint32_t> pass_queue_batch(
-        graph.passes.size(), RenderGraph::InvalidIndex
+    std::pmr::monotonic_buffer_resource scratch;
+    std::pmr::vector<bool> gpu_pass(graph.passes.size(), false, &scratch);
+    std::pmr::vector<uint32_t> pass_queue_batch(
+        graph.passes.size(), RenderGraph::InvalidIndex, &scratch
     );
 
-    std::vector<bool> execution_member(graph.passes.size(), false);
+    std::pmr::vector<bool> execution_member(graph.passes.size(), false, &scratch);
     if (compiled.execution_order.size() != graph.passes.size()) {
         return fail("execution order does not cover every declared pass");
     }
@@ -720,7 +722,7 @@ bool RenderGraphLowering::Lower(
         }
     }
 
-    std::vector<bool> resource_has_access(graph.resources.size(), false);
+    std::pmr::vector<bool> resource_has_access(graph.resources.size(), false, &scratch);
     for (const auto& access : compiled.accesses) {
         if (!graph.IsValidResource(access.resource) || !graph.IsValidPass(access.pass)) {
             return fail("compiled access references an invalid handle");
@@ -879,7 +881,7 @@ bool RenderGraphLowering::Lower(
         }
     }
 
-    std::vector<uint32_t> alias_barrier_owners(compiled.barriers.size(), 0);
+    std::pmr::vector<uint32_t> alias_barrier_owners(compiled.barriers.size(), 0, &scratch);
     for (const auto& alias : compiled.alias_boundaries) {
         if (!graph.IsValidResource(alias.predecessor_resource) ||
             !graph.IsValidResource(alias.successor_resource) ||
@@ -953,9 +955,9 @@ bool RenderGraphLowering::Lower(
         }
     }
 
-    std::vector<bool> prologue(compiled.barriers.size(), false);
-    std::vector<bool> epilogue(compiled.barriers.size(), false);
-    std::vector<uint32_t> before_occurrences(compiled.barriers.size(), 0);
+    std::pmr::vector<bool> prologue(compiled.barriers.size(), false, &scratch);
+    std::pmr::vector<bool> epilogue(compiled.barriers.size(), false, &scratch);
+    std::pmr::vector<uint32_t> before_occurrences(compiled.barriers.size(), 0, &scratch);
     for (const uint32_t barrier_index : compiled.prologue_barriers) {
         if (barrier_index >= compiled.barriers.size() || prologue[barrier_index]) {
             return fail("prologue contains an invalid or duplicate barrier index");
@@ -981,9 +983,10 @@ bool RenderGraphLowering::Lower(
     }
 
     LoweredPlan candidate{};
-    candidate.queue_syncs = lowered_queue_syncs;
+    candidate.queue_syncs = std::move(lowered_queue_syncs);
+    candidate.prologue.reserve(compiled.prologue_barriers.size());
     candidate.passes.reserve(compiled.execution_order.size());
-    std::vector<uint32_t> pass_instruction_indices(graph.passes.size(), RenderGraph::InvalidIndex);
+    std::pmr::vector<uint32_t> pass_instruction_indices(graph.passes.size(), RenderGraph::InvalidIndex, &scratch);
     for (const auto pass : compiled.execution_order) {
         if (!graph.IsValidPass(pass)) {
             return fail("execution order references an invalid pass");
@@ -1016,10 +1019,16 @@ bool RenderGraphLowering::Lower(
         return binding;
     };
 
-    std::vector<std::vector<RenderGraph::ResourceHandle>> resources_by_pass(graph.passes.size());
+    std::pmr::vector<std::pmr::vector<RenderGraph::ResourceHandle>> resources_by_pass(
+        graph.passes.size(), &scratch
+    );
     for (const auto& access : compiled.accesses) {
         if (graph.resources[access.resource.resource_id].kind != ResourceKind::Token) {
-            resources_by_pass[access.pass.pass_id].push_back(access.resource);
+            auto& resources = resources_by_pass[access.pass.pass_id];
+            // Compiler emits each pass in resource/cell order; retain one binding per resource.
+            if (resources.empty() || resources.back() != access.resource) {
+                resources.push_back(access.resource);
+            }
         }
     }
     for (auto& pass_entry : candidate.passes) {
@@ -1029,32 +1038,34 @@ bool RenderGraphLowering::Lower(
                 resources.push_back(resource);
             }
         }
-        std::sort(
-            resources.begin(),
-            resources.end(),
-            [](RenderGraph::ResourceHandle lhs, RenderGraph::ResourceHandle rhs) {
-                return lhs.resource_id < rhs.resource_id;
-            }
-        );
-        resources.erase(
-            std::unique(
+        if (!graph.passes[pass_entry.pass.pass_id].references.empty()) {
+            std::sort(
                 resources.begin(),
                 resources.end(),
                 [](RenderGraph::ResourceHandle lhs, RenderGraph::ResourceHandle rhs) {
-                    return lhs.resource_id == rhs.resource_id;
+                    return lhs.resource_id < rhs.resource_id;
                 }
-            ),
-            resources.end()
-        );
+            );
+            resources.erase(
+                std::unique(
+                    resources.begin(),
+                    resources.end(),
+                    [](RenderGraph::ResourceHandle lhs, RenderGraph::ResourceHandle rhs) {
+                        return lhs.resource_id == rhs.resource_id;
+                    }
+                ),
+                resources.end()
+            );
+        }
         pass_entry.keepalive.reserve(resources.size());
         for (const auto resource : resources) {
             pass_entry.keepalive.push_back(binding_for(resource));
         }
     }
 
-    std::vector<uint32_t> execution_position(
+    std::pmr::vector<uint32_t> execution_position(
         graph.passes.size(),
-        RenderGraph::InvalidIndex
+        RenderGraph::InvalidIndex, &scratch
     );
     for (uint32_t position = 0; position < compiled.execution_order.size(); ++position) {
         execution_position[compiled.execution_order[position].pass_id] = position;
@@ -1194,6 +1205,7 @@ bool RenderGraphLowering::Lower(
         }
 
         if (!barrier.sources.empty()) {
+            instruction.source_frontier.reserve(barrier.sources.size());
             bool first_source = true;
             for (const auto& source : barrier.sources) {
                 if (!graph.IsValidPass(source.pass) ||
@@ -1578,7 +1590,9 @@ bool RenderGraphLowering::Lower(
         pass->before.push_back(std::move(instruction));
     }
 
-    std::vector<std::vector<uint32_t>> boundaries_by_resource(graph.resources.size());
+    std::pmr::vector<std::pmr::vector<uint32_t>> boundaries_by_resource(
+        graph.resources.size(), &scratch
+    );
     for (const auto barrier_index : compiled.prologue_barriers) {
         const auto& barrier = compiled.barriers[barrier_index];
         boundaries_by_resource[barrier.resource.resource_id].push_back(barrier_index);

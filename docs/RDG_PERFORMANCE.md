@@ -859,3 +859,32 @@ GPU 同步与 profiling 应单独排查；它们可能解释部分整帧差额�
 Render DLL SHA-256：旧版 `ADE524A6B9FA641F9CB42C0B305A1E8ACB8ABDE80A028715DA4818420D7E8F0A`，接管初版 `E7752D2C1709ACAB016C283E7E0C7308AD0D618605AEDA34FC4B57FAB4C303E5`，当前 `7C1BFB9710A9A1D6CD464252C91E630556409C4C0183CBD8B2050F6FBCD39F7E`。匹配 EXE/全部 engine DLL 及 manifest 保存在 `build/rdg-takeover-variants/`；历史 Probe 配置补丁也保存在该目录。主工作区最终 EXE/DLL 全部与 current manifest 匹配，ProfileScope 源码恢复；历史 worktree 恢复原 `1244d4f4` 且干净，测试编辑器已关闭。
 
 运行目录位于 `build/rdg-bisect-results/`，名称见 14.2；每个目录保存 capture、配置、日志、进程信息和 `takeover-summary.json`。旧版重复运行的 metadata 同时保留采样时 checkout 和实际构建 commit，避免切换二进制后误标版本。汇总为 `build/rdg-takeover-summary.json`，分析日志为 `build/rdg-takeover-analysis.log`，当前细分结果为各目录的 `raster-frame-stages.json`、`raster-prepare-hotspots.json`、`compiler-stages.json`。执行脚本为 `build/run_rdg_bisect.ps1`、`build/run_rdg_takeover_remaining.ps1`，分析脚本为 `build/analyze_rdg_takeover.py` 及前文三个细分脚本。以上为本机忽略目录内的证据，关键条件与结果由本文保留。
+
+## 15. Lowering 暂存与录制准备优化
+
+### 15.1 实施顺序与责任
+
+在第 14 节对照之后，先优化 Lowering 的资源集合与暂存分配，验证后独立提交；再处理 merged recording 的回调所有权和保活查找，另行验证与提交。保持现有计时集合，通过独立 `--lower` 基准测 Lower 耗时和分配，避免继续增加每帧事件。Probe GI 保持关闭，图边界和资源状态规则不变。
+
+Lowering 的真实约束是每个 Pass 对每个物理资源保留一次强引用，并完整验证最终执行计划。Compiler 已按 Pass/resource/cell 输出访问，因此收集时可以跳过相邻重复资源；存在额外 Reference 时仍合并排序去重。只在 Lower 内存活的固定索引和嵌套收集容器使用局部 monotonic resource；输出计划、物理绑定、屏障来源仍独立拥有内存。循环内短期复用的验证容器不转入 arena，避免多批次分配累积到 Lower 结束。已知数量的 prologue 和 source frontier 预留容量，队列同步结果直接移动给输出候选。
+
+新增回归覆盖多 cell、逆序访问、重复/仅身份 Reference 以及 graph 销毁后输出仍有效。固定图基准新增可选 `--lower`，每轮先建立并编译新图，再单独计时 Lower；分配统计另跑一次，不混入计时，并确认 Lower 返回后 PMR live bytes 为零。前后必须使用同一个新版基准 EXE，保留原 Compile 模式。
+
+### 15.2 Lowering 结果
+
+固定图沿用 5 次预热、80 个样本；每种输入运行三组配对，顺序前/后、后/前、前/后。表中耗时为三次 p50 的中位数，规模为 Pass/每类资源/每 Pass 每类访问。
+
+| 输入 | Lower p50 前→后 ms | CRT 分配请求前→后 |
+| --- | ---: | ---: |
+| Whole 16/16/4 | 0.5091→0.4585 | 1383→998 |
+| Whole 64/64/16 | 6.5743→6.1821 | 17671→15049 |
+| Whole 128/128/16 | 13.1062→12.4634 | 35040→29911 |
+| Subranges 16/16/4 | 1.1002→1.0223 | 2575→1891 |
+| Subranges 64/64/16 | 8.3311→7.7938 | 15773→11433 |
+| Subranges 128/128/16 | 16.6131→15.7334 | 30682→22750 |
+
+六类输入的中位数改善约 4.9%～9.9%。36 次运行的同输入 Compile/Lowering Dump 摘要与访问、边、屏障数量一致。新实现 PMR 返回后 live bytes 均为 0；arena 峰值约 17～497 KB。旧实现未使用 PMR，计数为零不代表旧实现没有暂存内存，不能据此比较总堆峰值。CRT 数据包含 Debug 容器开销，不能外推 Release。
+
+两次 Raster 运行各 130 秒，正常退出且无运行/validation 错误。主图 Lower p50 从 1.3119 降到 1.1487 ms（约 12.4%）；RenderFrame p50 从 16.5116 到 15.6214 ms。然而 PrepareFrame 从 2.5179 增至 7.0963 ms，FPS 从 52.06 降到 44.82。这组样本不支持整帧加速结论，必须保留帧准备与运行间波动，不能只挑 Lower 或 RenderFrame 报告。
+
+完整 Debug 构建和 9 项 RDG/RHI 契约通过。新增回归最初误用了 identity-only 导入重载，改为显式 BufferRef 后重跑 Lowering 契约通过；生产实现的校验未放宽。构建/契约日志为 `build/rdg-lowering-build.log`、`rdg-lowering-contracts.log`、`rdg-lowering-contract-recheck.log`。配对二进制、各次 JSON 与汇总在 `build/rdg-lowering-variants/`，执行脚本为 `build/run_rdg_lowering_benchmark.ps1`；Raster 数据位于 `build/rdg-bisect-results/lowering-{before,after}-raster/`。
