@@ -36,8 +36,11 @@ private:
     };
 
     struct AtomicCell {
+        explicit AtomicCell(std::pmr::memory_resource* memory) : readers(memory) {}
+
         RenderGraph::ResourceRange range{};
-        std::vector<RenderGraph::CompiledBarrierSource> readers{};
+        // Mutable compile-time history; never referenced by a compiled barrier.
+        std::pmr::vector<RenderGraph::CompiledBarrierSource> readers;
         uint32                                          last_writer = RenderGraph::InvalidIndex;
         RenderGraph::CompiledBarrierSource last_writer_source{};
         uint32                                          last_access                   = RenderGraph::InvalidIndex;

@@ -648,7 +648,7 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                         if (mip_first == mip_end || layer_first == layer_end) {
                             continue;
                         }
-                        AtomicCell cell{};
+                        AtomicCell cell{&scratch_memory};
                         cell.range       = RenderGraph::TextureRange{
                             .aspects     = aspect,
                             .mip_first   = mip_first,
@@ -691,7 +691,7 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                 if (boundaries[index] == boundaries[index + 1]) {
                     continue;
                 }
-                AtomicCell cell{};
+                AtomicCell cell{&scratch_memory};
                 cell.range       = RenderGraph::BufferRange{
                     .offset = boundaries[index], .size = boundaries[index + 1] - boundaries[index]
                 };
@@ -703,7 +703,7 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                 cells.push_back(std::move(cell));
             }
         } else {
-            AtomicCell cell{};
+            AtomicCell cell{&scratch_memory};
             cell.range       = RenderGraph::WholeResourceRange(resource.kind);
             cell.initialized = resource.imported;
             cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
@@ -836,11 +836,22 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     physical_resource && usage.explicit_state &&
                     (source_state_unknown || !StatesCompatible(cell.state, next_state));
 
+                bool queue_ownership = false;
+                if (physical_resource && cell.last_domain.queue != RenderGraph::QueueRole::None) {
+                    const auto src_queue = graph.queue_topology.Resolve(cell.last_domain.queue);
+                    const auto dst_queue = graph.queue_topology.Resolve(pass.domain.queue);
+                    queue_ownership = IsExclusive(resource) &&
+                                      src_queue.family_id != dst_queue.family_id;
+                }
+
                 std::vector<RenderGraph::CompiledBarrierSource> barrier_sources{};
                 // Each pass/cell is merged once. Readers have distinct pass identities,
                 // and the last writer is never also a reader. Tokens need only hazard
                 // edges, so they do not build a physical barrier source frontier.
                 if (physical_resource) {
+                    const size_t source_count = (cell.last_writer != RenderGraph::InvalidIndex ? 1 : 0) +
+                        ((usage.write || state_transition || queue_ownership) ? cell.readers.size() : 0);
+                    barrier_sources.reserve(source_count);
                     if (cell.last_writer != RenderGraph::InvalidIndex) {
                         barrier_sources.push_back(cell.last_writer_source);
                     }
@@ -855,14 +866,6 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     (HasWrite(cell.last_mode) || usage.write);
                 const bool memory_dependency =
                     physical_resource && (!barrier_sources.empty() || boundary_memory_dependency);
-
-                bool queue_ownership = false;
-                if (physical_resource && cell.last_domain.queue != RenderGraph::QueueRole::None) {
-                    const auto src_queue = graph.queue_topology.Resolve(cell.last_domain.queue);
-                    const auto dst_queue = graph.queue_topology.Resolve(pass.domain.queue);
-                    queue_ownership = IsExclusive(resource) &&
-                                      src_queue.family_id != dst_queue.family_id;
-                }
 
                 if (state_transition || queue_ownership) {
                     // Writes already included the readers for their memory dependency.
@@ -1310,7 +1313,9 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
             const bool source_state_unknown = !cell.state_known;
             const bool state_transition =
                 source_state_unknown || !StatesCompatible(cell.state, final->state);
-            std::vector<RenderGraph::CompiledBarrierSource> sources = cell.readers;
+            std::vector<RenderGraph::CompiledBarrierSource> sources;
+            sources.reserve(cell.readers.size() + (cell.last_writer_source.pass.IsValid() ? 1 : 0));
+            sources.insert(sources.end(), cell.readers.begin(), cell.readers.end());
             if (cell.last_writer_source.pass.IsValid() &&
                 std::find(sources.begin(), sources.end(), cell.last_writer_source) == sources.end()) {
                 sources.push_back(cell.last_writer_source);
@@ -1923,7 +1928,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
             resource_cells[selected_slot->tail_resource].size() == 1) {
             predecessor_cell =
                 &resource_cells[selected_slot->tail_resource].front();
-            alias_sources = predecessor_cell->readers;
+            alias_sources.assign(predecessor_cell->readers.begin(), predecessor_cell->readers.end());
             if (predecessor_cell->last_writer_source.pass.IsValid() &&
                 std::find(
                     alias_sources.begin(),
@@ -2107,7 +2112,11 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
 
     // Semantic edges were validated when selecting execution_order. Every new
     // alias edge is checked against that same rank through its frontier below.
-    std::pmr::vector<uint32> alias_barrier_owners(plan.barriers.size(), 0, &scratch_memory);
+    // With no alias boundaries every owner count is zero; do not allocate a
+    // barrier-sized table to represent that constant. Still reject orphan barriers.
+    std::pmr::vector<uint32> alias_barrier_owners(
+        plan.alias_boundaries.empty() ? 0 : plan.barriers.size(), 0, &scratch_memory
+    );
     for (const auto& alias : plan.alias_boundaries) {
         if (!graph.IsValidResource(alias.predecessor_resource) ||
             !graph.IsValidResource(alias.successor_resource) ||
@@ -2179,7 +2188,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
 
     for (uint32 barrier_index = 0; barrier_index < plan.barriers.size();
          ++barrier_index) {
-        const uint32 owner_count = alias_barrier_owners[barrier_index];
+        const uint32 owner_count = alias_barrier_owners.empty() ? 0 : alias_barrier_owners[barrier_index];
         if ((plan.barriers[barrier_index].transient_alias && owner_count != 1) ||
             (!plan.barriers[barrier_index].transient_alias && owner_count != 0)) {
             return Fail(
