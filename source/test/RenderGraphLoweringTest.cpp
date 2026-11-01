@@ -268,7 +268,7 @@ void TestReverseDependencyUsesCompiledOrder(TestSuite& suite) {
     const auto after_first = lowered.After(first_reader);
     const auto after_last = lowered.After(last_reader);
     const auto final_barrier = std::find_if(after_first.begin(), after_first.end(), shared_export);
-    suite.Check(final_barrier != after_first.end() && final_barrier->source_frontier.size() == 2 &&
+    suite.Check(final_barrier != after_first.end() && plan.barriers[final_barrier->barrier_index].sources.size() == 2 &&
                     std::none_of(after_last.begin(), after_last.end(), shared_export),
                 test_name, "the complete reader frontier must export after the latest execution position, not greatest pass id");
 
@@ -400,7 +400,7 @@ void TestTextureFanInAndDeterminism(TestSuite& suite) {
         }
     );
     suite.Check(
-        fan_in != before_uav.end() && fan_in->source_frontier.size() >= 2 &&
+        fan_in != before_uav.end() && graph.GetCompiledPlan().barriers[fan_in->barrier_index].sources.size() >= 2 &&
             HasFlag(fan_in->source.stages, ERHIPipelineStageFlags::PS_ALL_GRAPHICS) &&
             HasFlag(fan_in->source.stages, ERHIPipelineStageFlags::PS_COMPUTE_SHADER) &&
             fan_in->source.access == ERHIAccessFlags::SHADER_READ &&
@@ -1163,17 +1163,12 @@ void TestMixedQueueFanInRetainsLocalSourceScope(TestSuite& suite) {
         before_writer.begin(),
         before_writer.end(),
         [&](const RenderGraphLowering::LoweredInstruction& instruction) {
-            return instruction.queue_acquire &&
-                   std::find(
-                       instruction.source_frontier.begin(),
-                       instruction.source_frontier.end(),
-                       graphics_reader
-                   ) != instruction.source_frontier.end() &&
-                   std::find(
-                       instruction.source_frontier.begin(),
-                       instruction.source_frontier.end(),
-                       compute_reader
-                   ) != instruction.source_frontier.end();
+            const auto& sources = graph.GetCompiledPlan().barriers[instruction.barrier_index].sources;
+            const auto has_source = [&](RenderGraph::PassHandle pass) {
+                return std::any_of(sources.begin(), sources.end(),
+                    [&](const auto& source) { return source.pass == pass; });
+            };
+            return instruction.queue_acquire && has_source(graphics_reader) && has_source(compute_reader);
         }
     );
     suite.Check(

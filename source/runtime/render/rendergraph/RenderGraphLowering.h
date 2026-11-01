@@ -71,7 +71,6 @@ public:
 
         RenderGraph::PassHandle src_pass{};
         RenderGraph::PassHandle dst_pass{};
-        std::vector<RenderGraph::PassHandle> source_frontier{};
 
         Scope source{};
         Scope destination{};

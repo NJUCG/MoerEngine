@@ -1078,7 +1078,8 @@ bool RenderGraphLowering::Lower(
         execution_position[compiled.execution_order[position].pass_id] = position;
     }
 
-    auto lower_instruction = [&](uint32 barrier_index, LoweredInstruction& instruction) {
+    auto lower_instruction = [&](uint32 barrier_index, LoweredInstruction& instruction,
+                                 RenderGraph::PassHandle& epilogue_source) {
         const auto& barrier = compiled.barriers[barrier_index];
         bool queue_acquire = false;
         if (!graph.IsValidResource(barrier.resource)) {
@@ -1211,8 +1212,24 @@ bool RenderGraphLowering::Lower(
             return false;
         }
 
+        // Only exports need a placement frontier. Consume it while mapping source
+        // scopes; the executable instruction needs neither a copy nor a borrowed span.
+        const auto track_epilogue_source = [&](RenderGraph::PassHandle source) {
+            if (!epilogue[barrier_index]) {
+                return true;
+            }
+            if (!graph.IsValidPass(source) ||
+                execution_position[source.pass_id] == RenderGraph::InvalidIndex) {
+                error = "epilogue barrier source is not in execution order";
+                return false;
+            }
+            if (!epilogue_source.IsValid() ||
+                execution_position[source.pass_id] > execution_position[epilogue_source.pass_id]) {
+                epilogue_source = source;
+            }
+            return true;
+        };
         if (!barrier.sources.empty()) {
-            instruction.source_frontier.reserve(barrier.sources.size());
             bool first_source = true;
             for (const auto& source : barrier.sources) {
                 if (!graph.IsValidPass(source.pass) ||
@@ -1225,7 +1242,9 @@ bool RenderGraphLowering::Lower(
                 if (!MapScope(source.state, source.access, source.domain, source_scope, error)) {
                     return false;
                 }
-                instruction.source_frontier.push_back(source.pass);
+                if (!track_epilogue_source(source.pass)) {
+                    return false;
+                }
                 const uint32 source_batch =
                     pass_queue_batch[source.pass.pass_id];
                 const uint32 destination_batch =
@@ -1273,8 +1292,8 @@ bool RenderGraphLowering::Lower(
                 )) {
                 return false;
             }
-            if (barrier.src_pass.IsValid()) {
-                instruction.source_frontier.push_back(barrier.src_pass);
+            if (barrier.src_pass.IsValid() && !track_epilogue_source(barrier.src_pass)) {
+                return false;
             }
         }
         if (!MapScope(
@@ -1385,7 +1404,8 @@ bool RenderGraphLowering::Lower(
         }
 
         LoweredInstruction instruction{};
-        if (!lower_instruction(barrier_index, instruction)) {
+        RenderGraph::PassHandle epilogue_source{};
+        if (!lower_instruction(barrier_index, instruction, epilogue_source)) {
             return fail("barrier " + std::to_string(barrier_index) + ": " + std::move(error));
         }
         if (barrier.queue_ownership) {
@@ -1557,21 +1577,7 @@ bool RenderGraphLowering::Lower(
             continue;
         }
         if (epilogue[barrier_index]) {
-            RenderGraph::PassHandle latest{};
-            uint32                  latest_position = 0;
-            bool found_source = false;
-            for (const auto source : instruction.source_frontier) {
-                if (!graph.IsValidPass(source) ||
-                    execution_position[source.pass_id] == RenderGraph::InvalidIndex) {
-                    return fail("epilogue barrier source is not in execution order");
-                }
-                if (!found_source || execution_position[source.pass_id] > latest_position) {
-                    latest = source;
-                    latest_position = execution_position[source.pass_id];
-                    found_source = true;
-                }
-            }
-            if (!found_source) {
+            if (!epilogue_source.IsValid()) {
                 // An imported range that no surviving pass touches already
                 // satisfies an unchanged read boundary. It needs no command.
                 if (instruction.before_state == instruction.after_state &&
@@ -1586,7 +1592,7 @@ bool RenderGraphLowering::Lower(
                     graph.resources[instruction.resource.resource_id].name + "'"
                 );
             }
-            auto* pass = find_mutable_pass(latest);
+            auto* pass = find_mutable_pass(epilogue_source);
             if (pass == nullptr) {
                 return fail("epilogue barrier source is not a GPU pass");
             }

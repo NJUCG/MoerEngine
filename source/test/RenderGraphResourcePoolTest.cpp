@@ -1255,7 +1255,8 @@ void TestAliasFollowsReverseDeclarationDependency(TestSuite& suite) {
         suite.Check(std::any_of(before.begin(), before.end(), [&](const auto& instruction) {
             return instruction.transient_alias && instruction.src_pass == write_second &&
                    instruction.dst_pass == write_first &&
-                   instruction.source_frontier == std::vector<RenderGraph::PassHandle>{write_second};
+                   plan.barriers[instruction.barrier_index].sources.size() == 1 &&
+                   plan.barriers[instruction.barrier_index].sources.front().pass == write_second;
         }), test, "lowering must place the alias barrier before its successor in compiled order");
     }
     allocator.ReleaseNonExported(graph);
