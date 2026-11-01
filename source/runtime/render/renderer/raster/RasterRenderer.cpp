@@ -960,7 +960,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 "RasterFrame", RenderGraph::QueueTopology::FromRHI()
             );
             auto compile_and_record = [&](RenderGraph& graph) {
-                if (graph.Compile()) {
+                if (graph.Compile(render_graph_debug_dump ? RenderGraph::DependencyDiagnostics::Enabled :
+                                                 RenderGraph::DependencyDiagnostics::Disabled)) {
                     if (render_graph_debug_dump) {
                         std::string dump = graph.Dump();
                         if (logged_render_graph_dumps.emplace(dump).second) {

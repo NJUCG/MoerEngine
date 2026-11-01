@@ -156,7 +156,8 @@ void ReleaseRenderGraphSubmit(Moer::Render::CmdSubmit& submit) {
         if (edge.src != src || edge.dst != dst) {
             continue;
         }
-        for (const auto& reason : edge.reasons) {
+        for (const auto& entry : plan.GetDependencyReasons(edge.src, edge.dst)) {
+            const auto& reason = entry.reason;
             if (reason.kind == kind && (!resource.IsValid() || reason.resource == resource)) {
                 return true;
             }
@@ -561,7 +562,7 @@ void TestResourceNameAndIdentityNamespaces(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    const bool compiled = graph.Compile();
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test_name, graph.GetCompileError());
     return graph.Dump();
 }
@@ -656,6 +657,71 @@ void TestDependencyCyclesRejectRecording(TestSuite& suite) {
         const bool recorded = RecordGraphForTest(graph);
         suite.Check(!recorded && callback_count == 0, test_name,
                     "a rejected graph must not execute recording callbacks");
+    }
+}
+
+// Compare all dumped execution metadata while ignoring the optional explanation text.
+[[nodiscard]] std::string ExecutionDump(const RenderGraph& graph) {
+    std::string dump = graph.Dump();
+    for (size_t position = dump.find(" reasons=["); position != std::string::npos;
+         position = dump.find(" reasons=[", position)) {
+        const size_t end = dump.find('\n', position);
+        dump.erase(position, end - position);
+    }
+    return dump;
+}
+
+void TestDependencyDiagnosticsLifecycle(TestSuite& suite) {
+    constexpr std::string_view test = "dependency diagnostics are optional and compile-local";
+    for (const auto topology : {RenderGraph::QueueTopology::SingleQueue(),
+                               RenderGraph::QueueTopology::DedicatedQueues()}) {
+        RenderGraph graph("DiagnosticEquivalence", topology);
+        int physical = 0;
+        const auto buffer = graph.ImportBuffer("Shared", &physical, {.byte_size = 128});
+        graph.SetInitialState(buffer, RenderGraph::BufferAccessType::ShaderRead,
+                              RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        for (Moer::uint32 index = 0; index < 4; ++index) {
+            graph.AddRecordPass(
+                "Access" + std::to_string(index),
+                [=](RenderGraph::PassBuilder& builder) {
+                    if (index == 0 || index == 3) {
+                        builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute)
+                            .Write(buffer, RenderGraph::BufferAccessType::Storage);
+                    } else {
+                        builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead,
+                                     {.offset = (index - 1) * 32, .size = 64});
+                    }
+                },
+                [](Moer::Render::CommandList&) {},
+                RenderGraph::PassRecordPolicy::ParallelAllowed
+            );
+        }
+        suite.Check(graph.Compile(), test, graph.GetCompileError());
+        suite.Check(!graph.GetCompiledPlan().dependency_reasons, test,
+                    "normal compilation must not retain diagnostic storage");
+        const auto normal_dump = ExecutionDump(graph);
+        std::string captured_dump;
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test, graph.GetCompileError());
+            const auto& reasons = graph.GetCompiledPlan().dependency_reasons;
+            suite.Check(reasons && !reasons->empty(), test, "capture must include dependency explanations");
+            suite.Check(ExecutionDump(graph) == normal_dump, test,
+                        "capturing explanations must preserve edges, ranges, versions, barriers and queue plans");
+            if (attempt == 0) { captured_dump = graph.Dump(); }
+            else { suite.Check(graph.Dump() == captured_dump, test, "recapture must be deterministic"); }
+        }
+        suite.Check(graph.Compile() && !graph.GetCompiledPlan().dependency_reasons &&
+                        ExecutionDump(graph) == normal_dump,
+                    test, "disabling capture on recompile must discard the previous explanations");
+        suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test, graph.GetCompileError());
+        const auto missing = graph.CreateTransientToken("MissingProducer");
+        suite.Check(!graph.GetCompiledPlan().dependency_reasons, test,
+                    "a declaration mutation must invalidate captured explanations");
+        graph.AddRecordPass("InvalidRead", [=](RenderGraph::PassBuilder& builder) { builder.Read(missing); },
+                            [](Moer::Render::CommandList&) {}, RenderGraph::PassRecordPolicy::Serial);
+        suite.Check(!graph.Compile(RenderGraph::DependencyDiagnostics::Enabled) &&
+                        !graph.GetCompiledPlan().dependency_reasons,
+                    test, "a failed compile must not publish partial explanations");
     }
 }
 
@@ -790,10 +856,10 @@ void TestRecompileBeforeOneShotExecution(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    bool compiled = graph.Compile();
+    bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test_name, graph.GetCompileError());
     const std::string first_dump = graph.Dump();
-    compiled = graph.Compile();
+    compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test_name, graph.GetCompileError());
     suite.Check(
         graph.Dump() == first_dump && callback_count == 0,
@@ -816,7 +882,7 @@ void TestRecompileBeforeOneShotExecution(TestSuite& suite) {
         test_name,
         "adding a declaration must invalidate and clear the previous compiled plan"
     );
-    compiled = graph.Compile();
+    compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test_name, graph.GetCompileError());
     suite.Check(
         graph.GetCompiledPlan().execution_order.size() == 2 &&
@@ -832,7 +898,7 @@ void TestRecompileBeforeOneShotExecution(TestSuite& suite) {
     suite.Check(callback_count == 2, test_name, "the first Execute must run each callback once");
     suite.Check(!RecordGraphForTest(graph), test_name, "a second Execute must be rejected");
     suite.Check(callback_count == 2, test_name, "a rejected second Execute must not repeat callbacks");
-    suite.Check(!graph.Compile(), test_name, "Compile after execution must be rejected");
+    suite.Check(!graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, "Compile after execution must be rejected");
     suite.Check(callback_count == 2, test_name, "a rejected post-execution Compile must not repeat callbacks");
     suite.Check(
         graph.IsCompiled() && graph.GetCompiledPlan().execution_order.size() == compiled_pass_count,
@@ -952,7 +1018,7 @@ void TestTypedTextureSubresourceHazards(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         !HasEdgeReason(
@@ -1047,7 +1113,7 @@ void TestTypedTextureLayerAndAspectHazards(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         !HasEdgeReason(
@@ -1328,7 +1394,7 @@ void TestTypedBufferRangeHazards(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         !HasEdgeReason(
@@ -1885,7 +1951,7 @@ void TestMultipleReadersProduceAllWarEdges(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -2393,7 +2459,7 @@ void TestExclusiveOwnershipUsesCurrentOwnerFamily(TestSuite& suite) {
         RenderGraph::AccessMode::Read
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* transfer = FindBarrier(plan, buffer.Untyped(), compute_read, copy_read);
     suite.Check(
@@ -2477,7 +2543,7 @@ void TestOwnershipWriterChainUsesCurrentFrontier(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* transfer = FindBarrier(plan, buffer.Untyped(), compute_read, copy_read);
     suite.Check(
@@ -2579,7 +2645,7 @@ void TestUnspecifiedReadsPreserveAvailabilityFrontier(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -2659,7 +2725,7 @@ void TestSameNativeReadsDependOnTransitionFrontier(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -2756,7 +2822,7 @@ void TestOwnershipAcquireOrdersSiblingNativeQueue(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -2816,7 +2882,7 @@ void TestImportAvailabilityOrdersSiblingNativeQueue(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* boundary = FindBarrier(plan, buffer.Untyped(), {}, first_read);
     suite.Check(
@@ -2903,7 +2969,7 @@ void TestOwnershipTransitionCollapsesReaderFrontier(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* barrier = FindBarrier(plan, buffer.Untyped(), acquire, transition);
     suite.Check(
@@ -3007,7 +3073,7 @@ void TestWriterAdvancesAvailabilityFrontiers(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -3103,7 +3169,7 @@ void TestOwnershipEpochDoesNotReusePriorFamilySources(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* transfer = FindBarrier(
         plan, buffer.Untyped(), graphics_epoch_one, compute_epoch_one
@@ -3163,7 +3229,7 @@ void TestTokenCrossQueueSyncHasNoOwnership(TestSuite& suite) {
         [](Moer::Render::CommandList&) {},
         RenderGraph::PassRecordPolicy::Serial
     );
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -3695,7 +3761,7 @@ void TestShaderReadStatesRequireTransition(TestSuite& suite) {
         RenderGraph::AccessMode::Read
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* barrier =
         FindBarrier(plan, texture.Untyped(), storage_read, sampled_read);
@@ -3760,7 +3826,7 @@ void TestReadTransitionWaitsForEveryActiveReader(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto barrier = std::find_if(
         plan.barriers.begin(),
@@ -5081,7 +5147,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         test_name,
         "physical presentation aliases were not deduplicated"
     );
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     if (!graph.IsCompiled()) {
         return;
     }
@@ -5211,7 +5277,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     const bool lowering_succeeded = RenderGraphLowering::Lower(graph, lowered, lowering_error);
     suite.Check(lowering_succeeded, test_name, lowering_error);
     const std::string lowered_dump = lowered.Dump();
-    const bool recompiled = graph.Compile();
+    const bool recompiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(recompiled, test_name, graph.GetCompileError());
     RenderGraphLowering::LoweredPlan rebuilt_lowered;
     const bool rebuilt_lowering_succeeded =
@@ -6602,7 +6668,7 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         RenderGraph::AccessMode::Read
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -6722,7 +6788,7 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
-        scene_update_graph.Compile(),
+        scene_update_graph.Compile(RenderGraph::DependencyDiagnostics::Enabled),
         test_name,
         scene_update_graph.GetCompileError()
     );
@@ -6790,7 +6856,7 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         RenderGraph::AccessMode::Read
     );
     suite.Check(
-        external_graph.Compile(),
+        external_graph.Compile(RenderGraph::DependencyDiagnostics::Enabled),
         test_name,
         external_graph.GetCompileError()
     );
@@ -6949,7 +7015,7 @@ void TestNrdSerialControlIslandContract(TestSuite& suite) {
         RenderGraph::AccessMode::Read
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -7058,6 +7124,7 @@ int main() {
     TestDependencyLevelOrdering(suite);
     TestDependencyCyclesRejectRecording(suite);
     TestHazardsAndDeterministicDump(suite);
+    TestDependencyDiagnosticsLifecycle(suite);
     TestTransientReadBeforeProducerFailsWithoutCallbacks(suite);
     TestCrossGraphHandlesAreRejected(suite);
     TestRecompileBeforeOneShotExecution(suite);

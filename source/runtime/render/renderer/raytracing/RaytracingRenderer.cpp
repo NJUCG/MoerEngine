@@ -1278,7 +1278,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             }
             if (!graph_passes_added) {
                 throw std::runtime_error(std::format("Raytracing graph declarations: setup={} lights={} gbuffer={} lighting={} nrd={} composition={} aa={} tone={} visualize={} texture={} ui={}", setup_passes_added, prepare_lights_added, gbuffer_added, lighting_added, nrd_added, composition_added, antialias_added, tone_mapping_added, visualize_added, show_texture_added, ui_added));
-            } else if (!graph.Compile()) {
+            } else if (!graph.Compile(state.render_graph_debug_dump ? RenderGraph::DependencyDiagnostics::Enabled :
+                                                 RenderGraph::DependencyDiagnostics::Disabled)) {
                 throw std::runtime_error("Raytracing graph compile failed: " + graph.GetCompileError());
             } else {
                 if (state.render_graph_debug_dump) {

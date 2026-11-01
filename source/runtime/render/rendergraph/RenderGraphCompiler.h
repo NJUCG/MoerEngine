@@ -6,7 +6,7 @@
 #include <memory_resource>
 #include <span>
 #include <string>
-#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Moer::Render {
@@ -14,7 +14,8 @@ namespace Moer::Render {
 /** Internal compiler for RenderGraph declarations. */
 class RenderGraphCompiler {
 public:
-    explicit RenderGraphCompiler(RenderGraph& graph) : graph(graph) {}
+    explicit RenderGraphCompiler(RenderGraph& graph, RenderGraph::DependencyDiagnostics diagnostics) :
+        graph(graph), diagnostics(diagnostics) {}
 
     bool Compile();
 
@@ -111,7 +112,8 @@ private:
         bool                                            source_state_unknown,
         std::vector<RenderGraph::CompiledBarrierSource> sources
     );
-    void AddEdge(uint32 src, uint32 dst, RenderGraph::CompiledEdgeReason reason);
+    template<typename MakeReason>
+    void AddEdge(uint32 src, uint32 dst, MakeReason&& make_reason);
     void SortEdges();
     bool Fail(std::string message);
 
@@ -119,10 +121,11 @@ private:
     RangesOverlap(const RenderGraph::ResourceRange& lhs, const RenderGraph::ResourceRange& rhs);
 
     RenderGraph& graph;
+    RenderGraph::DependencyDiagnostics diagnostics;
     // Compiler-only storage dies after Compile; CompiledPlan owns its allocations separately.
     // Declared first so all scratch containers are destroyed before their memory resource.
     std::pmr::monotonic_buffer_resource scratch_memory;
-    std::pmr::unordered_map<uint64, size_t> edge_indices{&scratch_memory};
+    std::pmr::unordered_set<uint64> edge_keys{&scratch_memory};
     // Rank in the selected execution order, shared by lifetime and alias analysis.
     std::pmr::vector<uint32> execution_position{&scratch_memory};
     // polymorphic_allocator propagates this resource to the nested PMR vectors.

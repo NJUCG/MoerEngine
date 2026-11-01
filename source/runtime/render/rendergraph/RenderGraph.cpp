@@ -1667,13 +1667,34 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
     return PassHandle{pass_index, graph_id};
 }
 
-bool RenderGraph::Compile() {
+std::span<const RenderGraph::CompiledDependencyReason>
+RenderGraph::CompiledPlan::GetDependencyReasons(PassHandle src, PassHandle dst) const {
+    if (!dependency_reasons) {
+        return {};
+    }
+    const auto endpoints = std::pair{src.pass_id, dst.pass_id};
+    const auto first = std::lower_bound(
+        dependency_reasons->begin(), dependency_reasons->end(), endpoints,
+        [](const auto& entry, const auto& key) {
+            return std::pair{entry.edge.src.pass_id, entry.edge.dst.pass_id} < key;
+        }
+    );
+    auto last = first;
+    while (last != dependency_reasons->end() && last->edge.src == src && last->edge.dst == dst) {
+        ++last;
+    }
+    return {first, last};
+}
+
+bool RenderGraph::Compile(DependencyDiagnostics diagnostics) {
     if (executed) {
         compile_error = "graph has already executed and cannot be compiled again";
         return false;
     }
     MOER_PROFILE_SCOPE("RenderGraph.Compile");
     ProfileDump::ScopedCpuProfile graph_profile("RenderGraph.CompileGraph", name);
+    // Never expose explanations from a previous compile attempt after setup fails.
+    compiled_plan.dependency_reasons.reset();
     DispatchSetupPassesAsync();
 
     std::string setup_error{};
@@ -1686,7 +1707,7 @@ bool RenderGraph::Compile() {
         return false;
     }
 
-    return RenderGraphCompiler(*this).Compile();
+    return RenderGraphCompiler(*this, diagnostics).Compile();
 }
 
 /**
@@ -2728,8 +2749,12 @@ std::string RenderGraph::Dump() const {
     for (const auto& edge : compiled_plan.edges) {
         stream << "  " << passes[edge.src.pass_id].name << " -> " << passes[edge.dst.pass_id].name
                << " reasons=[";
-        for (uint32 reason_index = 0; reason_index < edge.reasons.size(); ++reason_index) {
-            const auto& reason = edge.reasons[reason_index];
+        if (!compiled_plan.dependency_reasons) {
+            stream << "not captured";
+        }
+        const auto reasons = compiled_plan.GetDependencyReasons(edge.src, edge.dst);
+        for (uint32 reason_index = 0; reason_index < reasons.size(); ++reason_index) {
+            const auto& reason = reasons[reason_index].reason;
             if (reason_index != 0) {
                 stream << ", ";
             }
@@ -3356,6 +3381,7 @@ void RenderGraph::ReleaseNonExportedTransientBindings() noexcept {
 bool RenderGraph::FailCompile(std::string message) {
     compile_error = std::move(message);
     compiled      = false;
+    compiled_plan.dependency_reasons.reset();
     return false;
 }
 

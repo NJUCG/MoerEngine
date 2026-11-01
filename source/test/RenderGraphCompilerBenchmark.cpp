@@ -48,6 +48,7 @@ struct Options {
     bool lower = false;
     bool record = false;
     bool lifecycle = false;
+    RenderGraph::DependencyDiagnostics diagnostics = RenderGraph::DependencyDiagnostics::Disabled;
     std::string diagnose;
 };
 
@@ -61,6 +62,10 @@ Options ParseOptions(int argc, char** argv) {
                 options.diagnose != "allocations" && options.diagnose != "selftest") {
                 throw std::runtime_error("--diagnose expects timing, operations, allocations or selftest");
             }
+            continue;
+        }
+        if (option == "--capture-reasons") {
+            options.diagnostics = RenderGraph::DependencyDiagnostics::Enabled;
             continue;
         }
         if (option == "--lifecycle") {
@@ -340,7 +345,7 @@ void MeasureLifecycle(const Options& options, const PhysicalResources& physical)
             commands.SetResourceStateOwnership(Moer::Render::ERHIResourceStateOwnership::Compiled);
             BuildGraph(graph, options, physical, &recorded_passes);
             built = Clock::now();
-            if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
+            if (!graph.Compile(options.diagnostics) || !graph.RecordAndMergeFrontendCommands(commands, false)) {
                 throw std::runtime_error(graph.GetCompileError());
             }
             executed = Clock::now();
@@ -361,6 +366,7 @@ void MeasureLifecycle(const Options& options, const PhysicalResources& physical)
         << ",\"resources_per_kind\":" << options.resources
         << ",\"accesses_per_kind_per_pass\":" << options.accesses
         << ",\"subranges\":" << std::boolalpha << options.subranges
+        << ",\"capture_reasons\":" << (options.diagnostics == RenderGraph::DependencyDiagnostics::Enabled)
         << ",\"cpu\":" << options.cpu
         << ",\"warmup\":" << options.warmup << ",\"samples\":" << options.samples
         << ",\"build_p50_ms\":" << build_times[build_times.size() / 2]
@@ -374,7 +380,7 @@ bool RunPhase(const Options& options, RenderGraph& graph,
               std::string& error) {
     if (options.record) { return graph.RecordAndMergeFrontendCommands(commands, false); }
     if (options.lower) { return RenderGraphLowering::Lower(graph, lowered, error); }
-    return graph.Compile();
+    return graph.Compile(options.diagnostics);
 }
 
 TimingResult MeasurePhase(const Options& options, const PhysicalResources& physical) {
@@ -387,7 +393,7 @@ TimingResult MeasurePhase(const Options& options, const PhysicalResources& physi
         // A fresh graph per iteration matches a frame, without timing graph setup.
         RenderGraph graph("CompilerBenchmark");
         BuildGraph(graph, options, physical);
-        if ((options.lower || options.record) && !graph.Compile()) {
+        if ((options.lower || options.record) && !graph.Compile(options.diagnostics)) {
             throw std::runtime_error(graph.GetCompileError());
         }
         Moer::Render::CommandList commands;
@@ -431,7 +437,7 @@ AllocationResult MeasureAllocations(
     CrtCounts crt;
     RenderGraph graph("CompilerBenchmark");
     BuildGraph(graph, options, physical);
-    if ((options.lower || options.record) && !graph.Compile()) {
+    if ((options.lower || options.record) && !graph.Compile(options.diagnostics)) {
         throw std::runtime_error(graph.GetCompileError());
     }
     Moer::Render::CommandList commands;
@@ -478,6 +484,7 @@ void PrintResult(const Options& options, const TimingResult& timing, const Alloc
         << ",\"textures\":" << options.resources << ",\"buffers\":" << options.resources
         << ",\"accesses_per_kind_per_pass\":" << options.accesses
         << ",\"subranges\":" << options.subranges
+        << ",\"capture_reasons\":" << (options.diagnostics == RenderGraph::DependencyDiagnostics::Enabled)
         << ",\"cpu\":" << options.cpu
         << ",\"warmup\":" << options.warmup << ",\"samples\":" << options.samples
         << (options.record ? ",\"record_p50_ms\":" : options.lower ? ",\"lower_p50_ms\":" : ",\"compile_p50_ms\":") << timing.p50_ms
@@ -511,7 +518,7 @@ int main(int argc, char** argv) {
 #endif
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Usage: TestRenderGraphCompilerBenchmark [--passes 64] [--resources 64] "
-                     "[--accesses 16] [--warmup 5] [--samples 80] [--cpu logical-index] [--subranges] [--lower | --record | --lifecycle]\n"
+                     "[--accesses 16] [--warmup 5] [--samples 80] [--cpu logical-index] [--subranges] [--capture-reasons] [--lower | --record | --lifecycle]\n"
                      "--lifecycle includes build, Compile, compiled serial recording and destruction; no allocation probe.\n"
                      "--diagnose timing|operations|allocations|selftest requires MOER_RDG_DIAGNOSTICS and runs separately from phase modes.\n"
                      "Outputs JSON. Rebuilds the graph for every Compile; excludes build, Dump and graph destruction. --lower or --record measures Lower or compiled serial recording after untimed Compile.\n"

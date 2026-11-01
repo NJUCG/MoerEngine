@@ -471,7 +471,10 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
-    const bool compiled = graph.Compile();
+    suite.Check(graph.Compile() && !graph.GetCompiledPlan().dependency_reasons &&
+                    !graph.GetCompiledPlan().alias_boundaries.empty(),
+                test, "transient alias validation must succeed without captured reasons");
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test, graph.GetCompileError());
     if (!compiled) {
         return;
@@ -528,10 +531,10 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
         [&](const RenderGraph::CompiledEdge& edge) {
             return edge.src == first_pass && edge.dst == second_pass &&
                    std::any_of(
-                       edge.reasons.begin(),
-                       edge.reasons.end(),
-                       [](const RenderGraph::CompiledEdgeReason& reason) {
-                           return reason.kind ==
+                       plan.GetDependencyReasons(edge.src, edge.dst).begin(),
+                       plan.GetDependencyReasons(edge.src, edge.dst).end(),
+                       [](const RenderGraph::CompiledDependencyReason& entry) {
+                           return entry.reason.kind ==
                                   RenderGraph::EdgeReasonKind::TransientAlias;
                        }
                    );
@@ -944,7 +947,7 @@ void TestAliasBarrierCoversCompleteReaderFrontier(TestSuite& suite) {
         RenderGraph::PassRecordPolicy::Serial
     );
 
-    const bool compiled = graph.Compile();
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test, graph.GetCompileError());
     if (!compiled) {
         return;
@@ -993,10 +996,10 @@ void TestAliasBarrierCoversCompleteReaderFrontier(TestSuite& suite) {
             [&](const RenderGraph::CompiledEdge& edge) {
                 return edge.src == source && edge.dst == successor &&
                        std::any_of(
-                           edge.reasons.begin(),
-                           edge.reasons.end(),
-                           [](const RenderGraph::CompiledEdgeReason& reason) {
-                               return reason.kind ==
+                           plan.GetDependencyReasons(edge.src, edge.dst).begin(),
+                           plan.GetDependencyReasons(edge.src, edge.dst).end(),
+                           [](const RenderGraph::CompiledDependencyReason& entry) {
+                               return entry.reason.kind ==
                                       RenderGraph::EdgeReasonKind::TransientAlias;
                            }
                        );
@@ -1102,7 +1105,7 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
     const auto read_second = add_read("ReadSecond", second);
     const auto write_third = add_write("WriteThird", third);
 
-    const bool compiled = graph.Compile();
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test, graph.GetCompileError());
     if (!compiled) {
         return;
@@ -1122,8 +1125,8 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
                                 RenderGraph::EdgeReasonKind kind) {
         return std::any_of(plan.edges.begin(), plan.edges.end(), [&](const auto& edge) {
             return edge.src == src && edge.dst == dst &&
-                   std::any_of(edge.reasons.begin(), edge.reasons.end(), [&](const auto& reason) {
-                       return reason.kind == kind;
+                   std::any_of(plan.GetDependencyReasons(edge.src, edge.dst).begin(), plan.GetDependencyReasons(edge.src, edge.dst).end(), [&](const auto& entry) {
+                       return entry.reason.kind == kind;
                    });
         });
     };
@@ -1160,7 +1163,7 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
     }
 
     const std::string dump = graph.Dump();
-    const bool recompiled = graph.Compile();
+    const bool recompiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(recompiled, test, graph.GetCompileError());
     suite.Check(recompiled && graph.Dump() == dump, test,
                 "recompilation must rebuild the same execution, alias and dependency plan");
@@ -1193,7 +1196,7 @@ void TestAliasFollowsReverseDeclarationDependency(TestSuite& suite) {
     );
     first_builder->DependsOn(write_second);
 
-    const bool compiled = graph.Compile();
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test, graph.GetCompileError());
     if (!compiled) {
         return;
@@ -1223,15 +1226,15 @@ void TestAliasFollowsReverseDeclarationDependency(TestSuite& suite) {
     const auto has_reason = [&](RenderGraph::EdgeReasonKind kind) {
         return plan.edges.size() == 1 && plan.edges.front().src == write_second &&
                plan.edges.front().dst == write_first &&
-               std::any_of(plan.edges.front().reasons.begin(), plan.edges.front().reasons.end(),
-                           [&](const auto& reason) { return reason.kind == kind; });
+               std::any_of(plan.GetDependencyReasons(write_second, write_first).begin(), plan.GetDependencyReasons(write_second, write_first).end(),
+                           [&](const auto& entry) { return entry.reason.kind == kind; });
     };
     suite.Check(has_reason(RenderGraph::EdgeReasonKind::Explicit) &&
                     has_reason(RenderGraph::EdgeReasonKind::TransientAlias),
                 test, "alias planning must augment the existing reverse explicit edge");
 
     const std::string dump = graph.Dump();
-    const bool recompiled = graph.Compile();
+    const bool recompiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(recompiled && graph.Dump() == dump, test,
                 "recompilation must preserve the reverse execution and alias plan");
     if (!recompiled) {

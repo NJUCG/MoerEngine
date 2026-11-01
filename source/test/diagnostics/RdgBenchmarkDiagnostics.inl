@@ -87,7 +87,7 @@ void MeasureDiagnostics(const Options& options, const PhysicalResources& physica
             }
             {
                 Diag::Scope scope("CompileEntry");
-                if (!graph->Compile()) { throw std::runtime_error(graph->GetCompileError()); }
+                if (!graph->Compile(options.diagnostics)) { throw std::runtime_error(graph->GetCompileError()); }
             }
             {
                 Diag::Scope scope("RecordEntry");
@@ -115,6 +115,7 @@ void MeasureDiagnostics(const Options& options, const PhysicalResources& physica
     nlohmann::json result{
         {"mode", options.diagnose}, {"passes", options.passes}, {"resources_per_kind", options.resources},
         {"accesses_per_kind_per_pass", options.accesses}, {"subranges", options.subranges},
+        {"capture_reasons", options.diagnostics == RenderGraph::DependencyDiagnostics::Enabled},
         {"cpu", options.cpu}, {"warmup", options.warmup}, {"samples", options.samples},
         {"allocation_coverage", "new/delete in Render and benchmark, default PMR upstream and Memory API; excludes Core-internal new, direct C/allocator and other DLL allocations"}
     };
@@ -153,14 +154,14 @@ void MeasureDiagnostics(const Options& options, const PhysicalResources& physica
     BuildGraph(verify, options, physical);
     RenderGraphLowering::LoweredPlan lowered;
     std::string error;
-    if (!verify.Compile() || !RenderGraphLowering::Lower(verify, lowered, error)) { throw std::runtime_error(error); }
+    if (!verify.Compile(options.diagnostics) || !RenderGraphLowering::Lower(verify, lowered, error)) { throw std::runtime_error(error); }
     result["dump_fnv1a"] = std::to_string(Digest(verify.Dump()));
     result["lowered_dump_fnv1a"] = std::to_string(Digest(lowered.Dump()));
     const auto& plan = verify.GetCompiledPlan();
     result["work"] = {{"accesses", plan.accesses.size()}, {"edges", plan.edges.size()}, {"barriers", plan.barriers.size()},
                        {"queue_batches", plan.queue_batches.size()}, {"queue_syncs", plan.queue_syncs.size()}};
     size_t reasons = 0, sources = 0;
-    for (const auto& edge : plan.edges) { reasons += edge.reasons.size(); }
+    if (plan.dependency_reasons) { reasons = plan.dependency_reasons->size(); }
     for (const auto& barrier : plan.barriers) { sources += barrier.sources.size(); }
     result["work"]["edge_reasons"] = reasons;
     result["work"]["barrier_sources"] = sources;

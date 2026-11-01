@@ -461,9 +461,20 @@ public:
     };
 
     struct CompiledEdge {
-        PassHandle                      src{};
-        PassHandle                      dst{};
-        std::vector<CompiledEdgeReason> reasons{};
+        PassHandle src{};
+        PassHandle dst{};
+
+        friend bool operator==(const CompiledEdge&, const CompiledEdge&) = default;
+    };
+
+    enum class DependencyDiagnostics { Disabled, Enabled };
+
+    /** Optional explanations, sorted by edge endpoints and then reason. */
+    struct CompiledDependencyReason {
+        CompiledEdge       edge{};
+        CompiledEdgeReason reason{};
+
+        friend bool operator==(const CompiledDependencyReason&, const CompiledDependencyReason&) = default;
     };
 
     struct CompiledResource {
@@ -622,6 +633,10 @@ public:
         std::vector<PassHandle> execution_order{};
         /** Minimal hazard, explicit, state, and ownership frontier without fake serial edges. */
         std::vector<CompiledEdge> edges{};
+        /** Absent unless requested before Compile; never used to execute or validate the plan. */
+        std::optional<std::vector<CompiledDependencyReason>> dependency_reasons{};
+        [[nodiscard]] RENDER_API std::span<const CompiledDependencyReason>
+        GetDependencyReasons(PassHandle src, PassHandle dst) const;
         /** Atomic subresource/range accesses with logical input/output versions. */
         std::vector<CompiledAccess>   accesses{};
         std::vector<CompiledResource> resources{};
@@ -651,6 +666,7 @@ public:
         void Clear() {
             execution_order.clear();
             edges.clear();
+            dependency_reasons.reset();
             accesses.clear();
             resources.clear();
             dependency_levels.clear();
@@ -1015,7 +1031,9 @@ public:
      * Compiles declarations without emitting barriers or recording RHI commands.
      * Resource versions follow declaration order; execution follows the compiled dependencies.
      */
-    bool Compile();
+    // Dump always includes execution metadata. Full edge reasons require Enabled here;
+    // Dump never recompiles a graph to recover uncaptured explanations.
+    bool Compile(DependencyDiagnostics diagnostics = DependencyDiagnostics::Disabled);
 
     /**
      * Records compatible consecutive passes into shared private streams and

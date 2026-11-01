@@ -210,7 +210,10 @@ bool RenderGraphCompiler::Compile() {
     graph.compiled = false;
     graph.compile_error.clear();
     graph.compiled_plan.Clear();
-    edge_indices.clear();
+    if (diagnostics == RenderGraph::DependencyDiagnostics::Enabled) {
+        graph.compiled_plan.dependency_reasons.emplace();
+    }
+    edge_keys.clear();
     for (auto& resource : graph.resources) {
         resource.first_use = RenderGraph::InvalidIndex;
         resource.last_use  = RenderGraph::InvalidIndex;
@@ -769,7 +772,7 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
             AddEdge(
                 dependency.pass_id,
                 pass_index,
-                RenderGraph::CompiledEdgeReason{.kind = RenderGraph::EdgeReasonKind::Explicit}
+                [&] { return RenderGraph::CompiledEdgeReason{.kind = RenderGraph::EdgeReasonKind::Explicit}; }
             );
         }
 
@@ -890,12 +893,14 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                             AddEdge(
                                 source.pass.pass_id,
                                 pass_index,
-                                RenderGraph::CompiledEdgeReason{
-                                    .kind           = RenderGraph::EdgeReasonKind::StateTransition,
-                                    .resource       = resource_handle,
-                                    .range          = cell.range,
-                                    .input_version  = cell.version,
-                                    .output_version = cell.version
+                                [&] {
+                                    return RenderGraph::CompiledEdgeReason{
+                                        .kind           = RenderGraph::EdgeReasonKind::StateTransition,
+                                        .resource       = resource_handle,
+                                        .range          = cell.range,
+                                        .input_version  = cell.version,
+                                        .output_version = cell.version
+                                    };
                                 }
                             );
                         }
@@ -903,12 +908,14 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                             AddEdge(
                                 source.pass.pass_id,
                                 pass_index,
-                                RenderGraph::CompiledEdgeReason{
-                                    .kind           = RenderGraph::EdgeReasonKind::QueueOwnership,
-                                    .resource       = resource_handle,
-                                    .range          = cell.range,
-                                    .input_version  = cell.version,
-                                    .output_version = cell.version
+                                [&] {
+                                    return RenderGraph::CompiledEdgeReason{
+                                        .kind           = RenderGraph::EdgeReasonKind::QueueOwnership,
+                                        .resource       = resource_handle,
+                                        .range          = cell.range,
+                                        .input_version  = cell.version,
+                                        .output_version = cell.version
+                                    };
                                 }
                             );
                         }
@@ -921,12 +928,14 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     AddEdge(
                         cell.availability_established_pass,
                         pass_index,
-                        RenderGraph::CompiledEdgeReason{
-                            .kind           = RenderGraph::EdgeReasonKind::StateTransition,
-                            .resource       = resource_handle,
-                            .range          = cell.range,
-                            .input_version  = cell.version,
-                            .output_version = cell.version
+                        [&] {
+                            return RenderGraph::CompiledEdgeReason{
+                                .kind           = RenderGraph::EdgeReasonKind::StateTransition,
+                                .resource       = resource_handle,
+                                .range          = cell.range,
+                                .input_version  = cell.version,
+                                .output_version = cell.version
+                            };
                         }
                     );
                 }
@@ -939,12 +948,14 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                         AddEdge(
                             cell.ownership_established_pass,
                             pass_index,
-                            RenderGraph::CompiledEdgeReason{
-                                .kind           = RenderGraph::EdgeReasonKind::QueueOwnership,
-                                .resource       = resource_handle,
-                                .range          = cell.range,
-                                .input_version  = cell.version,
-                                .output_version = cell.version
+                            [&] {
+                                return RenderGraph::CompiledEdgeReason{
+                                    .kind           = RenderGraph::EdgeReasonKind::QueueOwnership,
+                                    .resource       = resource_handle,
+                                    .range          = cell.range,
+                                    .input_version  = cell.version,
+                                    .output_version = cell.version
+                                };
                             }
                         );
                     }
@@ -986,12 +997,14 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                         AddEdge(
                             cell.last_writer,
                             pass_index,
-                            RenderGraph::CompiledEdgeReason{
-                                .kind           = RenderGraph::EdgeReasonKind::ReadAfterWrite,
-                                .resource       = resource_handle,
-                                .range          = cell.range,
-                                .input_version  = cell.version,
-                                .output_version = cell.version
+                            [&] {
+                                return RenderGraph::CompiledEdgeReason{
+                                    .kind           = RenderGraph::EdgeReasonKind::ReadAfterWrite,
+                                    .resource       = resource_handle,
+                                    .range          = cell.range,
+                                    .input_version  = cell.version,
+                                    .output_version = cell.version
+                                };
                             }
                         );
                     }
@@ -1002,12 +1015,14 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                         AddEdge(
                             cell.last_writer,
                             pass_index,
-                            RenderGraph::CompiledEdgeReason{
-                                .kind           = RenderGraph::EdgeReasonKind::WriteAfterWrite,
-                                .resource       = resource_handle,
-                                .range          = cell.range,
-                                .input_version  = cell.version,
-                                .output_version = output_version
+                            [&] {
+                                return RenderGraph::CompiledEdgeReason{
+                                    .kind           = RenderGraph::EdgeReasonKind::WriteAfterWrite,
+                                    .resource       = resource_handle,
+                                    .range          = cell.range,
+                                    .input_version  = cell.version,
+                                    .output_version = output_version
+                                };
                             }
                         );
                     }
@@ -1015,12 +1030,14 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                         AddEdge(
                             reader.pass.pass_id,
                             pass_index,
-                            RenderGraph::CompiledEdgeReason{
-                                .kind           = RenderGraph::EdgeReasonKind::WriteAfterRead,
-                                .resource       = resource_handle,
-                                .range          = cell.range,
-                                .input_version  = cell.version,
-                                .output_version = output_version
+                            [&] {
+                                return RenderGraph::CompiledEdgeReason{
+                                    .kind           = RenderGraph::EdgeReasonKind::WriteAfterRead,
+                                    .resource       = resource_handle,
+                                    .range          = cell.range,
+                                    .input_version  = cell.version,
+                                    .output_version = output_version
+                                };
                             }
                         );
                     }
@@ -1378,32 +1395,25 @@ void RenderGraphCompiler::AuditStatePlanCompleteness() {
     }
 }
 
-void RenderGraphCompiler::AddEdge(uint32 src, uint32 dst, RenderGraph::CompiledEdgeReason reason) {
+template<typename MakeReason>
+void RenderGraphCompiler::AddEdge(uint32 src, uint32 dst, MakeReason&& make_reason) {
     MOER_RDG_COUNT(AddEdgeCalls, 1);
     if (src == dst || src == RenderGraph::InvalidIndex ||
         dst == RenderGraph::InvalidIndex) {
         return;
     }
-
-    const auto src_handle = RenderGraph::PassHandle{src, graph.graph_id};
-    const auto dst_handle = RenderGraph::PassHandle{dst, graph.graph_id};
-    const uint64 key        = (uint64{src} << 32) | dst;
-    const auto found = edge_indices.find(key);
-    if (found == edge_indices.end()) {
-        MOER_RDG_COUNT(ReasonAppends, 1);
-        MOER_RDG_COUNT(ReasonGrowths, 1);
-        const size_t index = graph.compiled_plan.edges.size();
-        graph.compiled_plan.edges.push_back(
-            RenderGraph::CompiledEdge{src_handle, dst_handle, {std::move(reason)}}
-        );
-        edge_indices.emplace(key, index);
-        return;
+    const RenderGraph::CompiledEdge edge{
+        {src, graph.graph_id}, {dst, graph.graph_id}
+    };
+    const uint64 key = (uint64{src} << 32) | dst;
+    if (edge_keys.insert(key).second) {
+        graph.compiled_plan.edges.push_back(edge);
     }
-    auto& reasons = graph.compiled_plan.edges[found->second].reasons;
-    // Consumers only read reasons after SortEdges canonicalizes the plan.
-    MOER_RDG_COUNT(ReasonAppends, 1);
-    MOER_RDG_COUNT(ReasonGrowths, reasons.size() == reasons.capacity());
-    reasons.push_back(std::move(reason));
+    if (auto& reasons = graph.compiled_plan.dependency_reasons) {
+        MOER_RDG_COUNT(ReasonAppends, 1);
+        MOER_RDG_COUNT(ReasonGrowths, reasons->size() == reasons->capacity());
+        reasons->push_back({edge, make_reason()});
+    }
 }
 
 void RenderGraphCompiler::SortEdges() {
@@ -1416,9 +1426,14 @@ void RenderGraphCompiler::SortEdges() {
                    (lhs.src.pass_id == rhs.src.pass_id && lhs.dst.pass_id < rhs.dst.pass_id);
         }
     );
-    for (auto& edge : graph.compiled_plan.edges) {
-        std::sort(edge.reasons.begin(), edge.reasons.end(), ReasonLess);
-        edge.reasons.erase(std::unique(edge.reasons.begin(), edge.reasons.end()), edge.reasons.end());
+    if (auto& reasons = graph.compiled_plan.dependency_reasons) {
+        std::sort(reasons->begin(), reasons->end(), [](const auto& lhs, const auto& rhs) {
+            const auto lhs_endpoints = std::pair{lhs.edge.src.pass_id, lhs.edge.dst.pass_id};
+            const auto rhs_endpoints = std::pair{rhs.edge.src.pass_id, rhs.edge.dst.pass_id};
+            return lhs_endpoints < rhs_endpoints ||
+                   (lhs_endpoints == rhs_endpoints && ReasonLess(lhs.reason, rhs.reason));
+        });
+        reasons->erase(std::unique(reasons->begin(), reasons->end()), reasons->end());
     }
 }
 
@@ -1427,12 +1442,8 @@ bool RenderGraphCompiler::BuildExecutionOrder() {
     MOER_RDG_PHASE("RenderGraph.Compiler.BuildExecutionOrder");
     SortEdges();
     std::pmr::vector<uint32> indegree(graph.passes.size(), 0, &scratch_memory);
-    for (size_t index = 0; index < graph.compiled_plan.edges.size(); ++index) {
-        const auto& edge = graph.compiled_plan.edges[index];
+    for (const auto& edge : graph.compiled_plan.edges) {
         ++indegree[edge.dst.pass_id];
-        // Alias planning still adds edges. Only this intermediate sort needs
-        // to update the insertion lookup; the final sort has no later writer.
-        edge_indices.at((uint64{edge.src.pass_id} << 32) | edge.dst.pass_id) = index;
     }
 
     // Preserve the lowest declaration index tie-break without rescanning all passes.
@@ -2054,14 +2065,16 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
             AddEdge(
                 source.pass.pass_id,
                 candidate.first_access->pass.pass_id,
-                RenderGraph::CompiledEdgeReason{
-                    .kind = RenderGraph::EdgeReasonKind::TransientAlias,
-                    .resource = RenderGraph::ResourceHandle{
-                        candidate.resource_index, graph.graph_id
-                    },
-                    .range          = candidate.first_access->range,
-                    .input_version  = candidate.first_access->input_version,
-                    .output_version = candidate.first_access->output_version,
+                [&] {
+                    return RenderGraph::CompiledEdgeReason{
+                        .kind = RenderGraph::EdgeReasonKind::TransientAlias,
+                        .resource = RenderGraph::ResourceHandle{
+                            candidate.resource_index, graph.graph_id
+                        },
+                        .range          = candidate.first_access->range,
+                        .input_version  = candidate.first_access->input_version,
+                        .output_version = candidate.first_access->output_version,
+                    };
                 }
             );
         }
