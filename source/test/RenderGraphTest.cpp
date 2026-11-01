@@ -595,6 +595,7 @@ void TestDependencyLevelOrdering(TestSuite& suite) {
         return;
     }
     const auto& plan = graph.GetCompiledPlan();
+    const auto dependency_levels = plan.BuildDependencyLevels();
     const std::vector<RenderGraph::PassHandle> declaration_order{
         root, independent, chain, fan_in, short_branch, join, late_independent
     };
@@ -603,10 +604,10 @@ void TestDependencyLevelOrdering(TestSuite& suite) {
     const std::vector<std::vector<RenderGraph::PassHandle>> expected_levels{
         {root, independent, late_independent}, {chain, short_branch}, {fan_in}, {join}
     };
-    suite.Check(plan.dependency_levels.size() == expected_levels.size(), test_name,
+    suite.Check(dependency_levels.size() == expected_levels.size(), test_name,
                 "fan-in must wait for its deepest predecessor");
-    for (size_t index = 0; index < std::min(plan.dependency_levels.size(), expected_levels.size()); ++index) {
-        suite.Check(plan.dependency_levels[index].passes == expected_levels[index], test_name,
+    for (size_t index = 0; index < std::min(dependency_levels.size(), expected_levels.size()); ++index) {
+        suite.Check(dependency_levels[index].passes == expected_levels[index], test_name,
                     "each dependency wave must preserve declaration order");
     }
 }
@@ -1020,6 +1021,7 @@ void TestTypedTextureSubresourceHazards(TestSuite& suite) {
 
     suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
+    const auto dependency_levels = plan.BuildDependencyLevels();
     suite.Check(
         !HasEdgeReason(
             plan, write_mip0, write_mip1, RenderGraph::EdgeReasonKind::WriteAfterWrite, texture.Untyped()
@@ -1042,10 +1044,10 @@ void TestTypedTextureSubresourceHazards(TestSuite& suite) {
         "a read must not depend on a writer of another mip"
     );
     suite.Check(
-        plan.dependency_levels.size() == 2 &&
-            DependencyLevelContains(plan.dependency_levels[0], write_mip0) &&
-            DependencyLevelContains(plan.dependency_levels[0], write_mip1) &&
-            DependencyLevelContains(plan.dependency_levels[1], read_mip0),
+        dependency_levels.size() == 2 &&
+            DependencyLevelContains(dependency_levels[0], write_mip0) &&
+            DependencyLevelContains(dependency_levels[0], write_mip1) &&
+            DependencyLevelContains(dependency_levels[1], read_mip0),
         test_name,
         "dependency levels must expose independent mip writers without changing execution policy"
     );
@@ -2727,6 +2729,7 @@ void TestSameNativeReadsDependOnTransitionFrontier(TestSuite& suite) {
 
     suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
+    const auto dependency_levels = plan.BuildDependencyLevels();
     suite.Check(
         HasEdgeReason(
             plan,
@@ -2767,11 +2770,11 @@ void TestSameNativeReadsDependOnTransitionFrontier(TestSuite& suite) {
         "compatible reads must fan out from the transition frontier without restoring a stale writer"
     );
     suite.Check(
-        plan.dependency_levels.size() == 3 &&
-            DependencyLevelContains(plan.dependency_levels[0], writer) &&
-            DependencyLevelContains(plan.dependency_levels[1], transition) &&
-            DependencyLevelContains(plan.dependency_levels[2], sibling_a) &&
-            DependencyLevelContains(plan.dependency_levels[2], sibling_b),
+        dependency_levels.size() == 3 &&
+            DependencyLevelContains(dependency_levels[0], writer) &&
+            DependencyLevelContains(dependency_levels[1], transition) &&
+            DependencyLevelContains(dependency_levels[2], sibling_a) &&
+            DependencyLevelContains(dependency_levels[2], sibling_b),
         test_name,
         "the writer, transition, and compatible sibling reads must occupy three dependency levels"
     );
@@ -4302,12 +4305,12 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
         test_name,
         "recording policy must survive compilation"
     );
+    const auto dependency_levels = plan.BuildDependencyLevels();
     suite.Check(
-        plan.frontend_record_units.size() == 3 &&
-            plan.frontend_record_units[0].dependency_level_index ==
-                plan.frontend_record_units[1].dependency_level_index &&
-            plan.frontend_record_units[2].dependency_level_index >
-                plan.frontend_record_units[0].dependency_level_index,
+        dependency_levels.size() == 2 &&
+            dependency_levels[0].passes ==
+                std::vector{plan.frontend_record_units[0].pass, plan.frontend_record_units[1].pass} &&
+            dependency_levels[1].passes == std::vector{plan.frontend_record_units[2].pass},
         test_name,
         "independent recording passes must share a dependency level while their consumer follows"
     );
@@ -4328,7 +4331,7 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
         Contains(graph.Dump(), "frontend_record_units:\n") &&
             Contains(
                 graph.Dump(),
-                "record=parallel-allowed native=parallel level=0"
+                "record=parallel-allowed native=parallel"
             ),
         test_name,
         "the deterministic dump must expose the executable CPU recording schedule"
@@ -5884,9 +5887,12 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto& recording_plan = graph.GetCompiledPlan().frontend_record_units;
+    const auto dependency_levels = graph.GetCompiledPlan().BuildDependencyLevels();
     suite.Check(
         recording_plan.size() == 4 &&
-            recording_plan[1].dependency_level_index > recording_plan[0].dependency_level_index,
+            dependency_levels.size() >= 2 &&
+            DependencyLevelContains(dependency_levels[0], recording_plan[0].pass) &&
+            DependencyLevelContains(dependency_levels[1], recording_plan[1].pass),
         test_name,
         "the fixture must place the two record callbacks in different GPU dependency levels"
     );

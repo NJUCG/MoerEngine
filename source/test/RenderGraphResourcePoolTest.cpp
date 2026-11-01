@@ -1111,6 +1111,7 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
         return;
     }
     const auto& plan = graph.GetCompiledPlan();
+    const auto dependency_levels = plan.BuildDependencyLevels();
     const Moer::uint32 slot = plan.resources[first.handle.resource_id].transient_slot;
     suite.Check(
         slot != RenderGraph::InvalidIndex &&
@@ -1145,21 +1146,14 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
     const std::vector<std::vector<RenderGraph::PassHandle>> expected_levels{
         {write_first}, {read_first, late_branch}, {write_second}, {read_second}, {write_third}
     };
-    suite.Check(plan.dependency_levels.size() == expected_levels.size(), test,
+    suite.Check(dependency_levels.size() == expected_levels.size(), test,
                 "the alias-only successor must follow the complete preceding chain");
     for (Moer::uint32 level = 0; level < expected_levels.size(); ++level) {
-        if (level < plan.dependency_levels.size()) {
-            suite.Check(plan.dependency_levels[level].passes == expected_levels[level], test,
+        if (level < dependency_levels.size()) {
+            suite.Check(dependency_levels[level].passes == expected_levels[level], test,
                         "final dependency levels must include both semantic and alias edges");
         }
-        for (const auto pass : expected_levels[level]) {
-            const auto unit = std::find_if(
-                plan.frontend_record_units.begin(), plan.frontend_record_units.end(),
-                [&](const auto& candidate) { return candidate.pass == pass; }
-            );
-            suite.Check(unit != plan.frontend_record_units.end() && unit->dependency_level_index == level,
-                        test, "recording metadata must use the final dependency level of each pass");
-        }
+
     }
 
     const std::string dump = graph.Dump();

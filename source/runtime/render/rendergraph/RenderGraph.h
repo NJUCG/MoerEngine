@@ -506,7 +506,6 @@ public:
             ERHITranslateExecutionClass::Parallel
         };
 
-        uint32 dependency_level_index = InvalidIndex;
     };
 
     /**
@@ -640,8 +639,8 @@ public:
         /** Atomic subresource/range accesses with logical input/output versions. */
         std::vector<CompiledAccess>   accesses{};
         std::vector<CompiledResource> resources{};
-        /** Semantic dependency levels for GPU graph analysis, independent of frontend recording. */
-        std::vector<CompiledDependencyLevel> dependency_levels{};
+        /** Diagnostic waves derived on demand from a successfully compiled graph. */
+        [[nodiscard]] RENDER_API std::vector<CompiledDependencyLevel> BuildDependencyLevels() const;
         /** Stable one-pass frontend sources with explicit thread-safety classification. */
         std::vector<CompiledFrontendRecordUnit> frontend_record_units{};
         /** CPU-class dispatch groups; GPU dependency edges never split them. */
@@ -669,7 +668,6 @@ public:
             dependency_reasons.reset();
             accesses.clear();
             resources.clear();
-            dependency_levels.clear();
             frontend_record_units.clear();
             frontend_dispatch_groups.clear();
             barriers.clear();

@@ -1667,6 +1667,29 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
     return PassHandle{pass_index, graph_id};
 }
 
+std::vector<RenderGraph::CompiledDependencyLevel> RenderGraph::CompiledPlan::BuildDependencyLevels() const {
+    if (execution_order.empty()) {
+        return {};
+    }
+    std::vector<uint32> levels(execution_order.size(), 0);
+    uint32 max_level = 0;
+    for (const auto pass : execution_order) {
+        auto edge = std::lower_bound(edges.begin(), edges.end(), pass.pass_id,
+            [](const CompiledEdge& candidate, uint32 source) { return candidate.src.pass_id < source; });
+        for (; edge != edges.end() && edge->src.pass_id == pass.pass_id; ++edge) {
+            auto& destination_level = levels[edge->dst.pass_id];
+            destination_level = std::max(destination_level, levels[pass.pass_id] + 1);
+            max_level = std::max(max_level, destination_level);
+        }
+    }
+    std::vector<CompiledDependencyLevel> result(max_level + 1);
+    // Diagnostic output keeps declaration order within each wave.
+    for (uint32 pass_index = 0; pass_index < levels.size(); ++pass_index) {
+        result[levels[pass_index]].passes.push_back({pass_index, execution_order.front().graph_id});
+    }
+    return result;
+}
+
 std::span<const RenderGraph::CompiledDependencyReason>
 RenderGraph::CompiledPlan::GetDependencyReasons(PassHandle src, PassHandle dst) const {
     if (!dependency_reasons) {
@@ -2948,12 +2971,13 @@ std::string RenderGraph::Dump() const {
         stream << "]\n";
     }
 
+    const auto dependency_levels = compiled_plan.BuildDependencyLevels();
     stream << "dependency_levels:\n";
     for (uint32 level_index = 0;
-         level_index < compiled_plan.dependency_levels.size();
+         level_index < dependency_levels.size();
          ++level_index) {
         stream << "  [" << level_index << "] [";
-        const auto& level = compiled_plan.dependency_levels[level_index];
+        const auto& level = dependency_levels[level_index];
         for (uint32 pass_index = 0;
              pass_index < level.passes.size();
              ++pass_index) {
@@ -2972,12 +2996,7 @@ std::string RenderGraph::Dump() const {
                << unit.target_queue.native_queue_id << "/family"
                << unit.target_queue.family_id << " record="
                << ToString(unit.record_policy) << " native="
-               << ToString(unit.native_translate_class) << " level=";
-        if (unit.dependency_level_index == InvalidIndex) {
-            stream << "none";
-        } else {
-            stream << unit.dependency_level_index;
-        }
+               << ToString(unit.native_translate_class);
         stream << " pass=" << passes[unit.pass.pass_id].name
                << " record_workload=" << unit.recording_workload << '\n';
     }

@@ -249,8 +249,7 @@ bool RenderGraphCompiler::Compile() {
         return false;
     }
     BuildQueuePlan();
-    const auto dependency_levels = BuildDependencyLevels();
-    BuildFrontendRecordUnits(dependency_levels);
+    BuildFrontendRecordUnits();
     BuildFrontendDispatchGroups();
     graph.compiled = true;
     return true;
@@ -1655,30 +1654,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
     }
 }
 
-std::pmr::vector<uint32> RenderGraphCompiler::BuildDependencyLevels() {
-    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildDependencyLevels");
-    MOER_RDG_PHASE("RenderGraph.Compiler.BuildDependencyLevels");
-    // A pass enters the wave after its deepest predecessor. The validated
-    // topological order also covers alias edges added after the initial sort.
-    std::pmr::vector<uint32> levels(graph.passes.size(), 0, &scratch_memory);
-    uint32                   max_level = 0;
-    for (const auto pass : graph.compiled_plan.execution_order) {
-        for (const auto& edge : OutgoingEdges(graph.compiled_plan.edges, pass.pass_id)) {
-            auto& destination_level = levels[edge.dst.pass_id];
-            destination_level = std::max(destination_level, levels[pass.pass_id] + 1);
-            max_level = std::max(max_level, destination_level);
-        }
-    }
-    graph.compiled_plan.dependency_levels.resize(max_level + 1);
-    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
-        graph.compiled_plan.dependency_levels[levels[pass_index]].passes.push_back(
-            RenderGraph::PassHandle{pass_index, graph.graph_id}
-        );
-    }
-    return levels;
-}
-
-void RenderGraphCompiler::BuildFrontendRecordUnits(std::span<const uint32> dependency_levels) {
+void RenderGraphCompiler::BuildFrontendRecordUnits() {
     MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildFrontendRecordUnits");
     MOER_RDG_PHASE("RenderGraph.Compiler.BuildFrontendRecordUnits");
     // Preserve one stable frontend source identity per pass in execution order.
@@ -1699,8 +1675,6 @@ void RenderGraphCompiler::BuildFrontendRecordUnits(std::span<const uint32> depen
                 .recording_workload = pass.recording_workload,
                 .native_translate_class = pass.translate_execution_class,
 
-                .dependency_level_index =
-                    dependency_levels[pass_handle.pass_id],
             }
         );
     }

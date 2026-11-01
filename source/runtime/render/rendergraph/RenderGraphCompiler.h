@@ -70,8 +70,7 @@ private:
     void AuditStatePlanCompleteness();
     bool BuildExecutionOrder();
     void BuildQueuePlan();
-    std::pmr::vector<uint32> BuildDependencyLevels();
-    void                     BuildFrontendRecordUnits(std::span<const uint32> dependency_levels);
+    void BuildFrontendRecordUnits();
     void BuildFrontendDispatchGroups();
     void BuildLifetimes();
     void BuildTransientAliasPlan();
