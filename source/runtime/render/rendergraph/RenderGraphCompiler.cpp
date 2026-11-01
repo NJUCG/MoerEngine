@@ -2105,26 +2105,15 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         return false;
     };
 
-    const auto has_alias_edge =
+    const auto has_dependency_edge =
         [&](RenderGraph::PassHandle source,
-            RenderGraph::PassHandle destination,
-            RenderGraph::ResourceHandle resource,
-            const RenderGraph::ResourceRange& range) {
+            RenderGraph::PassHandle destination) {
+            const auto outgoing = OutgoingEdges(plan.edges, source.pass_id);
             return std::any_of(
-                plan.edges.begin(),
-                plan.edges.end(),
+                outgoing.begin(),
+                outgoing.end(),
                 [&](const RenderGraph::CompiledEdge& edge) {
-                    return edge.src == source && edge.dst == destination &&
-                           std::any_of(
-                               edge.reasons.begin(),
-                               edge.reasons.end(),
-                               [&](const RenderGraph::CompiledEdgeReason& reason) {
-                                   return reason.kind ==
-                                              RenderGraph::EdgeReasonKind::TransientAlias &&
-                                          reason.resource == resource &&
-                                          reason.range == range;
-                               }
-                           );
+                    return edge.src == source && edge.dst == destination;
                 }
             );
         };
@@ -2190,12 +2179,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
                     RenderGraph::InvalidIndex ||
                 execution_position[source.pass_id] >=
                     execution_position[alias.dst_pass.pass_id] ||
-                !has_alias_edge(
-                    source,
-                    alias.dst_pass,
-                    alias.successor_resource,
-                    barrier.range
-                )) {
+                !has_dependency_edge(source, alias.dst_pass)) {
                 return Fail(
                     "transient alias source frontier is not fully ordered before its successor"
                 );
