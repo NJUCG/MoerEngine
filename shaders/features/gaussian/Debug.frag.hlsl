@@ -7,15 +7,15 @@
 float4 main(float4 position : SV_Position) : SV_TARGET {
     uint2  pixel = uint2(position.xy);
     float3 color = transmittance[pixel].xxx;
-    if (param.job.x == GAUSSIAN_DEBUG_TILE_COVERAGE) {
+    if (param.job.x == Moer::EGaussianDebugView::TileCoverage) {
         uint  tile    = pixel.x / 16 + (pixel.y / 16) * param.info.z;
         float density = saturate(log2(1.0 + float(ranges[tile * 2 + 1] - ranges[tile * 2])) / 12.0);
         color         = float3(density, density * density, 1 - density);
     }
-    if (param.job.x == GAUSSIAN_DEBUG_SHADOW_VISIBILITY) {
+    if (param.job.x == Moer::EGaussianDebugView::ShadowVisibility) {
         float alpha = 1 - transmittance[pixel];
         color       = alpha > 1e-5 ? saturate(debug_color[pixel].rgb / alpha) : float3(1, 1, 1);
-    } else if (param.job.x == GAUSSIAN_DEBUG_SHADOW_DEPTH) {
+    } else if (param.job.x == Moer::EGaussianDebugView::ShadowDepth) {
         color = 0;
         if (param.job.y != 0) {
             uint w, h;

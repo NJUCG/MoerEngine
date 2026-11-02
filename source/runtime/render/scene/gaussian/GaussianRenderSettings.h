@@ -5,17 +5,6 @@
 #include <filesystem>
 #include <string>
 namespace Moer {
-enum class EGaussianDisplayMode : uint {
-    Reference = GAUSSIAN_DISPLAY_REFERENCE,
-    Engine    = GAUSSIAN_DISPLAY_ENGINE
-};
-enum class EGaussianDebugView : uint {
-    Color            = GAUSSIAN_DEBUG_COLOR,
-    Transmittance    = GAUSSIAN_DEBUG_TRANSMITTANCE,
-    TileCoverage     = GAUSSIAN_DEBUG_TILE_COVERAGE,
-    ShadowVisibility = GAUSSIAN_DEBUG_SHADOW_VISIBILITY,
-    ShadowDepth      = GAUSSIAN_DEBUG_SHADOW_DEPTH
-};
 struct GaussianViewSettings {
     float3               background              = float3(0.f);
     float                exposure_ev             = 0.f;

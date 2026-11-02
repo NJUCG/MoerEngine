@@ -16,13 +16,13 @@ void main(uint3 id : SV_DispatchThreadID) {
     float  transmittance = transmittance_input[id.xy];
     float3 composite     = max(color_input[id.xy].rgb + transmittance * camera.background.xyz, 0.0);
     float3 display       = SRGBToLinear(saturate(composite));
-    if (param.job.x == GAUSSIAN_DISPLAY_ENGINE) {
+    if (param.job.x == Moer::EGaussianDisplayMode::Engine) {
         float3 linear_color = SRGBToLinear(composite) * exp2(camera.background.w);
         display             = linear_color / (1 + linear_color);
     }
-    if (param.job.y == GAUSSIAN_DEBUG_TRANSMITTANCE)
+    if (param.job.y == Moer::EGaussianDebugView::Transmittance)
         display = transmittance.xxx;
-    if (param.job.y == GAUSSIAN_DEBUG_TILE_COVERAGE) {
+    if (param.job.y == Moer::EGaussianDebugView::TileCoverage) {
         uint  tile_id = id.x / 16 + (id.y / 16) * camera.viewport.z;
         float density = saturate(log2(1.0 + float(ranges[tile_id * 2 + 1] - ranges[tile_id * 2])) / 12.0);
         display       = float3(density, density * density, 1 - density);

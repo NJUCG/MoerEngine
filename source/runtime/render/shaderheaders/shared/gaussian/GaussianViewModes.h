@@ -1,11 +1,13 @@
 #pragma once
 
-// Shared C++/HLSL values. Preserve these IDs for existing scene files.
-#define GAUSSIAN_DISPLAY_REFERENCE 0u
-#define GAUSSIAN_DISPLAY_ENGINE    1u
+#ifdef __cplusplus
+#include "shaderheaders/shared/raster/ShaderParametersUtils.h"
+#else
+#include "shared/raster/ShaderParametersUtils.h"
+#endif
 
-#define GAUSSIAN_DEBUG_COLOR             0u
-#define GAUSSIAN_DEBUG_TRANSMITTANCE     1u
-#define GAUSSIAN_DEBUG_TILE_COVERAGE     2u
-#define GAUSSIAN_DEBUG_SHADOW_VISIBILITY 3u
-#define GAUSSIAN_DEBUG_SHADOW_DEPTH      4u
+// Preserve the enumerator order for existing scene files.
+namespace Moer {
+EnumParam(EGaussianDisplayMode, Reference, Engine);
+EnumParam(EGaussianDebugView, Color, Transmittance, TileCoverage, ShadowVisibility, ShadowDepth);
+} // namespace Moer
