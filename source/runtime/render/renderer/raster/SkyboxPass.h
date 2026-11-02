@@ -27,6 +27,7 @@ public:
     };
 
     struct RecordParameters {
+        bool clear_depth = false;
         SkyboxPassBindlessParam pass_param{};
         BindlessArrayRef        bindless{};
         TextureRef              cubemap_owner{};
@@ -48,7 +49,8 @@ public:
         const RasterContext& context,
         const RasterConfig& config,
         const Camera& camera,
-        GraphResources resources
+        GraphResources resources,
+        bool clear_depth = false
     );
     void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 

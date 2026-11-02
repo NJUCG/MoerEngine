@@ -22,13 +22,13 @@ struct LightContext {
         accumulated_color = float3(0.0f, 0.0f, 0.0f);
     }
 
-    void AccumulateLight(Moer::GLight _light, float shadow) {
+    void AccumulateLight(Moer::GLight _light, float shadow, float gaussian_shadow = 1) {
         light = _light;
 
         if (light.type == Moer::ELightType::Directional) {
-            accumulated_color += _AccumulateDirectionalLight(shadow);
+            accumulated_color += _AccumulateDirectionalLight(shadow * gaussian_shadow);
         } else if (light.type == Moer::ELightType::Point) {
-            accumulated_color += _AccumulatePointLight();
+            accumulated_color += _AccumulatePointLight() * gaussian_shadow;
         } else if (light.type == Moer::ELightType::Spot) {
             accumulated_color += _AccumulateSpotLight();
         } else if (light.type == Moer::ELightType::Environment) {

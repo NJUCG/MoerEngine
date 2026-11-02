@@ -515,6 +515,8 @@ struct SceneUpdateBatch {
     uint                                  light_count = 0u;
     std::optional<ecs::CLightDirectional> main_directional_light;
     std::optional<ecs::CLightPoint>       main_point_light;
+    uint                                  main_directional_light_index = ~0u;
+    uint                                  main_point_light_index       = ~0u;
     std::optional<SceneGeometrySnapshot>  geometry;
 };
 

@@ -239,12 +239,14 @@ SceneUpdateBatch Scene::PrepareUpdateBatch(bool is_run_test_case, bool capture_g
         FindMainLightEntity<ecs::CLightDirectional, ecs::CTagMainLight>(registry);
     if (directional_entity != entt::null) {
         batch.main_directional_light = registry.get<const ecs::CLightDirectional>(directional_entity);
+        batch.main_directional_light_index = m_cpu_scene->GetLightIndex(directional_entity).value_or(~0u);
     }
 
     const entt::entity point_entity =
         FindMainLightEntity<ecs::CLightPoint, ecs::CTagMainLight>(registry);
     if (point_entity != entt::null) {
         batch.main_point_light = registry.get<const ecs::CLightPoint>(point_entity);
+        batch.main_point_light_index = m_cpu_scene->GetLightIndex(point_entity).value_or(~0u);
     }
 
     const bool geometry_changed = full_gpu_scene_rebuild || batch.tick_state.updated_transform ||
