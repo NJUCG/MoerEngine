@@ -3951,7 +3951,7 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
         RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
-        RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferRange{}
     );
     read_export_graph.Export(
         read_export_buffer,
@@ -3984,7 +3984,7 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
         RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
-        RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferRange{}
     );
     write_export_graph.Export(
         write_export_buffer,

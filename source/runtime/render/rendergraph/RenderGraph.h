@@ -111,10 +111,6 @@ public:
         uint32        layer_first = 0;
         uint32        layer_count = RemainingTextureRange;
 
-        [[nodiscard]] static constexpr TextureRange Whole() {
-            return {};
-        }
-
         [[nodiscard]] static constexpr TextureRange Mips(uint32 first, uint32 count) {
             TextureRange range{};
             range.mip_first = first;
@@ -136,10 +132,6 @@ public:
         uint64 offset = 0;
         uint64 size   = RemainingBufferRange;
 
-        [[nodiscard]] static constexpr BufferRange Whole() {
-            return {};
-        }
-
         friend auto operator<=>(const BufferRange&, const BufferRange&) = default;
     };
 
@@ -159,9 +151,9 @@ public:
     [[nodiscard]] static constexpr ResourceRange WholeResourceRange(ResourceKind kind) {
         switch (kind) {
             case ResourceKind::Texture:
-                return TextureRange::Whole();
+                return TextureRange{};
             case ResourceKind::Buffer:
-                return BufferRange::Whole();
+                return BufferRange{};
             case ResourceKind::Token:
                 return std::monostate{};
         }
@@ -688,42 +680,42 @@ public:
         PassBuilder& Write(ResourceHandle resource, std::string_view range = "all");
         PassBuilder& ReadWrite(ResourceHandle resource, std::string_view range = "all");
 
-        PassBuilder& Read(TextureHandle resource, TextureRange range = TextureRange::Whole());
-        PassBuilder& Write(TextureHandle resource, TextureRange range = TextureRange::Whole());
-        PassBuilder& ReadWrite(TextureHandle resource, TextureRange range = TextureRange::Whole());
+        PassBuilder& Read(TextureHandle resource, TextureRange range = {});
+        PassBuilder& Write(TextureHandle resource, TextureRange range = {});
+        PassBuilder& ReadWrite(TextureHandle resource, TextureRange range = {});
         PassBuilder& Read(
             TextureHandle     resource,
             TextureAccessType type,
-            TextureRange      range = TextureRange::Whole()
+            TextureRange      range = {}
         );
         PassBuilder& Write(
             TextureHandle     resource,
             TextureAccessType type,
-            TextureRange      range = TextureRange::Whole()
+            TextureRange      range = {}
         );
         PassBuilder& ReadWrite(
             TextureHandle     resource,
             TextureAccessType type,
-            TextureRange      range = TextureRange::Whole()
+            TextureRange      range = {}
         );
 
-        PassBuilder& Read(BufferHandle resource, BufferRange range = BufferRange::Whole());
-        PassBuilder& Write(BufferHandle resource, BufferRange range = BufferRange::Whole());
-        PassBuilder& ReadWrite(BufferHandle resource, BufferRange range = BufferRange::Whole());
+        PassBuilder& Read(BufferHandle resource, BufferRange range = {});
+        PassBuilder& Write(BufferHandle resource, BufferRange range = {});
+        PassBuilder& ReadWrite(BufferHandle resource, BufferRange range = {});
         PassBuilder& Read(
             BufferHandle     resource,
             BufferAccessType type,
-            BufferRange      range = BufferRange::Whole()
+            BufferRange      range = {}
         );
         PassBuilder& Write(
             BufferHandle     resource,
             BufferAccessType type,
-            BufferRange      range = BufferRange::Whole()
+            BufferRange      range = {}
         );
         PassBuilder& ReadWrite(
             BufferHandle     resource,
             BufferAccessType type,
-            BufferRange      range = BufferRange::Whole()
+            BufferRange      range = {}
         );
 
         PassBuilder& Read(TokenHandle resource);
@@ -920,28 +912,28 @@ public:
         TextureBoundaryState state,
         QueueRole            owner_queue,
         AccessMode           last_access = AccessMode::Unknown,
-        TextureRange         range       = TextureRange::Whole()
+        TextureRange         range       = {}
     );
     void SetInitialState(
         BufferHandle        resource,
         BufferBoundaryState state,
         QueueRole           owner_queue,
         AccessMode          last_access = AccessMode::Unknown,
-        BufferRange         range       = BufferRange::Whole()
+        BufferRange         range       = {}
     );
     void Export(
         TextureHandle        resource,
         TextureBoundaryState final_state,
         QueueRole            owner_queue,
         AccessMode           next_access = AccessMode::Read,
-        TextureRange         range       = TextureRange::Whole()
+        TextureRange         range       = {}
     );
     void Export(
         BufferHandle        resource,
         BufferBoundaryState final_state,
         QueueRole           owner_queue,
         AccessMode          next_access = AccessMode::Read,
-        BufferRange         range       = BufferRange::Whole()
+        BufferRange         range       = {}
     );
 
     /**

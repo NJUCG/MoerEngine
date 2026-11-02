@@ -32,12 +32,12 @@ struct RGTextureAccess {
     );
 
     RenderGraph::TextureHandle resource{};
-    RenderGraph::TextureRange  range = RenderGraph::TextureRange::Whole();
+    RenderGraph::TextureRange  range{};
 
     RGTextureAccess() = default;
     RGTextureAccess(
         RenderGraph::TextureHandle handle,
-        RenderGraph::TextureRange  access_range = RenderGraph::TextureRange::Whole()
+        RenderGraph::TextureRange  access_range = {}
     ) : resource(handle), range(access_range) {}
 
     RGTextureAccess& operator=(RenderGraph::TextureHandle handle) {
@@ -57,12 +57,12 @@ struct RGBufferAccess {
     );
 
     RenderGraph::BufferHandle resource{};
-    RenderGraph::BufferRange  range = RenderGraph::BufferRange::Whole();
+    RenderGraph::BufferRange  range{};
 
     RGBufferAccess() = default;
     RGBufferAccess(
         RenderGraph::BufferHandle handle,
-        RenderGraph::BufferRange  access_range = RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferRange  access_range = {}
     ) : resource(handle), range(access_range) {}
 
     RGBufferAccess& operator=(RenderGraph::BufferHandle handle) {
@@ -104,7 +104,7 @@ public:
     [[nodiscard]] static RGTextureAccessElement Read(
         RenderGraph::TextureHandle     handle,
         RenderGraph::TextureAccessType type  = RenderGraph::TextureAccessType::Unspecified,
-        RenderGraph::TextureRange      range = RenderGraph::TextureRange::Whole()
+        RenderGraph::TextureRange      range = {}
     ) {
         return RGTextureAccessElement(
             handle,
@@ -117,7 +117,7 @@ public:
     [[nodiscard]] static RGTextureAccessElement Write(
         RenderGraph::TextureHandle     handle,
         RenderGraph::TextureAccessType type  = RenderGraph::TextureAccessType::Unspecified,
-        RenderGraph::TextureRange      range = RenderGraph::TextureRange::Whole()
+        RenderGraph::TextureRange      range = {}
     ) {
         return RGTextureAccessElement(
             handle,
@@ -130,7 +130,7 @@ public:
     [[nodiscard]] static RGTextureAccessElement ReadWrite(
         RenderGraph::TextureHandle     handle,
         RenderGraph::TextureAccessType type  = RenderGraph::TextureAccessType::Unspecified,
-        RenderGraph::TextureRange      range = RenderGraph::TextureRange::Whole()
+        RenderGraph::TextureRange      range = {}
     ) {
         return RGTextureAccessElement(
             handle,
@@ -168,7 +168,7 @@ private:
     RenderGraph::TextureHandle resource{};
     RenderGraph::AccessMode    mode = RenderGraph::AccessMode::None;
     RenderGraph::TextureAccessType type  = RenderGraph::TextureAccessType::Unspecified;
-    RenderGraph::TextureRange  range = RenderGraph::TextureRange::Whole();
+    RenderGraph::TextureRange  range{};
 };
 
 /** One heterogeneous buffer-array element with explicit mode and type. */
@@ -177,7 +177,7 @@ public:
     [[nodiscard]] static RGBufferAccessElement Read(
         RenderGraph::BufferHandle     handle,
         RenderGraph::BufferAccessType type  = RenderGraph::BufferAccessType::Unspecified,
-        RenderGraph::BufferRange      range = RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferRange      range = {}
     ) {
         return RGBufferAccessElement(
             handle,
@@ -190,7 +190,7 @@ public:
     [[nodiscard]] static RGBufferAccessElement Write(
         RenderGraph::BufferHandle     handle,
         RenderGraph::BufferAccessType type  = RenderGraph::BufferAccessType::Unspecified,
-        RenderGraph::BufferRange      range = RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferRange      range = {}
     ) {
         return RGBufferAccessElement(
             handle,
@@ -203,7 +203,7 @@ public:
     [[nodiscard]] static RGBufferAccessElement ReadWrite(
         RenderGraph::BufferHandle     handle,
         RenderGraph::BufferAccessType type  = RenderGraph::BufferAccessType::Unspecified,
-        RenderGraph::BufferRange      range = RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferRange      range = {}
     ) {
         return RGBufferAccessElement(
             handle,
@@ -241,7 +241,7 @@ private:
     RenderGraph::BufferHandle resource{};
     RenderGraph::AccessMode   mode = RenderGraph::AccessMode::None;
     RenderGraph::BufferAccessType type  = RenderGraph::BufferAccessType::Unspecified;
-    RenderGraph::BufferRange  range = RenderGraph::BufferRange::Whole();
+    RenderGraph::BufferRange  range{};
 };
 
 using RGTextureAccessArray = RGAccessArray<RGTextureAccessElement>;

@@ -339,10 +339,10 @@ void TestReadOnlyBoundariesNeedNoCommands(TestSuite& suite, bool merge, bool par
         const auto data = graph.ImportBuffer("Data", buffer, {.byte_size = 64});
         const auto image = graph.ImportTexture("Image", texture, {.mip_count = 2, .layer_count = 2});
         const auto bytes = partial ? RenderGraph::BufferRange{.offset = 16, .size = 32} :
-                                     RenderGraph::BufferRange::Whole();
+                                     RenderGraph::BufferRange{};
         const auto slice = partial ? RenderGraph::TextureRange{
             .aspects = RenderGraph::TextureAspect::Color, .mip_first = 1, .mip_count = 1,
-            .layer_first = 1, .layer_count = 1} : RenderGraph::TextureRange::Whole();
+            .layer_first = 1, .layer_count = 1} : RenderGraph::TextureRange{};
         graph.SetInitialState(data, RenderGraph::BufferAccessType::ShaderRead,
             RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read, bytes);
         graph.SetInitialState(image, RenderGraph::TextureAccessType::Sampled,

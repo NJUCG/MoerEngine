@@ -185,8 +185,8 @@ void BuildGraph(RenderGraph& graph, const Options& options, const PhysicalResour
         graph.AddRecordPass("Pass" + std::to_string(pass), [&](RenderGraph::PassBuilder& builder) {
             for (Moer::uint32 access = 0; access < options.accesses; ++access) {
                 const auto index         = (Moer::uint64{pass} * 3 + access) % options.resources;
-                auto texture_range = RenderGraph::TextureRange::Whole();
-                auto buffer_range = RenderGraph::BufferRange::Whole();
+                RenderGraph::TextureRange texture_range{};
+                RenderGraph::BufferRange buffer_range{};
                 if (options.subranges) {
                     // Each touched resource has internal boundaries. Select from its
                     // eight mip/layer pairs and equal-sized buffer ranges without
