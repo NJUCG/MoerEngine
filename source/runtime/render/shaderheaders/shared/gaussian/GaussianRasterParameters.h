@@ -2,9 +2,11 @@
 
 #ifdef __cplusplus
 #include "GaussianParameters.h"
+#include "GaussianViewModes.h"
 namespace Moer::Render {
 #else
 #include "shared/gaussian/GaussianParameters.h"
+#include "shared/gaussian/GaussianViewModes.h"
 namespace Moer {
 #endif
 

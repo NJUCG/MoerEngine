@@ -1,19 +1,20 @@
 #pragma once
 #include "misc/Traits.h"
+#include "shaderheaders/shared/gaussian/GaussianViewModes.h"
 #include <cmath>
 #include <filesystem>
 #include <string>
 namespace Moer {
 enum class EGaussianDisplayMode : uint {
-    Reference,
-    Engine
+    Reference = GAUSSIAN_DISPLAY_REFERENCE,
+    Engine    = GAUSSIAN_DISPLAY_ENGINE
 };
 enum class EGaussianDebugView : uint {
-    Color,
-    Transmittance,
-    TileCoverage,
-    ShadowVisibility,
-    ShadowDepth
+    Color            = GAUSSIAN_DEBUG_COLOR,
+    Transmittance    = GAUSSIAN_DEBUG_TRANSMITTANCE,
+    TileCoverage     = GAUSSIAN_DEBUG_TILE_COVERAGE,
+    ShadowVisibility = GAUSSIAN_DEBUG_SHADOW_VISIBILITY,
+    ShadowDepth      = GAUSSIAN_DEBUG_SHADOW_DEPTH
 };
 struct GaussianViewSettings {
     float3               background              = float3(0.f);
