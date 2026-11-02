@@ -39,12 +39,12 @@ void RecordWithPassMarker(CommandList& cmd_list, std::string_view name, Record&&
 
 } // namespace
 
-RenderGraph::PreparedPassHandle ShadowDepthPass::AddToGraph(
-    RenderGraph& graph,
-    RasterContext& context,
-    const RasterConfig& ui_config,
-    const Camera& camera,
-    GraphResources resources,
+ShadowDepthPass::GraphPassHandle ShadowDepthPass::AddToGraph(
+    RenderGraph&                                  graph,
+    RasterContext&                                context,
+    const RasterConfig&                           ui_config,
+    const Camera&                                 camera,
+    GraphResources                                resources,
     std::span<const RenderGraph::SetupPassHandle> setup_dependencies
 ) {
     auto prepared = graph.AddSetupPass(
@@ -77,7 +77,7 @@ RenderGraph::PreparedPassHandle ShadowDepthPass::AddToGraph(
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
-    return {prepared.GetSetupPass(), pass};
+    return {{prepared.GetSetupPass(), pass}, prepared};
 }
 
 RenderGraph::PreparedPassHandle ProbeUpdatePass::AddToGraph(

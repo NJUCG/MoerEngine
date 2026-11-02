@@ -59,31 +59,24 @@ public:
     const StaticArray<TextureRef, 4>& GetMaps() const {
         return m_maps;
     }
-    TextureRef RecordDepthDebug(CommandList& commands) {
-        return m_last ? RecordDepthDebug(commands, *m_last) : TextureRef{};
-    }
-    void ResetFrame() {
-        m_last.reset();
-    }
     double           GetGpuTime();
     const BufferRef& GetDataBuffer() const {
         return m_data;
     }
 
 private:
-    std::optional<RecordParameters> m_last;
-    GaussianShadowPipeline          m_pipeline;
-    GaussianShadowInspectPipeline   m_inspect;
-    TextureRef                      m_debug_depth;
-    BindlessArrayRef                m_bindless;
-    BufferRef                       m_data;
-    uint                            m_data_handle = 0;
-    StaticArray<TextureRef, 4>      m_maps{};
-    StaticArray<uint, 4>            m_handles{};
-    StaticArray<TextureRef, 4>      m_mesh_maps{};
-    StaticArray<uint, 4>            m_mesh_handles{};
-    QueryFuture                     m_timing{};
-    double                          m_gpu_ms = 0;
-    bool                            m_cube   = false;
+    GaussianShadowPipeline        m_pipeline;
+    GaussianShadowInspectPipeline m_inspect;
+    TextureRef                    m_debug_depth;
+    BindlessArrayRef              m_bindless;
+    BufferRef                     m_data;
+    uint                          m_data_handle = 0;
+    StaticArray<TextureRef, 4>    m_maps{};
+    StaticArray<uint, 4>          m_handles{};
+    StaticArray<TextureRef, 4>    m_mesh_maps{};
+    StaticArray<uint, 4>          m_mesh_handles{};
+    QueryFuture                   m_timing{};
+    double                        m_gpu_ms = 0;
+    bool                          m_cube   = false;
 };
 } // namespace Moer::Render::Raster

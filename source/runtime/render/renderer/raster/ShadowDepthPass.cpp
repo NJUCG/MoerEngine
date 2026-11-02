@@ -972,8 +972,6 @@ void ShadowDepthPass::SetGaussians(
     }
     m_gaussian_bounds = std::move(bounds);
     context.lighting_data.gaussian_shadow = uint4(0);
-    if (!active && m_gaussian_pass)
-        m_gaussian_pass->ResetFrame();
     if (active) {
         if (!m_gaussian_pass) m_gaussian_pass = std::make_unique<GaussianShadowPass>(context);
         m_gaussian_scene = scene;

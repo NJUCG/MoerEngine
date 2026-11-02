@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include <bit>
+
 #include "math/Function.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
@@ -183,6 +185,11 @@ public:
 
     [[nodiscard]] const BufferRef& GetExposureBuffer() const {
         return exposure_buffer;
+    }
+
+    // Restore neutral exposure before the next adaptation step.
+    void ResetExposure(CommandList& cmd_list) {
+        cmd_list.ClearResource(exposure_buffer->GetView(), std::bit_cast<uint32_t>(1.0f));
     }
 
     void Record(CommandList& cmd_list, const RecordParameters& parameters) {

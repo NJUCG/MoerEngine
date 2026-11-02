@@ -80,10 +80,7 @@ private:
     // 按执行顺序排列的 Raster Pass。
     UniquePtr<GaussianSplatPass>           m_gaussian_splat_pass;
     UniquePtr<GaussianImageExport>         m_gaussian_export;
-    UniquePtr<GaussianCompositePass> m_gaussian_composite_pass;
-    bool m_had_visible_gaussians = false;
-    bool m_had_mesh_pipeline_work = true;
-    bool m_has_gaussian_exposure = false;
+    UniquePtr<GaussianCompositePass>       m_gaussian_composite_pass;
     UniquePtr<HiZBuildPass>                hiz_build_pass;
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
     UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;
@@ -108,6 +105,11 @@ private:
     UniquePtr<CudaPass>     cuda_pass;
     UniquePtr<TensorRTPass> tensor_rt_pass;
 #endif
+
+    // Cross-frame scheduling history; each pass still owns its temporal resources.
+    bool m_had_visible_gaussians        = false; // Visibility transitions invalidate AA history.
+    bool m_had_mesh_pipeline_work       = true;  // Mesh stage transitions invalidate Hi-Z and RTAO.
+    bool m_was_gaussian_display_context = false; // Entering this context resets exposure adaptation.
 
     Camera scene_view_camera;
     bool   scene_view_camera_initialized = false;

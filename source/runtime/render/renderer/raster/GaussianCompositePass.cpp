@@ -181,4 +181,21 @@ void GaussianCompositePass::RecordDebug(
     commands.AddCallback([parameters, output]() {});
 }
 
+void GaussianCompositePass::RecordDebug(
+    CommandList&                             commands,
+    RecordParameters                         parameters,
+    TextureRef                               output,
+    ShadowDepthPass&                         shadows,
+    const ShadowDepthPass::RecordParameters* shadow_parameters
+) {
+    if (parameters.debug_view == EGaussianDebugView::ShadowDepth && shadow_parameters) {
+        auto atlas = shadows.RecordGaussianDepthDebug(commands, *shadow_parameters);
+        if (atlas) {
+            parameters.color                 = atlas;
+            parameters.is_shadow_depth_valid = true;
+        }
+    }
+    RecordDebug(commands, parameters, output);
+}
+
 } // namespace Moer::Render::Raster

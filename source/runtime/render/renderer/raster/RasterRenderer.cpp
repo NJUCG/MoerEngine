@@ -902,32 +902,37 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             );
         }
 
-        if (m_gaussian_export) m_gaussian_export->Poll();
+        if (m_gaussian_export)
+            m_gaussian_export->Poll();
         if (frame_packet.gaussian_export_request && !m_gaussian_export)
             m_gaussian_export = MakeUnique<GaussianImageExport>();
-        const bool has_visible_gaussians = frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
+        const bool has_visible_gaussians =
+            frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
             frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
         // Preserve the legacy mesh schedule, including procedural surfaces, in scenes without GS assets.
         const bool has_meshes = !frame_packet.has_gaussian_assets ||
-            frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly ||
-            frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
+                                frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly ||
+                                frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
         if (has_meshes != m_had_mesh_pipeline_work) {
             // Surface histories cannot survive an interval with no mesh passes.
             raster_context.InvalidateHiZHistory();
             rtao_denoiser_pass->ResetHistory();
         }
-        m_had_mesh_pipeline_work = has_meshes;
+        m_had_mesh_pipeline_work    = has_meshes;
         const bool record_gaussians = has_visible_gaussians || bool(frame_packet.gaussian_export_request);
-        if (has_visible_gaussians != m_had_visible_gaussians) aa_pass->ResetHistory();
-        const bool gaussian_display_context = has_visible_gaussians || (frame_packet.has_gaussian_assets && !has_meshes);
-        if (gaussian_display_context && !m_has_gaussian_exposure)
-            cmd_list.ClearResource(tonemapping_pass->GetExposureBuffer()->GetView(), 0x3f800000u);
-        m_has_gaussian_exposure = gaussian_display_context;
-        m_had_visible_gaussians = has_visible_gaussians;
+        if (has_visible_gaussians != m_had_visible_gaussians)
+            aa_pass->ResetHistory();
+        const bool gaussian_display_context =
+            has_visible_gaussians || (frame_packet.has_gaussian_assets && !has_meshes);
+        if (gaussian_display_context && !m_was_gaussian_display_context)
+            tonemapping_pass->ResetExposure(cmd_list);
+        m_was_gaussian_display_context = gaussian_display_context;
+        m_had_visible_gaussians        = has_visible_gaussians;
         if (has_visible_gaussians && raster_config.aa_mode == EAaMode::SMAA_T2X)
             raster_config.aa_mode = EAaMode::SMAA_1X;
         if (record_gaussians) {
-            if (!m_gaussian_splat_pass) m_gaussian_splat_pass = MakeUnique<GaussianSplatPass>(manager);
+            if (!m_gaussian_splat_pass)
+                m_gaussian_splat_pass = MakeUnique<GaussianSplatPass>(manager);
             if (!m_gaussian_composite_pass)
                 m_gaussian_composite_pass = MakeUnique<GaussianCompositePass>(manager, raster_context.bdls);
             m_gaussian_splat_pass->SetPairCapacity(frame_packet.gaussian_view_settings.tile_pair_capacity);
@@ -1158,6 +1163,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         prepare_safety
                     );
                 };
+            std::optional<ShadowDepthPass::RecordParameters> shadow_parameters;
             RenderGraph::PreparedPassHandle shadow_depth_pass_handle{}, probe_update_pass_handle{};
             if (has_meshes) {
                 shadow_depth_pass_handle = schedule_prepared(
@@ -1167,9 +1173,10 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             .SideEffect();
                     },
                     [&]() {
-                        return shadow_depth_pass->Prepare(raster_context, raster_config, camera);
+                        shadow_parameters = shadow_depth_pass->Prepare(raster_context, raster_config, camera);
+                        return *shadow_parameters;
                     },
-                    [&](CommandList& recording_cmd_list,
+                    [&](CommandList&                             recording_cmd_list,
                         const ShadowDepthPass::RecordParameters& parameters) {
                         recording_cmd_list.PushScopeWithTimeScope(
                             RasterTool::GetShadowDepthPassProfileScopeName()
@@ -1575,10 +1582,14 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             processing_image_resource = graph_resources.tonemapping_output;
 
             if (record_gaussians && frame_packet.gaussian_view_settings.debug_view != EGaussianDebugView::Color) {
-                const auto debug = m_gaussian_composite_pass->Prepare(processing_image,
-                    m_gaussian_splat_pass->GetColor(),m_gaussian_splat_pass->GetTransmittance(),
-                    BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),m_gaussian_splat_pass->GetRanges(),
-                    frame_packet.gaussian_view_settings.debug_view);
+                const auto debug = m_gaussian_composite_pass->Prepare(
+                    processing_image,
+                    m_gaussian_splat_pass->GetColor(),
+                    m_gaussian_splat_pass->GetTransmittance(),
+                    BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),
+                    m_gaussian_splat_pass->GetRanges(),
+                    frame_packet.gaussian_view_settings.debug_view
+                );
                 schedule_prepared(
                     "GaussianDebug",
                     [&](RenderGraph::PassBuilder&) {},
@@ -1586,32 +1597,38 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         return debug;
                     },
                     [&](CommandList& commands, const GaussianCompositePass::RecordParameters& parameters) {
-                        auto debug_parameters = parameters;
-                        if (parameters.debug_view == EGaussianDebugView::ShadowDepth) {
-                            auto atlas = shadow_depth_pass->RecordGaussianDepthDebug(commands);
-                            if (atlas) {
-                                debug_parameters.color                 = atlas;
-                                debug_parameters.is_shadow_depth_valid = true;
-                            }
-                        }
                         m_gaussian_composite_pass->RecordDebug(
-                            commands, debug_parameters, raster_context.textures.tonemapping_output.tex
+                            commands,
+                            parameters,
+                            raster_context.textures.tonemapping_output.tex,
+                            *shadow_depth_pass,
+                            shadow_parameters ? &*shadow_parameters : nullptr
                         );
                     }
                 );
             }
             if (frame_packet.gaussian_export_request)
-                schedule_prepared("GaussianExport", [&](RenderGraph::PassBuilder&) {}, []() { return uint8(0); },
-                    [&](CommandList& commands, uint8) { record_gaussian_export(commands); });
-                if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
-                    schedule_prepared(
-                        "CameraGizmo",
-                        [&](RenderGraph::PassBuilder& builder) {
+                schedule_prepared(
+                    "GaussianExport",
+                    [&](RenderGraph::PassBuilder&) {},
+                    []() {
+                        return uint8(0);
+                    },
+                    [&](CommandList& commands, uint8) {
+                        record_gaussian_export(commands);
+                    }
+                );
+            if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
+                schedule_prepared(
+                    "CameraGizmo",
+                    [&](RenderGraph::PassBuilder& builder) {
                         builder.ReadWrite(graph_resources.tonemapping_output)
                             .SideEffect();
                     },
-                    [&]() { return camera_gizmo_pass->Prepare(raster_context, camera, main_camera); },
-                    [&](CommandList& recording_cmd_list,
+                    [&]() {
+                        return camera_gizmo_pass->Prepare(raster_context, camera, main_camera);
+                    },
+                    [&](CommandList&                             recording_cmd_list,
                         const CameraGizmoPass::RecordParameters& parameters) {
                         camera_gizmo_pass->Record(recording_cmd_list, parameters);
                     }
@@ -1938,7 +1955,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 execute_linear();
             } else {
                 if (record_gaussians) gaussian_graph = m_gaussian_splat_pass->ImportGraphResources(graph);
-                RenderGraph::PreparedPassHandle shadow_depth_handle{}, probe_update_handle{};
+                ShadowDepthPass::GraphPassHandle shadow_depth_handle{};
+                RenderGraph::PreparedPassHandle  probe_update_handle{};
                 if (has_meshes) {
                     shadow_depth_handle = shadow_depth_pass->AddToGraph(
                         graph,
@@ -2243,14 +2261,19 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         .tonemapping_output = graph_resources.tonemapping_output
                     }
                 );
-                processing_image = raster_context.textures.tonemapping_output;
+                processing_image          = raster_context.textures.tonemapping_output;
                 processing_image_resource = graph_resources.tonemapping_output;
 
-                if (record_gaussians && frame_packet.gaussian_view_settings.debug_view != EGaussianDebugView::Color) {
-                    const auto debug = m_gaussian_composite_pass->Prepare(processing_image,
-                        m_gaussian_splat_pass->GetColor(),m_gaussian_splat_pass->GetTransmittance(),
-                        BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),m_gaussian_splat_pass->GetRanges(),
-                        frame_packet.gaussian_view_settings.debug_view);
+                if (record_gaussians &&
+                    frame_packet.gaussian_view_settings.debug_view != EGaussianDebugView::Color) {
+                    const auto debug = m_gaussian_composite_pass->Prepare(
+                        processing_image,
+                        m_gaussian_splat_pass->GetColor(),
+                        m_gaussian_splat_pass->GetTransmittance(),
+                        BufferRef(m_gaussian_splat_pass->GetStatusBuffer().GetBuffer()),
+                        m_gaussian_splat_pass->GetRanges(),
+                        frame_packet.gaussian_view_settings.debug_view
+                    );
                     graph.AddRecordPass(
                         "GaussianDebug",
                         [&, gaussian_graph, graph_resources](RenderGraph::PassBuilder& builder) {
@@ -2263,27 +2286,34 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                                 graph, builder, raster_context, false
                             );
                         },
-                        [&, debug](CommandList& commands) {
-                            auto debug_parameters = debug;
-                            if (debug.debug_view == EGaussianDebugView::ShadowDepth) {
-                                auto atlas = shadow_depth_pass->RecordGaussianDepthDebug(commands);
-                                if (atlas) {
-                                    debug_parameters.color                 = atlas;
-                                    debug_parameters.is_shadow_depth_valid = true;
-                                }
-                            }
+                        [&, debug, shadow_depth_handle](CommandList& commands) {
                             m_gaussian_composite_pass->RecordDebug(
-                                commands, debug_parameters, raster_context.textures.tonemapping_output.tex
+                                commands,
+                                debug,
+                                raster_context.textures.tonemapping_output.tex,
+                                *shadow_depth_pass,
+                                shadow_depth_handle.parameters.IsValid() ?
+                                    &shadow_depth_handle.parameters.Get() :
+                                    nullptr
                             );
                         },
                         RenderGraph::PassExecutionClass::ParallelRecordEligible
                     );
                 }
                 if (frame_packet.gaussian_export_request)
-                    graph.AddRecordPass("GaussianExport", [&](RenderGraph::PassBuilder& builder) {
-                        builder.Read(graph_resources.tonemapping_output).Read(gaussian_graph.display)
-                            .Read(gaussian_graph.status).SideEffect();
-                    }, [&](CommandList& commands) { record_gaussian_export(commands); }, RenderGraph::PassExecutionClass::SerialRecord);
+                    graph.AddRecordPass(
+                        "GaussianExport",
+                        [&](RenderGraph::PassBuilder& builder) {
+                            builder.Read(graph_resources.tonemapping_output)
+                                .Read(gaussian_graph.display)
+                                .Read(gaussian_graph.status)
+                                .SideEffect();
+                        },
+                        [&](CommandList& commands) {
+                            record_gaussian_export(commands);
+                        },
+                        RenderGraph::PassExecutionClass::SerialRecord
+                    );
                 if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
                     camera_gizmo_pass->AddToGraph(
                         graph,

@@ -118,7 +118,7 @@ bool ReadGaussianCacheExtension(
     SceneCacheBinaryReader&    reader,
     entt::registry&            registry,
     const Array<entt::entity>& entities,
-    uint32 version
+    uint32                     version
 ) {
     uint64 asset_count = 0;
     if (!reader.ReadPod(asset_count) || asset_count > entities.size())
@@ -160,8 +160,10 @@ bool ReadGaussianCacheExtension(
         settings.is_enabled = is_enabled != 0;
         if (version >= 7) {
             uint32 cast = 0, receive = 0;
-            if (!reader.ReadPod(cast) || !reader.ReadPod(receive) || cast > 1 || receive > 1) return false;
-            settings.cast_shadows = cast != 0; settings.receive_shadows = receive != 0;
+            if (!reader.ReadPod(cast) || !reader.ReadPod(receive) || cast > 1 || receive > 1)
+                return false;
+            settings.cast_shadows    = cast != 0;
+            settings.receive_shadows = receive != 0;
         }
         registry.emplace<ecs::CGaussianInstance>(entity, assets[asset_id], settings);
     }
@@ -183,9 +185,12 @@ bool ReadGaussianCacheExtension(
         !reader.ReadPod(view.display_mode) || !reader.ReadPod(view.debug_view) ||
         !reader.ReadPod(view.tile_pair_capacity) || !IsValidGaussianViewSettings(view))
         return false;
-    if (version >= 7 && (!reader.ReadPod(view.shadow_alpha_cutoff) ||
-        !reader.ReadPod(view.shadow_receive_strength) || !reader.ReadPod(view.shadow_world_bias))) return false;
-    if (!IsValidGaussianViewSettings(view)) return false;
+    if (version >= 7 &&
+        (!reader.ReadPod(view.shadow_alpha_cutoff) || !reader.ReadPod(view.shadow_receive_strength) ||
+         !reader.ReadPod(view.shadow_world_bias)))
+        return false;
+    if (!IsValidGaussianViewSettings(view))
+        return false;
     registry.ctx().emplace<ecs::CtxGaussianViewSettings>(view);
     return true;
 }

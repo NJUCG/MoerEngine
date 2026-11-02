@@ -138,7 +138,6 @@ GaussianShadowPass::RecordParameters GaussianShadowPass::Prepare(
             result.maps[i]        = m_maps[i];
         }
     context.lighting_data.gaussian_shadow = uint4(m_data_handle, data.config.w, 0, 0);
-    m_last                                = result;
     return result;
 }
 void GaussianShadowPass::EnsureResources(RasterContext& context, const RasterConfig& config, bool cast) {

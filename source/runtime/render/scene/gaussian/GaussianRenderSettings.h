@@ -16,14 +16,14 @@ enum class EGaussianDebugView : uint {
     ShadowDepth
 };
 struct GaussianViewSettings {
-    float3               background         = float3(0.f);
-    float                exposure_ev        = 0.f;
-    EGaussianDisplayMode display_mode       = EGaussianDisplayMode::Reference;
-    EGaussianDebugView   debug_view         = EGaussianDebugView::Color;
-    uint                 tile_pair_capacity = 4u * 1024u * 1024u;
-    float shadow_alpha_cutoff = 0.4f;
-    float shadow_receive_strength = 0.5f;
-    float shadow_world_bias = 0.005f;
+    float3               background              = float3(0.f);
+    float                exposure_ev             = 0.f;
+    EGaussianDisplayMode display_mode            = EGaussianDisplayMode::Reference;
+    EGaussianDebugView   debug_view              = EGaussianDebugView::Color;
+    uint                 tile_pair_capacity      = 4u * 1024u * 1024u;
+    float                shadow_alpha_cutoff     = 0.4f;
+    float                shadow_receive_strength = 0.5f;
+    float                shadow_world_bias       = 0.005f;
 };
 inline bool IsValidGaussianViewSettings(const GaussianViewSettings& value) {
     return std::isfinite(value.background.x) && std::isfinite(value.background.y) &&
@@ -65,10 +65,10 @@ struct GaussianRasterStatus {
     uint64 geometry_bytes        = 0;
     uint64 workspace_bytes       = 0;
     double gpu_ms                = 0;
-    double projection_gpu_ms = 0;
-    double sorting_gpu_ms = 0;
-    double accumulation_gpu_ms = 0;
-    double composite_gpu_ms = 0;
+    double projection_gpu_ms     = 0;
+    double sorting_gpu_ms        = 0;
+    double accumulation_gpu_ms   = 0;
+    double composite_gpu_ms      = 0;
     double shadow_cast_gpu_ms    = 0;
     double shadow_receive_gpu_ms = 0;
 };

@@ -69,6 +69,10 @@ public:
         std::optional<GaussianShadowPass::RecordParameters> gaussian{};
     };
 
+    struct GraphPassHandle : RenderGraph::PreparedPassHandle {
+        RGPreparedValue<RecordParameters> parameters{};
+    };
+
     ShadowDepthPass(RasterContext& context);
     void SetGaussians(
         RasterContext&          context,
@@ -84,9 +88,10 @@ public:
         RasterContext&            context,
         bool                      write
     );
-    TextureRef RecordGaussianDepthDebug(CommandList& commands) {
-        return m_gaussian_scene && m_gaussian_pass ? m_gaussian_pass->RecordDepthDebug(commands) :
-                                                     TextureRef{};
+    TextureRef RecordGaussianDepthDebug(CommandList& commands, const RecordParameters& parameters) {
+        return parameters.gaussian && m_gaussian_pass ?
+                   m_gaussian_pass->RecordDepthDebug(commands, *parameters.gaussian) :
+                   TextureRef{};
     }
     double GetGaussianShadowGpuTime() {
         return m_gaussian_scene && m_gaussian_pass && !m_gaussian_bounds.empty() ?
@@ -100,12 +105,12 @@ public:
     [[nodiscard]] RecordParameters
     Prepare(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
-    RenderGraph::PreparedPassHandle AddToGraph(
-        RenderGraph& graph,
-        RasterContext& context,
-        const RasterConfig& ui_config,
-        const Camera& camera,
-        GraphResources resources,
+    GraphPassHandle AddToGraph(
+        RenderGraph&                                  graph,
+        RasterContext&                                context,
+        const RasterConfig&                           ui_config,
+        const Camera&                                 camera,
+        GraphResources                                resources,
         std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
     );
 
@@ -137,7 +142,9 @@ private:
     ) const;
     void RecordShadowDraw(CommandList& cmd_list, const RecordParameters& parameters, const DrawBatch& batch);
     void RecordPointShadowMultiview(
-        CommandList& cmd_list, const RecordParameters& parameters, const DrawBatch& batch
+        CommandList&            cmd_list,
+        const RecordParameters& parameters,
+        const DrawBatch&        batch
     );
 
 private:
@@ -145,22 +152,22 @@ private:
     static constexpr uint32_t k_point_shadow_view_mask  = (1u << k_point_shadow_view_count) - 1u;
 
     std::unique_ptr<GaussianShadowPass> m_gaussian_pass;
-    const GaussianGpuScene* m_gaussian_scene = nullptr;
-    GaussianViewSettings m_gaussian_settings{};
-    bool m_gaussian_editor_view = false;
+    const GaussianGpuScene*             m_gaussian_scene = nullptr;
+    GaussianViewSettings                m_gaussian_settings{};
+    bool                                m_gaussian_editor_view = false;
     bool                                m_gaussian_point_mode  = false;
-    uint64 m_gaussian_revision = 0;
-    Array<Box3D> m_gaussian_bounds;
-    uint                    enabled_cascade_layers;
-    ShadowDepthPassPipeline m_pso;
-    PointShadowMultiviewPipeline m_point_shadow_multiview_pso;
-    BufferRef                    m_point_shadow_view_matrices;
-    bool                         m_point_shadow_multiview_supported = false;
-    CullingPass             m_culling_pass;
-    Array<Box3D>            m_shadow_caster_bounds;
-    uint64_t                m_shadow_caster_bounds_generation = 0u;
-    bool                    m_shadow_caster_bounds_valid      = false;
-    bool                    m_log_cascade_bounds_next_render  = false;
-    LoopedTimer             m_shadow_caster_bounds_log_timer{5.0, false};
+    uint64                              m_gaussian_revision    = 0;
+    Array<Box3D>                        m_gaussian_bounds;
+    uint                                enabled_cascade_layers;
+    ShadowDepthPassPipeline             m_pso;
+    PointShadowMultiviewPipeline        m_point_shadow_multiview_pso;
+    BufferRef                           m_point_shadow_view_matrices;
+    bool                                m_point_shadow_multiview_supported = false;
+    CullingPass                         m_culling_pass;
+    Array<Box3D>                        m_shadow_caster_bounds;
+    uint64_t                            m_shadow_caster_bounds_generation = 0u;
+    bool                                m_shadow_caster_bounds_valid      = false;
+    bool                                m_log_cascade_bounds_next_render  = false;
+    LoopedTimer                         m_shadow_caster_bounds_log_timer{5.0, false};
 };
 } // namespace Moer::Render::Raster
