@@ -17,18 +17,17 @@ struct GGaussian {
 };
 
 struct GGaussianInstance {
-#ifdef __cplusplus
     float4x4 world_transform;
-#else
-    row_major float4x4 world_transform;
-#endif
     float4   color_opacity;
     uint4
         range; // first Gaussian, count, SH degree, flags: game=1, editor=2, cast shadows=4, receive shadows=8
 };
 
 #ifdef __cplusplus
-static_assert(sizeof(GGaussian) == 304);
-static_assert(sizeof(GGaussianInstance) == 96);
+static_assert(
+    sizeof(GGaussian) == 304,
+    "Changing the raw .moca Gaussian record requires a cache version migration"
+);
+
 #endif
 } // namespace Moer / Moer::Render

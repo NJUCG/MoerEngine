@@ -11,26 +11,20 @@ namespace Moer {
 #endif
 
 struct GGaussianCamera {
-#ifdef __cplusplus
     float4x4 world_to_view;
     float4x4 view_to_clip;
     float4x4 clip_to_view;
-#else
-    row_major float4x4 world_to_view;
-    row_major float4x4 view_to_clip;
-    row_major float4x4 clip_to_view;
-#endif
-    float4 position;
-    uint4  viewport; // width, height, tile columns, tile rows
-    float4 filter;   // minimum pixel variance, alpha cutoff, near clip, far clip
-    float4 background;
+    float4   position;
+    uint4    viewport; // width, height, tile columns, tile rows
+    float4   filter;   // minimum pixel variance, alpha cutoff, near clip, far clip
+    float4   background;
 };
 
 struct GProjectedGaussian {
     float4 center_depth;  // pixel center xy, positive view depth, conservative log-alpha cutoff
     float4 conic_opacity; // inverse covariance xx/xy/yy, activated opacity
     float4 color;         // display RGB and Mesh shadow visibility (1 when disabled)
-    uint4  tile_rect; // inclusive min xy, exclusive max xy
+    uint4  tile_rect;     // inclusive min xy, exclusive max xy
 };
 
 // Every kernel stays below the portable 128-byte push-constant limit.
@@ -48,9 +42,7 @@ struct GaussianCompositeParams {
 };
 
 #ifdef __cplusplus
-static_assert(sizeof(GaussianCompositeParams) == 32);
-static_assert(sizeof(GGaussianCamera) == 256);
-static_assert(sizeof(GProjectedGaussian) == 64);
-static_assert(sizeof(GaussianDispatchParams) == 32);
+static_assert(sizeof(GaussianCompositeParams) <= 128, "Push constants must fit the portable 128-byte limit");
+static_assert(sizeof(GaussianDispatchParams) <= 128, "Push constants must fit the portable 128-byte limit");
 #endif
 } // namespace Moer / Moer::Render

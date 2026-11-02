@@ -3,6 +3,17 @@
 #include "math/Function.h"
 #include "rhi/RHI.h"
 namespace Moer::Render::Raster {
+namespace {
+// CPU frame parameters retain mathematical matrices; transpose only for GPU upload.
+GaussianShadowData PrepareGpuShadowData(GaussianShadowData data) {
+    for (auto& matrix : data.world_to_clip) {
+        matrix = Transpose(matrix);
+    }
+    data.world_to_view = Transpose(data.world_to_view);
+    return data;
+}
+} // namespace
+
 GaussianShadowPass::GaussianShadowPass(RasterContext& context) :
     GaussianShadowPass(
         context.manager,
@@ -180,8 +191,9 @@ double GaussianShadowPass::GetGpuTime() {
     return m_gpu_ms;
 }
 void GaussianShadowPass::Record(CommandList& commands, const RecordParameters& parameters) {
+    const auto gpu_data = PrepareGpuShadowData(parameters.data);
     commands.CopyFrom(
-        std::span<const byte>(reinterpret_cast<const byte*>(&parameters.data), sizeof(parameters.data)),
+        std::span<const byte>(reinterpret_cast<const byte*>(&gpu_data), sizeof(gpu_data)),
         parameters.data_buffer->GetView(),
         "Gaussian shadow views"
     );
@@ -198,7 +210,7 @@ void GaussianShadowPass::Record(CommandList& commands, const RecordParameters& p
             for (uint draw = 0; draw < parameters.draws.size(); ++draw) {
                 const auto&        instance = parameters.draws[draw];
                 GaussianShadowDraw param{};
-                param.world_to_clip = parameters.data.world_to_clip[view];
+                param.world_to_clip = Transpose(parameters.data.world_to_clip[view]);
                 param.info =
                     uint4(instance.range.x, parameters.instance_indices[draw], parameters.data.config.z, 0);
                 param.options = parameters.data.options;
@@ -241,9 +253,9 @@ TextureRef GaussianShadowPass::RecordDepthDebug(CommandList& commands, const Rec
         sizeof(GaussianShadowData),
         EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST
     );
+    const auto gpu_data = PrepareGpuShadowData(parameters.data);
     commands.CopyFrom(
-        std::span<const byte>(reinterpret_cast<const byte*>(&parameters.data), sizeof(parameters.data)),
-        uniform->GetView()
+        std::span<const byte>(reinterpret_cast<const byte*>(&gpu_data), sizeof(gpu_data)), uniform->GetView()
     );
     commands.UpdateBindlessArray(parameters.bindless);
     commands.Compute(m_inspect, uniform->GetView(), m_debug_depth->GetView(), parameters.bindless)

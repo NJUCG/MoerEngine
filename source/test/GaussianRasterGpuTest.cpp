@@ -584,6 +584,9 @@ void RunHybrid(
             sizeof(shadow),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
         );
+        for (auto& matrix : shadow.world_to_clip)
+            matrix = Transpose(matrix);
+        shadow.world_to_view = Transpose(shadow.world_to_view);
         commands.CopyFrom(
             std::span<byte>(reinterpret_cast<byte*>(&shadow), sizeof(shadow)), shadow_buffer->GetView()
         );
@@ -847,8 +850,12 @@ void RunGaussianShadows(ShaderManager& manager, bool cube, float opacity_multipl
         queries.size() * 3,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC
     );
+    auto gpu_shadow_data = parameters.data;
+    for (auto& matrix : gpu_shadow_data.world_to_clip)
+        matrix = Transpose(matrix);
+    gpu_shadow_data.world_to_view = Transpose(gpu_shadow_data.world_to_view);
     commands.CopyFrom(
-        std::span<const byte>(reinterpret_cast<const byte*>(&parameters.data), sizeof(parameters.data)),
+        std::span<const byte>(reinterpret_cast<const byte*>(&gpu_shadow_data), sizeof(gpu_shadow_data)),
         parameters.data_buffer->GetView()
     );
     commands.CopyFrom(

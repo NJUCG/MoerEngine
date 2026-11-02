@@ -38,7 +38,7 @@ BuildGaussianGpuUpload(const GaussianSceneSnapshot& snapshot, bool should_includ
                 );
         }
         GGaussianInstance gpu_instance{};
-        gpu_instance.world_transform = instance.world_transform;
+        gpu_instance.world_transform = Transpose(instance.world_transform);
         const auto& settings         = instance.settings;
         gpu_instance.color_opacity   = float4(
             settings.color_multiplier.x,

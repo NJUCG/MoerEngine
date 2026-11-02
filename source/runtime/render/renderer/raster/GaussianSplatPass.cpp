@@ -439,9 +439,9 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     }
     commands.PushScopeWithTimeScope("Gaussian Raster");
     auto camera_data           = std::make_shared<GGaussianCamera>();
-    camera_data->world_to_view = camera.GetViewMatrix();
-    camera_data->view_to_clip  = camera.GetProjectionMatrix();
-    camera_data->clip_to_view  = camera.GetProjectionMatrixInv();
+    camera_data->world_to_view = Transpose(camera.GetViewMatrix());
+    camera_data->view_to_clip  = Transpose(camera.GetProjectionMatrix());
+    camera_data->clip_to_view  = Transpose(camera.GetProjectionMatrixInv());
     const auto position        = camera.GetPosition();
     camera_data->position      = float4(position.x, position.y, position.z, 1);
     camera_data->viewport =

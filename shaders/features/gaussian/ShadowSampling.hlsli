@@ -1,17 +1,9 @@
 #ifndef MOER_GAUSSIAN_SHADOW_SAMPLING
 #define MOER_GAUSSIAN_SHADOW_SAMPLING
 #include "shared/gaussian/GaussianShadowParameters.h"
-// Raw-buffer matrix loads do not preserve the typed-buffer row-major interpretation.
-// Read explicit rows so Mesh and GS consumers use the same CPU matrix layout.
+// GPU matrices use the same column-major layout for typed and raw-buffer reads.
 Moer::GaussianShadowData LoadGaussianShadowData(uint handle) {
-    ArrayBuffer buffer = ArrayBuffer(handle);
-    Moer::GaussianShadowData data = buffer.Load<Moer::GaussianShadowData>(0);
-    [unroll] for (uint view = 0; view < 6; ++view)
-        [unroll] for (uint row = 0; row < 4; ++row)
-            data.world_to_clip[view][row] = buffer.Load<float4>(view * 4 + row);
-    [unroll] for (uint row = 0; row < 4; ++row)
-        data.world_to_view[row] = buffer.Load<float4>(24 + row);
-    return data;
+    return ArrayBuffer(handle).Load<Moer::GaussianShadowData>(0);
 }
 float GaussianShadowCascade(Moer::GaussianShadowData data, uint handle, uint cascade, float3 world) {
     float4 clip = mul(data.world_to_clip[cascade], float4(world, 1));
