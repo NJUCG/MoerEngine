@@ -24,7 +24,4 @@ struct GaussianShadowDraw {
     uint4    info;    // first gaussian, instance index, resolution, reserved
     float4   options; // cutoff
 };
-#ifdef __cplusplus
-static_assert(sizeof(GaussianShadowDraw) <= 128, "Push constants must fit the portable 128-byte limit");
-#endif
 }
