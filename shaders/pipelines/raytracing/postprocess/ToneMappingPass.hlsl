@@ -61,9 +61,9 @@ float3 Dither(float3 input, float2 seed) {
   return input;
 }
 
-void main(in float4 pos
-          : SV_Position, in float2 uv
-          : TEXCOORD0, out float4 target
+void main(in float2 uv
+          : TEXCOORD0, in float4 pos
+          : SV_Position, out float4 target
           : SV_Target) {
 
   STL::Rng::Hash::Initialize(uint2(pos.xy), params.frame_idx);

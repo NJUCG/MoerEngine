@@ -1000,21 +1000,32 @@ void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _n
 }
 void CommandList::CopyFrom(TextureView _src, TextureView _dst, std::string_view _name) {
     ValidateRHICommandAccess("CommandList::CopyFrom");
+    const auto valid_range = [](TextureView view) {
+        return view.texture && view.num_array && view.array_layer <= view.texture->GetNumArray() &&
+               view.num_array <= view.texture->GetNumArray() - view.array_layer;
+    };
+    if (!valid_range(_src) || !valid_range(_dst) || _src.num_array != _dst.num_array) {
+        throw std::invalid_argument("Texture copy requires matching, valid array ranges");
+    }
     Retain(_src);
     Retain(_dst);
-    commands.push_back(
-        MakeUnique<CopyTextureCmd>(
-            _src.texture->GetFormat(),
-            reinterpret_cast<uint64>(_src.texture), //reinterpret_cast<uint64
-            reinterpret_cast<uint64>(_dst.texture),
-            _src.mip_level,
-            _dst.mip_level,
-            _src.offset,
-            _dst.offset,
-            _src.extent,
-            _name
-        )
-    );
+    for (uint32 layer = 0; layer < _src.num_array; ++layer) {
+        commands.push_back(
+            MakeUnique<CopyTextureCmd>(
+                _src.texture->GetFormat(),
+                reinterpret_cast<uint64>(_src.texture),
+                reinterpret_cast<uint64>(_dst.texture),
+                _src.mip_level,
+                _dst.mip_level,
+                _src.offset,
+                _dst.offset,
+                TextureCopyExtent(_src),
+                _name,
+                _src.array_layer + layer,
+                _dst.array_layer + layer
+            )
+        );
+    }
 }
 void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _name) {
     ValidateRHICommandAccess("CommandList::CopyFrom");
@@ -1337,7 +1348,9 @@ void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
     assert(_array && "Bindless array is null");
     RetainResource(_array.Get());
 
-    commands.push_back(_array->CreateUpdateCommand());
+    if (auto update = _array->CreateUpdateCommand()) {
+        commands.push_back(std::move(update));
+    }
 }
 
 void CommandList::ClearResource(BufferView _buffer, uint32 _value) {

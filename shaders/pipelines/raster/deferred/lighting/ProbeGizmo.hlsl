@@ -158,7 +158,15 @@ float3 ProbeGizmoGetColor(Moer::ProbeGridProbeData probe, uint axis_index) {
     return fixed_color * (0.55 + axis_tint * 0.45) * moer_constants.param.gizmo_config.y * state_tint;
 }
 
-ProbeGizmoVSOutput ProbeGizmoVS(uint vertex_id : SV_VertexID, uint probe_index : SV_InstanceID) {
+ProbeGizmoVSOutput ProbeGizmoVS(uint vertex_id : SV_VertexID, uint probe_index : SV_InstanceID
+#if DXIL
+    , int base_vertex : SV_StartVertexLocation, uint base_instance : SV_StartInstanceLocation
+#endif
+) {
+#if DXIL
+    vertex_id = uint(int(vertex_id) + base_vertex);
+    probe_index += base_instance;
+#endif
     if (moer_constants.param.probe_volume_config.x == Moer::RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS ||
         moer_constants.param.probe_volume_config.x == Moer::RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS) {
         return ProbeVolumeBoundsVS(vertex_id);

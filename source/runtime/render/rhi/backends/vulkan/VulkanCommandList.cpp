@@ -743,7 +743,9 @@ void VulkanCommandList::CopyTexture(
     uint32         _src_mip_level,
     uint32         _dst_mip_level,
     VkImageLayout  _src_layout,
-    VkImageLayout  _dst_layout
+    VkImageLayout  _dst_layout,
+    uint32         _src_array_layer,
+    uint32         _dst_array_layer
 ) {
     if ((_src_layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && _src_layout != VK_IMAGE_LAYOUT_GENERAL) ||
         (_dst_layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && _dst_layout != VK_IMAGE_LAYOUT_GENERAL)) {
@@ -755,13 +757,13 @@ void VulkanCommandList::CopyTexture(
     }
     VkImageCopy copy_region = {
         .srcSubresource =
-            {.aspectMask = aspect, .mipLevel = _src_mip_level, .baseArrayLayer = 0, .layerCount = 1},
+            {.aspectMask = aspect, .mipLevel = _src_mip_level, .baseArrayLayer = _src_array_layer, .layerCount = 1},
         .srcOffset =
             {static_cast<int32>(_src_offset.x),
              static_cast<int32>(_src_offset.y),
              static_cast<int32>(_src_offset.z)},
         .dstSubresource =
-            {.aspectMask = aspect, .mipLevel = _dst_mip_level, .baseArrayLayer = 0, .layerCount = 1},
+            {.aspectMask = aspect, .mipLevel = _dst_mip_level, .baseArrayLayer = _dst_array_layer, .layerCount = 1},
         .dstOffset =
             {static_cast<int32>(_dst_offset.x),
              static_cast<int32>(_dst_offset.y),

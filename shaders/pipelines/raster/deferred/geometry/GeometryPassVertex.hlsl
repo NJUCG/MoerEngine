@@ -132,11 +132,20 @@ struct VsContext {
 VsOutput main(
     uint vertex_id : SV_VertexID,    // 顶点 ID（自动由 GPU 提供）
     uint instance_id : SV_InstanceID // 实例 ID（自动由 GPU 提供）
+#if DXIL
+    , int base_vertex : SV_StartVertexLocation
+    , uint base_instance : SV_StartInstanceLocation
+#endif
 #if POINT_SHADOW_MULTIVIEW
     , uint view_id : SV_ViewID
 #endif
 ) {
-
+#if DXIL
+    // The RHI uses Vulkan-style absolute vertex/instance indices. DXIL's
+    // ordinary system values exclude the offsets carried by an indirect draw.
+    vertex_id = uint(int(vertex_id) + base_vertex);
+    instance_id += base_instance;
+#endif
     VsContext context;
 #if !POINT_SHADOW_MULTIVIEW
     uint view_id = 0u;

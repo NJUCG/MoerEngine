@@ -186,16 +186,16 @@ void CheckSerialization() {
     Require(table_bytes[0] == 0 && table_bytes[1] == 2, "Bindless cache type tag changed");
 
     ReflectParamInfo dxil{ReflectParamInfo::DxilParameterReflection{
-        .slot = 2, .space = 3, .count = 4, .type = 0xabcd, .byte_size = 0x1234
+        .slot = 2, .space = 3, .count = 4, .type = 0xabcd, .byte_size = 0x1234, .byte_offset = 32
     }};
     const auto  dxil_bytes    = Serialize(dxil);
     const auto  restored_dxil = Deserialize(dxil_bytes);
     const auto&      d             = restored_dxil.GetDxilReflection();
     Require(
-        d.slot == 2 && d.space == 3 && d.count == 4 && d.type == 0xabcd && d.byte_size == 0x1234,
+        d.slot == 2 && d.space == 3 && d.count == 4 && d.type == 0xabcd && d.byte_size == 0x1234 && d.byte_offset == 32,
         "DXIL cache lost fields"
     );
-    Require(dxil_bytes.size() == 17 && dxil_bytes[0] == 1, "DXIL cache does not use its fixed field format");
+    Require(dxil_bytes.size() == 21 && dxil_bytes[0] == 1, "DXIL cache does not use its fixed field format");
     Require(
         std::get_if<ReflectParamInfo::SpirvParameterReflection>(&restored_dxil.backend_data) == nullptr,
         "DXIL reflection was read as SPIR-V"

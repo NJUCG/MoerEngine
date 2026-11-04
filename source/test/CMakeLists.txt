@@ -1,5 +1,17 @@
 set(moer_test_folder "test")
 
+option(MOER_D3D12_GPU_TESTS "Register D3D12 hardware integration tests in CTest" OFF)
+if(WIN32)
+    add_executable(TestD3D12Backend "D3D12BackendTest.cpp")
+    target_link_libraries(TestD3D12Backend PRIVATE Moer::Render)
+    target_compile_definitions(TestD3D12Backend PRIVATE MOER_TEST_WORKSPACE="${BINARY_ROOT_DIR}/bin/$<CONFIG>")
+    set_target_properties(TestD3D12Backend PROPERTIES FOLDER ${moer_test_folder})
+    if(MOER_D3D12_GPU_TESTS)
+        add_test(NAME D3D12BackendContract COMMAND $<TARGET_FILE:TestD3D12Backend>)
+        set_tests_properties(D3D12BackendContract PROPERTIES WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 120 LABELS "gpu;d3d12")
+    endif()
+endif()
+
 add_subdirectory(math)
 add_subdirectory(remote)
 add_subdirectory(scripting)

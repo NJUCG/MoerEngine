@@ -919,15 +919,18 @@ void DXCompiler::Impl::ReflectDXIL(
                 DX_CHECK_HRESULT(cb->GetDesc(&desc));
                 param_info.byte_size = desc.Size;
                 if (name == ReflectParamInfo::constants_name && desc.Variables == 1) {
-                    // A single logical constant keeps its argument name even
-                    // when declared through the shared push-constant wrapper.
+                    // DXIL cbuffer packing may insert gaps between logical
+                    // arguments. Preserve reflected offsets for backend upload.
                     auto* type = cb->GetVariableByIndex(0)->GetType();
                     D3D12_SHADER_TYPE_DESC type_desc{};
                     DX_CHECK_HRESULT(type->GetDesc(&type_desc));
-                    if (type_desc.Members != 1) {
-                        throw std::invalid_argument("D3D12 does not support multiple logical constants");
+                    for (uint32 member = 0; member < type_desc.Members; ++member) {
+                        D3D12_SHADER_TYPE_DESC member_desc{};
+                        DX_CHECK_HRESULT(type->GetMemberTypeByIndex(member)->GetDesc(&member_desc));
+                        auto logical = param_info;
+                        logical.byte_offset = member_desc.Offset;
+                        reflect_map.emplace(type->GetMemberTypeName(member), ReflectParamInfo{logical});
                     }
-                    name = type->GetMemberTypeName(0);
                 }
                 assert(shaderInputBindDesc.BindCount == 1); // ? array of constant buffer
             } break;

@@ -1,5 +1,6 @@
 
 #include "D3D12Device.h"
+#include "D3D12Common.h"
 #include <WinPixEventRuntime/pix3.h>
 
 namespace Moer::Render {

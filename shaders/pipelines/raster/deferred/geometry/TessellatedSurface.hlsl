@@ -116,7 +116,15 @@ struct SurfaceDomainOutput {
     nointerpolation float tessellation_factor : TEXCOORD1;
 };
 
-SurfaceControlPoint SurfaceVS(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID) {
+SurfaceControlPoint SurfaceVS(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID
+#if DXIL
+    , int base_vertex : SV_StartVertexLocation, uint base_instance : SV_StartInstanceLocation
+#endif
+) {
+#if DXIL
+    vertex_id = uint(int(vertex_id) + base_vertex);
+    instance_id += base_instance;
+#endif
     uint grid_x = max(surface_data.grid_and_options.x, 1u);
     uint grid_z = max(surface_data.grid_and_options.y, 1u);
 

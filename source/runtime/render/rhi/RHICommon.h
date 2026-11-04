@@ -1412,6 +1412,7 @@ struct ReflectParamInfo {
         uint32 count;
         uint32 type : 16;      // for common resource, see EShaderVariableType
         uint32 byte_size : 16; // padded size, size for root constant
+        uint32 byte_offset{0}; // logical member offset inside a DXIL constant buffer
 
         bool IsBindless() const {
             return count == 0;
