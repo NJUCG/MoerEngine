@@ -91,7 +91,7 @@ OutputStream& ReflectParamInfo::operator<<(OutputStream& stream) const {
         const auto& dxil_reflection = GetDxilReflection();
         stream << ReflectionBackendTag::Dxil << dxil_reflection.slot << dxil_reflection.space
                << dxil_reflection.count << uint16(dxil_reflection.type)
-               << uint16(dxil_reflection.byte_size);
+               << uint16(dxil_reflection.byte_size) << dxil_reflection.byte_offset;
         return stream;
     }
 
@@ -119,7 +119,7 @@ InputStream& ReflectParamInfo::operator>>(InputStream& stream) {
             uint16                  type      = 0;
             uint16                  byte_size = 0;
             stream >> dxil_reflection.slot >> dxil_reflection.space >> dxil_reflection.count >> type >>
-                byte_size;
+                byte_size >> dxil_reflection.byte_offset;
             dxil_reflection.type      = type;
             dxil_reflection.byte_size = byte_size;
             backend_data              = dxil_reflection;

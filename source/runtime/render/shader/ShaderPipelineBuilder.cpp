@@ -18,9 +18,6 @@ void ApplyShaderConstantLayoutDefines(
     const PipelineArgumentMetadata& metadata,
     EShaderPlatform                 platform
 ) {
-    if (platform == SP_WIN_D3D_SM6 && metadata.GetConstantLayouts().size() > 1) {
-        throw std::invalid_argument("D3D12 does not yet support multiple logical constant arguments");
-    }
     asset.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint32(1));
     asset.environment.SetDefine("MOER_PC_BYTE_SIZE", metadata.GetConstantByteSize());
     for (const ShaderConstantArgumentLayout& argument : metadata.GetConstantLayouts()) {
