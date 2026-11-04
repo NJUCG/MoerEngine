@@ -128,6 +128,9 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
     const uint32           mutation_id       = input.mutation_id;
     const std::string_view shader_type_name = GetShaderTypeName(_type);
 
+    if (input.target_info.shader_platform == SP_WIN_D3D_SM6) {
+        LOG_INFO("[Startup][D3D12Shader] Compiling {} / {} ({})", shader_path, entry_point, shader_type_name);
+    }
     ShaderCompilerOutput output = ShaderCompiler::Compile(std::move(input));
 
     if (!output.b_succeeded) {

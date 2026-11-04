@@ -16,7 +16,7 @@ namespace Moer::Render {
 namespace {
 
 constexpr uint32 k_shader_cache_magic          = 0x4D534443; // "MSDC"
-constexpr uint32 k_shader_cache_format_version = 7;
+constexpr uint32 k_shader_cache_format_version = 8;
 
 std::string GetCacheFileName(RenderDevice& device) {
     return std::string(ToString(device.GetShaderPlatform())) + ".sdc";

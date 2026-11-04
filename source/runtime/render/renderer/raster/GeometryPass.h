@@ -68,7 +68,7 @@ public:
             {},
             {
                 RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM),           // base_color
-                RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32), // normal
+                RHIColorAttachmentInfo::Preset(PF_A2B10G10R10_UNORM_PACK32), // normal
                 RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)            // metal_rough_ao
             },
             depth_stencil_info,

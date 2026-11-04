@@ -80,7 +80,7 @@ TessellatedSurfacePass::TessellatedSurfacePass(RasterContext& context) {
         {},
         {
             RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM),
-            RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32),
+            RHIColorAttachmentInfo::Preset(PF_A2B10G10R10_UNORM_PACK32),
             RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)
         },
         RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),

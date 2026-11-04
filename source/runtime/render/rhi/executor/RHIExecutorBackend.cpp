@@ -50,7 +50,7 @@ public:
             if (!SubmitHasWork(entry.submit)) {
                 continue;
             }
-            if (last_queue.has_value() && *last_queue != entry.queue) {
+            if (last_queue.has_value() && UsesDifferentNativeQueue(*last_queue, entry.queue)) {
                 WaitForQueue(*last_queue, ordered_copy_timeline);
             }
             ExecuteSubmission(entry, ordered_copy_timeline);
@@ -58,7 +58,7 @@ public:
         }
 
         if (_batch.present.has_value()) {
-            if (last_queue.has_value() && *last_queue != EQueueType::Graphics) {
+            if (last_queue.has_value() && UsesDifferentNativeQueue(*last_queue, EQueueType::Graphics)) {
                 WaitForQueue(*last_queue, ordered_copy_timeline);
             }
             RHIPresentRequest& present = *_batch.present;
@@ -104,6 +104,10 @@ public:
     }
 
 private:
+    static bool UsesDifferentNativeQueue(EQueueType a, EQueueType b) {
+        const auto topology = RenderDevice::Get().GetQueueTopology();
+        return topology.Resolve(a).native_queue_id != topology.Resolve(b).native_queue_id;
+    }
     static void ValidateBatchQueues(const RHISubmissionBatch& _batch) {
         const RHIQueueTopology queue_topology =
             RenderDevice::Get().GetQueueTopology();

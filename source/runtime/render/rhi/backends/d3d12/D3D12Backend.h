@@ -98,9 +98,10 @@ private:
 };
 
 struct Binding {
-    uint32                   argument = UINT32_MAX;
-    uint32                   root     = 0;
-    uint32                   count    = 1;
+    EPixelFormat             inferred_format = PF_UNDEFINED;
+    uint32                   argument        = UINT32_MAX;
+    uint32                   root            = 0;
+    uint32                   count           = 1;
     ED3D12ShaderVariableType type{};
     bool                     constants     = false;
     uint32                   constant_size = 0;
@@ -124,6 +125,15 @@ public:
     bool                        compute  = false;
     bool                        mesh     = false;
 };
+
+struct ConstantLayout {
+    uint32                       packed_size = 0;
+    uint32                       native_size = 0;
+    Array<Binding::ConstantCopy> copies;
+};
+ConstantLayout              ReflectConstantLayout(ID3D12ShaderReflectionType*);
+ConstantLayout              ReflectBufferLayout(ID3D12ShaderReflectionConstantBuffer*);
+ID3D12ShaderReflectionType* FindConstantType(ID3D12ShaderReflection*, std::string_view);
 
 PipelineHandle CreatePipeline(Context&, PipelineShaderInfo&&, const GfxPsoCreateInfo*);
 
@@ -212,6 +222,8 @@ class Queue;
 class CopyQueueAdapter;
 
 struct Context {
+    ComPtr<ID3D12InfoQueue1>          debug_callbacks;
+    DWORD                             debug_callback_cookie = 0;
     ComPtr<IDXGIFactory6>             factory;
     ComPtr<IDXGIAdapter1>             adapter;
     ComPtr<ID3D12Device5>             device;
@@ -240,6 +252,8 @@ struct QueryRecord {
 };
 
 struct Packet {
+    ComPtr<IDXGISwapChain3> presentation;
+    PresentReceiptRef       present_receipt;
     explicit Packet(CmdSubmit&& submit) :
         submit(std::move(submit)) {}
     CmdSubmit                                                    submit;
@@ -247,6 +261,7 @@ struct Packet {
     ComPtr<ID3D12CommandAllocator>                               allocator;
     ComPtr<ID3D12GraphicsCommandList6>                           list;
     Array<ComPtr<ID3D12CommandSignature>>                        signatures;
+    Array<ComPtr<ID3D12Resource>>                                native_resources;
     Array<BufferRef>                                             buffers;
     Array<CountableRef<RHIResource>>                             resources;
     Array<std::pair<DescriptorHeap*, std::pair<uint32, uint32>>> descriptors;
@@ -279,6 +294,8 @@ public:
 };
 
 class Queue final : public CommandQueue {
+    friend class SwapchainImpl;
+
 public:
     explicit Queue(Context&);
     ~Queue();
@@ -300,6 +317,7 @@ public:
 private:
     void                                Complete(std::stop_token);
     WaitEvent                           SubmitPacket(std::unique_ptr<Packet>);
+    std::unique_lock<std::mutex>        LockIdle();
     Context&                            context;
     ComPtr<ID3D12CommandQueue>          queue;
     FenceRef                            timeline;

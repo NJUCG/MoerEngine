@@ -1337,7 +1337,9 @@ void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
     assert(_array && "Bindless array is null");
     RetainResource(_array.Get());
 
-    commands.push_back(_array->CreateUpdateCommand());
+    if (auto update = _array->CreateUpdateCommand()) {
+        commands.push_back(std::move(update));
+    }
 }
 
 void CommandList::ClearResource(BufferView _buffer, uint32 _value) {

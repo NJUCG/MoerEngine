@@ -41,11 +41,15 @@ D3D12Device::D3D12Device(D3D12RHIConfig config) :
     if (!ctx.device) {
         throw std::runtime_error("No D3D12 hardware adapter with feature level 12_0");
     }
-    D3D12_FEATURE_DATA_SHADER_MODEL model{D3D_SHADER_MODEL_6_7};
+    D3D12_FEATURE_DATA_SHADER_MODEL model{D3D_SHADER_MODEL_6_8};
     DX_CHECK_HRESULT(ctx.device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &model, sizeof(model)));
-    if (model.HighestShaderModel < D3D_SHADER_MODEL_6_7) {
-        throw std::runtime_error("Moer D3D12 shaders require Shader Model 6.7");
+    if (model.HighestShaderModel < D3D_SHADER_MODEL_6_8) {
+        throw std::runtime_error("Moer D3D12 shaders require Shader Model 6.8 for base vertex/instance indices");
     }
+    D3D12_FEATURE_DATA_D3D12_OPTIONS21 options21{};
+    DX_CHECK_HRESULT(ctx.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS21, &options21, sizeof(options21)));
+    if (!options21.ExtendedCommandInfoSupported)
+        throw std::runtime_error("D3D12 adapter does not support ExtendedCommandInfo");
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5{};
     if (SUCCEEDED(ctx.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &options5, sizeof(options5)))) {
         ctx.raytracing = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1;
@@ -55,6 +59,19 @@ D3D12Device::D3D12Device(D3D12RHIConfig config) :
         ctx.mesh_shaders = options7.MeshShaderTier != D3D12_MESH_SHADER_TIER_NOT_SUPPORTED;
     }
     ctx.device.As(&ctx.info_queue);
+    if (SUCCEEDED(ctx.device.As(&ctx.debug_callbacks))) {
+        DX_CHECK_HRESULT(ctx.debug_callbacks->RegisterMessageCallback(
+            [](D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id, LPCSTR description, void*) {
+                if (severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
+                    validation_error_count.fetch_add(1);
+                    LOG_ERROR("D3D12 validation {}: {}", uint32(id), description);
+                }
+            },
+            D3D12_MESSAGE_CALLBACK_FLAG_NONE,
+            nullptr,
+            &ctx.debug_callback_cookie
+        ));
+    }
     const D3D12MA::ALLOCATOR_DESC allocator_info{.pDevice = ctx.device.Get(), .pAdapter = ctx.adapter.Get()};
     DX_CHECK_HRESULT(D3D12MA::CreateAllocator(&allocator_info, &ctx.allocator));
     ctx.views     = std::make_unique<DescriptorHeap>(ctx.device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1000000, true);
@@ -84,7 +101,7 @@ D3D12Device::D3D12Device(D3D12RHIConfig config) :
     }
     ctx.queue = std::make_unique<Queue>(ctx);
     ctx.copy  = std::make_unique<CopyQueueAdapter>(*ctx.queue);
-    LOG_INFO("D3D12 initialized: SM6.7 bindless, DXR={}, mesh shaders={}", ctx.raytracing, ctx.mesh_shaders);
+    LOG_INFO("D3D12 initialized: SM6.8 bindless, DXR={}, mesh shaders={}", ctx.raytracing, ctx.mesh_shaders);
 }
 
 D3D12Device::~D3D12Device() = default;
@@ -162,7 +179,7 @@ void D3D12Device::FlushDebugMessages() const {
         Array<byte> storage(size);
         auto*       message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
         if (SUCCEEDED(native->info_queue->GetMessage(i, message, &size))) {
-            if (message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
+            if (message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR && !native->debug_callbacks) {
                 native->validation_errors.fetch_add(1);
                 validation_error_count.fetch_add(1);
                 LOG_ERROR("D3D12 validation {}: {}", uint32(message->ID), message->pDescription);
@@ -179,6 +196,8 @@ namespace Moer::Render::D3D12 {
 Context::~Context() {
     copy.reset();
     queue.reset();
+    if (debug_callbacks)
+        debug_callbacks->UnregisterMessageCallback(debug_callback_cookie);
 }
 BufferRef Context::Buffer(uint64 size, EBufferUsageFlags usage, D3D12_HEAP_TYPE heap) {
     return MoerNew(GpuBuffer)(*this, BufferInfo{size, 1, usage}, heap);

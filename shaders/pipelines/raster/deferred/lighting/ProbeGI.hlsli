@@ -3,6 +3,14 @@
 
 #include "shared/raster/ShaderParameters.h"
 
+// DXIL's optimizer otherwise duplicates the full adaptive hierarchy search for
+// every volume and level. These loops index GPU buffers, not static arrays.
+#if DXIL
+#define PROBE_SEARCH_LOOP [loop]
+#else
+#define PROBE_SEARCH_LOOP [unroll]
+#endif
+
 bool ProbeGIIsEnabled(Moer::LightingData lighting_data) {
     return lighting_data.probe_system_config.x != 0u && lighting_data.probe_system_config.z != 0u &&
            lighting_data.probe_system_config.w != 0u && lighting_data.probe_system_counts.x > 0u &&
@@ -55,7 +63,7 @@ uint ProbeGIGetLevelGridDim(uint subdivision_level) {
 
 uint ProbeGIGetLevelPageOffset(uint subdivision_level) {
     uint page_offset = 0u;
-    [unroll] for (uint level = 0u; level < Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL; ++level) {
+    PROBE_SEARCH_LOOP for (uint level = 0u; level < Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL; ++level) {
         if (level < subdivision_level) {
             const uint dim = ProbeGIGetLevelGridDim(level);
             page_offset += dim * dim * dim;
@@ -855,7 +863,7 @@ float3 ProbeGISampleHierarchyFromLevel(
     resolved_coverage = 0.0;
     resolved_level = float(min(start_level, volume.hierarchy.z));
 
-    [unroll] for (uint level = 0u; level <= Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL; ++level) {
+    PROBE_SEARCH_LOOP for (uint level = 0u; level <= Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL; ++level) {
         if (level < start_level || level > volume.hierarchy.z || remaining_coverage <= 1e-5) {
             continue;
         }
@@ -987,7 +995,7 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
     float3 irradiance_sum = float3(0.0, 0.0, 0.0);
     float  volume_weight_sum = 0.0;
 
-    [unroll] for (uint volume_index = 0u; volume_index < Moer::RASTER_PROBE_VOLUME_MAX_COUNT; ++volume_index) {
+    PROBE_SEARCH_LOOP for (uint volume_index = 0u; volume_index < Moer::RASTER_PROBE_VOLUME_MAX_COUNT; ++volume_index) {
         if (volume_index >= lighting_data.probe_system_counts.x) {
             continue;
         }
@@ -1042,7 +1050,7 @@ bool ProbeGISelectVolume(
     selected_biased_pos = world_pos;
     float best_weight = -1.0;
 
-    [unroll] for (uint volume_index = 0u; volume_index < Moer::RASTER_PROBE_VOLUME_MAX_COUNT; ++volume_index) {
+    PROBE_SEARCH_LOOP for (uint volume_index = 0u; volume_index < Moer::RASTER_PROBE_VOLUME_MAX_COUNT; ++volume_index) {
         if (volume_index >= lighting_data.probe_system_counts.x) {
             continue;
         }
@@ -1416,4 +1424,5 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
     return volume_color * lighting_data.probe_system_debug.x;
 }
 
+#undef PROBE_SEARCH_LOOP
 #endif // MOER_RASTER_DEFERRED_LIGHTING_PROBE_GI_HLSLI

@@ -232,7 +232,15 @@ CsmGizmoVSOutput CsmGizmoSphereVS(Moer::CsmGizmoCascadeData cascade_data, uint v
     );
 }
 
-CsmGizmoVSOutput CsmGizmoVS(uint vertex_id : SV_VertexID, uint cascade_index : SV_InstanceID) {
+CsmGizmoVSOutput CsmGizmoVS(uint vertex_id : SV_VertexID, uint cascade_index : SV_InstanceID
+#if DXIL
+    , int base_vertex : SV_StartVertexLocation, uint base_instance : SV_StartInstanceLocation
+#endif
+) {
+#if DXIL
+    vertex_id = uint(int(vertex_id) + base_vertex);
+    cascade_index += base_instance;
+#endif
     const uint cascade_count = max(moer_constants.param.csm_config.y, 1u);
     const uint safe_cascade_index = min(cascade_index, cascade_count - 1u);
     ArrayBuffer cascade_buffer = ArrayBuffer(moer_constants.param.csm_config.x);

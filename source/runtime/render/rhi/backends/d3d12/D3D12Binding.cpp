@@ -54,10 +54,12 @@ uint32 Recorder::View(BufferView view, ED3D12ShaderVariableType type, uint32 ind
         const D3D12_CONSTANT_BUFFER_VIEW_DESC desc{buffer.Address(view.GetByteOffset()), uint32(Align(view.GetByteSize(), 256))};
         context.device->CreateConstantBufferView(&desc, cpu);
     } else {
-        const bool   raw        = type == ED3D12ShaderVariableType::ByteAddressBuffer || type == ED3D12ShaderVariableType::RWByteAddressBuffer;
-        const bool   structured = type == ED3D12ShaderVariableType::StructuredBuffer || type == ED3D12ShaderVariableType::RWStructuredBuffer;
-        const uint32 stride     = raw ? 4 : structured ? view.GetStride() :
-                                                         uint32(GetSizeFromImageFormat(view.format, {1, 1, 1}));
+        const bool raw        = type == ED3D12ShaderVariableType::ByteAddressBuffer || type == ED3D12ShaderVariableType::RWByteAddressBuffer;
+        const bool structured = type == ED3D12ShaderVariableType::StructuredBuffer || type == ED3D12ShaderVariableType::RWStructuredBuffer;
+        if (!raw && !structured && view.format == PF_UNDEFINED)
+            throw std::invalid_argument("D3D12 typed buffer view requires a format");
+        const uint32 stride = raw ? 4 : structured ? view.GetStride() :
+                                                     uint32(GetSizeFromImageFormat(view.format, {1, 1, 1}));
         if (!stride || view.GetByteOffset() % stride || view.GetByteSize() % stride)
             throw std::invalid_argument("Invalid D3D12 buffer element alignment");
         const DXGI_FORMAT format = raw ? DXGI_FORMAT_R32_TYPELESS : structured ? DXGI_FORMAT_UNKNOWN :
@@ -217,12 +219,35 @@ void Recorder::Bind(PipelineHandle handle, const ArrayArguments& args) {
                 if (count >= binding.count)
                     throw std::invalid_argument("Too many D3D12 descriptor array elements");
                 if constexpr (std::is_same_v<T, BufferView>) {
-                    auto&      buffer = *static_cast<GpuBuffer*>(view.buffer);
+                    auto resolved = view;
+                    if (resolved.format == PF_UNDEFINED)
+                        resolved.format = binding.inferred_format;
+                    if (binding.type == ED3D12ShaderVariableType::ConstantBuffer &&
+                        std::any_of(binding.constant_copies.begin(), binding.constant_copies.end(), [](auto copy) {
+                            return copy.source != copy.destination;
+                        })) {
+                        auto converted = context.Buffer(binding.constant_size);
+                        packet.buffers.push_back(converted);
+                        auto&      src       = *static_cast<GpuBuffer*>(view.buffer);
+                        auto&      dst       = *static_cast<GpuBuffer*>(converted.Get());
+                        const auto old_state = src.state;
+                        Transition(src, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                        Transition(dst, D3D12_RESOURCE_STATE_COPY_DEST);
+                        for (auto copy : binding.constant_copies) {
+                            if (copy.source + copy.size > view.GetByteSize())
+                                throw std::invalid_argument("D3D12 UBO source range is smaller than its reflected C++ layout");
+                            list->CopyBufferRegion(dst.resource.Get(), copy.destination, src.resource.Get(), view.byte_offset + copy.source, copy.size);
+                        }
+                        Transition(src, old_state);
+                        Transition(dst, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+                        resolved = converted->GetView();
+                    }
+                    auto&      buffer = *static_cast<GpuBuffer*>(resolved.buffer);
                     const auto state  = binding.type == ED3D12ShaderVariableType::ConstantBuffer ? D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER :
                                                 IsUav(binding.type)                                      ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS :
                                                                                                            D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
                     Transition(buffer, state);
-                    View(view, binding.type, start + count++);
+                    View(resolved, binding.type, start + count++);
                 } else {
                     Transition(*static_cast<GpuTexture*>(view.texture), IsUav(binding.type) ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, view.mip_level, view.num_mips, view.array_layer, view.num_array);
                     View(view, binding.type, start + count++);

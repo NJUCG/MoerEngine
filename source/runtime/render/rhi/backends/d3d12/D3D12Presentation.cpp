@@ -14,7 +14,7 @@ SwapchainImpl::SwapchainImpl(Context& context, const SwapchainCreateInfo& info) 
 bool SwapchainImpl::Recreate(const SwapchainCreateInfo& info) {
     if (!info.surface.IsValid() || !info.size.x || !info.size.y)
         return false;
-    context.queue->Sync();
+    auto            idle = context.queue->LockIdle();
     std::lock_guard lock(mutex);
     const auto      native = info.surface.source->GetNativeWindow();
     HWND            window = reinterpret_cast<HWND>(native.platform_window_handle);
@@ -83,8 +83,9 @@ void Queue::Present(SwapchainRef swapchain, TextureView source, PresentReceiptRe
         Recorder recorder(context, *packet);
         auto&    src = *static_cast<GpuTexture*>(source.texture);
         recorder.Transition(src, D3D12_RESOURCE_STATE_COPY_SOURCE, source.mip_level, 1, source.array_layer, 1);
-        auto*                  destination = target.backbuffers[target.swapchain->GetCurrentBackBufferIndex()].Get();
-        D3D12_RESOURCE_BARRIER barrier     = CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
+        auto* destination = target.backbuffers[target.swapchain->GetCurrentBackBufferIndex()].Get();
+        packet->native_resources.emplace_back(destination);
+        D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
         packet->list->ResourceBarrier(1, &barrier);
         const CD3DX12_TEXTURE_COPY_LOCATION src_location(src.resource.Get(), src.Subresource(source.mip_level, source.array_layer));
         const CD3DX12_TEXTURE_COPY_LOCATION dst_location(destination, 0);
@@ -92,13 +93,9 @@ void Queue::Present(SwapchainRef swapchain, TextureView source, PresentReceiptRe
         std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
         packet->list->ResourceBarrier(1, &barrier);
         DX_CHECK_HRESULT(packet->list->Close());
+        packet->presentation    = target.swapchain;
+        packet->present_receipt = receipt;
         SubmitPacket(std::move(packet));
-        const HRESULT result = target.swapchain->Present(0, 0);
-        if (FAILED(result)) {
-            LOG_ERROR("D3D12 Present failed: {:#x}", uint32(result));
-            resolve(false, result == DXGI_ERROR_INVALID_CALL);
-        } else
-            resolve(true);
     } catch (const std::exception& error) {
         LOG_ERROR("D3D12 Present: {}", error.what());
         resolve(false);

@@ -30,6 +30,19 @@ bool IsUav(ED3D12ShaderVariableType type) {
     return (type >= ED3D12ShaderVariableType::RWByteAddressBuffer && type <= ED3D12ShaderVariableType::RWTypedBuffer) ||
            (type >= ED3D12ShaderVariableType::RWTexture1D && type <= ED3D12ShaderVariableType::RWTexture3D);
 }
+EPixelFormat TypedBufferFormat(const D3D12_SHADER_INPUT_BIND_DESC& binding) {
+    const uint32           count    = 1 + ((binding.uFlags & D3D_SIF_TEXTURE_COMPONENTS) >> 2);
+    constexpr EPixelFormat floats[] = {PF_R32_SFLOAT, PF_R32G32_SFLOAT, PF_R32G32B32_SFLOAT, PF_R32G32B32A32_SFLOAT};
+    constexpr EPixelFormat uints[]  = {PF_R32_UINT, PF_R32G32_UINT, PF_R32G32B32_UINT, PF_R32G32B32A32_UINT};
+    constexpr EPixelFormat ints[]   = {PF_R32_SINT, PF_R32G32_SINT, PF_R32G32B32_SINT, PF_R32G32B32A32_SINT};
+    if (binding.ReturnType == D3D_RETURN_TYPE_FLOAT)
+        return floats[count - 1];
+    if (binding.ReturnType == D3D_RETURN_TYPE_UINT)
+        return uints[count - 1];
+    if (binding.ReturnType == D3D_RETURN_TYPE_SINT)
+        return ints[count - 1];
+    throw std::invalid_argument("D3D12 typed buffer requires an explicit view format for this return type");
+}
 D3D12_BLEND Blend(EBlendFactor factor) {
     constexpr D3D12_BLEND values[] = {D3D12_BLEND_ZERO, D3D12_BLEND_ONE, D3D12_BLEND_SRC_COLOR, D3D12_BLEND_INV_SRC_COLOR, D3D12_BLEND_DEST_COLOR, D3D12_BLEND_INV_DEST_COLOR, D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_DEST_ALPHA, D3D12_BLEND_INV_DEST_ALPHA, D3D12_BLEND_BLEND_FACTOR, D3D12_BLEND_INV_BLEND_FACTOR, D3D12_BLEND_SRC1_COLOR, D3D12_BLEND_INV_SRC1_COLOR, D3D12_BLEND_SRC1_ALPHA, D3D12_BLEND_INV_SRC1_ALPHA};
     return values[uint32(factor)];
@@ -84,6 +97,7 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
     Array<D3D12_DESCRIPTOR_RANGE1> ranges;
     ranges.reserve(shaders.shaders.size() * arguments.size());
     for (const auto& shader : shaders.shaders) {
+        ComPtr<ID3D12ShaderReflection> native_reflection;
         if (!shader.shader_param_map)
             throw std::invalid_argument("D3D12 requires DXIL reflection");
         std::set<std::pair<uint32, uint32>> constant_registers;
@@ -96,7 +110,14 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
                 continue;
             const auto& reflection = found->second.GetDxilReflection();
             active |= uint64(1) << arg_index;
-            Binding               binding{.argument = arg_index, .root = uint32(roots.size()), .count = std::max(1u, reflection.count), .type = ED3D12ShaderVariableType(reflection.type)};
+            Binding binding{.argument = arg_index, .root = uint32(roots.size()), .count = std::max(1u, reflection.count), .type = ED3D12ShaderVariableType(reflection.type)};
+            if (binding.type == ED3D12ShaderVariableType::TypedBuffer || binding.type == ED3D12ShaderVariableType::RWTypedBuffer) {
+                if (!native_reflection)
+                    native_reflection = Reflect(shader);
+                D3D12_SHADER_INPUT_BIND_DESC desc{};
+                DX_CHECK_HRESULT(native_reflection->GetResourceBindingDescByName(name.c_str(), &desc));
+                binding.inferred_format = TypedBufferFormat(desc);
+            }
             D3D12_ROOT_PARAMETER1 root{};
             root.ShaderVisibility = Visibility(shader.shader_type);
             if (argument.cpp_info.type == SDA_Constant) {
@@ -104,6 +125,8 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
                     continue;
                 binding.constants     = true;
                 binding.constant_size = reflection.byte_size;
+                if (!native_reflection)
+                    native_reflection = Reflect(shader);
                 for (const auto& layout : shaders.argument_metadata.GetConstantLayouts()) {
                     const auto member = map.find(std::string(arguments[layout.argument_index].name));
                     if (member == map.end())
@@ -111,9 +134,14 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
                     const auto& value = member->second.GetDxilReflection();
                     if (value.slot != reflection.slot || value.space != reflection.space)
                         continue;
-                    if (value.byte_offset + layout.byte_size > reflection.byte_size)
-                        throw std::invalid_argument("DXIL constant argument exceeds cbuffer");
-                    binding.constant_copies.push_back({layout.byte_offset, value.byte_offset, layout.byte_size});
+                    const auto logical = ReflectConstantLayout(FindConstantType(native_reflection.Get(), arguments[layout.argument_index].name));
+                    if (logical.packed_size != layout.byte_size || value.byte_offset + logical.native_size > reflection.byte_size)
+                        throw std::invalid_argument("DXIL logical constant layout does not match the C++ shared header");
+                    for (auto copy : logical.copies) {
+                        copy.source += layout.byte_offset;
+                        copy.destination += value.byte_offset;
+                        binding.constant_copies.push_back(copy);
+                    }
                 }
                 root.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
                 root.Descriptor    = {reflection.slot, reflection.space, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE};
@@ -121,6 +149,13 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
                 root.ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
                 root.Descriptor    = {reflection.slot, reflection.space, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE};
             } else {
+                if (binding.type == ED3D12ShaderVariableType::ConstantBuffer) {
+                    if (!native_reflection)
+                        native_reflection = Reflect(shader);
+                    auto layout             = ReflectBufferLayout(native_reflection->GetConstantBufferByName(name.c_str()));
+                    binding.constant_size   = layout.native_size;
+                    binding.constant_copies = std::move(layout.copies);
+                }
                 root.ParameterType                           = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
                 const D3D12_DESCRIPTOR_RANGE_TYPE range_type = binding.type == ED3D12ShaderVariableType::Sampler        ? D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER :
                                                                binding.type == ED3D12ShaderVariableType::ConstantBuffer ? D3D12_DESCRIPTOR_RANGE_TYPE_CBV :

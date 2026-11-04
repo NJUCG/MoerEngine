@@ -41,8 +41,14 @@ void Queue::Wait(WaitEvent event) {
         throw std::runtime_error("D3D12 queue wait producer was not accepted");
     DX_CHECK_HRESULT(queue->Wait(fence->fence.Get(), event.value));
 }
-WaitEvent Queue::SubmitPacket(std::unique_ptr<Packet> packet) {
-    auto& submit = packet->submit;
+WaitEvent Queue::SubmitPacket(std::unique_ptr<Packet> owning_packet) {
+    // Allocate Completion's owner before native execution. An allocation
+    // failure must not free resources already visible to the GPU.
+    owning_packet->error.reserve(256);
+    std::unique_lock completion_lock(completion_mutex);
+    pending.push_back(std::move(owning_packet));
+    Packet* packet = pending.back().get();
+    auto&   submit = packet->submit;
     if (packet->error.empty()) {
         for (const auto wait : submit.wait_events) {
             auto* fence = reinterpret_cast<Timeline*>(wait.timeline_handle);
@@ -78,16 +84,22 @@ WaitEvent Queue::SubmitPacket(std::unique_ptr<Packet> packet) {
         packet->rollback.clear();
         packet->accepted = true;
     }
+    if (packet->presentation) {
+        const HRESULT result = packet->error.empty() ? packet->presentation->Present(0, 0) : E_FAIL;
+        if (packet->present_receipt)
+            packet->present_receipt->Resolve(SUCCEEDED(result));
+        if (FAILED(result))
+            packet->error = "D3D12 swapchain Present failed";
+    }
+    // Present may queue native work after the copy command list. The retirement
+    // signal must cover that work before backbuffers can be resized or freed.
     packet->timeline     = ++next_timeline;
     const uint64  value  = packet->timeline;
     const HRESULT signal = queue->Signal(static_cast<Timeline*>(timeline.Get())->fence.Get(), value);
     if (FAILED(signal))
         packet->error = "D3D12 queue completion signal failed";
     timeline->MarkSubmitted(value);
-    {
-        std::lock_guard lock(completion_mutex);
-        pending.push_back(std::move(packet));
-    }
+    completion_lock.unlock();
     completion_cv.notify_all();
     return {uint64(timeline.Get()), value};
 }
@@ -124,6 +136,17 @@ void Queue::Sync(uint64 value) {
     completion_cv.wait(lock, [&] {
         return retired >= value;
     });
+}
+std::unique_lock<std::mutex> Queue::LockIdle() {
+    for (;;) {
+        Sync();
+        std::unique_lock lock(submission_mutex);
+        std::lock_guard  completion_lock(completion_mutex);
+        if (retired >= next_timeline)
+            return lock;
+        // A later Present raced the drain. Do not wait with submission_mutex:
+        // Completion callbacks are allowed to submit further work.
+    }
 }
 void Queue::Complete(std::stop_token stop) {
     RHIThreadRoleScope role(ERHIThreadRole::Completion);
