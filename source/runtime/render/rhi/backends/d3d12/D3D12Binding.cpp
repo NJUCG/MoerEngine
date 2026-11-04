@@ -220,6 +220,15 @@ void Recorder::Bind(PipelineHandle handle, const ArrayArguments& args) {
                     throw std::invalid_argument("Too many D3D12 descriptor array elements");
                 if constexpr (std::is_same_v<T, BufferView>) {
                     auto resolved = view;
+                    // Scene buffers may be allocated as bytes for bindless raw
+                    // access. A structured descriptor uses the shader's element
+                    // stride, independently of that allocation's element type.
+                    if (binding.structure_stride) {
+                        if (resolved.GetByteSize() % binding.structure_stride)
+                            throw std::invalid_argument("D3D12 structured view size is not a whole shader element");
+                        resolved.num_elements = resolved.GetByteSize() / binding.structure_stride;
+                        resolved.stride       = binding.structure_stride;
+                    }
                     if (resolved.format == PF_UNDEFINED)
                         resolved.format = binding.inferred_format;
                     if (binding.type == ED3D12ShaderVariableType::ConstantBuffer &&

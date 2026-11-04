@@ -111,6 +111,15 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
             const auto& reflection = found->second.GetDxilReflection();
             active |= uint64(1) << arg_index;
             Binding binding{.argument = arg_index, .root = uint32(roots.size()), .count = std::max(1u, reflection.count), .type = ED3D12ShaderVariableType(reflection.type)};
+            if (argument.cpp_info.type != SDA_BindlessArray &&
+                (binding.type == ED3D12ShaderVariableType::StructuredBuffer || binding.type == ED3D12ShaderVariableType::RWStructuredBuffer)) {
+                if (!native_reflection)
+                    native_reflection = Reflect(shader);
+                D3D12_SHADER_BUFFER_DESC desc{};
+                const auto               resource_name = binding.count > 1 ? name + "[0]" : name;
+                DX_CHECK_HRESULT(native_reflection->GetConstantBufferByName(resource_name.c_str())->GetDesc(&desc));
+                binding.structure_stride = desc.Size;
+            }
             if (binding.type == ED3D12ShaderVariableType::TypedBuffer || binding.type == ED3D12ShaderVariableType::RWTypedBuffer) {
                 if (!native_reflection)
                     native_reflection = Reflect(shader);

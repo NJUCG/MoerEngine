@@ -98,10 +98,11 @@ private:
 };
 
 struct Binding {
-    EPixelFormat             inferred_format = PF_UNDEFINED;
-    uint32                   argument        = UINT32_MAX;
-    uint32                   root            = 0;
-    uint32                   count           = 1;
+    EPixelFormat             inferred_format  = PF_UNDEFINED;
+    uint32                   argument         = UINT32_MAX;
+    uint32                   root             = 0;
+    uint32                   count            = 1;
+    uint32                   structure_stride = 0;
     ED3D12ShaderVariableType type{};
     bool                     constants     = false;
     uint32                   constant_size = 0;
