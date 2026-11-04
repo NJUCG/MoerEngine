@@ -212,11 +212,22 @@ void Recorder::Bind(PipelineHandle handle, const ArrayArguments& args) {
         } else if (const auto* sampler = std::get_if<Sampler>(&arg)) {
             table(binding.root, context.samplers->Gpu(context.SamplerIndex(*sampler)));
         } else {
-            const uint32 start = Descriptor(*context.views, binding.count);
+            uint32 descriptor_count = binding.count;
+            if (!descriptor_count) {
+                if (const auto* views = std::get_if<BufferViewArray>(&arg))
+                    descriptor_count = uint32(views->size());
+                else if (const auto* views = std::get_if<TextureViewArray>(&arg))
+                    descriptor_count = uint32(views->size());
+                else
+                    descriptor_count = 1;
+            }
+            if (!descriptor_count)
+                throw std::invalid_argument("D3D12 unbounded descriptor array cannot be empty");
+            const uint32 start = Descriptor(*context.views, descriptor_count);
             uint32       count = 0;
             auto         write = [&](const auto& view) {
                 using T = std::decay_t<decltype(view)>;
-                if (count >= binding.count)
+                if (count >= descriptor_count)
                     throw std::invalid_argument("Too many D3D12 descriptor array elements");
                 if constexpr (std::is_same_v<T, BufferView>) {
                     auto resolved = view;
@@ -285,7 +296,7 @@ void Recorder::Bind(PipelineHandle handle, const ArrayArguments& args) {
                 count = 1;
             } else
                 throw std::invalid_argument("D3D12 reflected argument type mismatch");
-            if (count != binding.count)
+            if (count != descriptor_count)
                 throw std::invalid_argument("D3D12 descriptor array length mismatch");
             table(binding.root, context.views->Gpu(start));
         }

@@ -40,9 +40,9 @@ float4 SampleTexture(float2 uv, uint mip_level) {
   return LoadTexture(coord, mip_level);
 }
 
-void main(in float4 pos
-          : SV_Position, in float2 uv
-          : TEXCOORD0, out float4 target
+void main(in float2 uv
+          : TEXCOORD0, in float4 pos
+          : SV_Position, out float4 target
           : SV_Target) {
   uint2 dimensions;
 

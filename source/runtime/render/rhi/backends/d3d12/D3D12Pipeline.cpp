@@ -110,13 +110,13 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
                 continue;
             const auto& reflection = found->second.GetDxilReflection();
             active |= uint64(1) << arg_index;
-            Binding binding{.argument = arg_index, .root = uint32(roots.size()), .count = std::max(1u, reflection.count), .type = ED3D12ShaderVariableType(reflection.type)};
+            Binding binding{.argument = arg_index, .root = uint32(roots.size()), .count = reflection.count, .type = ED3D12ShaderVariableType(reflection.type)};
             if (argument.cpp_info.type != SDA_BindlessArray &&
                 (binding.type == ED3D12ShaderVariableType::StructuredBuffer || binding.type == ED3D12ShaderVariableType::RWStructuredBuffer)) {
                 if (!native_reflection)
                     native_reflection = Reflect(shader);
                 D3D12_SHADER_BUFFER_DESC desc{};
-                const auto               resource_name = binding.count > 1 ? name + "[0]" : name;
+                const auto               resource_name = binding.count != 1 ? name + "[0]" : name;
                 DX_CHECK_HRESULT(native_reflection->GetConstantBufferByName(resource_name.c_str())->GetDesc(&desc));
                 binding.structure_stride = desc.Size;
             }
@@ -170,7 +170,7 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
                                                                binding.type == ED3D12ShaderVariableType::ConstantBuffer ? D3D12_DESCRIPTOR_RANGE_TYPE_CBV :
                                                                IsUav(binding.type)                                      ? D3D12_DESCRIPTOR_RANGE_TYPE_UAV :
                                                                                                                           D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-                ranges.push_back({range_type, binding.count, reflection.slot, reflection.space, range_type == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER ? D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE : D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE, 0});
+                ranges.push_back({range_type, binding.count ? binding.count : UINT32_MAX, reflection.slot, reflection.space, range_type == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER ? D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE : D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE, 0});
                 root.DescriptorTable = {1, &ranges.back()};
             }
             roots.push_back(root);

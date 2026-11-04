@@ -55,9 +55,7 @@ D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS Geometry::Inputs() const {
     return inputs;
 }
 Scene::Scene(Context& context) :
-    context(context),
-    current(MoerNew(Tlas)()),
-    previous(MoerNew(Tlas)()) {}
+    context(context) {}
 RaytracingInstance& Scene::AddInstance() {
     if (!free_instances.empty()) {
         const uint32 index = free_instances.back();
