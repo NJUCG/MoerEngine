@@ -144,7 +144,7 @@ PipelineHandle CreatePipeline(Context&, PipelineShaderInfo&&, const GfxPsoCreate
 // descriptors or index data used by an older draw.
 class Bindless final : public BindlessArray {
 public:
-    Bindless(Context&, uint32);
+    explicit Bindless(uint32);
     uint32 AllocateTexture(const TextureView&, Sampler) override;
     uint32 AllocateBuffer(BufferView) override;
     void   UnbindTexture(uint32) override;
@@ -165,7 +165,6 @@ public:
     Array<Entry> Snapshot();
 
 private:
-    Context&         context;
     std::mutex       mutex;
     Array<Entry>     desired;
     Array<Entry>     committed;
@@ -269,7 +268,6 @@ struct Packet {
     Array<std::pair<DescriptorHeap*, std::pair<uint32, uint32>>> descriptors;
     Array<std::function<void()>>                                 readbacks;
     Array<std::function<void()>>                                 rollback;
-    bool                                                         accepted = false;
     std::string                                                  error;
     ComPtr<ID3D12QueryHeap>                                      timestamps;
     ComPtr<ID3D12QueryHeap>                                      occlusion;

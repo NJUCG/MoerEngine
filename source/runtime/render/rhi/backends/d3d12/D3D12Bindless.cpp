@@ -2,8 +2,7 @@
 
 namespace Moer::Render::D3D12 {
 
-Bindless::Bindless(Context& context, uint32 capacity) :
-    context(context),
+Bindless::Bindless(uint32 capacity) :
     capacity(capacity) {
     if (capacity < 3 || capacity >= (1u << 23))
         throw std::invalid_argument("Invalid D3D12 bindless capacity");

@@ -124,7 +124,7 @@ TextureRef D3D12Device::CreateTexture(std::string_view name, const TextureInfo& 
     return owner;
 }
 BindlessArrayRef D3D12Device::CreateBindlessArray(uint32 count) {
-    return MoerNew(Bindless)(*native, count);
+    return MoerNew(Bindless)(count);
 }
 RaytracingGeometryRef D3D12Device::CreateRaytracingGeometry(const RaytracingGeometryInfo& info) {
     if (!native->raytracing)

@@ -204,9 +204,10 @@ bool Timeline::Wait(uint64 value) {
     return fence->GetCompletedValue() != UINT64_MAX && !IsRejected(value);
 }
 Packet::~Packet() {
-    if (!accepted)
-        for (auto it = rollback.rbegin(); it != rollback.rend(); ++it)
-            (*it)();
+    // Native execution clears the journal at handoff. Before that boundary,
+    // destruction retains responsibility for undoing unsubmitted changes.
+    for (auto it = rollback.rbegin(); it != rollback.rend(); ++it)
+        (*it)();
     for (auto [heap, range] : descriptors)
         heap->Free(range.first, range.second);
 }

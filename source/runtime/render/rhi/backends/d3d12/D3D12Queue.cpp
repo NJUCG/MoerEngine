@@ -66,7 +66,6 @@ WaitEvent Queue::SubmitPacket(std::unique_ptr<Packet> owning_packet) {
     if (packet->error.empty()) {
         ID3D12CommandList* lists[] = {packet->list.Get()};
         queue->ExecuteCommandLists(1, lists);
-        packet->accepted = true;
         // Once ExecuteCommandLists crosses the native boundary, resources and
         // allocator storage belong to Completion, including on device removal.
         packet->rollback.clear();
@@ -82,7 +81,6 @@ WaitEvent Queue::SubmitPacket(std::unique_ptr<Packet> owning_packet) {
         for (auto it = packet->rollback.rbegin(); it != packet->rollback.rend(); ++it)
             (*it)();
         packet->rollback.clear();
-        packet->accepted = true;
     }
     if (packet->presentation) {
         const HRESULT result = packet->error.empty() ? packet->presentation->Present(0, 0) : E_FAIL;
