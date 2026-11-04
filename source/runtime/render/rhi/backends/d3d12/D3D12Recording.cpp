@@ -1,4 +1,5 @@
 #include "D3D12Backend.h"
+#include "rhi/RHIMultiview.h"
 #include <WinPixEventRuntime/pix3.h>
 #include <algorithm>
 #include <cstring>
@@ -159,10 +160,19 @@ void Recorder::Barrier(const BarrierCmd& cmd) {
         Transition(*reinterpret_cast<GpuTexture*>(b.handle), AccessState(b.dst_state.access, b.dst_state.texture_layout), b.mip_level, b.mip_count, b.array_layer, b.array_count);
 }
 void Recorder::RenderPass(const RenderPassInfo& pass) {
+    render_view_mask   = pass.view_mask;
+    const uint32 views = Multiview::RequiredViewCount(pass.view_mask);
+    if (views && (!context.view_instancing || views > D3D12_MAX_VIEW_INSTANCE_COUNT))
+        throw std::invalid_argument("Unsupported D3D12 render pass view mask");
+    if (context.view_instancing)
+        list->SetViewInstanceMask(pass.view_mask ? pass.view_mask : 1u);
     Array<D3D12_CPU_DESCRIPTOR_HANDLE> rtvs;
     uint32                             width = pass.render_area.extent.x, height = pass.render_area.extent.y;
     for (const auto& attachment : pass.color_attachments) {
         auto& texture = *static_cast<GpuTexture*>(attachment.target);
+        if (!Multiview::IsAttachmentRangeValid(attachment.array_layer, attachment.array_count, texture.GetNumArray()) ||
+            !Multiview::AttachmentCoversViewMask(attachment.array_count, pass.view_mask))
+            throw std::invalid_argument("D3D12 color attachment does not cover the view mask");
         Transition(texture, D3D12_RESOURCE_STATE_RENDER_TARGET, attachment.mip_level, 1, attachment.array_layer, attachment.array_count);
         D3D12_RENDER_TARGET_VIEW_DESC desc{};
         desc.Format = Format(texture.GetFormat());
@@ -190,6 +200,9 @@ void Recorder::RenderPass(const RenderPassInfo& pass) {
     if (pass.depth_attachment.Valid()) {
         const auto& attachment = pass.depth_attachment;
         auto&       texture    = *static_cast<GpuTexture*>(attachment.target);
+        if (!Multiview::IsAttachmentRangeValid(attachment.array_layer, attachment.array_count, texture.GetNumArray()) ||
+            !Multiview::AttachmentCoversViewMask(attachment.array_count, pass.view_mask))
+            throw std::invalid_argument("D3D12 depth attachment does not cover the view mask");
         Transition(texture, D3D12_RESOURCE_STATE_DEPTH_WRITE, attachment.mip_level, 1, attachment.array_layer, attachment.array_count);
         D3D12_DEPTH_STENCIL_VIEW_DESC desc{};
         desc.Format = Format(texture.GetFormat());

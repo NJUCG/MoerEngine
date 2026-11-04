@@ -30,6 +30,7 @@ public:
     PipelineHandle        CreatePipeline(PipelineShaderInfo&&) override;
     void                  WaitIdle() override;
     bool                  SupportsTessellation() const override;
+    bool                  SupportsMultiview(uint32) const override;
     uint32                GetMaxTessellationFactor() const override;
     bool                  SupportsRaytracingAccelerationStructures() const override;
     void                  FlushDebugMessages() const override;

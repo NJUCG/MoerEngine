@@ -141,6 +141,8 @@ void Recorder::Bind(PipelineHandle handle, const ArrayArguments& args) {
     if (pipeline.compute)
         list->SetComputeRootSignature(pipeline.signature.Get());
     else {
+        if (pipeline.view_mask != render_view_mask)
+            throw std::invalid_argument("D3D12 pipeline and render pass view masks must match");
         list->SetGraphicsRootSignature(pipeline.signature.Get());
         list->IASetPrimitiveTopology(pipeline.topology);
     }

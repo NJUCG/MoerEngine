@@ -1,6 +1,7 @@
 #include "D3D12Backend.h"
 #include "rhi/ShaderStageUtils.h"
 #include <algorithm>
+#include <bit>
 #include <d3d12shader.h>
 #include <dxcapi.h>
 
@@ -86,8 +87,8 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
     const auto error = gfx ? ValidateGraphicsShaderStages(shaders.shaders) : ValidateComputeShaderStages(shaders.shaders);
     if (!error.empty())
         throw std::invalid_argument(std::string(error));
-    if (gfx && gfx->view_mask)
-        throw std::invalid_argument("D3D12 multiview is not enabled");
+    if (gfx && gfx->view_mask && (!context.view_instancing || std::bit_width(gfx->view_mask) > D3D12_MAX_VIEW_INSTANCE_COUNT))
+        throw std::invalid_argument("D3D12 multiview requires view instancing and at most four views");
     const auto arguments = shaders.argument_metadata.GetArguments();
     if (arguments.size() > 64)
         throw std::invalid_argument("D3D12 pipelines support at most 64 logical arguments");
@@ -184,8 +185,9 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
         throw std::invalid_argument("D3D12 root signature exceeds 64 DWORDs");
     auto*          pipeline = MoerNew(Pipeline)(active);
     PipelineHandle owner{pipeline};
-    pipeline->bindings = std::move(bindings);
-    pipeline->compute  = gfx == nullptr;
+    pipeline->bindings  = std::move(bindings);
+    pipeline->compute   = gfx == nullptr;
+    pipeline->view_mask = gfx ? gfx->view_mask : 0;
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC signature{};
     signature.Version  = D3D_ROOT_SIGNATURE_VERSION_1_1;
     signature.Desc_1_1 = {uint32(roots.size()), roots.data(), 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT | D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED};
@@ -317,38 +319,19 @@ PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, co
     }
     desc.SampleDesc.Count = gfx->multisample_info.sample_count;
     desc.SampleMask       = UINT32_MAX;
-    if (pipeline->mesh) {
-        if (!context.mesh_shaders)
+    if (pipeline->mesh || gfx->view_mask) {
+        if (pipeline->mesh && !context.mesh_shaders)
             throw std::runtime_error("Adapter does not support mesh shaders");
-        struct Stream {
-            CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE        root;
-            CD3DX12_PIPELINE_STATE_STREAM_AS                    as;
-            CD3DX12_PIPELINE_STATE_STREAM_MS                    ms;
-            CD3DX12_PIPELINE_STATE_STREAM_PS                    ps;
-            CD3DX12_PIPELINE_STATE_STREAM_BLEND_DESC            blend;
-            CD3DX12_PIPELINE_STATE_STREAM_SAMPLE_MASK           mask;
-            CD3DX12_PIPELINE_STATE_STREAM_RASTERIZER            raster;
-            CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL         depth;
-            CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY    topology;
-            CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS formats;
-            CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL_FORMAT  depth_format;
-            CD3DX12_PIPELINE_STATE_STREAM_SAMPLE_DESC           samples;
-        } stream;
-        stream.root     = desc.pRootSignature;
-        stream.as       = amplification;
-        stream.ms       = mesh;
-        stream.ps       = desc.PS;
-        stream.blend    = CD3DX12_BLEND_DESC(desc.BlendState);
-        stream.mask     = desc.SampleMask;
-        stream.raster   = CD3DX12_RASTERIZER_DESC(desc.RasterizerState);
-        stream.depth    = CD3DX12_DEPTH_STENCIL_DESC(desc.DepthStencilState);
-        stream.topology = desc.PrimitiveTopologyType;
-        D3D12_RT_FORMAT_ARRAY formats{};
-        formats.NumRenderTargets = desc.NumRenderTargets;
-        std::copy(std::begin(desc.RTVFormats), std::end(desc.RTVFormats), formats.RTFormats);
-        stream.formats      = formats;
-        stream.depth_format = desc.DSVFormat;
-        stream.samples      = desc.SampleDesc;
+        CD3DX12_PIPELINE_STATE_STREAM2 stream(desc);
+        stream.AS = amplification;
+        stream.MS = mesh;
+        D3D12_VIEW_INSTANCE_LOCATION locations[D3D12_MAX_VIEW_INSTANCE_COUNT]{};
+        if (gfx->view_mask) {
+            const uint32 count = std::bit_width(gfx->view_mask);
+            for (uint32 i = 0; i < count; ++i)
+                locations[i] = {0, i};
+            stream.ViewInstancingDesc = CD3DX12_VIEW_INSTANCING_DESC(count, locations, D3D12_VIEW_INSTANCING_FLAG_ENABLE_VIEW_INSTANCE_MASKING);
+        }
         const D3D12_PIPELINE_STATE_STREAM_DESC stream_desc{sizeof(stream), &stream};
         DX_CHECK_HRESULT(context.device->CreatePipelineState(&stream_desc, IID_PPV_ARGS(&pipeline->state)));
     } else {

@@ -122,9 +122,10 @@ public:
     ComPtr<ID3D12RootSignature> signature;
     Array<Binding>              bindings;
     Array<uint32>               vertex_strides;
-    D3D_PRIMITIVE_TOPOLOGY      topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    bool                        compute  = false;
-    bool                        mesh     = false;
+    D3D_PRIMITIVE_TOPOLOGY      topology  = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    bool                        compute   = false;
+    bool                        mesh      = false;
+    uint32                      view_mask = 0;
 };
 
 struct ConstantLayout {
@@ -237,10 +238,10 @@ struct Context {
     std::unique_ptr<DescriptorHeap>   dsvs;
     std::unique_ptr<Queue>            queue;
     std::unique_ptr<CopyQueueAdapter> copy;
-    bool                              raytracing   = false;
-    bool                              mesh_shaders = false;
-    bool                              force_sync   = false;
-    std::atomic<uint32>               validation_errors{0};
+    bool                              raytracing      = false;
+    bool                              mesh_shaders    = false;
+    bool                              view_instancing = false;
+    bool                              force_sync      = false;
     ~Context();
     BufferRef Buffer(uint64 size, EBufferUsageFlags usage = EBufferUsageFlags::NONE, D3D12_HEAP_TYPE heap = D3D12_HEAP_TYPE_DEFAULT);
     uint32    SamplerIndex(Sampler) const;
@@ -381,6 +382,7 @@ private:
     Packet&                                            packet;
     ID3D12GraphicsCommandList6*                        list;
     UnorderedMap<Bindless*, D3D12_GPU_VIRTUAL_ADDRESS> bindless_tables;
+    uint32                                             render_view_mask = 0;
 };
 
 } // namespace Moer::Render::D3D12

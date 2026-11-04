@@ -58,6 +58,9 @@ D3D12Device::D3D12Device(D3D12RHIConfig config) :
     if (SUCCEEDED(ctx.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &options7, sizeof(options7)))) {
         ctx.mesh_shaders = options7.MeshShaderTier != D3D12_MESH_SHADER_TIER_NOT_SUPPORTED;
     }
+    D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3{};
+    if (SUCCEEDED(ctx.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS3, &options3, sizeof(options3))))
+        ctx.view_instancing = options3.ViewInstancingTier != D3D12_VIEW_INSTANCING_TIER_NOT_SUPPORTED;
     ctx.device.As(&ctx.info_queue);
     if (SUCCEEDED(ctx.device.As(&ctx.debug_callbacks))) {
         DX_CHECK_HRESULT(ctx.debug_callbacks->RegisterMessageCallback(
@@ -163,6 +166,9 @@ void D3D12Device::WaitIdle() {
 bool D3D12Device::SupportsTessellation() const {
     return true;
 }
+bool D3D12Device::SupportsMultiview(uint32 view_count) const {
+    return native->view_instancing && view_count > 0 && view_count <= D3D12_MAX_VIEW_INSTANCE_COUNT;
+}
 uint32 D3D12Device::GetMaxTessellationFactor() const {
     return 64;
 }
@@ -180,7 +186,6 @@ void D3D12Device::FlushDebugMessages() const {
         auto*       message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
         if (SUCCEEDED(native->info_queue->GetMessage(i, message, &size))) {
             if (message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR && !native->debug_callbacks) {
-                native->validation_errors.fetch_add(1);
                 validation_error_count.fetch_add(1);
                 LOG_ERROR("D3D12 validation {}: {}", uint32(message->ID), message->pDescription);
             } else if (message->Severity == D3D12_MESSAGE_SEVERITY_WARNING) {
