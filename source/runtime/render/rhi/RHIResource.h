@@ -849,6 +849,7 @@ public:
         uint64       command_token;
         bool         free;
         uint64       byte_offset{0};
+        uint64       byte_size{0};
     };
 
     struct InvalidUpdateInfo {

@@ -124,6 +124,10 @@ private:
     }
 
     static void PublishUnsupportedGpuResults(RHISubmissionBatch& _batch) {
+        if (RenderDevice::Get().GetRHIType() == ERHIType::D3D12) {
+            // D3D12's owning completion packets publish native outcomes.
+            return;
+        }
         // The legacy D3D12 backend has no reliable per-submit fault outcome.
         // Fail closed for host completion futures rather than reporting a
         // false Ready. Publish the whole batch before the first queue can
@@ -261,8 +265,8 @@ std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor(uint32 _submission_bat
             break;
 #endif
         case ERHIType::D3D12:
-            LOG_WARNING(
-                "[RHIExecutor] D3D12 uses the legacy queue adapter; upper Vulkan topology is unavailable"
+            LOG_INFO(
+                "[RHIExecutor] D3D12 uses ordered logical queues on one native Direct Queue"
             );
             return std::make_shared<LegacyQueueBackendExecutor>();
         case ERHIType::Metal:
