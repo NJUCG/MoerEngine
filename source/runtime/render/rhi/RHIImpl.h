@@ -297,6 +297,8 @@ public:
     uint64       dst_handle{};
     uint32       src_mip_level{};
     uint32       dst_mip_level{};
+    uint32       src_array_layer{};
+    uint32       dst_array_layer{};
     uint3        src_offset{};
     uint3        dst_offset{};
     uint3        size{};
@@ -314,7 +316,9 @@ public:
         uint3            _src_offset,
         uint3            _dst_offset,
         uint3            _size,
-        std::string_view _name = typenames[uint32(EType::TextureToTexture)]
+        std::string_view _name = typenames[uint32(EType::TextureToTexture)],
+        uint32           _src_array_layer = 0,
+        uint32           _dst_array_layer = 0
     ) :
         Command(EType::TextureToTexture, _name),
         format(_format),
@@ -322,6 +326,8 @@ public:
         dst_handle(_dst_handle),
         src_mip_level(_src_mip_level),
         dst_mip_level(_dst_mip_level),
+        src_array_layer(_src_array_layer),
+        dst_array_layer(_dst_array_layer),
         src_offset{_src_offset.x, _src_offset.y, _src_offset.z},
         dst_offset{_dst_offset.x, _dst_offset.y, _dst_offset.z},
         size{_size.x, _size.y, _size.z} {}
@@ -344,6 +350,12 @@ public:
     }
     auto DstMipLevel() const {
         return dst_mip_level;
+    }
+    auto SrcArrayLayer() const {
+        return src_array_layer;
+    }
+    auto DstArrayLayer() const {
+        return dst_array_layer;
     }
     auto SrcOffset() const {
         return src_offset;

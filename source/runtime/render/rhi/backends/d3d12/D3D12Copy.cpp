@@ -183,10 +183,10 @@ void Recorder::Copy(const Command& command) {
         const auto& cmd = static_cast<const CopyTextureCmd&>(command);
         auto&       src = *reinterpret_cast<GpuTexture*>(cmd.SrcHandle());
         auto&       dst = *reinterpret_cast<GpuTexture*>(cmd.DstHandle());
-        Transition(src, D3D12_RESOURCE_STATE_COPY_SOURCE, cmd.SrcMipLevel(), 1);
-        Transition(dst, D3D12_RESOURCE_STATE_COPY_DEST, cmd.DstMipLevel(), 1);
-        const CD3DX12_TEXTURE_COPY_LOCATION source(src.resource.Get(), src.Subresource(cmd.SrcMipLevel()));
-        const CD3DX12_TEXTURE_COPY_LOCATION destination(dst.resource.Get(), dst.Subresource(cmd.DstMipLevel()));
+        Transition(src, D3D12_RESOURCE_STATE_COPY_SOURCE, cmd.SrcMipLevel(), 1, cmd.SrcArrayLayer(), 1);
+        Transition(dst, D3D12_RESOURCE_STATE_COPY_DEST, cmd.DstMipLevel(), 1, cmd.DstArrayLayer(), 1);
+        const CD3DX12_TEXTURE_COPY_LOCATION source(src.resource.Get(), src.Subresource(cmd.SrcMipLevel(), cmd.SrcArrayLayer()));
+        const CD3DX12_TEXTURE_COPY_LOCATION destination(dst.resource.Get(), dst.Subresource(cmd.DstMipLevel(), cmd.DstArrayLayer()));
         const auto                          start  = cmd.SrcOffset();
         const auto                          end    = start + cmd.Size();
         const auto                          offset = cmd.DstOffset();

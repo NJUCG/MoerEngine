@@ -595,7 +595,11 @@ public:
             _cmd.SrcOffset(),
             _cmd.DstOffset(),
             _cmd.SrcMipLevel(),
-            _cmd.DstMipLevel()
+            _cmd.DstMipLevel(),
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            _cmd.SrcArrayLayer(),
+            _cmd.DstArrayLayer()
         );
     }
 

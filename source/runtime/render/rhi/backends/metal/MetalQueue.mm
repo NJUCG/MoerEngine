@@ -644,6 +644,7 @@ public:
                     if (source == nullptr || destination == nullptr ||
                         copy.Format() != source->GetFormat() || copy.Format() != destination->GetFormat() ||
                         copy.SrcMipLevel() != 0 || copy.DstMipLevel() != 0 ||
+                        copy.SrcArrayLayer() >= source->GetNumArray() || copy.DstArrayLayer() >= destination->GetNumArray() ||
                         copy.SrcOffset() != uint3{0, 0, 0} || copy.DstOffset() != uint3{0, 0, 0} ||
                         copy.Size() != source->GetExtent() || copy.Size() != destination->GetExtent()) {
                         Unsupported("this texture copy layout");
@@ -677,11 +678,11 @@ public:
                     const auto& copy = static_cast<const CopyTextureCmd&>(*command);
                     auto* source = static_cast<MetalTexture*>(reinterpret_cast<Texture*>(copy.SrcHandle()));
                     auto* destination = static_cast<MetalTexture*>(reinterpret_cast<Texture*>(copy.DstHandle()));
-                    [blit copyFromTexture:source->Native() sourceSlice:0 sourceLevel:0
+                    [blit copyFromTexture:source->Native() sourceSlice:copy.SrcArrayLayer() sourceLevel:0
                             sourceOrigin:MTLOriginMake(0, 0, 0)
                               sourceSize:MTLSizeMake(copy.Size().x, copy.Size().y, 1)
                                toTexture:destination->Native()
-                        destinationSlice:0 destinationLevel:0
+                        destinationSlice:copy.DstArrayLayer() destinationLevel:0
                        destinationOrigin:MTLOriginMake(0, 0, 0)];
                     continue;
                 }

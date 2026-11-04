@@ -181,7 +181,6 @@ public:
         uint32         _mip_level,
         uint32         _array_layer
     );
-    // Copies array layer zero only; the RHI image-copy command has no layer fields.
     void CopyTexture(
         VulkanTexture* _src,
         VulkanTexture* _dst,
@@ -191,7 +190,9 @@ public:
         uint32         _src_mip_level,
         uint32         _dst_mip_level,
         VkImageLayout  _src_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VkImageLayout  _dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+        VkImageLayout  _dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        uint32         _src_array_layer = 0,
+        uint32         _dst_array_layer = 0
     );
     void ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _byte_size, uint32 _data);
     void ClearColorTexture(
