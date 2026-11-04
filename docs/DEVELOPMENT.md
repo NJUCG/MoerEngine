@@ -289,9 +289,11 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
 
 ## 7. RHI 顶点格式
 
+D3D12 的功能范围、提交所有权和验证入口见 [D3D12 后端](D3D12_BACKEND.md)。
+
 顶点声明和光追几何的 `vertex_format` 使用 `EVertexFormat`（`rhi/VertexFormat.h`），纹理和 texel buffer 使用 `EPixelFormat`。两者不能隐式转换，避免将深度、压缩或 sRGB 像素格式误用于顶点输入。
 
-`Float1`～`Float4` 表示 32 位浮点分量，`UInt` 表示一个 32 位无符号整数，`UByte4Normalized` 表示四个 8 位无符号分量，读取时归一化到 `[0, 1]`。通过 `GetVertexFormatByteSize()` 计算顶点属性的字节数，由 Metal / Vulkan 各自映射到原生顶点格式；新增格式时同步补充这两处映射。
+`Float1`～`Float4` 表示 32 位浮点分量，`UInt` 表示一个 32 位无符号整数，`UByte4Normalized` 表示四个 8 位无符号分量，读取时归一化到 `[0, 1]`。通过 `GetVertexFormatByteSize()` 计算顶点属性的字节数，由 Metal / Vulkan / D3D12 各自映射到原生顶点格式；新增格式时同步补充对应映射。
 
 ## 8. RDG 编译执行与资源边界
 
