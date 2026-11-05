@@ -90,7 +90,6 @@ VkResult CreateDevice(VkPhysicalDevice gpu, VkDeviceCreateInfo request, VulkanDe
     VkPhysicalDeviceDescriptorBufferFeaturesEXT          buffer{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT};
     VkPhysicalDeviceMemoryPriorityFeaturesEXT            priority{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT};
     VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pageable{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT};
-    VkPhysicalDeviceCopyMemoryIndirectFeaturesNV         indirect_copy{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COPY_MEMORY_INDIRECT_FEATURES_NV};
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR         matrix{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
     VkPhysicalDeviceCooperativeVectorFeaturesNV          vector{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_FEATURES_NV};
 #if PLATFORM_WINDOWS
@@ -111,7 +110,6 @@ VkResult CreateDevice(VkPhysicalDevice gpu, VkDeviceCreateInfo request, VulkanDe
     query_feature(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME, buffer);
     query_feature(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME, priority);
     query_feature(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME, pageable);
-    query_feature(VK_NV_COPY_MEMORY_INDIRECT_EXTENSION_NAME, indirect_copy);
     query_feature(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, matrix);
     query_feature(VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME, vector);
 #if PLATFORM_WINDOWS
@@ -146,7 +144,6 @@ VkResult CreateDevice(VkPhysicalDevice gpu, VkDeviceCreateInfo request, VulkanDe
     caps.m_has_descriptor_buffer_push                      = caps.m_has_ext_descriptor_buffer && buffer.descriptorBufferPushDescriptors;
     caps.m_has_memory_priority                             = enable_feature(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME, priority, priority.memoryPriority);
     caps.m_has_pageable_device_local_memory                = enable_feature(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME, pageable, pageable.pageableDeviceLocalMemory && caps.m_has_memory_priority);
-    caps.m_has_nv_copy_memory_indirect                     = enable_feature(VK_NV_COPY_MEMORY_INDIRECT_EXTENSION_NAME, indirect_copy, indirect_copy.indirectCopy);
     caps.m_has_khr_cooperative_matrix                      = enable_feature(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, matrix, matrix.cooperativeMatrix);
     caps.m_has_khr_cooperative_matrix_robust_buffer_access = caps.m_has_khr_cooperative_matrix && matrix.cooperativeMatrixRobustBufferAccess;
     caps.m_has_nv_cooperative_vector                       = enable_feature(VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME, vector, vector.cooperativeVector);
@@ -180,7 +177,6 @@ VkResult CreateDevice(VkPhysicalDevice gpu, VkDeviceCreateInfo request, VulkanDe
     query_property(optional.descriptor_heap_properties, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT, caps.m_has_ext_descriptor_heap);
     query_property(optional.descriptor_buffer_properties, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT, caps.m_has_ext_descriptor_buffer);
     query_property(optional.push_descriptor_properties, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR, push_descriptors);
-    query_property(optional.copy_memory_indirect_properties, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COPY_MEMORY_INDIRECT_PROPERTIES_NV, caps.m_has_nv_copy_memory_indirect);
     query_property(optional.acceleration_structure_properties, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR, caps.m_has_khr_acceleration_structure);
     query_property(optional.ray_tracing_pipeline_properties, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR, caps.m_has_khr_ray_tracing_pipeline);
     query_property(optional.cooperative_matrix_properties, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR, caps.m_has_khr_cooperative_matrix);

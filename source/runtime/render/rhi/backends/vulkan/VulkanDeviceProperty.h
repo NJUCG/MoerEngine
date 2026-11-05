@@ -32,9 +32,6 @@ public:
     // Mesh shading
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties{};
 
-    // Memory operations
-    VkPhysicalDeviceCopyMemoryIndirectPropertiesNV  copy_memory_indirect_properties{};
-
     // Cooperative operations
     VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperative_matrix_properties{};
     VkPhysicalDeviceCooperativeVectorPropertiesNV  cooperative_vector_properties{};

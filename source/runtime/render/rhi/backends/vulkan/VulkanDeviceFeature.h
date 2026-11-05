@@ -99,8 +99,6 @@ public:
 
     bool m_has_memory_priority              = false;
     bool m_has_pageable_device_local_memory = false;
-    // nvidia
-    bool m_has_nv_copy_memory_indirect = false;
 
     // cooperative bundle 依赖的 core feature 前置条件。
     bool m_has_shader_float16                          = false;
