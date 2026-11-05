@@ -179,6 +179,8 @@ Vulkan 后端统一通过 `rhi/backends/vulkan/VulkanCommon.h` 获取 Vulkan 声
 
 Vulkan 后端固定以 API 1.3 为目标，配置中的 `api_version` 必须为 `"1.3"`，物理设备可以支持更新版本。Feature 和 Property 缓存只保存值；`pNext` 仅在查询或创建设备的调用期间连接，不随缓存保留。
 
+实例必需扩展和设备扩展的查询、依赖检查、启用均集中在 `VulkanDeviceInitialization.cpp`。Device 保存已启用名称、能力值和属性快照；新增扩展时在该初始化流程中补充对应结构和条件，不创建独立扩展对象。
+
 ### C++规范
 
 MoerEngine开发早期使用 `.clang-tidy` 对命名风格进行规范，但强制性较弱，导致风格不统一，历史遗留问题大。

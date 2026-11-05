@@ -9,9 +9,6 @@
 #include "misc/STL.h"
 
 namespace Moer::Render {
-class VulkanDeviceExtension;
-
-using TVulkanDeviceExtensionArray      = Moer::Array<std::shared_ptr<VulkanDeviceExtension>>;
 using TExtensionArray                  = Moer::Array<std::string_view>;
 using TLayerArray                      = Moer::Array<std::string_view>;
 using TQueueFamilyPropertiesArray      = Moer::Array<VkQueueFamilyProperties>;

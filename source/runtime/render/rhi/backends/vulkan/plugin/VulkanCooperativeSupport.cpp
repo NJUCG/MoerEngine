@@ -35,7 +35,7 @@ CooperativeVectorModeInfo BuildCooperativeVectorModeInfo(const VkCooperativeVect
 }
 
 std::string
-BuildUnsupportedCooperativeExtensionList(const VulkanOptionalDeviceExtensions& _optional_extensions) {
+BuildUnsupportedCooperativeExtensionList(const VulkanDeviceCapabilities& _optional_extensions) {
     std::string unsupported_extensions;
 
     const auto append_extension = [&](std::string_view _extension_name) {
@@ -57,28 +57,8 @@ BuildUnsupportedCooperativeExtensionList(const VulkanOptionalDeviceExtensions& _
 
 } // namespace
 
-// 把 cooperative 依赖的 core feature 映射到引擎自己的 capability 状态里。
-void UpdateCooperativePrerequisites(
-    const VulkanDeviceFeatures&     _core_features,
-    VulkanOptionalDeviceExtensions& _optional_extensions
-) {
-    const auto& core_1_1 = _core_features.GetCore11Features();
-    const auto& core_1_2 = _core_features.GetCore12Features();
-
-    _optional_extensions.m_has_shader_float16              = (core_1_2.shaderFloat16 == VK_TRUE);
-    _optional_extensions.m_has_shader_int8                 = (core_1_2.shaderInt8 == VK_TRUE);
-    _optional_extensions.m_has_vulkan_memory_model         = (core_1_2.vulkanMemoryModel == VK_TRUE);
-    _optional_extensions.m_has_storage_buffer_16bit_access = (core_1_1.storageBuffer16BitAccess == VK_TRUE);
-    _optional_extensions.m_has_uniform_and_storage_buffer_16bit_access =
-        (core_1_1.uniformAndStorageBuffer16BitAccess == VK_TRUE);
-    _optional_extensions.m_has_storage_buffer_8bit_access = (core_1_2.storageBuffer8BitAccess == VK_TRUE);
-    _optional_extensions.m_has_uniform_and_storage_buffer_8bit_access =
-        (core_1_2.uniformAndStorageBuffer8BitAccess == VK_TRUE);
-}
-
-// 把 cooperative 当前的支持情况集中打印出来，便于后续做 shader probe。
 void LogCooperativeSupportSummary(
-    const VulkanOptionalDeviceExtensions& _optional_extensions,
+    const VulkanDeviceCapabilities& _optional_extensions,
     const VulkanOptionalDeviceProperties& _optional_properties
 ) {
     const std::string unsupported_extensions = BuildUnsupportedCooperativeExtensionList(_optional_extensions);
@@ -108,7 +88,7 @@ void LogCooperativeSupportSummary(
 }
 
 CooperativeExtensionInfo BuildCooperativeExtensionInfo(
-    const VulkanOptionalDeviceExtensions& _optional_extensions,
+    const VulkanDeviceCapabilities& _optional_extensions,
     const VulkanOptionalDeviceProperties& _optional_properties
 ) {
     CooperativeExtensionInfo info{};

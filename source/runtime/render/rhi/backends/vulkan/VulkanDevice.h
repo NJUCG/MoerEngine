@@ -9,7 +9,7 @@
 #include "VulkanMemoryAllocator.h"
 #include "VulkanTypeDefs.h"
 #include "misc/Types.h"
-#include "vulkanextension/VulkanExtension.h"
+#include "VulkanDeviceInitialization.h"
 
 #include "misc/LockFree.h"
 #include "misc/STL.h"
@@ -30,44 +30,6 @@ namespace Moer::Render {
 class VulkanCommandQueue;
 class VulkanCopyQueue;
 class VulkanCommandRecorder;
-
-struct QueueFamilyIndices {
-    std::optional<uint32> graphics;
-    std::optional<uint32> present;
-    std::optional<uint32> transfer;
-    std::optional<uint32> compute;
-    std::optional<uint32> raytracing;
-
-    bool IsComplete() const {
-        return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value() &&
-               raytracing.has_value();
-    }
-    uint32 Size() const {
-        uint32 size = 0;
-        if (graphics.has_value())
-            size++;
-        if (present.has_value())
-            size++;
-        if (transfer.has_value())
-            size++;
-        if (compute.has_value())
-            size++;
-        if (raytracing.has_value())
-            size++;
-        return size;
-    }
-};
-
-struct VulkanDeviceInfo {
-    TVulkanDeviceExtensionArray      enabled_extensions{};
-    VulkanOptionalDeviceExtensions   optional_extensions{};
-    VulkanDeviceFeatures             core_features{};
-    VulkanCoreDeviceProperties       core_properties{};
-    VulkanOptionalDeviceProperties   optional_properties{};
-    VkPhysicalDeviceMemoryProperties memory_properties{};
-    TQueueFamilyPropertiesArray      queue_family_props{};
-    QueueFamilyIndices               queue_family_indices{};
-};
 
 class VulkanDevice : public RenderDevice::Impl {
 public:
@@ -156,8 +118,8 @@ public:
     }
 
     // Device properties and extension queries.
-    const VulkanOptionalDeviceExtensions& GetOptionalExtensions() const {
-        return m_device_info.optional_extensions;
+    const VulkanDeviceCapabilities& GetCapabilities() const {
+        return m_device_info.capabilities;
     }
     const VulkanDeviceFeatures& GetCoreFeatures() const {
         return m_device_info.core_features;

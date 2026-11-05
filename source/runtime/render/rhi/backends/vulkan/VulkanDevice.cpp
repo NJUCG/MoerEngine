@@ -22,7 +22,6 @@
 #endif
 #include "plugin/VulkanCooperativeSupport.h"
 #include "plugin/VulkanNrdPlugin.h"
-#include "vulkanextension/VulkanExtension.h"
 #include <string_view>
 
 #include "log/LogSystem.h"
@@ -198,22 +197,14 @@ void VulkanDevice::InitVulkanInstance() {
         return true;
     };
 
-    const auto instance_extensions_required = VulkanInstanceExtension::GetMERequiredInstanceExtensions();
-    const auto instance_extensions_optional =
-        VulkanInstanceExtension::GetMEOptionalInstanceExtensions();
+    const auto instance_extensions_required = VulkanInitialization::RequiredInstanceExtensions();
     Array<const char*> instance_extensions_loaded;
     bool               b_instance_extensions_fully_supported = true;
     for (const auto& ext : instance_extensions_required) {
-        if (is_extension_supported(ext.data()))
-            instance_extensions_loaded.emplace_back(ext.data());
+        if (is_extension_supported(ext))
+            instance_extensions_loaded.emplace_back(ext);
         else
             b_instance_extensions_fully_supported = false;
-    }
-    for (const auto& ext : instance_extensions_optional) {
-        if (!instance_extensions.contains(ext.data())) {
-            continue;
-        }
-        instance_extensions_loaded.emplace_back(ext.data());
     }
     CHECK_ASSERT(
         b_instance_extensions_fully_supported, "Not all required instance extensions are supported."
@@ -246,17 +237,14 @@ VkPhysicalDevice VulkanDevice::SelectGpu() {
     VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, gpu_list.data()));
 
     // lambda helpers
-    const auto& extensions_required = VulkanDeviceExtension::GetMERequiredDeviceExtensions();
+    const auto& extensions_required = VulkanInitialization::RequiredDeviceExtensions();
 
     const auto& is_extensions_required_supported = [&](VkPhysicalDevice _gpu) {
         // 只检查 GPU 是否声明支持对应扩展，不检查 feature 结构体细节
         auto gpu_extensions = VulkanDevice::GetGpuExtensions(_gpu);
 
         for (const auto& extension : extensions_required) {
-            const auto& required_name = extension->GetExtensionName();
-            const bool  is_optional   = extension->IsOptional();
-
-            if (!gpu_extensions.contains(required_name.data()) && !is_optional) {
+            if (!gpu_extensions.contains(extension)) {
                 return false;
             }
         }
@@ -341,12 +329,9 @@ VkPhysicalDevice VulkanDevice::SelectGpu() {
 
             bool has_missing = false;
             for (const auto& extension : extensions_required) {
-                const auto& required_name = extension->GetExtensionName();
-                const bool  is_optional   = extension->IsOptional();
-
-                if (!gpu_extensions.contains(required_name.data()) && !is_optional) {
+                if (!gpu_extensions.contains(extension)) {
                     has_missing = true;
-                    log_msg += std::string(required_name) + "\n";
+                    log_msg += std::string(extension) + "\n";
                 }
             }
 
@@ -373,41 +358,8 @@ VkPhysicalDevice VulkanDevice::SelectGpu() {
      * @brief Initialize GPU, query features, properties, memory, queue family, etc.
      */
 void VulkanDevice::InitGpu() {
-    // Enable extensions
-    auto gpu_extensions = VulkanDevice::GetGpuExtensions(m_gpu);
-
-    m_device_info.enabled_extensions = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(gpu_extensions);
-    // Query core features
     m_device_info.core_features = VulkanDeviceFeatures::QuerySupportedFeatures(m_gpu);
-    // 先从 core feature 中提取 cooperative bundle 需要的前置能力。
-    UpdateCooperativePrerequisites(m_device_info.core_features, m_device_info.optional_extensions);
-    // Query advanced features, use advanced features as GPU supported, and developers cannot specify them.
-    {
-        VkPhysicalDeviceFeatures2 features2{};
-        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        for (const auto& extension : m_device_info.enabled_extensions) {
-            extension->PreGpuFeatures(features2);
-        }
-        vkGetPhysicalDeviceFeatures2(m_gpu, &features2);
-        for (const auto& extension : m_device_info.enabled_extensions) {
-            extension->PostGpuFeatures(m_device_info.optional_extensions);
-        }
-    }
-
-    // Query core properties
     m_device_info.core_properties = VulkanCoreDeviceProperties::QueryGpuProperties(m_gpu);
-    // Query advanced properties.
-    {
-        VkPhysicalDeviceProperties2 props2{};
-        props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-        for (const auto& extension : m_device_info.enabled_extensions) {
-            extension->PreGpuProperties(this, props2);
-        }
-        vkGetPhysicalDeviceProperties2(m_gpu, &props2);
-        for (const auto& extension : m_device_info.enabled_extensions) {
-            extension->PostGpuProperties(this);
-        }
-    }
 
     // Query core memory properties
     vkGetPhysicalDeviceMemoryProperties(m_gpu, &m_device_info.memory_properties);
@@ -434,10 +386,6 @@ void VulkanDevice::InitGpu() {
         m_device_info.core_properties.core_1_0.limits.maxBoundDescriptorSets,
         m_device_info.core_properties.core_1_0.limits.timestampComputeAndGraphics
     );
-    // 启动时输出 cooperative 支持摘要，便于后续调试 shader/toolchain 问题。
-    LogCooperativeSupportSummary(m_device_info.optional_extensions, m_device_info.optional_properties);
-    m_cooperative_extension_info =
-        BuildCooperativeExtensionInfo(m_device_info.optional_extensions, m_device_info.optional_properties);
 }
 
 void VulkanDevice::LogGpuEnvironment() const {
@@ -538,30 +486,14 @@ void VulkanDevice::CreateDevice() {
     device_create_info.queueCreateInfoCount = static_cast<uint32>(queue_create_infos.size());
     device_create_info.pQueueCreateInfos    = queue_create_infos.data();
 
-    // setup extension and feature info
-    Moer::Array<const char*> extensions_loaded;
-    for (const auto& extension : m_device_info.enabled_extensions) {
-        if (!extension || !extension->ShouldEnableDeviceCreate()) {
-            // 如果拓展不启用或者不可用，则跳过
-            continue;
-        }
-        extensions_loaded.emplace_back(extension->GetExtensionName().data());
-        extension->PreCreateDevice(device_create_info);
-        LOG_INFO("Loading VulkanDeviceExtension: {}", extension->GetExtensionName());
-    }
-    device_create_info.enabledExtensionCount   = static_cast<uint32>(extensions_loaded.size());
-    device_create_info.ppEnabledExtensionNames = extensions_loaded.data();
-
-    auto core11 = m_device_info.core_features.GetCore11Features();
-    auto core12 = m_device_info.core_features.GetCore12Features();
-    auto core13 = m_device_info.core_features.GetCore13Features();
-    core11.pNext = &core12;
-    core12.pNext = &core13;
-    core13.pNext = const_cast<void*>(device_create_info.pNext);
-    device_create_info.pNext = &core11;
-    device_create_info.pEnabledFeatures = &m_device_info.core_features.GetCore10Features();
-    VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
+    VK_CHECK_RESULT(VulkanInitialization::CreateDevice(m_gpu, device_create_info, m_device_info, m_device));
     volkLoadDevice(m_device);
+    for (const char* extension : m_device_info.enabled_extensions) {
+        LOG_INFO("Loading Vulkan device extension: {}", extension);
+    }
+    LogCooperativeSupportSummary(m_device_info.capabilities, m_device_info.optional_properties);
+    m_cooperative_extension_info =
+        BuildCooperativeExtensionInfo(m_device_info.capabilities, m_device_info.optional_properties);
 
     vkGetDeviceQueue(m_device, graphics_family, 0, &m_graphics_queue_handle);
 
@@ -647,7 +579,7 @@ void VulkanDevice::CreateMemoryAllocator() {
 
     //capable of using buffer via device address(64bit) passed to shader.
     alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-    if (m_device_info.optional_extensions.m_has_memory_priority) {
+    if (m_device_info.capabilities.m_has_memory_priority) {
         alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
     }
 
@@ -705,7 +637,7 @@ bool ReadPushDescriptorDisableOverride() {
 } // namespace
 
 void VulkanDevice::CreateDescriptorHeap() {
-    const auto& ext   = GetOptionalExtensions();
+    const auto& ext   = GetCapabilities();
     const auto& props = GetOptionalProperties();
     descriptor_caps   = {
         .heap   = ext.m_has_ext_descriptor_heap,
@@ -1027,16 +959,13 @@ QueueFamilyIndices VulkanDevice::SelectQueueFamilyIndices(VkPhysicalDevice _gpu)
 }
 
 bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
-    for (const auto& ext : m_device_info.enabled_extensions) {
-        if (ext && ext->ShouldEnableDeviceCreate() && ext->GetExtensionName() == _ext_name) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(m_device_info.enabled_extensions, [&](const char* name) {
+        return name == _ext_name;
+    });
 }
 
 bool VulkanDevice::IsExtensionCooperativeEnabled() const {
-    return m_device_info.optional_extensions.IsExtensionCooperativeEnabled();
+    return m_device_info.capabilities.IsExtensionCooperativeEnabled();
 }
 
 const CooperativeExtensionInfo& VulkanDevice::GetCooperativeExtensionInfo() const {
@@ -1052,7 +981,7 @@ bool VulkanDevice::TryConvertCooperativeVectorMatrix(
         LOG_ERROR("VulkanRHI: TryConvertCooperativeVectorMatrix failed: {}", _message);
     };
 
-    if (!m_device_info.optional_extensions.SupportsCooperativeVector()) {
+    if (!m_device_info.capabilities.SupportsCooperativeVector()) {
         log_error("VK_NV_cooperative_vector is not enabled on the current device.");
         return false;
     }

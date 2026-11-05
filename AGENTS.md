@@ -84,6 +84,7 @@ source/
         backends/                #   Graphics API implementations
           vulkan/                  #   Vulkan backend
             VulkanDevice.cpp/h     #     Device setup, capabilities and resource entry points
+            VulkanDeviceInitialization.cpp/h # Native feature queries and device creation with local chains
             VulkanPipelineCreation.cpp # Shader reflection, native pipeline construction
             VulkanQueue.cpp/h      #     Queue reservation, native submission and completion handoff
             VulkanCommandRecorder.cpp/h # Recording workspaces and reusable Context pools
