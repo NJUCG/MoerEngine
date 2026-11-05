@@ -177,6 +177,8 @@ Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.
 
 Vulkan 后端统一通过 `rhi/backends/vulkan/VulkanCommon.h` 获取 Vulkan 声明。Render 模块内不要直接 include `<volk.h>`、`<vulkan/vulkan_core.h>` 或平台 Vulkan 头文件；公开或消费 Vulkan 类型的 CMake target 应链接 `Moer::VulkanHeaders`，由它传递 `VK_NO_PROTOTYPES`、平台宏、头文件路径和 Volk 依赖。`source/profile/VkLayer.cpp` 是独立 Vulkan Layer，不受 Render 模块规则约束。修改该契约后，应构建 `TestVulkanHeaderContract` 并运行名为 `VulkanHeaderContract` 的 CTest。
 
+Vulkan 后端固定以 API 1.3 为目标，配置中的 `api_version` 必须为 `"1.3"`，物理设备可以支持更新版本。Feature 和 Property 缓存只保存值；`pNext` 仅在查询或创建设备的调用期间连接，不随缓存保留。
+
 ### C++规范
 
 MoerEngine开发早期使用 `.clang-tidy` 对命名风格进行规范，但强制性较弱，导致风格不统一，历史遗留问题大。

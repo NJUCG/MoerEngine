@@ -23,37 +23,6 @@
 
 namespace Moer::Render {
 
-#if !defined(__APPLE__)
-template<>
-VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
-    using std::string;
-    MOER_ASSERT(
-        _info.rhi_type == ERHIType::Vulkan,
-        "ResolveConfigAs<VulkanRHIConfig> requires Vulkan"
-    );
-
-    VulkanRHIConfig config;
-
-    std::string_view api = _info.rhi_api_version;
-
-    api = api.substr(0, 3); // 1.0, 1.1, 1.2, 1.3
-    if (api == "1.0")
-        config.api_version = VK_API_VERSION_1_0;
-    else if (api == "1.1")
-        config.api_version = VK_API_VERSION_1_1;
-    else if (api == "1.2")
-        config.api_version = VK_API_VERSION_1_2;
-    else if (api == "1.3")
-        config.api_version = VK_API_VERSION_1_3;
-    else {
-        LOG_ERROR("Unsupported vulkan api version: {}", api);
-        MOER_ASSERT(false, "Unsupported Vulkan API version: {}", api);
-    }
-
-    return config;
-}
-#endif
-
 #if defined(_WIN32)
 template<>
 D3D12RHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
@@ -84,8 +53,11 @@ void RenderDevice::Init(DeviceInitInfo&& _info) {
 #if defined(__APPLE__)
                 throw std::runtime_error("Vulkan backend is not built on macOS; select Metal when available");
 #else
+                if (_info.rhi_api_version != "1.3") {
+                    throw std::invalid_argument("The Vulkan backend only supports API version 1.3");
+                }
                 Get().impl =
-                    std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info))));
+                    std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)()));
                 break;
 #endif
 #if defined(_WIN32)

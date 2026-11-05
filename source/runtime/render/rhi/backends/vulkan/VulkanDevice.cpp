@@ -62,20 +62,20 @@
 
 namespace Moer::Render {
 
-VulkanDevice::VulkanDevice(const VulkanRHIConfig& _config) : RenderDevice::Impl() {
+VulkanDevice::VulkanDevice() : RenderDevice::Impl() {
     try {
-        InitVulkanInstance(_config.api_version);
+        InitVulkanInstance();
 
-        m_gpu = SelectGpu(_config.api_version);
-        InitGpu(_config.api_version);
+        m_gpu = SelectGpu();
+        InitGpu();
 
         CreateDevice();
-        CreateMemoryAllocator(m_instance, _config.api_version);
+        CreateMemoryAllocator();
 
         CreateInternalResources();
 
         RegisterDefaultPlugins();
-        LogGpuEnvironment(_config.api_version);
+        LogGpuEnvironment();
     } catch (...) {
         Destroy();
         throw;
@@ -93,9 +93,8 @@ VulkanDevice::~VulkanDevice() {
 /**
      * @brief init vulkan instance
      * check instance layers and extensions, create instance, load functions using volk
-     * @param _api_version
      */
-void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
+void VulkanDevice::InitVulkanInstance() {
     VK_CHECK_RESULT(volkInitialize());
 
     VkApplicationInfo application_info{};
@@ -105,7 +104,7 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     application_info.pEngineName = MACRO_STR(__ENGINE_NAME__);
     application_info.engineVersion =
         VK_MAKE_VERSION(PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
-    application_info.apiVersion = _api_version;
+    application_info.apiVersion = k_vulkan_api_version;
 
     VkInstanceCreateInfo instance_create_info{};
     instance_create_info.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -236,10 +235,9 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
 /**
     * @brief Select gpu, check extension support, etc.
     * Only check core extensions and core features support.
-    * @param _api_version
     * @return selected gpu
     */
-VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
+VkPhysicalDevice VulkanDevice::SelectGpu() {
     uint32 gpu_count = 0;
     VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, nullptr));
     CHECK_ASSERT(gpu_count, "No GPU with Vulkan support found!");
@@ -266,10 +264,9 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         return true;
     };
 
-    const auto& features_required          = VulkanDeviceFeatures::BuildRequiredFeatures(_api_version);
     const auto& is_core_features_supported = [&](VkPhysicalDevice _gpu) {
-        auto gpu_features = VulkanDeviceFeatures::QuerySupportedFeatures(_gpu, _api_version);
-        bool ok           = gpu_features.SupportsAll(features_required);
+        auto gpu_features = VulkanDeviceFeatures::QuerySupportedFeatures(_gpu);
+        bool ok           = gpu_features.SupportsRequiredFeatures();
         if (!ok) {
             LOG_ERROR("GPU does NOT satisfy required core Vulkan features.");
         }
@@ -287,6 +284,10 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
     for (auto* gpu : gpu_list) {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(gpu, &props);
+        if (props.apiVersion < k_vulkan_api_version) {
+            LOG_WARNING("Skipping GPU '{}': Vulkan 1.3 or newer is required", props.deviceName);
+            continue;
+        }
 
         // // 以下代码用于Debug AMD GPU
         // // 笔记本等多 GPU 场景：名称含 "RTX" 时跳过（例如 RTX 5070 Laptop），便于强制走 A 卡等其它适配器
@@ -370,15 +371,14 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
 
 /**
      * @brief Initialize GPU, query features, properties, memory, queue family, etc.
-     * @param _api_version
      */
-void VulkanDevice::InitGpu(uint32 _api_version) {
+void VulkanDevice::InitGpu() {
     // Enable extensions
     auto gpu_extensions = VulkanDevice::GetGpuExtensions(m_gpu);
 
     m_device_info.enabled_extensions = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(gpu_extensions);
     // Query core features
-    m_device_info.core_features = VulkanDeviceFeatures::QuerySupportedFeatures(m_gpu, _api_version);
+    m_device_info.core_features = VulkanDeviceFeatures::QuerySupportedFeatures(m_gpu);
     // 先从 core feature 中提取 cooperative bundle 需要的前置能力。
     UpdateCooperativePrerequisites(m_device_info.core_features, m_device_info.optional_extensions);
     // Query advanced features, use advanced features as GPU supported, and developers cannot specify them.
@@ -395,7 +395,7 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
     }
 
     // Query core properties
-    m_device_info.core_properties = VulkanCoreDeviceProperties::QueryGpuProperties(m_gpu, _api_version);
+    m_device_info.core_properties = VulkanCoreDeviceProperties::QueryGpuProperties(m_gpu);
     // Query advanced properties.
     {
         VkPhysicalDeviceProperties2 props2{};
@@ -440,7 +440,7 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
         BuildCooperativeExtensionInfo(m_device_info.optional_extensions, m_device_info.optional_properties);
 }
 
-void VulkanDevice::LogGpuEnvironment(uint32 _requested_api_version) const {
+void VulkanDevice::LogGpuEnvironment() const {
     const auto& properties = m_device_info.core_properties.core_1_0;
     const char* device_type = "unknown";
     switch (properties.deviceType) {
@@ -484,9 +484,9 @@ void VulkanDevice::LogGpuEnvironment(uint32 _requested_api_version) const {
         properties.vendorID,
         properties.deviceID,
         device_uuid,
-        VK_API_VERSION_MAJOR(_requested_api_version),
-        VK_API_VERSION_MINOR(_requested_api_version),
-        VK_API_VERSION_PATCH(_requested_api_version),
+        VK_API_VERSION_MAJOR(k_vulkan_api_version),
+        VK_API_VERSION_MINOR(k_vulkan_api_version),
+        VK_API_VERSION_PATCH(k_vulkan_api_version),
         VK_API_VERSION_MAJOR(properties.apiVersion),
         VK_API_VERSION_MINOR(properties.apiVersion),
         VK_API_VERSION_PATCH(properties.apiVersion),
@@ -552,8 +552,14 @@ void VulkanDevice::CreateDevice() {
     device_create_info.enabledExtensionCount   = static_cast<uint32>(extensions_loaded.size());
     device_create_info.ppEnabledExtensionNames = extensions_loaded.data();
 
-    VulkanDeviceFeatures enabled_features = m_device_info.core_features;
-    enabled_features.AttachToDeviceCreateInfo(device_create_info);
+    auto core11 = m_device_info.core_features.GetCore11Features();
+    auto core12 = m_device_info.core_features.GetCore12Features();
+    auto core13 = m_device_info.core_features.GetCore13Features();
+    core11.pNext = &core12;
+    core12.pNext = &core13;
+    core13.pNext = const_cast<void*>(device_create_info.pNext);
+    device_create_info.pNext = &core11;
+    device_create_info.pEnabledFeatures = &m_device_info.core_features.GetCore10Features();
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
     volkLoadDevice(m_device);
 
@@ -605,7 +611,7 @@ void VulkanDevice::CreateDevice() {
     }
 }
 
-void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
+void VulkanDevice::CreateMemoryAllocator() {
     VmaAllocatorCreateInfo alloc_create_info{};
 
     VmaVulkanFunctions vma_functions{};
@@ -632,9 +638,9 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
     vma_functions.vkBindImageMemory2KHR                   = vkBindImageMemory2;
     vma_functions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
 
-    alloc_create_info.vulkanApiVersion = _api_version;
+    alloc_create_info.vulkanApiVersion = k_vulkan_api_version;
 
-    alloc_create_info.instance         = _instance;
+    alloc_create_info.instance         = m_instance;
     alloc_create_info.physicalDevice   = m_gpu;
     alloc_create_info.device           = m_device;
     alloc_create_info.pVulkanFunctions = &vma_functions;

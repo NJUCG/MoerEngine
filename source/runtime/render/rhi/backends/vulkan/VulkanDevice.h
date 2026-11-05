@@ -58,10 +58,6 @@ struct QueueFamilyIndices {
     }
 };
 
-struct VulkanRHIConfig {
-    uint32 api_version = VK_API_VERSION_1_3;
-};
-
 struct VulkanDeviceInfo {
     TVulkanDeviceExtensionArray      enabled_extensions{};
     VulkanOptionalDeviceExtensions   optional_extensions{};
@@ -76,7 +72,7 @@ struct VulkanDeviceInfo {
 class VulkanDevice : public RenderDevice::Impl {
 public:
     // Lifecycle.
-    VulkanDevice(const VulkanRHIConfig& _config);
+    VulkanDevice();
     ~VulkanDevice() override;
 
     // Shared resource limits.
@@ -340,12 +336,12 @@ private:
     };
 
     // Initialization and shutdown.
-    void             InitVulkanInstance(uint32 _api_version);
-    VkPhysicalDevice SelectGpu(uint32 _api_version);
-    void             InitGpu(uint32 _api_version);
-    void             LogGpuEnvironment(uint32 _requested_api_version) const;
+    void             InitVulkanInstance();
+    VkPhysicalDevice SelectGpu();
+    void             InitGpu();
+    void             LogGpuEnvironment() const;
     void             CreateDevice();
-    void             CreateMemoryAllocator(VkInstance _instance, uint32 _api_version);
+    void             CreateMemoryAllocator();
     void             CreateDescriptorHeap();
     void             DestroyDescriptorHeap();
     void             CreateInternalResources();

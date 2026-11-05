@@ -26,6 +26,8 @@
 
 namespace Moer::Render {
 
+inline constexpr uint32 k_vulkan_api_version = VK_API_VERSION_1_3;
+
 enum class EVulkanTimestampQueryResetMode : uint8 {
     Unsupported,
     CommandBuffer,

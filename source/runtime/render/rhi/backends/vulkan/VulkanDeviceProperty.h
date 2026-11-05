@@ -10,7 +10,7 @@ namespace Moer::Render {
 // A value snapshot: QueryGpuProperties detaches all temporary pNext links before returning.
 class VulkanCoreDeviceProperties {
 public:
-    static VulkanCoreDeviceProperties QueryGpuProperties(VkPhysicalDevice _gpu, uint32 _api_version);
+    static VulkanCoreDeviceProperties QueryGpuProperties(VkPhysicalDevice gpu);
 
     VkPhysicalDeviceProperties         core_1_0{};
     VkPhysicalDeviceVulkan11Properties core_1_1{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
