@@ -34,7 +34,6 @@ public:
 
     // Memory operations
     VkPhysicalDeviceCopyMemoryIndirectPropertiesNV  copy_memory_indirect_properties{};
-    VkPhysicalDeviceMemoryDecompressionPropertiesNV memory_decompression_properties{};
 
     // Cooperative operations
     VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperative_matrix_properties{};
