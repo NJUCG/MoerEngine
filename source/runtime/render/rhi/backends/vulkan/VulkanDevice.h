@@ -17,7 +17,6 @@
 #include "rhi/RHIMultiview.h"
 
 #include <atomic>
-#include <functional>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -30,6 +29,9 @@ namespace Moer::Render {
 class VulkanCommandQueue;
 class VulkanCopyQueue;
 class VulkanCommandRecorder;
+namespace Ext {
+class VkNRDPlugin;
+}
 
 class VulkanDevice : public RenderDevice::Impl {
 public:
@@ -273,28 +275,6 @@ private:
     friend struct VulkanFaultInjection;
 #endif
 
-    struct PluginEntry {
-        using CreateFunction  = std::function<RuntimePlugin*(VulkanDevice*)>;
-        using DestroyFunction = std::function<void(RuntimePlugin*)>;
-
-        RuntimePlugin*  instance;
-        CreateFunction  create;
-        DestroyFunction destroy;
-
-        PluginEntry(CreateFunction create, DestroyFunction destroy) :
-            instance{nullptr}, create{create}, destroy{destroy} {}
-        PluginEntry(const PluginEntry&) = delete;
-        PluginEntry(PluginEntry&& other) :
-            instance{other.instance}, create{other.create}, destroy{other.destroy} {
-            other.instance = nullptr;
-        }
-        ~PluginEntry() {
-            if (instance) {
-                destroy(instance);
-            }
-        }
-    };
-
     // Initialization and shutdown.
     void             InitVulkanInstance();
     VkPhysicalDevice SelectGpu();
@@ -320,7 +300,6 @@ private:
     static TQueueFamilyPropertiesArray GetQueueFamilyProperties(VkPhysicalDevice _gpu);
 
     QueueFamilyIndices SelectQueueFamilyIndices(VkPhysicalDevice _gpu) const;
-    void RegisterDefaultPlugins();
     void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info);
     void SetupDebugUtilsMessengerEXT();
 
@@ -342,9 +321,9 @@ private:
         bool                          _predrained
     );
 
-    // Plugin state.
-    std::mutex                            plugins_mutex;
-    UnorderedMap<std::string, PluginEntry> plugins;
+#if WITH_NRD
+    UniquePtr<Ext::VkNRDPlugin> nrd_plugin;
+#endif
 
     // Cooperative capability metadata.
     CooperativeExtensionInfo m_cooperative_extension_info{};

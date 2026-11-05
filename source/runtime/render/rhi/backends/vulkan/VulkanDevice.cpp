@@ -73,7 +73,9 @@ VulkanDevice::VulkanDevice() : RenderDevice::Impl() {
 
         CreateInternalResources();
 
-        RegisterDefaultPlugins();
+#if WITH_NRD
+        nrd_plugin = MakeUnique<Ext::VkNRDPlugin>(this);
+#endif
         LogGpuEnvironment();
     } catch (...) {
         Destroy();
@@ -737,6 +739,9 @@ void VulkanDevice::DestroyDescriptorHeap() {
 }
 
 void VulkanDevice::Destroy() {
+#if WITH_NRD
+    nrd_plugin.reset();
+#endif
     // for (auto& cmd_allocator : m_command_allocators) {
     //     CHECK_AND_DELETE(cmd_allocator);
     // }
@@ -1565,19 +1570,13 @@ void VulkanDevice::SetResourceName(uint64 _handle, VkObjectType _type, const std
     vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
 }
 
-RuntimePlugin* VulkanDevice::LoadPlugin(std::string_view _name) {
-    auto plugin_it = plugins.find(_name.data());
-    if (plugin_it == plugins.end()) {
-        return nullptr;
+RuntimePlugin* VulkanDevice::LoadPlugin(std::string_view name) {
+#if WITH_NRD
+    if (name == Ext::NRDPlugin::name) {
+        return nrd_plugin.get();
     }
-    auto& plugin = plugin_it->second;
-    {
-        std::lock_guard lock{plugins_mutex};
-        if (plugin.instance == nullptr) {
-            plugin.instance = plugin.create(this);
-        }
-    }
-    return plugin.instance;
+#endif
+    return nullptr;
 }
 
 void VulkanDevice::CopyData(const BufferView& _dst, const void* _data, uint64 _size) {
@@ -1593,18 +1592,4 @@ void VulkanDevice::CopyData(void* _dst, const BufferView& _src, uint64 _size) {
     );
 }
 
-void VulkanDevice::RegisterDefaultPlugins() {
-
-#if WITH_NRD
-    plugins.try_emplace(
-        Moer::Render::Ext::NRDPlugin::name.data(),
-        [](VulkanDevice* _device) -> RuntimePlugin* {
-            return MoerNew(Moer::Render::Ext::VkNRDPlugin(_device));
-        },
-        [](RuntimePlugin* _ext) {
-            MoerDelete(static_cast<Moer::Render::Ext::VkNRDPlugin*>(_ext));
-        }
-    );
-#endif
-}
 }; // namespace Moer::Render
