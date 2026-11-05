@@ -25,6 +25,7 @@
 #include "rhi/backends/vulkan/VulkanFault.h"
 #include "rhi/backends/vulkan/VulkanMemoryAllocator.h"
 #include "rhi/backends/vulkan/VulkanPipeline.h"
+#include "rhi/backends/vulkan/VulkanQueue.h"
 #include "rhi/backends/vulkan/VulkanPlatform.h"
 #include "rhi/backends/vulkan/VulkanRaytracingResource.h"
 #include "rhi/backends/vulkan/VulkanSubmission.h"
@@ -44,6 +45,8 @@ static_assert(std::is_base_of_v<Moer::Render::VulkanGenericPlatform, Moer::Rende
 
 // Command resources own native handles and cannot be copied or relocated while
 // command lists retain pointers to their pool.
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanNativeQueue>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanNativeQueue>);
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandPool>);
 static_assert(!std::is_copy_assignable_v<Moer::Render::VulkanCommandPool>);
 static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandPool>);

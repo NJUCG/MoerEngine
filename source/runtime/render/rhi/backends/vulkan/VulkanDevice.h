@@ -268,6 +268,7 @@ public:
 private:
     friend VulkanCommandQueue;
     friend VulkanCommandRecorder;
+    friend class VulkanNativeQueue;
 #if MOER_VULKAN_TEST_SUPPORT
     friend struct VulkanFaultInjection;
 #endif

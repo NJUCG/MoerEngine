@@ -17,7 +17,11 @@ namespace Moer::Render {
 class VulkanNativeQueue {
 public:
     VulkanNativeQueue(EQueueType _type, VulkanDevice& _device);
-    ~VulkanNativeQueue();
+    ~VulkanNativeQueue() = default;
+    VulkanNativeQueue(const VulkanNativeQueue&) = delete;
+    VulkanNativeQueue& operator=(const VulkanNativeQueue&) = delete;
+    VulkanNativeQueue(VulkanNativeQueue&&) = delete;
+    VulkanNativeQueue& operator=(VulkanNativeQueue&&) = delete;
 
     VulkanOperationResult
     Submit(VulkanCommandList& _cmdlist, const VulkanOperationContext& _context, VkFence _fence = VK_NULL_HANDLE);
@@ -47,12 +51,6 @@ public:
         return type;
     }
 
-    // Logical queues that alias one VkQueue must share one host synchronization mutex.
-    void SetSubmitMutex(std::mutex* _mutex) {
-        assert(_mutex != nullptr);
-        submit_mutex = _mutex;
-    }
-
     void BeginLabel(std::string_view _label, float4 _color);
     void EndLabel();
     void InsertLabel(std::string_view _label, float4 _color);
@@ -64,9 +62,8 @@ private:
     VkQueue                      queue;
     EQueueType                   type;
 
-    // A local mutex covers standalone use before the device installs its canonical queue mutex.
-    std::mutex  local_submit_mutex;
-    std::mutex* submit_mutex = &local_submit_mutex;
+    // Borrow the device's canonical mutex for this native queue from construction.
+    std::mutex& submit_mutex;
 };
 
 class VulkanCommandQueue : public CommandQueue {
@@ -79,10 +76,6 @@ public:
     void        Present(SwapchainRef _viewport, TextureView _view, PresentReceiptRef _receipt = {}) override;
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
-
-    void SetQueueSubmitMutex(std::mutex* _mutex) {
-        queue.SetSubmitMutex(_mutex);
-    }
 
 private:
     friend class VulkanSubmissionExecutor;
@@ -183,10 +176,6 @@ public:
     WaitEvent Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;
-
-    void SetQueueSubmitMutex(std::mutex* _mutex) {
-        queue.SetSubmitMutex(_mutex);
-    }
 
     void CopyFrom(BufferView _src, BufferView _dst) override {};
     void CopyFrom(TextureView _src, TextureView _dst) override {};

@@ -517,10 +517,6 @@ void VulkanDevice::CreateDevice() {
     m_copy_queue = MakeUnique<VulkanCopyQueue>(*this);
     SetResourceName(uint64(m_transfer_queue_handle), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
 
-    m_graphics_command_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_graphics_queue_handle));
-    m_compute_command_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_compute_queue_handle));
-    m_copy_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_transfer_queue_handle));
-
     if (m_graphics_queue_handle == m_transfer_queue_handle) {
         LOG_WARNING(
             "gfx and transfer share the same VkQueue handle. "

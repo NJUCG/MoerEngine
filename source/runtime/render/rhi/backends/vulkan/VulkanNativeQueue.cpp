@@ -9,28 +9,23 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <thread>
 
 namespace Moer::Render {
 
-VulkanNativeQueue::VulkanNativeQueue(EQueueType _type, VulkanDevice& _device) : device(_device), type(_type) {
-    switch (_type) {
-        case EQueueType::Graphics:
-            queue = _device.GetGraphicsQueue();
-            break;
-        case EQueueType::Compute:
-            queue = _device.GetComputeQueue();
-            break;
-        case EQueueType::Copy:
-            queue = _device.GetTransferQueue();
-            break;
-        default:
-            assert(false && "Invalid queue type");
-    }
-    assert(queue != VK_NULL_HANDLE && "Invalid queue type!");
-}
-
-VulkanNativeQueue::~VulkanNativeQueue() {}
+VulkanNativeQueue::VulkanNativeQueue(EQueueType _type, VulkanDevice& _device) :
+    device(_device),
+    queue([&]() {
+        switch (_type) {
+            case EQueueType::Graphics: return _device.GetGraphicsQueue();
+            case EQueueType::Compute: return _device.GetComputeQueue();
+            case EQueueType::Copy: return _device.GetTransferQueue();
+            default: throw std::invalid_argument("Invalid Vulkan queue type");
+        }
+    }()),
+    type(_type),
+    submit_mutex(_device.GetQueueHostMutex(queue)) {}
 
 VulkanOperationResult VulkanNativeQueue::SubmitEmpty(
     const VulkanOperationContext& _context,
@@ -188,7 +183,7 @@ void VulkanNativeQueue::Signal(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
 
 
 void VulkanNativeQueue::BeginLabel(std::string_view _label, float4 _color) {
-    std::unique_lock<std::mutex> guard(*submit_mutex);
+    std::unique_lock<std::mutex> guard(submit_mutex);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
     label.pLabelName = _label.data();
     label.color[0]   = _color.x;
@@ -199,12 +194,12 @@ void VulkanNativeQueue::BeginLabel(std::string_view _label, float4 _color) {
 }
 
 void VulkanNativeQueue::EndLabel() {
-    std::unique_lock<std::mutex> guard(*submit_mutex);
+    std::unique_lock<std::mutex> guard(submit_mutex);
     vkQueueEndDebugUtilsLabelEXT(queue);
 }
 
 void VulkanNativeQueue::InsertLabel(std::string_view _label, float4 _color) {
-    std::unique_lock<std::mutex> guard(*submit_mutex);
+    std::unique_lock<std::mutex> guard(submit_mutex);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
     label.pLabelName = _label.data();
     label.color[0]   = _color.x;
