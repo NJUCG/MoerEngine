@@ -3,13 +3,15 @@
 
 #include "rhi/plugin/NrdPlugin.h"
 
-#include "../VulkanDeviceObject.h"
+namespace Moer::Render {
+class VulkanDevice;
+}
 
 namespace Moer::Render::Ext {
 
-class VkNRDPlugin : public NRDPlugin, public VulkanDeviceObject {
+class VkNRDPlugin : public NRDPlugin {
 public:
-    VkNRDPlugin(VulkanDevice* _device) : VulkanDeviceObject(_device) {}
+    VkNRDPlugin(VulkanDevice* _device) : m_device(_device) {}
     ~VkNRDPlugin() = default;
 
     SharedPtr<NRDInterface> CreateInterface(
@@ -23,6 +25,9 @@ public:
         uint16                  _frame_width  = 0,
         uint16                  _frame_height = 0
     ) override;
+
+private:
+    VulkanDevice* m_device;
 };
 
 }; // namespace Moer::Render::Ext

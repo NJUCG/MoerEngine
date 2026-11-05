@@ -39,9 +39,9 @@ struct VulkanBindlessArray::LegacyDescriptorSets {
 
 VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size) :
     BindlessArray(),
-    VulkanDeviceObject(_device),
     texture_offset_in_buffer(GetBindlessTextureDescriptorOffset(*_device)),
     bindings(_max_size),
+    m_device(_device),
     g_heap(_device->GetGlobalDescriptorHeap()),
     texture_slot_offset(1),
     buffer_slot_offset(1),
@@ -66,8 +66,7 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
                 .vk_usage =
                     usage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 .needs_device_address = true,
-            },
-            true
+            }
         );
     };
     m_index_buffer = create_buffer(

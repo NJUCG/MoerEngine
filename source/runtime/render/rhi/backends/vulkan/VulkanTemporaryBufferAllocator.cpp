@@ -92,7 +92,7 @@ MOER_TEMP_BUFFER_NOINLINE VulkanBuffer* CreateTemporaryBuffer(
     }
     try {
         return MoerPlacementNew(storage)
-            VulkanBuffer(_name, info, _device, BuildTemporaryBufferAllocationInfo(_usage), false);
+            VulkanBuffer(_name, info, _device, BuildTemporaryBufferAllocationInfo(_usage));
     } catch (...) {
         Memory::Free(storage);
         throw;

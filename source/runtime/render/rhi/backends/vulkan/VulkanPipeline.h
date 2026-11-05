@@ -2,7 +2,6 @@
 
 #include "VulkanCommon.h"
 #include "VulkanDescriptorMode.h"
-#include "VulkanDeviceObject.h"
 #include "VulkanPipelineArgument.h"
 #include "misc/Types.h"
 #include "rhi/RHIResource.h"
@@ -12,6 +11,8 @@
 #include <variant>
 
 namespace Moer::Render {
+
+class VulkanDevice;
 
 struct VulkanDescriptorBindingInfo {
     VkDescriptorSetLayoutBinding vk_binding{};
@@ -94,7 +95,7 @@ struct VulkanPipelineBindingTemplate {
     Array<VkDescriptorBufferBindingInfoEXT> descriptor_buffers;
 };
 
-class VulkanPipelineState : public PipelineState, public VulkanDeviceObject {
+class VulkanPipelineState : public PipelineState {
     enum EType {
         GFX,
         Compute,
@@ -104,7 +105,7 @@ class VulkanPipelineState : public PipelineState, public VulkanDeviceObject {
 public:
     VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX, uint64 active_argument_bits = 0) :
         PipelineState(active_argument_bits),
-        VulkanDeviceObject(_device),
+        m_device(_device),
         m_pipeline(VK_NULL_HANDLE),
         m_pipeline_layout(VK_NULL_HANDLE),
         m_type(_type) {};
@@ -176,6 +177,7 @@ private:
 
 protected:
     friend VulkanDevice;
+    VulkanDevice*                m_device;
     Array<VulkanArgumentInfo>    m_argument_infos;
     VkPipeline                   m_pipeline;
     VkPipelineLayout             m_pipeline_layout;

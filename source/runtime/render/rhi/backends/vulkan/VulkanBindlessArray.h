@@ -1,7 +1,6 @@
 #pragma once
 
 #include "VulkanDescriptorBufferAllocator.h"
-#include "VulkanDeviceObject.h"
 #include "VulkanRHIResource.h"
 #include "misc/LockFree.h"
 #include "misc/Types.h"
@@ -13,7 +12,7 @@
 
 namespace Moer::Render {
 
-class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
+class VulkanBindlessArray final : public BindlessArray {
 public:
     enum class EResourceType : uint8 {
         Texture,
@@ -103,6 +102,8 @@ public:
     Array<BindingRecord> bindings;
 
 private:
+    VulkanDevice* m_device;
+
     struct LegacyDescriptorSets;
     std::unique_ptr<LegacyDescriptorSets> legacy_sets;
     void                                  CreateLegacySets(uint32 max_size);

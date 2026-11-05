@@ -12,7 +12,7 @@
 
 namespace Moer::Render {
 
-VulkanTimeline::VulkanTimeline(VulkanDevice& device) : VulkanDeviceObject(&device) {
+VulkanTimeline::VulkanTimeline(VulkanDevice& device) : m_device(&device) {
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
     VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};

@@ -19,7 +19,6 @@
 #include "rhi/backends/vulkan/VulkanDebugCallback.h"
 #include "rhi/backends/vulkan/VulkanDescriptor.h"
 #include "rhi/backends/vulkan/VulkanDeviceFeature.h"
-#include "rhi/backends/vulkan/VulkanDeviceObject.h"
 #include "rhi/backends/vulkan/VulkanDeviceProperty.h"
 #include "rhi/backends/vulkan/VulkanEnumTranslator.h"
 #include "rhi/backends/vulkan/VulkanFault.h"

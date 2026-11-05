@@ -1,6 +1,5 @@
 #pragma once
 
-#include "VulkanDeviceObject.h"
 #include "VulkanFault.h"
 #include "misc/Types.h"
 #include "rhi/RHIResource.h"
@@ -11,9 +10,11 @@
 
 namespace Moer::Render {
 
+class VulkanDevice;
+
 // GPU signal progress backed by a VkSemaphore. CPU callbacks, query publication
 // and resource retirement are tracked separately by the owning queue.
-class VulkanTimeline final : public Fence, VulkanDeviceObject {
+class VulkanTimeline final : public Fence {
 public:
     VulkanTimeline(VulkanDevice&);
     ~VulkanTimeline() override;
@@ -53,6 +54,7 @@ private:
     VkResult RefreshGpuCompletedValue(uint64 target_value);
     VkResult HandleGpuOperationFailure(VkResult result, uint64 value, EVulkanFaultOperation operation);
 
+    VulkanDevice*           m_device;
     VkSemaphore             m_timeline{VK_NULL_HANDLE};
     mutable std::mutex      m_state_mutex;
     uint64                  m_cached_gpu_completed_value{0};

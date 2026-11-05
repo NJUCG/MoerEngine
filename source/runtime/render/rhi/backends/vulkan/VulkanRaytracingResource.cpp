@@ -79,8 +79,8 @@ VulkanRaytracingGeometry::VulkanRaytracingGeometry(
     const RaytracingGeometryInfo& _info,
     VulkanDevice*                 _device
 ) :
-    VulkanDeviceObject(_device),
-    RaytracingGeometry(_info) {
+    RaytracingGeometry(_info),
+    m_device(_device) {
 
     VkAccelerationStructureBuildTypeKHR         build_type = VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR;
     VkAccelerationStructureBuildGeometryInfoKHR build_info{
@@ -105,8 +105,7 @@ VulkanRaytracingGeometry::VulkanRaytracingGeometry(
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .memory_usage = VMA_MEMORY_USAGE_GPU_ONLY,
             .needs_device_address = true,
-        },
-        false
+        }
     );
 
     VkAccelerationStructureCreateInfoKHR create_info{
@@ -158,7 +157,7 @@ void VulkanAccelerationStructure::Destroy() {
     device.EnqueueDeferredRelease(this);
 }
 
-VulkanRaytracingScene::VulkanRaytracingScene(VulkanDevice* device) : VulkanDeviceObject(device) {
+VulkanRaytracingScene::VulkanRaytracingScene(VulkanDevice* device) : m_device(device) {
     instance_buffer = CreateInstanceBuffer(instance_capacity);
 }
 
@@ -327,8 +326,7 @@ VulkanBufferRef VulkanRaytracingScene::CreateInstanceBuffer(uint32 capacity) {
             .allocation_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
             .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
             .needs_device_address = true,
-        },
-        true
+        }
     );
 }
 
@@ -410,8 +408,7 @@ bool VulkanRaytracingScene::EnsureAccelerationStructureStorage() {
                 .vk_usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                 .needs_device_address = true,
-            },
-            true
+            }
         );
     }
     if (grow_tlas) {
@@ -425,8 +422,7 @@ bool VulkanRaytracingScene::EnsureAccelerationStructureStorage() {
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                 .needs_device_address = true,
-            },
-            true
+            }
         );
         const VkAccelerationStructureCreateInfoKHR create_info{
             .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,

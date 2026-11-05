@@ -39,7 +39,7 @@ bool InvokeCompletionCallbacksNoexcept(
 } // namespace
 
 VulkanCommandContext::VulkanCommandContext(VulkanDevice* _device, EQueueType _type) :
-    VulkanDeviceObject(_device),
+    m_device(_device),
     queue_type(_type),
     command_pool(_device, _type),
     cmd_list(command_pool),

@@ -45,8 +45,8 @@ TextureView Texture::GetView(uint8, uint8) {
 
 VulkanBuffer::VulkanBuffer(
     std::string_view, const BufferInfo& info, VulkanDevice& device,
-    const VulkanBufferAllocationInfo&, bool
-) : Buffer(info), VulkanDeviceObject(&device) {
+    const VulkanBufferAllocationInfo&
+) : Buffer(info), m_device(&device) {
     if (++allocation_attempts == fail_on_attempt) {
         throw std::bad_alloc();
     }

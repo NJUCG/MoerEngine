@@ -2,7 +2,6 @@
 
 #include "VulkanCommon.h"
 #include "VulkanDescriptorRecordingPlan.h"
-#include "VulkanDeviceObject.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHIResource.h"
@@ -21,7 +20,7 @@ struct ArrayArguments;
 class VkNativeQueryPool;
 struct VulkanResourceBinding;
 
-class VulkanCommandPool : public VulkanDeviceObject {
+class VulkanCommandPool {
 public:
     VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_type);
     ~VulkanCommandPool();
@@ -42,6 +41,7 @@ public:
     std::string_view GetQueueName() const;
 
 private:
+    VulkanDevice* m_device;
     EQueueType    queue_type;
     VkCommandPool command_pool{VK_NULL_HANDLE};
 };

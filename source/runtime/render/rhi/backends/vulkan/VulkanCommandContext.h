@@ -1,7 +1,6 @@
 #pragma once
 
 #include "VulkanCommandList.h"
-#include "VulkanDeviceObject.h"
 #include "VulkanCommandQueries.h"
 #include "VulkanTemporaryBufferAllocator.h"
 
@@ -12,7 +11,7 @@
 namespace Moer::Render {
 
 // A recording and its resources travel together through Submission and Completion.
-class VulkanCommandContext : public VulkanDeviceObject {
+class VulkanCommandContext {
 public:
     VulkanCommandContext(VulkanDevice* _device, EQueueType _queue_type);
     ~VulkanCommandContext();
@@ -67,6 +66,8 @@ public:
 
 private:
     bool ResetCommandPool();
+
+    VulkanDevice* m_device;
 
     // Release command buffers before the pool and callbacks.
     EQueueType                                queue_type{EQueueType::Ignore};

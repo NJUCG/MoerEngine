@@ -1,7 +1,6 @@
 #pragma once
 
 #include "VulkanCommon.h"
-#include "VulkanDeviceObject.h"
 #include "VulkanMemoryAllocator.h"
 #include "misc/Types.h"
 #include "rhi/RHIResource.h"
@@ -11,6 +10,8 @@
 #include <span>
 
 namespace Moer::Render {
+
+class VulkanDevice;
 
 struct VulkanBufferDescriptorKey {
     uint64   byte_offset{0};
@@ -45,7 +46,7 @@ struct VulkanBufferAllocationInfo {
     VkDeviceSize              min_alignment = 1;
 };
 
-class VulkanBuffer : public Buffer, VulkanDeviceObject {
+class VulkanBuffer : public Buffer {
 public:
     struct BufferAlloc {
         VkBuffer      buffer{VK_NULL_HANDLE};
@@ -64,8 +65,7 @@ public:
         std::string_view                  _name,
         const BufferInfo&                 _info,
         VulkanDevice&                     _device,
-        const VulkanBufferAllocationInfo& _allocation_info,
-        bool                              _defer_destroy
+        const VulkanBufferAllocationInfo& _allocation_info
     );
     uint64                     DeviceAddress() const;
     inline const VmaAllocation GetAllocation() const {
@@ -78,6 +78,8 @@ public:
 
 private:
     friend class VulkanDescriptorHeap;
+
+    VulkanDevice* m_device;
 
     VulkanBufferDescriptorCacheSlots& GetDescriptorCacheSlots(VkDescriptorType _type);
     VulkanBufferDescriptorCacheSlots  m_descriptor_cache_slots[4];
@@ -111,7 +113,7 @@ struct VulkanTextureDescriptorKey {
         }
     };
 };
-class VulkanTexture final : public Texture, public VulkanDeviceObject {
+class VulkanTexture final : public Texture {
 public:
     VulkanTexture() = delete;
     ~VulkanTexture();
@@ -150,6 +152,8 @@ public:
 
 private:
     friend class VulkanDescriptorHeap;
+
+    VulkanDevice* m_device;
 
     UnorderedMap<VulkanTextureDescriptorKey, uint32, VulkanTextureDescriptorKey::Hasher>
         m_descriptor_cache_slots;

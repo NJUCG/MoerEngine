@@ -352,7 +352,8 @@ std::shared_ptr<const VulkanDescriptorRecordingPlan> PrepareDescriptorRecordingP
     return plan;
 }
 
-class VulkanCommandVisitor : VulkanDeviceObject {
+class VulkanCommandVisitor {
+    VulkanDevice*          m_device;
     VulkanCommandList&     cmd_list;
     VulkanCommandContext&  command_context;
     const TCachedArgArray& cached_args;
@@ -385,9 +386,9 @@ public:
         ProfilerStorage*       _profiler                = nullptr,
         bool                   _query_profiling_enabled = false
     ) :
-        VulkanDeviceObject(&_device),
-        command_context(_command_context),
+        m_device(&_device),
         cmd_list(_cmd_list),
+        command_context(_command_context),
         cached_args(_cached_args),
         profiler(_profiler),
         query_profiling_enabled(_query_profiling_enabled) {}

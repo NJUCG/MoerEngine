@@ -1,6 +1,5 @@
 #pragma once
 
-#include "VulkanDeviceObject.h"
 #include "VulkanRHIResource.h"
 #include "misc/Types.h"
 #include "rhi/RHICommand.h"
@@ -25,7 +24,7 @@ private:
 };
 
 using VulkanAccelRef = CountableRef<VulkanAccelerationStructure>;
-class VulkanRaytracingGeometry final : public RaytracingGeometry, public VulkanDeviceObject {
+class VulkanRaytracingGeometry final : public RaytracingGeometry {
 public:
     VulkanRaytracingGeometry(const RaytracingGeometryInfo& _info, VulkanDevice* _device);
     virtual ~VulkanRaytracingGeometry();
@@ -45,11 +44,12 @@ public:
     uint64 blas_address = 0;
 
 private:
+    VulkanDevice*              m_device;
     VkAccelerationStructureKHR acc = VK_NULL_HANDLE;
     VulkanBufferRef            underlying_buffer;
 };
 
-class VulkanRaytracingScene final : public RaytracingScene, public VulkanDeviceObject {
+class VulkanRaytracingScene final : public RaytracingScene {
 public:
     VulkanRaytracingScene(VulkanDevice* _device);
     ~VulkanRaytracingScene() override = default;
@@ -65,6 +65,8 @@ public:
     void               AdvanceFrame() override;
 
 private:
+    VulkanDevice* m_device;
+
     VulkanBufferRef     CreateInstanceBuffer(uint32 capacity);
     void GrowInstanceBuffer();
     bool EnsureAccelerationStructureStorage();

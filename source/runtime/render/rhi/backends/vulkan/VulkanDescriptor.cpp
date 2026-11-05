@@ -206,8 +206,7 @@ void VulkanDescriptorHeap::CreateNativeHeaps() {
                 .needs_device_address = true,
                 .queue_family_indices = std::span(families, families[0] == families[1] ? 1 : 2),
                 .min_alignment        = alignment,
-            },
-            false
+            }
         );
     };
     const uint64 resource_reserved = Moer::AlignUp(GetDescriptorCapacity(*m_device), GetStorageAlignment());
@@ -252,8 +251,7 @@ void VulkanDescriptorHeap::CreateDescriptorBuffer() {
             .allocation_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
             .needs_device_address = true,
             .queue_family_indices = std::span(queue_families, queue_families[0] == queue_families[1] ? 1 : 2),
-        },
-        false
+        }
     );
 }
 

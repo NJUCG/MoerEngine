@@ -30,7 +30,7 @@
 namespace Moer::Render {
 
 VulkanCommandPool::VulkanCommandPool(VulkanDevice* _device, EQueueType _queue_type) :
-    VulkanDeviceObject(_device),
+    m_device(_device),
     queue_type(_queue_type) {
     // Use the selected queue-role mapping, including vendor overrides, so the
     // command pool belongs to the same family as the actual submission queue.

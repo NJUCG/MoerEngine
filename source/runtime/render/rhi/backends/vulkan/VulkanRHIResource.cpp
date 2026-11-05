@@ -84,19 +84,17 @@ VulkanBuffer::VulkanBuffer(std::string_view _name, const BufferInfo& _info, Vulk
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .allocation_flags     = GetBufferAllocationFlags(_info.usage),
             .needs_device_address = true,
-        },
-        true
+        }
     ) {}
 
 VulkanBuffer::VulkanBuffer(
     std::string_view                  _name,
     const BufferInfo&                 _info,
     VulkanDevice&                     _device,
-    const VulkanBufferAllocationInfo& _allocation_info,
-    bool                              _defer_destroy
+    const VulkanBufferAllocationInfo& _allocation_info
 ) :
     Buffer(_info),
-    VulkanDeviceObject(&_device) {
+    m_device(&_device) {
     if (_info.size == 0 || _info.stride == 0) {
         throw std::invalid_argument("Vulkan buffer size and stride must be nonzero");
     }
@@ -151,7 +149,6 @@ VulkanBuffer::VulkanBuffer(
         );
     }
     try {
-        b_deferred_delete = _defer_destroy;
         if (_allocation_info.needs_device_address) {
             const VkBufferDeviceAddressInfo address_info{
                 .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
@@ -187,11 +184,7 @@ VulkanBufferDescriptorCacheSlots& VulkanBuffer::GetDescriptorCacheSlots(VkDescri
 }
 
 void VulkanBuffer::Destroy() {
-    if (b_deferred_delete) {
-        m_device->EnqueueDeferredRelease(this);
-        return;
-    }
-    MoerDelete(this);
+    m_device->EnqueueDeferredRelease(this);
 }
 
 void VulkanBuffer::SetName(const std::string_view _name) {
@@ -201,7 +194,7 @@ void VulkanBuffer::SetName(const std::string_view _name) {
 
 VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, VkImage _image) :
     Texture(_info),
-    VulkanDeviceObject(_device) {
+    m_device(_device) {
     b_present          = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
 
     if (_image != VK_NULL_HANDLE) {
@@ -377,11 +370,7 @@ VulkanTexture::~VulkanTexture() {
 }
 
 void VulkanTexture::Destroy() {
-    if (b_deferred_delete) {
-        m_device->EnqueueDeferredRelease(this);
-        return;
-    }
-    MoerDelete(this);
+    m_device->EnqueueDeferredRelease(this);
 }
 
 void VulkanTexture::SetName(const std::string_view _name) {
