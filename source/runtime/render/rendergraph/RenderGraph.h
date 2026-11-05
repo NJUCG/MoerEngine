@@ -43,6 +43,54 @@ concept RGParameterAccessProvider =
         value.DeclareRGAccess(collector);
     };
 
+// Complete these types before RenderGraph uses them in default arguments.
+enum class RGTextureAspect : uint8 {
+    None    = 0,
+    Color   = 1 << 0,
+    Depth   = 1 << 1,
+    Stencil = 1 << 2,
+    All     = (1 << 0) | (1 << 1) | (1 << 2),
+};
+
+constexpr RGTextureAspect operator|(RGTextureAspect lhs, RGTextureAspect rhs) {
+    return static_cast<RGTextureAspect>(static_cast<uint8>(lhs) | static_cast<uint8>(rhs));
+}
+
+constexpr RGTextureAspect operator&(RGTextureAspect lhs, RGTextureAspect rhs) {
+    return static_cast<RGTextureAspect>(static_cast<uint8>(lhs) & static_cast<uint8>(rhs));
+}
+
+struct RGTextureRange {
+    RGTextureAspect aspects     = RGTextureAspect::All;
+    uint32          mip_first   = 0;
+    uint32          mip_count   = MaxValue<uint32>;
+    uint32          layer_first = 0;
+    uint32          layer_count = MaxValue<uint32>;
+
+    [[nodiscard]] static constexpr RGTextureRange Mips(uint32 first, uint32 count) {
+        RGTextureRange range{};
+        range.mip_first = first;
+        range.mip_count = count;
+        return range;
+    }
+
+    [[nodiscard]] static constexpr RGTextureRange Layers(uint32 first, uint32 count) {
+        RGTextureRange range{};
+        range.layer_first = first;
+        range.layer_count = count;
+        return range;
+    }
+
+    friend auto operator<=>(const RGTextureRange&, const RGTextureRange&) = default;
+};
+
+struct RGBufferRange {
+    uint64 offset = 0;
+    uint64 size   = MaxValue<uint64>;
+
+    friend auto operator<=>(const RGBufferRange&, const RGBufferRange&) = default;
+};
+
 /**
  * Typed RDG frontend with an opt-in command-recording schedule.
  *
@@ -67,21 +115,7 @@ public:
         Token,
     };
 
-    enum class TextureAspect : uint8 {
-        None    = 0,
-        Color   = 1 << 0,
-        Depth   = 1 << 1,
-        Stencil = 1 << 2,
-        All     = (1 << 0) | (1 << 1) | (1 << 2),
-    };
-
-    friend constexpr TextureAspect operator|(TextureAspect lhs, TextureAspect rhs) {
-        return static_cast<TextureAspect>(static_cast<uint8>(lhs) | static_cast<uint8>(rhs));
-    }
-
-    friend constexpr TextureAspect operator&(TextureAspect lhs, TextureAspect rhs) {
-        return static_cast<TextureAspect>(static_cast<uint8>(lhs) & static_cast<uint8>(rhs));
-    }
+    using TextureAspect = RGTextureAspect;
 
     enum class SharingMode : uint8 {
         Exclusive,
@@ -104,36 +138,8 @@ public:
         friend bool operator==(const BufferDesc&, const BufferDesc&) = default;
     };
 
-    struct TextureRange {
-        TextureAspect aspects     = TextureAspect::All;
-        uint32        mip_first   = 0;
-        uint32        mip_count   = RemainingTextureRange;
-        uint32        layer_first = 0;
-        uint32        layer_count = RemainingTextureRange;
-
-        [[nodiscard]] static constexpr TextureRange Mips(uint32 first, uint32 count) {
-            TextureRange range{};
-            range.mip_first = first;
-            range.mip_count = count;
-            return range;
-        }
-
-        [[nodiscard]] static constexpr TextureRange Layers(uint32 first, uint32 count) {
-            TextureRange range{};
-            range.layer_first = first;
-            range.layer_count = count;
-            return range;
-        }
-
-        friend auto operator<=>(const TextureRange&, const TextureRange&) = default;
-    };
-
-    struct BufferRange {
-        uint64 offset = 0;
-        uint64 size   = RemainingBufferRange;
-
-        friend auto operator<=>(const BufferRange&, const BufferRange&) = default;
-    };
+    using TextureRange = RGTextureRange;
+    using BufferRange  = RGBufferRange;
 
     // A token has no subranges; its monostate is also the default range.
     using ResourceRange = std::variant<std::monostate, TextureRange, BufferRange>;
