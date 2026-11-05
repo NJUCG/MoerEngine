@@ -26,6 +26,8 @@
 
 namespace Moer::Render {
 
+enum class EVulkanTimestampQueryResetMode : uint8;
+
 class VulkanCommandQueue;
 class VulkanCopyQueue;
 class VulkanCommandRecorder;

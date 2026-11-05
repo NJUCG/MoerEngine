@@ -1,24 +1,9 @@
 #pragma once
 
-// MoerEngine uses Volk for every Vulkan entry point. Include this header
-// instead of Vulkan SDK headers so platform declarations and
-// VK_NO_PROTOTYPES are established before Vulkan is parsed.
-#if defined(_WIN32)
-#ifndef VK_USE_PLATFORM_WIN32_KHR
-#define VK_USE_PLATFORM_WIN32_KHR 1
-#endif
-#elif defined(__linux__)
-#ifndef VK_USE_PLATFORM_XLIB_KHR
-#define VK_USE_PLATFORM_XLIB_KHR 1
-#endif
-#endif
-
-#if (defined(VULKAN_H_) || defined(VULKAN_CORE_H_)) && !defined(VK_NO_PROTOTYPES)
-#error "Include VulkanCommon.h before Vulkan SDK headers, or compile with VK_NO_PROTOTYPES."
-#endif
-
+// Moer::VulkanHeaders supplies the Vulkan compile definitions before any SDK
+// header is parsed. Keep the backend's native declarations and entry points here.
 #ifndef VK_NO_PROTOTYPES
-#define VK_NO_PROTOTYPES 1
+#error "Link Moer::VulkanHeaders to supply VK_NO_PROTOTYPES and Vulkan platform definitions."
 #endif
 
 #include "misc/Types.h"
@@ -27,11 +12,5 @@
 namespace Moer::Render {
 
 inline constexpr uint32 k_vulkan_api_version = VK_API_VERSION_1_3;
-
-enum class EVulkanTimestampQueryResetMode : uint8 {
-    Unsupported,
-    CommandBuffer,
-    Host,
-};
 
 } // namespace Moer::Render

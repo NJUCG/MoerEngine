@@ -15,6 +15,7 @@
 #include "rhi/RHISubmissionPipelinePolicy.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "rhi/backends/vulkan/VulkanCommandProfiler.h"
+#include "rhi/backends/vulkan/VulkanCommandQueries.h"
 #include "rhi/backends/vulkan/VulkanCustomCommand.h"
 #include "rhi/backends/vulkan/VulkanDevice.h"
 #include "rhi/backends/vulkan/VulkanQueue.h"

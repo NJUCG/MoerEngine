@@ -6,6 +6,7 @@
 #include "PixelFormat.h"
 #include "VulkanBindlessArray.h"
 #include "VulkanCommandList.h"
+#include "VulkanCommandQueries.h"
 #include "VulkanCommandRecorder.h"
 #include "VulkanDebugCallback.h"
 #include "VulkanEnumTranslator.h"

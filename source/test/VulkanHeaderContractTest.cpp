@@ -10,6 +10,12 @@
 #error "Moer::Render must propagate VK_NO_PROTOTYPES to every consumer."
 #endif
 
+#if defined(_WIN32) && !defined(VK_USE_PLATFORM_WIN32_KHR)
+#error "Moer::VulkanHeaders must propagate VK_USE_PLATFORM_WIN32_KHR."
+#elif defined(__linux__) && !defined(VK_USE_PLATFORM_XLIB_KHR)
+#error "Moer::VulkanHeaders must propagate VK_USE_PLATFORM_XLIB_KHR."
+#endif
+
 #include "rhi/RHIWindowSurface.h"
 #include "rhi/backends/vulkan/VulkanBindlessArray.h"
 #include "rhi/backends/vulkan/VulkanCommandContext.h"

@@ -1,4 +1,5 @@
 #include "VulkanCommandRecorder.h"
+#include "VulkanCommandQueries.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanQueueInternal.h"

@@ -172,6 +172,7 @@ Files in `shaderheaders/shared/` use `#ifdef __cplusplus` guards:
 ### Vulkan Header Contract
 - Vulkan RHI code gets Vulkan declarations through `rhi/backends/vulkan/VulkanCommon.h`; do not include `<volk.h>`, `<vulkan/vulkan_core.h>`, or platform Vulkan headers directly in the Render module.
 - Targets that expose or consume Vulkan types must link `Moer::VulkanHeaders`. It propagates `VK_NO_PROTOTYPES`, the active Vulkan platform macro, the required include paths, and the Volk dependency.
+- Keep Vulkan macro definitions in CMake. `VulkanCommon.h` checks the build contract and includes Volk; it does not supply fallback definitions or query policy types.
 - `source/profile/VkLayer.cpp` is a standalone Vulkan layer and is the intentional exception to the Render-module rule.
 - After changing the Vulkan include contract, build `TestVulkanHeaderContract` and run the `VulkanHeaderContract` CTest.
 

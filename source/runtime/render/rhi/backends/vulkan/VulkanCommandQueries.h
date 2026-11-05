@@ -14,6 +14,12 @@
 
 namespace Moer::Render {
 
+enum class EVulkanTimestampQueryResetMode : uint8 {
+    Unsupported,
+    CommandBuffer,
+    Host,
+};
+
 class VulkanCommandList;
 class VulkanDevice;
 struct QueryCmd;
