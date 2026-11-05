@@ -156,9 +156,6 @@ public:
     VkQueue GetTransferQueue() const {
         return m_transfer_queue_handle;
     }
-    VkQueue GetRayTracingQueue() const {
-        return m_raytracing_queue_handle;
-    }
 
     [[nodiscard]] RENDER_API uint32 GetTimestampValidBits(
         EQueueType _queue_type
@@ -358,7 +355,6 @@ private:
     VkQueue               m_graphics_queue_handle     = VK_NULL_HANDLE;
     VkQueue               m_present_queue_handle      = VK_NULL_HANDLE;
     VkQueue               m_compute_queue_handle      = VK_NULL_HANDLE;
-    VkQueue               m_raytracing_queue_handle   = VK_NULL_HANDLE;
     VkQueue               m_transfer_queue_handle     = VK_NULL_HANDLE;
 
     // Device properties.
@@ -409,7 +405,6 @@ private:
     std::mutex m_present_queue_mutex;
     std::mutex m_compute_queue_mutex;
     std::mutex m_transfer_queue_mutex;
-    std::mutex m_raytracing_queue_mutex;
 
     // Deferred release and immutable samplers.
     LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};

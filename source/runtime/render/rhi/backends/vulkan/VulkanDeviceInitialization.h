@@ -14,26 +14,11 @@ struct QueueFamilyIndices {
     std::optional<uint32> present;
     std::optional<uint32> transfer;
     std::optional<uint32> compute;
-    std::optional<uint32> raytracing;
 
     bool IsComplete() const {
-        return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value() &&
-               raytracing.has_value();
+        return graphics.has_value() && present.has_value() && transfer.has_value() && compute.has_value();
     }
-    uint32 Size() const {
-        uint32 size = 0;
-        if (graphics.has_value())
-            size++;
-        if (present.has_value())
-            size++;
-        if (transfer.has_value())
-            size++;
-        if (compute.has_value())
-            size++;
-        if (raytracing.has_value())
-            size++;
-        return size;
-    }
+
 };
 
 struct VulkanDeviceInfo {

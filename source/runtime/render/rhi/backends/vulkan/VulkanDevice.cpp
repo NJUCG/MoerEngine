@@ -505,7 +505,6 @@ void VulkanDevice::CreateDevice() {
         &m_compute_queue_handle
     );
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue_handle);
-    vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue_handle);
 
     m_graphics_command_recorder = MakeUnique<VulkanCommandRecorder>(*this, EQueueType::Graphics);
     m_compute_command_recorder  = MakeUnique<VulkanCommandRecorder>(*this, EQueueType::Compute);
@@ -925,7 +924,6 @@ QueueFamilyIndices VulkanDevice::SelectQueueFamilyIndices(VkPhysicalDevice _gpu)
         return indices;
     }
     indices.graphics   = graphics;
-    indices.raytracing = graphics;
     indices.present    = graphics;
     if (is_amd) {
         indices.transfer = graphics;
@@ -1098,9 +1096,6 @@ std::mutex& VulkanDevice::GetQueueHostMutex(VkQueue _queue) {
     if (_queue == m_transfer_queue_handle) {
         return m_transfer_queue_mutex;
     }
-    if (_queue == m_raytracing_queue_handle) {
-        return m_raytracing_queue_mutex;
-    }
     assert(false && "Unknown VkQueue handle");
     return m_graphics_queue_mutex;
 }
@@ -1112,7 +1107,6 @@ Array<std::mutex*> VulkanDevice::GetUniqueQueueHostMutexes() {
         m_present_queue_handle,
         m_compute_queue_handle,
         m_transfer_queue_handle,
-        m_raytracing_queue_handle,
     };
     for (VkQueue queue : queues) {
         if (queue == VK_NULL_HANDLE) {

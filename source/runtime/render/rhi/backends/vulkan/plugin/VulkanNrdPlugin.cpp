@@ -3,6 +3,9 @@
 
 #if WITH_NRD
 
+#include <algorithm>
+#include <array>
+
 #include "../../vulkan/VulkanCustomCommand.h"
 #include "../../vulkan/VulkanDescriptor.h"
 #include "../../vulkan/VulkanDevice.h"
@@ -32,15 +35,17 @@ public:
             device_desc.vkDevice         = _device->GetDevice();
             device_desc.vkPhysicalDevice = _device->GetGpu();
 
-            const uint32 queue_family_indices[] = {
+            std::array queue_family_indices = {
                 _device->GetQueueFamilyIndices().graphics.value(),
                 _device->GetQueueFamilyIndices().present.value(),
                 _device->GetQueueFamilyIndices().compute.value(),
                 _device->GetQueueFamilyIndices().transfer.value(),
             };
 
-            device_desc.queueFamilyIndices  = queue_family_indices;
-            device_desc.queueFamilyIndexNum = _device->GetQueueFamilyIndices().Size();
+            std::ranges::sort(queue_family_indices);
+            const auto unique_end = std::unique(queue_family_indices.begin(), queue_family_indices.end());
+            device_desc.queueFamilyIndices = queue_family_indices.data();
+            device_desc.queueFamilyIndexNum = static_cast<uint32>(unique_end - queue_family_indices.begin());
             device_desc.minorVersion = VK_VERSION_MINOR(_device->GetCoreProperties().core_1_0.apiVersion);
             device_desc.enableNRIValidation = false;
 
