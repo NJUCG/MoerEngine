@@ -137,24 +137,15 @@ void TerminalizeUnsubmittedSignals(
 }
 
 QueryPublishBatch PublishUnsubmittedQueryErrors(
-    CmdSubmit&                 _submit,
-    VulkanCommandContextBatch* _command_contexts,
-    std::string_view           _reason
+    CmdSubmit&            _submit,
+    VulkanCommandContext* _command_context,
+    std::string_view      _reason
 ) noexcept {
     const QueryPublishBatch query_batch =
         _submit.query_publish_batch.Valid() ? _submit.query_publish_batch : QueryBackendAccess::BeginPublishBatch();
 
-    if (_command_contexts != nullptr) {
-        for (auto& command_context : _command_contexts->submitted) {
-            if (command_context) {
-                command_context->PublishQueriesAfterGpuCompletion(query_batch, false, _reason);
-            }
-        }
-        for (auto& command_context : _command_contexts->abandoned) {
-            if (command_context) {
-                command_context->PublishQueriesAfterGpuCompletion(query_batch, false, _reason);
-            }
-        }
+    if (_command_context != nullptr) {
+        _command_context->PublishQueriesAfterGpuCompletion(query_batch, false, _reason);
     }
     // The submit-token pass is also the malformed/native-record fallback in
     // the opposite direction: a token without a command context record still

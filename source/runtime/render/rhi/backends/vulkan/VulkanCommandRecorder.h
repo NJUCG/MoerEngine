@@ -19,27 +19,31 @@ public:
     // Executor reserves a packet before recording. Its lease serializes this
     // workspace through the native submission decision, including rejection.
     // Preparation failures stay in the owning packet for Submission/Completion.
-    void Record(VulkanRecordedSubmission& _pending) noexcept;
-    void Record(VulkanRecordedCopySubmission& _pending) noexcept;
+    void Record(VulkanPendingSubmission& _pending) noexcept;
 
     UniquePtr<VulkanCommandContext> AcquireContext();
     // Completion calls this after publishing queries and running context callbacks.
-    void RecycleContexts(VulkanCommandContextBatch& _contexts, bool _can_recycle_submitted);
+    void RecycleContext(
+        UniquePtr<VulkanCommandContext> _context,
+        bool                            _gpu_submitted,
+        bool                            _can_recycle_submitted
+    );
 
     Array<RHIResource*> TakeDeferredReleases();
     void                ResetProfiling() noexcept;
     ProfileData         GetProfilerEntry();
 
 private:
+    void        RecordCopy(VulkanPendingSubmission& _pending) noexcept;
     static bool SupportsCompiledCommands(const CmdSubmit& _submit, EQueueType _queue_type);
-    void   RecordCopyCommands(VulkanCommandContext& _context, CmdSubmit& _submit, bool _suppress_timestamp_queries);
-    void   RecordCommands(VulkanRecordedSubmission& _pending);
-    double RecordPreparedCommands(
-        VulkanRecordedSubmission&                                   _pending,
-        const std::shared_ptr<const VulkanDescriptorRecordingPlan>& _descriptor_plan
-    );
+    void        RecordCopyCommands(VulkanCommandContext& _context, CmdSubmit& _submit, bool _suppress_timestamp_queries);
+    void        RecordCommands(VulkanPendingSubmission& _pending);
+    double      RecordPreparedCommands(
+             VulkanPendingSubmission&                                    _pending,
+             const std::shared_ptr<const VulkanDescriptorRecordingPlan>& _descriptor_plan
+         );
     void RejectRecording(
-        VulkanRecordedSubmission&    _pending,
+        VulkanPendingSubmission&     _pending,
         const VulkanOperationResult& _outcome,
         std::string_view             _reason
     ) noexcept;

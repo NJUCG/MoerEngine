@@ -130,9 +130,10 @@ void SuccessfulSyncCompletesWithoutFailure() {
 void SyncExceptionReachesCompletionDespiteDiagnosticFailure() {
     Moer::uint32                            complete_count = 0;
     Moer::uint32                            reject_count   = 0;
-    std::exception_ptr propagated_failure{};
+    std::exception_ptr                      propagated_failure{};
+    std::exception_ptr                      diagnosed_failure{};
     std::vector<EWorkerRequestFailurePhase> failures;
-    const std::exception_ptr injected_failure =
+    const std::exception_ptr                injected_failure =
         std::make_exception_ptr(std::runtime_error("injected Sync failure"));
 
     const WorkerRequestDispatchResult result = DispatchWorkerRequestNoexcept(
@@ -147,7 +148,8 @@ void SyncExceptionReachesCompletionDespiteDiagnosticFailure() {
             ++complete_count;
             propagated_failure = _failure;
         },
-        [&](EWorkerRequestFailurePhase _phase, const std::exception_ptr&) {
+        [&](EWorkerRequestFailurePhase _phase, const std::exception_ptr& _failure) {
+            diagnosed_failure = _failure;
             failures.push_back(_phase);
             throw std::runtime_error("injected diagnostic failure");
         }
@@ -157,7 +159,9 @@ void SyncExceptionReachesCompletionDespiteDiagnosticFailure() {
     Expect(!result.stop, "Sync exception incorrectly stopped the worker");
     Expect(reject_count == 0, "Sync exception incorrectly rejected a Submit");
     Expect(complete_count == 1, "Sync exception did not release its waiter exactly once");
-    Expect(propagated_failure == injected_failure, "Sync completion did not receive the original process exception");
+    // Capturing a rethrown exception may copy it. Both observers must receive
+    // the same captured exception, regardless of the implementation's identity.
+    Expect(propagated_failure && propagated_failure == diagnosed_failure, "Sync completion did not receive the diagnosed process exception");
     Expect(
         failures.size() == 1 && failures.front() == EWorkerRequestFailurePhase::Process,
         "Sync process failure was not diagnosed exactly once"
@@ -175,7 +179,8 @@ void SyncExceptionReachesCompletionDespiteDiagnosticFailure() {
 void StopProcessExceptionStillCompletesShutdown() {
     Moer::uint32             complete_count = 0;
     Moer::uint32             reject_count   = 0;
-    std::exception_ptr propagated_failure{};
+    std::exception_ptr       propagated_failure{};
+    std::exception_ptr       diagnosed_failure{};
     const std::exception_ptr injected_failure =
         std::make_exception_ptr(std::runtime_error("injected Stop Sync failure"));
 
@@ -191,23 +196,34 @@ void StopProcessExceptionStillCompletesShutdown() {
             ++complete_count;
             propagated_failure = _failure;
         },
-        [](EWorkerRequestFailurePhase, const std::exception_ptr&) {}
+        [&](EWorkerRequestFailurePhase, const std::exception_ptr& _failure) {
+            diagnosed_failure = _failure;
+        }
     );
 
     Expect(result.failed, "Stop process exception was not reported as failed");
     Expect(result.stop, "Stop process exception did not terminate the worker");
     Expect(reject_count == 0, "Stop process exception incorrectly rejected a Submit");
     Expect(complete_count == 1, "Stop process exception did not finish shutdown exactly once");
-    Expect(propagated_failure == injected_failure, "Stop completion did not receive the original process exception");
+    Expect(propagated_failure && propagated_failure == diagnosed_failure, "Stop completion did not receive the diagnosed process exception");
+    try {
+        std::rethrow_exception(propagated_failure);
+    } catch (const std::runtime_error& error) {
+        Expect(std::string_view(error.what()) == "injected Stop Sync failure", "Stop completion lost the process exception");
+    }
 }
 
 void StopExceptionsAlwaysCompleteAndExit() {
     Moer::uint32                            complete_count = 0;
     std::vector<EWorkerRequestFailurePhase> failures;
-    const WorkerRequestDispatchResult result = DispatchWorkerRequestNoexcept(
+    const WorkerRequestDispatchResult       result = DispatchWorkerRequestNoexcept(
         EWorkerRequestKind::Stop,
-        [] { throw std::runtime_error("injected Stop Sync failure"); },
-        [] { throw std::runtime_error("Stop must not reject a Submit"); },
+        [] {
+            throw std::runtime_error("injected Stop Sync failure");
+        },
+        [] {
+            throw std::runtime_error("Stop must not reject a Submit");
+        },
         [&](const std::exception_ptr&) {
             ++complete_count;
             throw std::runtime_error("injected completion failure");

@@ -20,14 +20,9 @@ void LogQueueErrorNoexcept(spdlog::format_string_t<Args...> _format, Args&&... _
 
 // Shared queue implementation operations. Ownership remains with the queue,
 // recorded submission and its existing completion records.
-struct VulkanPresentationSourceMembershipCommit {
-    BindlessArrayRef                                          bindless_array{};
-    VulkanBindlessArray::PresentationSourceMembershipSnapshot membership{};
-};
-
-struct VulkanPresentationSourceStateTransaction {
-    Array<VulkanPresentationSourceStateDelta>       delta{};
-    Array<VulkanPresentationSourceMembershipCommit> membership_commits{};
+struct VulkanPresentationStateUpdate {
+    Array<std::pair<TextureRef, bool>>                                                            delta{};
+    Array<std::pair<BindlessArrayRef, VulkanBindlessArray::PresentationSourceMembershipSnapshot>> membership_commits{};
 };
 
 void FinalizeRejectedBindlessUpdates(const CmdSubmit& _submit);
@@ -58,12 +53,12 @@ void MarkSubmissionAccepted(
     const Array<SignalEvent>& _signal_events
 );
 
-VulkanPresentationSourceStateProgram BuildPresentationSourceStateProgram(const CmdSubmit& _submit, EQueueType _queue);
+Array<VulkanPresentSourceEvent> CollectPresentationEvents(const CmdSubmit& _submit, EQueueType _queue);
 
-VulkanPresentationSourceStateTransaction
-EvaluatePresentationSourceStateProgram(const VulkanPresentationSourceStateProgram& _program);
+VulkanPresentationStateUpdate
+EvaluatePresentationEvents(const Array<VulkanPresentSourceEvent>& _program);
 
-void CommitAcceptedPresentationSourceStateTransaction(VulkanPresentationSourceStateTransaction& _transaction) noexcept;
+void CommitAcceptedPresentationState(VulkanPresentationStateUpdate& _transaction) noexcept;
 
 void TerminalizeUnsubmittedSignal(
     VulkanDevice&                _device,
@@ -79,9 +74,9 @@ void TerminalizeUnsubmittedSignals(
 );
 
 QueryPublishBatch PublishUnsubmittedQueryErrors(
-    CmdSubmit&                 _submit,
-    VulkanCommandContextBatch* _command_contexts,
-    std::string_view           _reason
+    CmdSubmit&            _submit,
+    VulkanCommandContext* _command_context,
+    std::string_view      _reason
 ) noexcept;
 
 } // namespace Moer::Render

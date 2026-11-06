@@ -385,16 +385,25 @@ Vulkan 的 `RunTranslateThread` 和 `RunSubmissionThread` 对应后端的两条�
 其内部 `WorkerRequest` 包含批次提交、同步或停止操作，`CpuTaskCompletion` 通知 CPU 工作完成；
 `VulkanSubmissionResult` 表示原生提交是否接受及可用的完成等待点，GPU 完成仍由队列 timeline 确认。
 完成队列只接收拥有本次资源的完成包，不再逐条分派回调、Context 或 descriptor lease。
-`ReserveSubmission` 从入口起以独立的 `VulkanRecordedSubmission` / `VulkanRecordedCopySubmission`
-持有请求并预留逻辑队列序号，Executor 再调用 `VulkanCommandRecorder::Record`。录制失败也保留这个拥有资源的包，
+`ReserveSubmission` 从入口起以统一的 `VulkanPendingSubmission`
+持有 Graphics、Compute、Copy 请求并预留逻辑队列序号，Executor 再调用 `VulkanCommandRecorder::Record`。录制失败也保留这个拥有资源的包，
 继续由 Submission 发布批次结果，再交给 Completion 收尾，避免局部变量析构提前触发通知。
 `submission_outcome` 为空表示尚未决定提交结果，有值表示已接受或已拒绝；它不表示 GPU 已完成。
+
+每份请求通过 `VulkanSubmissionCompletion` 独立确认 GPU 完成、发布自身结果、执行回调和回收资源。
+同属一个提交批次不承诺其他请求的结果已经就绪，也不建立跨请求的回调层级或跨队列通知屏障。
+同一份完成记录仍先发布全部 Query / GPU completion 终态，再依次执行 GPU completion、Query、普通和成功通知；
+资源保活覆盖自身回调，单个队列 Sync 等待本队列 CPU 退役，全局 Sync 逐一排空所有队列。
+RHI 阶段线程禁止通过 Query / GPU completion Future 阻塞等待尚未终态的结果，避免回调阻塞结果生产者。
+一个逻辑请求拆成多个原生提交时，原请求的普通和成功回调仍由源级多段聚合统一收尾；
+这个边界只覆盖同一请求，不扩展到同批其他独立请求。录制事务的提交门和批次失败收尾继续保护原有接纳与所有权约束。
+
 原生提交成功后先保存结果，再发布其他状态，后续 CPU bookkeeping 异常不能把已接受的工作误当作未提交。
 
 录制与提交由 Executor 显式串联：预留序号 → Recorder 录制 → Queue 提交 → Completion 收尾。
 Device 为 Graphics、Compute、Copy 各持有一个 Recorder；原来的 Context 池、隔离区和录制统计迁入 Recorder，
 没有增加第二份池或工作线程。录制中的 Context 随提交包转交，Completion 发布查询结果并执行 Context 回调后，
-才调用 Recorder 的 `RecycleContexts` 复用或隔离。Device 先排空并销毁 Queue，再销毁 Recorder。
+才调用 Recorder 的 `RecycleContext` 复用或隔离。Device 先排空并销毁 Queue，再销毁 Recorder。
 原来的 transferable lease 随提交包覆盖录制到提交决策，仍用于串行保护同一逻辑队列的可变录制状态。
 
 `VulkanCommandRecording.cpp` 实现命令 visitor 与 Graphics/Compute 录制，`VulkanCopyCommandRecording.cpp`

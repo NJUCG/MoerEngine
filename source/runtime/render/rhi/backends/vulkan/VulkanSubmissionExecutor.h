@@ -2,8 +2,8 @@
 
 #include "VulkanSubmission.h"
 #include "VulkanSubmissionRequestDispatch.h"
-#include "rhi/executor/RHIExecutorBackend.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
+#include "rhi/executor/RHIExecutorBackend.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -18,7 +18,6 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
-#include <variant>
 
 namespace Moer::Render {
 
@@ -94,7 +93,6 @@ private:
         GpuCompletionPublishBatch    gpu_completion_batch{};
         Array<QueryToken>            query_tokens{};
         QueryPublishBatch            query_batch{};
-        VulkanBatchCompletionTicket  completion_ticket{};
         bool                         terminalized{false};
         uint64                       publication_epoch{0};
     };
@@ -107,7 +105,6 @@ private:
         explicit BatchRejectionPublication(RHISubmissionBatch& _batch);
 
         void PublishSuffix(size_t _reject_from, int32 _result, bool _recoverable, std::string_view _reason) noexcept;
-        [[nodiscard]] VulkanBatchCompletionTicket CompletionTicket(size_t _source_index) const noexcept;
 
         Array<RejectionSourceSnapshot> sources{};
         std::recursive_mutex           mutex{};
@@ -119,16 +116,14 @@ private:
         size_t                                     reject_from{0};
     };
 
-    using RecordedSourcePacket = std::variant<std::monostate, VulkanRecordedSubmission, VulkanRecordedCopySubmission>;
-
     struct PipelineSourceSlot {
-        EQueueType           queue{EQueueType::Ignore};
-        uint64               async_queue_scope{0};
-        uint32               original_source_index{0};
-        uint32               source_segment_index{0};
-        uint32               source_segment_count{1};
-        bool                 cross_native_predecessor_wait{false};
-        RecordedSourcePacket recorded_packet{};
+        EQueueType                             queue{EQueueType::Ignore};
+        uint64                                 async_queue_scope{0};
+        uint32                                 original_source_index{0};
+        uint32                                 source_segment_index{0};
+        uint32                                 source_segment_count{1};
+        bool                                   cross_native_predecessor_wait{false};
+        std::optional<VulkanPendingSubmission> recorded_packet{};
     };
 
     struct PipelineBatchState {
@@ -186,52 +181,48 @@ private:
         }
     }
 
-    void ProcessBatch(RHISubmissionBatch& _batch, BatchExceptionState& _exception_state);
-    void ExecutePipelineSource(const std::shared_ptr<PipelineBatchState>& _batch, size_t _source_index) noexcept;
-    [[nodiscard]] RecordedSourcePacket TranslateSourceForRuntime(
-        EQueueType                  _queue,
-        CmdSubmit&&                 _submit,
-        VulkanBatchCompletionTicket _completion_ticket = {}
+    void                                                 ProcessBatch(RHISubmissionBatch& _batch, BatchExceptionState& _exception_state);
+    void                                                 ExecutePipelineSource(const std::shared_ptr<PipelineBatchState>& _batch, size_t _source_index) noexcept;
+    [[nodiscard]] std::optional<VulkanPendingSubmission> TranslateSourceForRuntime(
+        EQueueType  _queue,
+        CmdSubmit&& _submit
     ) noexcept;
     [[nodiscard]] VulkanSubmissionResult SubmitRecordedSourceForRuntime(
-        EQueueType                            _queue,
-        RecordedSourcePacket&&                _packet,
-        const VulkanRuntimePreCompletionHook* _pre_completion = nullptr
+        EQueueType                               _queue,
+        std::optional<VulkanPendingSubmission>&& _packet,
+        const VulkanSubmissionObserver*          _pre_completion = nullptr
     ) noexcept;
     static void PublishRuntimeFailureBeforeCompletion(void* _context, const VulkanSubmissionResult& _result) noexcept;
     void        RejectRecordedSourceForRuntime(
-               EQueueType             _queue,
-               RecordedSourcePacket&& _packet,
-               VkResult               _result,
-               bool                   _recoverable
+               EQueueType                               _queue,
+               std::optional<VulkanPendingSubmission>&& _packet,
+               VkResult                                 _result,
+               bool                                     _recoverable
            ) noexcept;
     void RejectSourceForRuntime(
-        EQueueType                  _queue,
-        CmdSubmit&&                 _submit,
-        VkResult                    _result,
-        bool                        _recoverable,
-        VulkanBatchCompletionTicket _completion_ticket = {}
+        EQueueType  _queue,
+        CmdSubmit&& _submit,
+        VkResult    _result,
+        bool        _recoverable
     ) noexcept;
-    [[nodiscard]] static bool       HasRecordedSourcePacket(const RecordedSourcePacket& _packet) noexcept;
-    [[nodiscard]] static CmdSubmit* GetRecordedSourceSubmit(RecordedSourcePacket& _packet) noexcept;
-    [[nodiscard]] VkResult          GetQueueFaultResult(EQueueType _queue) const noexcept;
-    void                            WaitForPipelineCapacity();
-    void                            DrainPipelineBatches();
-    void                            PrepareStreamSubmit(CmdSubmit& _submit, EQueueType _queue);
-    void                            UpdateStreamFrontier(EQueueType _queue, WaitEvent _completion, bool _collapse);
-    void                            ResetStreamScope() noexcept;
-    void                            LatchHardFailure(StreamPosition _position, int32 _result) noexcept;
-    [[nodiscard]] bool IsHardFailureAtOrBefore(StreamPosition _position, int32* _result = nullptr) const noexcept;
-    void               ProcessSync(ERHISyncDepth _depth);
-    void               RejectBatch(
-                      RHISubmissionBatch&&                       _batch,
-                      int32                                      _result,
-                      std::string_view                           _reason,
-                      bool                                       _recoverable,
-                      size_t                                     _first_source           = 0,
-                      size_t*                                    _next_unconsumed_source = nullptr,
-                      std::shared_ptr<BatchRejectionPublication> _rejection_publication  = {}
-                  );
+    [[nodiscard]] VkResult GetQueueFaultResult(EQueueType _queue) const noexcept;
+    void                   WaitForPipelineCapacity();
+    void                   DrainPipelineBatches();
+    void                   PrepareStreamSubmit(CmdSubmit& _submit, EQueueType _queue);
+    void                   UpdateStreamFrontier(EQueueType _queue, WaitEvent _completion, bool _collapse);
+    void                   ResetStreamScope() noexcept;
+    void                   LatchHardFailure(StreamPosition _position, int32 _result) noexcept;
+    [[nodiscard]] bool     IsHardFailureAtOrBefore(StreamPosition _position, int32* _result = nullptr) const noexcept;
+    void                   ProcessSync(ERHISyncDepth _depth);
+    void                   RejectBatch(
+                          RHISubmissionBatch&&                       _batch,
+                          int32                                      _result,
+                          std::string_view                           _reason,
+                          bool                                       _recoverable,
+                          size_t                                     _first_source           = 0,
+                          size_t*                                    _next_unconsumed_source = nullptr,
+                          std::shared_ptr<BatchRejectionPublication> _rejection_publication  = {}
+                      );
     void CompleteRequest(const std::shared_ptr<CpuTaskCompletion>& _completion, std::exception_ptr _failure = {});
     void ReportRequestFailure(
         ERequestKind                                       _kind,

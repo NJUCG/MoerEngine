@@ -1885,7 +1885,7 @@ void PrepareQueryPools(
 
 } // namespace
 
-void VulkanCommandRecorder::RecordCommands(VulkanRecordedSubmission& pending) {
+void VulkanCommandRecorder::RecordCommands(VulkanPendingSubmission& pending) {
     assert(GetCurrentRHIThreadRole() == ERHIThreadRole::Translate);
     if (device.IsFaulted()) {
         RejectRecording(pending, {EVulkanOperationStatus::Rejected, device.GetFirstFaultResult()}, "device is faulted");
@@ -1894,8 +1894,8 @@ void VulkanCommandRecorder::RecordCommands(VulkanRecordedSubmission& pending) {
 
     QueryRequirements queries;
     try {
-        pending.presentation_source_program = BuildPresentationSourceStateProgram(pending.submit, queue_type);
-        queries                             = ValidateRecordingRequest(device, pending.submit, queue_type);
+        pending.presentation_events = CollectPresentationEvents(pending.submit, queue_type);
+        queries                     = ValidateRecordingRequest(device, pending.submit, queue_type);
         if (!SupportsCompiledCommands(pending.submit, queue_type)) {
             throw VulkanCommandRecordingFailure{
                 "compiled submission contains an unsupported command or inferred barrier", VK_ERROR_FEATURE_NOT_PRESENT
@@ -1934,13 +1934,9 @@ void VulkanCommandRecorder::RecordCommands(VulkanRecordedSubmission& pending) {
         return;
     }
 
-    // Establish resource ownership before recording. The reserved vectors let
-    // success transfer a context without allocating after native side effects.
-    pending.command_contexts.abandoned.reserve(1);
-    pending.command_contexts.submitted.reserve(1);
-    pending.ordered_cmd_lists.reserve(1);
-    pending.command_contexts.abandoned.emplace_back(AcquireContext());
-    VulkanCommandContext& context = *pending.command_contexts.abandoned.back();
+    // Retain the context before any recording or query-pool side effects.
+    pending.command_context       = AcquireContext();
+    VulkanCommandContext& context = *pending.command_context;
     try {
         PrepareQueryPools(context, queries, queue_type, pending.timeline);
     } catch (const VulkanCommandRecordingFailure& failure) {
@@ -1989,21 +1985,17 @@ void VulkanCommandRecorder::RecordCommands(VulkanRecordedSubmission& pending) {
         return;
     }
 
-    pending.deferred_releases = TakeDeferredReleases();
-    if (!pending.submit.cmds.empty()) {
-        pending.ordered_cmd_lists.emplace_back(&context.GetCommandList());
-    }
-    pending.command_contexts.submitted.emplace_back(std::move(pending.command_contexts.abandoned.back()));
-    pending.command_contexts.abandoned.clear();
+    pending.deferred_releases   = TakeDeferredReleases();
+    pending.has_native_commands = !pending.submit.cmds.empty();
     profiler->FinishRecording(pending.submit, elapsed_ms);
 }
 
 double VulkanCommandRecorder::RecordPreparedCommands(
-    VulkanRecordedSubmission&                                   _pending,
+    VulkanPendingSubmission&                                    _pending,
     const std::shared_ptr<const VulkanDescriptorRecordingPlan>& _descriptor_plan
 ) {
     const CmdSubmit&      submit                   = _pending.submit;
-    VulkanCommandContext& context                  = *_pending.command_contexts.abandoned.back();
+    VulkanCommandContext& context                  = *_pending.command_context;
     VulkanCommandList&    command_list             = context.GetCommandList();
     const bool            has_cmd                  = !submit.cmds.empty();
     const bool            begins_profiling_frame   = submit.BeginsProfilingFrame();

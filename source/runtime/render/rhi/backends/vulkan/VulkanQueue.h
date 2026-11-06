@@ -9,7 +9,6 @@
 #include <span>
 #include <string_view>
 #include <thread>
-#include <type_traits>
 #include <utility>
 
 namespace Moer::Render {
@@ -80,52 +79,29 @@ public:
 private:
     friend class VulkanSubmissionExecutor;
 
-    struct CompletionEvent {
-        VulkanSubmitCompletionBatch batch;
-        uint64                      timeline;
-        uint64                      retirement_serial;
-
-        template<typename... Args>
-            requires std::is_constructible_v<VulkanSubmitCompletionBatch, Args&&...>
-        CompletionEvent(uint64 _timeline, uint64 _retirement_serial, Args&&... _args) noexcept(
-            std::is_nothrow_constructible_v<VulkanSubmitCompletionBatch, Args&&...>
-        ) :
-            batch(std::forward<Args>(_args)...),
-            timeline(_timeline),
-            retirement_serial(_retirement_serial) {}
-    };
-
-    struct SubmissionCompletionOutcome {
-        bool     gpu_success{false};
-        bool     release_safe{false};
-        VkResult result{VK_ERROR_UNKNOWN};
-        bool     recoverable_rejection{false};
-    };
-
     // Executor ownership and phase entry points.
     [[nodiscard]] bool ClaimRuntimeOwnership();
     void               ReleaseRuntimeOwnership() noexcept;
     void               CancelRuntimeDependencyWaits() noexcept;
 
-    [[nodiscard]] VulkanRecordedSubmission ReserveSubmission(CmdSubmit&& _submit) noexcept;
+    [[nodiscard]] VulkanPendingSubmission ReserveSubmission(CmdSubmit&& _submit) noexcept;
 
     VulkanSubmissionResult SubmitRecordedForRuntime(
-        VulkanRecordedSubmission              _recorded,
-        const VulkanRuntimePreCompletionHook* _pre_completion = nullptr
+        VulkanPendingSubmission         _recorded,
+        const VulkanSubmissionObserver* _pre_completion = nullptr
     ) noexcept;
-    void RejectRecordedForRuntime(VulkanRecordedSubmission&& _recorded, VkResult _result, bool _recoverable) noexcept;
+    void RejectRecordedForRuntime(VulkanPendingSubmission&& _recorded, VkResult _result, bool _recoverable) noexcept;
     void RejectForRuntime(
-        CmdSubmit&&                 _submit,
-        VkResult                    _result,
-        bool                        _recoverable,
-        VulkanBatchCompletionTicket _batch_completion = {}
+        CmdSubmit&& _submit,
+        VkResult    _result,
+        bool        _recoverable
     ) noexcept;
     VulkanSubmissionResult
     PresentForRuntime(SwapchainRef _swapchain, TextureView _source, PresentReceiptRef _receipt) noexcept;
 
     // Native submission and transfer to Completion.
     VulkanOperationResult
-    SubmitRecorded(VulkanRecordedSubmission& _recorded, const std::atomic_bool* _continue_waiting = nullptr);
+                           SubmitRecorded(VulkanPendingSubmission& _recorded, const std::atomic_bool* _continue_waiting = nullptr);
     VulkanSubmissionResult PresentSwapchain(
         SwapchainRef&&    _swapchain,
         TextureRef&&      _source_texture,
@@ -135,14 +111,12 @@ private:
         uint64            _serial
     ) noexcept;
     void
-    CommitRuntimeSubmitCompletion(VulkanRecordedSubmission& _recorded, const VulkanOperationResult& _outcome) noexcept;
+    CommitRuntimeSubmitCompletion(VulkanPendingSubmission& _recorded, const VulkanOperationResult& _outcome) noexcept;
 
     // Completion confirmation, callbacks and resource retirement.
     void CompletionThreadMain();
 
-    SubmissionCompletionOutcome ResolveGpuCompletion(VulkanSubmitCompletionBatch& _batch, uint64 _timeline);
-
-    void ProcessCompletion(CompletionEvent& _completion);
+    void ProcessCompletion(VulkanSubmissionCompletion& _completion);
     void CompleteAll(uint64 _timeline);
 
     VulkanDevice&     vk_device;
@@ -157,15 +131,14 @@ private:
     std::atomic<uint64>          last_reserved_timeline{0};
 
     // CPU retirement also includes requests which never reached the GPU.
-    std::mutex                             event_mutex;
-    std::condition_variable_any            queue_cv;
-    DEQueue<CompletionEvent>               event_queue;
-    bool                                   completion_worker_running{false};
-    std::jthread                           completion_thread;
-    uint64                                 cpu_retired_timeline{0}; // Protected by event_mutex.
-    uint64                                 retirement_enqueued_serial{0};
-    uint64                                 retirement_settled_serial{0}; // Protected by event_mutex.
-    Array<VulkanBatchCompletionSettlement> batch_completion_settlements{};
+    std::mutex                          event_mutex;
+    std::condition_variable_any         queue_cv;
+    DEQueue<VulkanSubmissionCompletion> event_queue;
+    bool                                completion_worker_running{false};
+    std::jthread                        completion_thread;
+    uint64                              cpu_retired_timeline{0}; // Protected by event_mutex.
+    uint64                              retirement_enqueued_serial{0};
+    uint64                              retirement_settled_serial{0}; // Protected by event_mutex.
 };
 
 class VulkanCopyQueue : public CopyQueue {
@@ -188,42 +161,26 @@ private:
     friend class VulkanDevice;
     friend class VulkanSubmissionExecutor;
 
-    struct CompletionEvent {
-        VulkanSubmitCompletionBatch batch;
-        uint64                      timeline;
-        uint64                      retirement_serial;
-
-        template<typename... Args>
-            requires std::is_constructible_v<VulkanSubmitCompletionBatch, Args&&...>
-        CompletionEvent(uint64 _timeline, uint64 _retirement_serial, Args&&... _args) noexcept(
-            std::is_nothrow_constructible_v<VulkanSubmitCompletionBatch, Args&&...>
-        ) :
-            batch(std::forward<Args>(_args)...),
-            timeline(_timeline),
-            retirement_serial(_retirement_serial) {}
-    };
-
-    [[nodiscard]] bool            ClaimRuntimeOwnership();
-    void                          ReleaseRuntimeOwnership() noexcept;
-    void                          EnableRuntimeDependencyWaits() noexcept;
-    void                          CancelRuntimeDependencyWaits() noexcept;
-    VulkanRecordedCopySubmission  ReserveSubmission(CmdSubmit&& _submit) noexcept;
-    VulkanSubmissionResult SubmitRecordedForRuntime(
-        VulkanRecordedCopySubmission          _recorded,
-        const VulkanRuntimePreCompletionHook* _pre_completion = nullptr
-    ) noexcept;
+    [[nodiscard]] bool      ClaimRuntimeOwnership();
+    void                    ReleaseRuntimeOwnership() noexcept;
+    void                    EnableRuntimeDependencyWaits() noexcept;
+    void                    CancelRuntimeDependencyWaits() noexcept;
+    VulkanPendingSubmission ReserveSubmission(CmdSubmit&& _submit) noexcept;
+    VulkanSubmissionResult  SubmitRecordedForRuntime(
+         VulkanPendingSubmission         _recorded,
+         const VulkanSubmissionObserver* _pre_completion = nullptr
+     ) noexcept;
     void
-    RejectRecordedForRuntime(VulkanRecordedCopySubmission&& _recorded, VkResult _result, bool _recoverable) noexcept;
+         RejectRecordedForRuntime(VulkanPendingSubmission&& _recorded, VkResult _result, bool _recoverable) noexcept;
     void RejectForRuntime(
-        CmdSubmit&&                 _submit,
-        VkResult                    _result,
-        bool                        _recoverable,
-        VulkanBatchCompletionTicket _batch_completion = {}
+        CmdSubmit&& _submit,
+        VkResult    _result,
+        bool        _recoverable
     ) noexcept;
 
     void CommitRuntimeSubmitCompletion(
-        VulkanRecordedCopySubmission& _recorded,
-        const VulkanOperationResult&  _outcome
+        VulkanPendingSubmission&     _recorded,
+        const VulkanOperationResult& _outcome
     ) noexcept;
     void ExecuteThread();
     void CompleteAll(uint64 _timeline);
@@ -238,16 +195,15 @@ private:
     std::atomic_bool             dependency_waits_enabled{true};
     std::atomic<uint64>          last_frame{0};
 
-    std::mutex                             event_mutex;
-    std::condition_variable_any            queue_cv;
-    std::condition_variable                settled_cv;
-    DEQueue<CompletionEvent>               event_queue;
-    std::atomic_bool                       enabled{false};
-    std::jthread                           thread;
-    std::atomic<uint64>                    cpu_settled_frame{0};
-    uint64                                 retirement_enqueued_serial{0};
-    std::atomic<uint64>                    retirement_settled_serial{0};
-    Array<VulkanBatchCompletionSettlement> batch_completion_settlements{};
+    std::mutex                          event_mutex;
+    std::condition_variable_any         queue_cv;
+    std::condition_variable             settled_cv;
+    DEQueue<VulkanSubmissionCompletion> event_queue;
+    std::atomic_bool                    enabled{false};
+    std::jthread                        thread;
+    std::atomic<uint64>                 cpu_settled_frame{0};
+    uint64                              retirement_enqueued_serial{0};
+    std::atomic<uint64>                 retirement_settled_serial{0};
 };
 
 } // namespace Moer::Render

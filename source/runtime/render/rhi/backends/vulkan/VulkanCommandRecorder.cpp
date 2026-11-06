@@ -25,9 +25,13 @@ VulkanCommandRecorder::~VulkanCommandRecorder() {
     quarantined_contexts.clear();
 }
 
-void VulkanCommandRecorder::Record(VulkanRecordedSubmission& _pending) noexcept {
+void VulkanCommandRecorder::Record(VulkanPendingSubmission& _pending) noexcept {
     assert(GetCurrentRHIThreadRole() == ERHIThreadRole::Translate);
-    assert(queue_type != EQueueType::Copy && queue_type == _pending.context.queue_type);
+    assert(queue_type == _pending.context.queue_type);
+    if (queue_type == EQueueType::Copy) {
+        RecordCopy(_pending);
+        return;
+    }
     assert(_pending.execution_lease.OwnsGate());
     if (_pending.submission_outcome.has_value()) {
         ResetProfiling();
@@ -55,7 +59,7 @@ ProfileData VulkanCommandRecorder::GetProfilerEntry() {
 }
 
 void VulkanCommandRecorder::RejectRecording(
-    VulkanRecordedSubmission&    _pending,
+    VulkanPendingSubmission&     _pending,
     const VulkanOperationResult& _outcome,
     std::string_view             _reason
 ) noexcept {
@@ -97,34 +101,22 @@ Array<RHIResource*> VulkanCommandRecorder::TakeDeferredReleases() {
     return deleted_resources;
 }
 
-void VulkanCommandRecorder::RecycleContexts(VulkanCommandContextBatch& _contexts, bool _can_recycle_submitted) {
-    if (_can_recycle_submitted) {
-        for (auto& command_context : _contexts.submitted) {
-            _can_recycle_submitted = command_context->Reset() && _can_recycle_submitted;
-        }
+void VulkanCommandRecorder::RecycleContext(
+    UniquePtr<VulkanCommandContext> _context,
+    bool                            _gpu_submitted,
+    bool                            _can_recycle_submitted
+) {
+    if (!_context) {
+        return;
     }
-    if (_can_recycle_submitted && !device.IsFaulted()) {
-        for (auto& command_context : _contexts.submitted) {
-            available_contexts.Push(command_context.release());
-        }
+    const bool reset = _gpu_submitted ? (_can_recycle_submitted && _context->Reset()) :
+                                        (!device.IsFaulted() && _context->ResetAbandoned());
+    if (reset && !device.IsFaulted()) {
+        available_contexts.Push(_context.release());
     } else {
-        for (auto& command_context : _contexts.submitted) {
-            if (!command_context) {
-                continue;
-            }
-            device.RecordAllocatorQuarantine();
-            device.RecordSkippedCommandPoolReset();
-            quarantined_contexts.emplace_back(std::move(command_context));
-        }
-    }
-    for (auto& command_context : _contexts.abandoned) {
-        if (!device.IsFaulted() && command_context->ResetAbandoned()) {
-            available_contexts.Push(command_context.release());
-        } else if (command_context) {
-            device.RecordAllocatorQuarantine();
-            device.RecordSkippedCommandPoolReset();
-            quarantined_contexts.emplace_back(std::move(command_context));
-        }
+        device.RecordAllocatorQuarantine();
+        device.RecordSkippedCommandPoolReset();
+        quarantined_contexts.emplace_back(std::move(_context));
     }
 }
 

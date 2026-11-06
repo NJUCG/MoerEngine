@@ -148,31 +148,6 @@ VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForT
         throw std::runtime_error("materialized segments did not share source resource ownership");
     }
 
-    // An early-arriving packet must survive later participants and every tier.
-    VulkanBatchCompletionGroup              group(2);
-    auto                                    owner               = std::make_shared<RHICommandLifetime>();
-    std::weak_ptr<const RHICommandLifetime> weak_owner          = owner;
-    bool                                    callbacks_saw_owner = true;
-    VulkanBatchCompletionGroup::Participant first;
-    first.lifetime    = std::move(owner);
-    first.gpu_success = true;
-    first.callbacks.emplace_back([&] {
-        callbacks_saw_owner &= !weak_owner.expired();
-    });
-    group.Arrive(0, std::move(first));
-    if (weak_owner.expired()) {
-        throw std::runtime_error("batch completion dropped an early participant's owner");
-    }
-    VulkanBatchCompletionGroup::Participant last;
-    last.gpu_success = true;
-    last.success_callbacks.emplace_back([&] {
-        callbacks_saw_owner &= !weak_owner.expired();
-    });
-    group.Arrive(1, std::move(last));
-    group.WaitUntilSettled();
-    if (!callbacks_saw_owner || !weak_owner.expired()) {
-        throw std::runtime_error("batch completion resource lifetime did not cover callback tiers");
-    }
     result.materialized_prefix_signal_count =
         static_cast<uint32>(prefix_submit.signal_events.size());
     result.materialized_prefix_keepalive_count =

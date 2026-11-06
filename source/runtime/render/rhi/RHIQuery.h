@@ -70,7 +70,10 @@ public:
     [[nodiscard]] bool IsReady() const noexcept;
     [[nodiscard]] QueryStatus Status() const noexcept;
 
-    void Wait() const;
+    // RHI stage owners cannot block on Pending: doing so can stall the only
+    // thread that can publish another result. Terminal results remain readable.
+    // Wait/WaitFor/Get throw std::logic_error for a pending query on those threads.
+    void               Wait() const;
     [[nodiscard]] bool WaitFor(std::chrono::nanoseconds _timeout) const;
 
     template<typename Rep, typename Period>

@@ -5,10 +5,8 @@
 #include "rhi/backends/vulkan/VulkanDevice.h"
 #include "rhi/backends/vulkan/VulkanQueue.h"
 
-#include <algorithm>
 #include <atomic>
 #include <cassert>
-#include <limits>
 
 namespace Moer::Render {
 namespace {
@@ -19,8 +17,6 @@ std::atomic<const VulkanSubmissionDependencyWaitObserver*>
     g_submission_dependency_wait_observer{nullptr};
 std::atomic<const VulkanBackendSyncWaitObserver*>
     g_backend_sync_wait_observer{nullptr};
-std::atomic<const VulkanQueueLocalSyncWaitObserver*>
-    g_queue_local_sync_wait_observer{nullptr};
 std::atomic<const VulkanDeviceIdleWaitObserver*> g_device_idle_wait_observer{nullptr};
 std::atomic<const VulkanScriptedQueryPreparationOverrideForTesting*>
     g_scripted_query_preparation_override{nullptr};
@@ -133,18 +129,6 @@ bool RemoveVulkanBackendSyncWaitObserver(
     return RemoveObserver(g_backend_sync_wait_observer, _observer);
 }
 
-bool TryInstallVulkanQueueLocalSyncWaitObserver(
-    const VulkanQueueLocalSyncWaitObserver* _observer
-) noexcept {
-    return TryInstallObserver(g_queue_local_sync_wait_observer, _observer);
-}
-
-bool RemoveVulkanQueueLocalSyncWaitObserver(
-    const VulkanQueueLocalSyncWaitObserver* _observer
-) noexcept {
-    return RemoveObserver(g_queue_local_sync_wait_observer, _observer);
-}
-
 bool TryInstallVulkanDeviceIdleWaitObserver(const VulkanDeviceIdleWaitObserver* _observer) noexcept {
     return TryInstallObserver(g_device_idle_wait_observer, _observer);
 }
@@ -217,38 +201,6 @@ void NotifyVulkanNativeSubmission(
             .thread_role         = GetCurrentRHIThreadRole(),
             .outcome             = _outcome,
             .empty_submit        = _empty_submit,
-        }
-    );
-}
-
-void NotifyVulkanQueueLocalSyncWait(
-    EQueueType _queue,
-    uint64     _target_retirement_serial,
-    size_t     _completion_group_count
-) noexcept {
-    const VulkanQueueLocalSyncWaitObserver* observer =
-        g_queue_local_sync_wait_observer.load(
-            std::memory_order_acquire
-        );
-    if (observer == nullptr) {
-        return;
-    }
-    observer->callback(
-        observer->context,
-        VulkanQueueLocalSyncWaitEvent{
-            .queue       = _queue,
-            .thread_id   = Platform::GetCurrentThreadID(),
-            .thread_role = GetCurrentRHIThreadRole(),
-            .target_retirement_serial =
-                _target_retirement_serial,
-            .completion_group_count = static_cast<uint32>(
-                std::min(
-                    _completion_group_count,
-                    static_cast<size_t>(
-                        std::numeric_limits<uint32>::max()
-                    )
-                )
-            ),
         }
     );
 }

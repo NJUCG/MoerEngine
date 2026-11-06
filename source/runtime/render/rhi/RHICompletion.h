@@ -129,8 +129,8 @@ private:
 };
 
 // Opaque ticket separating terminal-state publication from callback release.
-// A whole backend batch can publish every sibling first, then notify in stable
-// source order without callback-induced Completion deadlocks.
+// The transaction that first publishes a result owns its callback release.
+// Publication and notification remain separate across completion and cancellation.
 class RENDER_API GpuCompletionPublishBatch {
 public:
     GpuCompletionPublishBatch() = default;

@@ -28,12 +28,6 @@ void NotifyVulkanNativeSubmission(
     bool                         _empty_submit
 ) noexcept;
 
-void NotifyVulkanQueueLocalSyncWait(
-    EQueueType _queue,
-    uint64     _target_retirement_serial,
-    size_t     _completion_group_count
-) noexcept;
-
 void NotifyVulkanDeviceIdleWait(const VulkanOperationContext& _context) noexcept;
 
 void NotifyVulkanSubmissionDependencyWaitBegin(

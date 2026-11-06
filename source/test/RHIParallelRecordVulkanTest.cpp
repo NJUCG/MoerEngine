@@ -10,7 +10,6 @@
 #include "rendergraph/RenderGraphPassParameters.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/executor/RHIExecutor.h"
 #include "rhi/RHIGpuScope.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
 #include "rhi/RHIThreadOwnership.h"
@@ -21,6 +20,7 @@
 #include "rhi/backends/vulkan/VulkanQueue.h"
 #include "rhi/backends/vulkan/VulkanRHIResource.h"
 #include "rhi/backends/vulkan/VulkanTimeline.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 #include "vulkan/VulkanFaultInjection.h"
@@ -1334,90 +1334,6 @@ public:
 private:
     VulkanBackendSyncWaitObserver observer{};
     bool                          installed{false};
-};
-
-class QueueLocalSyncWaitCapture final {
-public:
-    static void Observe(
-        void*                                    _context,
-        const VulkanQueueLocalSyncWaitEvent& _event
-    ) noexcept {
-        auto& capture =
-            *static_cast<QueueLocalSyncWaitCapture*>(_context);
-        const uint32 queue_bit =
-            _event.queue == EQueueType::Graphics ? 1u :
-            _event.queue == EQueueType::Compute ? 2u :
-            _event.queue == EQueueType::Copy ? 4u :
-            0u;
-        if (queue_bit == 0 ||
-            _event.thread_role == ERHIThreadRole::Completion ||
-            _event.target_retirement_serial == 0 ||
-            _event.completion_group_count == 0) {
-            capture.invalid.store(true, std::memory_order_release);
-        }
-        capture.queue_mask.fetch_or(
-            queue_bit, std::memory_order_acq_rel
-        );
-        capture.count.fetch_add(1, std::memory_order_acq_rel);
-        capture.entered.release();
-    }
-
-    [[nodiscard]] bool WaitForTwo(
-        std::chrono::milliseconds _timeout
-    ) noexcept {
-        return entered.try_acquire_for(_timeout) &&
-               entered.try_acquire_for(_timeout);
-    }
-
-    [[nodiscard]] bool ValidGraphicsComputePair() const noexcept {
-        return !invalid.load(std::memory_order_acquire) &&
-               count.load(std::memory_order_acquire) == 2 &&
-               queue_mask.load(std::memory_order_acquire) == 3u;
-    }
-
-private:
-    std::counting_semaphore<2> entered{0};
-    std::atomic<uint32>        count{0};
-    std::atomic<uint32>        queue_mask{0};
-    std::atomic<bool>          invalid{false};
-};
-
-class ScopedQueueLocalSyncWaitObserver final {
-public:
-    explicit ScopedQueueLocalSyncWaitObserver(
-        QueueLocalSyncWaitCapture& _capture
-    ) :
-        observer{
-            .context  = &_capture,
-            .callback = &QueueLocalSyncWaitCapture::Observe,
-        } {
-        if (!TryInstallVulkanQueueLocalSyncWaitObserver(
-                &observer
-            )) {
-            throw std::runtime_error(
-                "Vulkan queue-local Sync observer was already installed"
-            );
-        }
-        installed = true;
-    }
-
-    ~ScopedQueueLocalSyncWaitObserver() noexcept {
-        if (installed &&
-            !RemoveVulkanQueueLocalSyncWaitObserver(&observer)) {
-            std::terminate();
-        }
-    }
-
-    ScopedQueueLocalSyncWaitObserver(
-        const ScopedQueueLocalSyncWaitObserver&
-    ) = delete;
-    ScopedQueueLocalSyncWaitObserver& operator=(
-        const ScopedQueueLocalSyncWaitObserver&
-    ) = delete;
-
-private:
-    VulkanQueueLocalSyncWaitObserver observer{};
-    bool                             installed{false};
 };
 
 class DeviceIdleWaitCapture final {
@@ -7402,115 +7318,115 @@ void RunRecoverableCopyDependencyRejection() {
         ERHIExecSubmitFlags::FlushGPU
     );
 
-    auto* shared_vk_fence = ResourceCast(shared_done.Get());
-    auto* stale_vk_fence  = ResourceCast(stale_wait_done.Get());
-    std::atomic_bool continue_waiting{true};
-    std::jthread publication_deadline(
-        [&continue_waiting](std::stop_token _stop) {
-            const auto deadline = std::chrono::steady_clock::now() + 5s;
-            while (!_stop.stop_requested() &&
-                   std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(10ms);
+        auto*            shared_vk_fence = ResourceCast(shared_done.Get());
+        auto*            stale_vk_fence  = ResourceCast(stale_wait_done.Get());
+        std::atomic_bool continue_waiting{true};
+        std::jthread     publication_deadline(
+            [&continue_waiting](std::stop_token _stop) {
+                const auto deadline = std::chrono::steady_clock::now() + 5s;
+                while (!_stop.stop_requested() &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    std::this_thread::sleep_for(10ms);
+                }
+                if (!_stop.stop_requested()) {
+                    continue_waiting.store(false, std::memory_order_release);
+                }
             }
-            if (!_stop.stop_requested()) {
-                continue_waiting.store(false, std::memory_order_release);
-            }
-        }
-    );
-    const bool stale_wait_submitted =
-        stale_vk_fence->WaitSubmitted(1, &continue_waiting);
-    publication_deadline.request_stop();
-    publication_deadline.join();
-    if (stale_wait_submitted || !stale_vk_fence->IsRejected(1)) {
-        throw std::runtime_error(
-            "Submission did not publish a rejected stale-value dependency "
-            "before Completion"
         );
-    }
-    if (!shared_vk_fence->IsRejected(1) ||
-        !shared_vk_fence->WaitSubmitted(2) ||
-        !shared_vk_fence->Wait(2) ||
-        shared_done->GetValue() < 2 ||
-        shared_vk_fence->QueryGpuCompletion(2) != VK_SUCCESS ||
-        shared_vk_fence->Wait(1) ||
-        shared_vk_fence->QueryGpuCompletion(1) != VK_ERROR_UNKNOWN) {
-        throw std::runtime_error(
-            "reused external fence lost its exact rejection or accepted value"
-        );
-    }
-
-    release_guard.Release();
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-
-    if (!shared_vk_fence->IsRejected(1) ||
-        shared_vk_fence->IsRejected(2) ||
-        shared_vk_fence->IsFailed() ||
-        !stale_vk_fence->IsRejected(1) ||
-        stale_vk_fence->IsFailed()) {
-        throw std::runtime_error(
-            "recoverable Copy rejection poisoned the reusable external fence"
-        );
-    }
-    if (shared_vk_fence->WaitSubmitted(1) ||
-        !shared_vk_fence->WaitSubmitted(2) ||
-        shared_done->GetValue() < 2 ||
-        readback != expected) {
-        throw std::runtime_error(
-            "reused external fence did not recover at its next timeline value"
-        );
-    }
-    if (blocker_callbacks.load(std::memory_order_acquire) != 1 ||
-        blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
-        rejected_callbacks.load(std::memory_order_acquire) != 1 ||
-        rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        recovered_callbacks.load(std::memory_order_acquire) != 1 ||
-        recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
-        stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
-        stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        dependent_callbacks.load(std::memory_order_acquire) != 1 ||
-        dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
-        throw std::runtime_error(
-            "recoverable Copy rejection callbacks retired incorrectly"
-        );
-    }
-    if (native_capture.Overflowed() || native_capture.Count() != 3) {
-        throw std::runtime_error(
-            "rejected Copy packets reached native submit or accepted packets "
-            "were lost"
-        );
-    }
-    const uint32 submission_thread_id =
-        native_capture.Event(0).thread_id;
-    for (size_t index = 0; index < native_capture.Count(); ++index) {
-        const VulkanNativeSubmissionEvent& event =
-            native_capture.Event(index);
-        if (event.queue != EQueueType::Copy ||
-            event.thread_role != ERHIThreadRole::Submission ||
-            event.thread_id != submission_thread_id ||
-            !event.outcome.Succeeded()) {
+        const bool stale_wait_submitted =
+            stale_vk_fence->WaitSubmitted(1, &continue_waiting);
+        publication_deadline.request_stop();
+        publication_deadline.join();
+        if (stale_wait_submitted || !stale_vk_fence->IsRejected(1)) {
             throw std::runtime_error(
-                "accepted Copy recovery packets escaped the sole native "
-                "Submission owner"
+                "Submission did not publish a rejected stale-value dependency "
+                "before Completion"
             );
         }
-    }
+        if (!shared_vk_fence->IsRejected(1) ||
+            !shared_vk_fence->WaitSubmitted(2) ||
+            !shared_vk_fence->Wait(2) ||
+            shared_done->GetValue() < 2 ||
+            shared_vk_fence->QueryGpuCompletion(2) != VK_SUCCESS ||
+            shared_vk_fence->Wait(1) ||
+            shared_vk_fence->QueryGpuCompletion(1) != VK_ERROR_UNKNOWN) {
+            throw std::runtime_error(
+                "reused external fence lost its exact rejection or accepted value"
+            );
+        }
 
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (native_capture.Count() != 3 ||
-        blocker_callbacks.load(std::memory_order_acquire) != 1 ||
-        blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
-        rejected_callbacks.load(std::memory_order_acquire) != 1 ||
-        rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        recovered_callbacks.load(std::memory_order_acquire) != 1 ||
-        recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
-        stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
-        stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        dependent_callbacks.load(std::memory_order_acquire) != 1 ||
-        dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
-        throw std::runtime_error(
-            "a second Sync replayed recoverable Copy retirement"
-        );
-    }
+        release_guard.Release();
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+        if (!shared_vk_fence->IsRejected(1) ||
+            shared_vk_fence->IsRejected(2) ||
+            shared_vk_fence->IsFailed() ||
+            !stale_vk_fence->IsRejected(1) ||
+            stale_vk_fence->IsFailed()) {
+            throw std::runtime_error(
+                "recoverable Copy rejection poisoned the reusable external fence"
+            );
+        }
+        if (shared_vk_fence->WaitSubmitted(1) ||
+            !shared_vk_fence->WaitSubmitted(2) ||
+            shared_done->GetValue() < 2 ||
+            readback != expected) {
+            throw std::runtime_error(
+                "reused external fence did not recover at its next timeline value"
+            );
+        }
+        if (blocker_callbacks.load(std::memory_order_acquire) != 1 ||
+            blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
+            rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+            rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
+            recovered_callbacks.load(std::memory_order_acquire) != 1 ||
+            recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
+            stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
+            stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
+            dependent_callbacks.load(std::memory_order_acquire) != 1 ||
+            dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error(
+                "recoverable Copy rejection callbacks retired incorrectly"
+            );
+        }
+        if (native_capture.Overflowed() || native_capture.Count() != 3) {
+            throw std::runtime_error(
+                "rejected Copy packets reached native submit or accepted packets "
+                "were lost"
+            );
+        }
+        const uint32 submission_thread_id =
+            native_capture.Event(0).thread_id;
+        for (size_t index = 0; index < native_capture.Count(); ++index) {
+            const VulkanNativeSubmissionEvent& event =
+                native_capture.Event(index);
+            if (event.queue != EQueueType::Copy ||
+                event.thread_role != ERHIThreadRole::Submission ||
+                event.thread_id != submission_thread_id ||
+                !event.outcome.Succeeded()) {
+                throw std::runtime_error(
+                    "accepted Copy recovery packets escaped the sole native "
+                    "Submission owner"
+                );
+            }
+        }
+
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (native_capture.Count() != 3 ||
+            blocker_callbacks.load(std::memory_order_acquire) != 1 ||
+            blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
+            rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+            rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
+            recovered_callbacks.load(std::memory_order_acquire) != 1 ||
+            recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
+            stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
+            stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
+            dependent_callbacks.load(std::memory_order_acquire) != 1 ||
+            dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error(
+                "a second Sync replayed recoverable Copy retirement"
+            );
+        }
     } catch (...) {
         const std::exception_ptr failure = std::current_exception();
         release_guard.Release();
@@ -12903,9 +12819,6 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
                 ERHIThreadRole::Completion ||
             ordinary_callbacks[0].load(
                 std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[1].load(
-                std::memory_order_acquire
             ) != 1) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
@@ -12995,9 +12908,6 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     sibling.AddSuccessCallback([&] {
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
-            ordinary_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
             ordinary_callbacks[1].load(
                 std::memory_order_acquire
             ) != 1) {
@@ -13985,674 +13895,132 @@ void RunOcclusionQueryCompletionOwnership() {
     );
 }
 
-void RunTimestampQuerySuccessfulBatchPublication() {
+void RunTimestampQueryIndependentCompletion(bool cross_queue) {
     using namespace std::chrono_literals;
-
-    auto&            device            = RenderDevice::Get();
-    constexpr uint64 async_queue_scope = 0x5048313751534241ull;
-
-    std::array<FenceRef, 2> signals{
-        device.CreateFence(),
-        device.CreateFence(),
-    };
-    std::array<QueryFuture, 2> futures{};
-    std::array<std::atomic<uint32>, 2> query_callbacks{};
-    std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
-    std::array<std::atomic<uint32>, 2> success_callbacks{};
-    std::atomic<uint32>                callback_errors{0};
-
-    CommandList first(EQueueType::Graphics);
-
-    first.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    QueryToken first_query =
-        first.BeginTimestampQuery("Phase17ASuccessBatchFirst");
-    futures[0] = first_query.GetFuture();
-    first.EndTimestampQuery(first_query);
-
-    CommandList second(EQueueType::Graphics);
-
-    second.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    QueryToken second_query =
-        second.BeginTimestampQuery("Phase17ASuccessBatchSecond");
-    futures[1] = second_query.GetFuture();
-    second.EndTimestampQuery(second_query);
-
-    auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanTimeline*>(
-            ResourceCast(signals[_index].Get())
-        );
-        return fence != nullptr && signals[_index]->GetValue() >= 1 &&
-               !fence->IsRejected(1) && !fence->IsFailed();
-    };
-    auto peer_ready = [&](size_t _index) {
-        if (!futures[_index].WaitFor(500ms)) {
-            return false;
-        }
-        const std::optional<QueryResult> result =
-            futures[_index].TryGet();
-        return result.has_value() &&
-               result->status == QueryStatus::Ready &&
-               result->kind == QueryKind::Timestamp;
-    };
-
-    futures[0].Then([&](const QueryResult& _result) {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            _result.status != QueryStatus::Ready ||
-            !peer_ready(1) ||
-            !signal_succeeded(0) ||
-            !signal_succeeded(1)) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        query_callbacks[0].fetch_add(1, std::memory_order_release);
-    });
-    futures[1].Then([&](const QueryResult& _result) {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            _result.status != QueryStatus::Ready ||
-            !peer_ready(0) ||
-            !signal_succeeded(0) ||
-            !signal_succeeded(1)) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        query_callbacks[1].fetch_add(1, std::memory_order_release);
-    });
-
-    first.AddCallback([&] {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            !peer_ready(1) ||
-            query_callbacks[0].load(std::memory_order_acquire) != 1 ||
-            query_callbacks[1].load(std::memory_order_acquire) != 1) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        ordinary_callbacks[0].fetch_add(1, std::memory_order_release);
-    });
-    second.AddCallback([&] {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            !peer_ready(0) ||
-            query_callbacks[0].load(std::memory_order_acquire) != 1 ||
-            query_callbacks[1].load(std::memory_order_acquire) != 1) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        ordinary_callbacks[1].fetch_add(1, std::memory_order_release);
-    });
-    first.AddSuccessCallback([&] {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            ordinary_callbacks[0].load(std::memory_order_acquire) != 1 ||
-            ordinary_callbacks[1].load(std::memory_order_acquire) != 1) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        success_callbacks[0].fetch_add(1, std::memory_order_release);
-    });
-    second.AddSuccessCallback([&] {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            ordinary_callbacks[0].load(std::memory_order_acquire) != 1 ||
-            ordinary_callbacks[1].load(std::memory_order_acquire) != 1) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        success_callbacks[1].fetch_add(1, std::memory_order_release);
-    });
-
-    CmdSubmit first_submit = first.Submit();
-    first_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    first_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Compiled
-    );
-    first_submit.async_queue_scope = async_queue_scope;
-    first_submit.Signal(signals[0].Get(), 1);
-
-    CmdSubmit second_submit = second.Submit();
-    second_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    second_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Compiled
-    );
-    second_submit.async_queue_scope = async_queue_scope;
-    second_submit.Signal(signals[1].Get(), 1);
-
-    SourceSubmissionCapture        source_capture(async_queue_scope);
-    ScopedSourceSubmissionObserver source_observer(source_capture);
-    NativeSubmissionCapture        native_capture{};
-    ScopedNativeSubmissionObserver native_observer(native_capture);
-
-    Array<RHISubmissionRequest> batch{};
-    batch.emplace_back(
-        EQueueType::Graphics, std::move(first_submit)
-    );
-    batch.emplace_back(
-        EQueueType::Graphics, std::move(second_submit)
-    );
-    RHIExecutor::Get().Submit(
-        std::move(batch), ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-
-    for (size_t index = 0; index < futures.size(); ++index) {
-        const QueryResult result = futures[index].Get();
-        if (result.status != QueryStatus::Ready ||
-            result.kind != QueryKind::Timestamp ||
-            !signal_succeeded(index) ||
-            query_callbacks[index].load(std::memory_order_acquire) != 1 ||
-            ordinary_callbacks[index].load(std::memory_order_acquire) != 1 ||
-            success_callbacks[index].load(std::memory_order_acquire) != 1) {
-            throw std::runtime_error(
-                "successful timestamp batch did not retire exactly once"
-            );
-        }
-    }
-    if (callback_errors.load(std::memory_order_acquire) != 0 ||
-        source_capture.Overflowed() || source_capture.Count() != 2 ||
-        native_capture.Overflowed() || native_capture.Count() != 2) {
-        throw std::runtime_error(
-            "successful timestamp batch exposed a partial terminal frontier"
-        );
-    }
-
-    const uint64 batch_sequence =
-        source_capture.Event(0).batch_sequence;
-    if (batch_sequence == 0) {
-        throw std::runtime_error(
-            "successful timestamp batch lost its backend sequence"
-        );
-    }
-    for (size_t index = 0; index < 2; ++index) {
-        const VulkanSourceSubmissionEvent& source_event =
-            source_capture.Event(index);
-        const VulkanNativeSubmissionEvent& native_event =
-            native_capture.Event(index);
-        if (source_event.batch_sequence != batch_sequence ||
-            source_event.source_index != index ||
-            source_event.queue != EQueueType::Graphics ||
-            source_event.async_queue_scope != async_queue_scope ||
-            native_event.queue != EQueueType::Graphics ||
-            native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.Succeeded()) {
-            throw std::runtime_error(
-                "successful timestamp batch escaped stable Submission ordering"
-            );
-        }
-    }
-    if (native_capture.Event(0).native_queue_handle !=
-        native_capture.Event(1).native_queue_handle) {
-        throw std::runtime_error(
-            "successful timestamp batch did not exercise one native queue"
-        );
-    }
-
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    for (size_t index = 0; index < futures.size(); ++index) {
-        if (query_callbacks[index].load(std::memory_order_acquire) != 1 ||
-            ordinary_callbacks[index].load(std::memory_order_acquire) != 1 ||
-            success_callbacks[index].load(std::memory_order_acquire) != 1) {
-            throw std::runtime_error(
-                "a second RHI Sync replayed successful batch callbacks"
-            );
-        }
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=TimestampQuerySuccessfulBatchPublication "
-        "sources=2 queues=Graphics,Graphics batch_sequence={} "
-        "signals=terminal_before_query_callbacks "
-        "queries=batch_published_before_notify "
-        "cross_future_wait=ready owner=Completion "
-        "query_callbacks=exactly_once "
-        "ordinary_callbacks=exactly_once "
-        "success_callbacks=exactly_once "
-        "native_submit=2 native_owner=Submission replay=0",
-        batch_sequence
-    );
-}
-
-void RunTimestampQueryCrossQueueBatchPublication() {
-    using namespace std::chrono_literals;
-
-    auto& device = RenderDevice::Get();
-    const RHIQueueTopology topology = device.GetQueueTopology();
-    if (!topology.graphics.available || !topology.compute.available) {
-        LOG_INFO(
-            "[TESTCASE][SKIP] "
-            "name=TimestampQueryCrossQueueBatchPublication "
-            "reason=queue_unavailable"
-        );
-        return;
-    }
-
-    constexpr uint64 async_queue_scope = 0x504831375143524Full;
-    const bool native_alias =
-        topology.graphics.native_queue_id ==
-        topology.compute.native_queue_id;
-
-    std::array<FenceRef, 2> signals{
-        device.CreateFence(),
-        device.CreateFence(),
-    };
-    std::array<QueryFuture, 2> futures{};
+    auto&                              device     = RenderDevice::Get();
+    const EQueueType                   peer_queue = cross_queue ? EQueueType::Compute : EQueueType::Graphics;
+    FenceRef                           peer_gate  = device.CreateFence();
+    std::array<QueryFuture, 2>         queries{};
     std::array<GpuCompletionFuture, 2> completions{};
-    std::array<std::atomic<uint32>, 2> query_callbacks{};
-    std::array<std::atomic<uint32>, 2> completion_callbacks{};
-    std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
-    std::array<std::atomic<uint32>, 2> success_callbacks{};
-    std::atomic<uint32> callback_errors{0};
-    std::atomic<uint32> queue_sync_returns{0};
-    std::atomic<uint32> sync_before_callback_finished{0};
-    std::atomic<bool> blocking_callback_finished{false};
-    std::binary_semaphore blocking_callback_entered{0};
-    std::binary_semaphore release_blocking_callback{0};
-    std::counting_semaphore<2> queue_sync_returned{0};
-    QueueLocalSyncWaitCapture queue_sync_wait_capture{};
-    OneShotSemaphoreRelease release_callback_guard(
-        release_blocking_callback
-    );
+    std::array<std::atomic<uint32>, 2> phases{};
+    std::atomic<uint32>                errors{0};
+    std::binary_semaphore              first_retired{0};
 
-    auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanTimeline*>(
-            ResourceCast(signals[_index].Get())
-        );
-        return fence != nullptr && signals[_index]->GetValue() >= 1 &&
-               !fence->IsRejected(1) && !fence->IsFailed();
-    };
-    auto peer_ready = [&](size_t _index) {
-        if (!futures[_index].WaitFor(500ms)) {
-            return false;
-        }
-        const std::optional<QueryResult> result =
-            futures[_index].TryGet();
-        return result.has_value() &&
-               result->status == QueryStatus::Ready &&
-               result->kind == QueryKind::Timestamp;
-    };
+    CommandList                 first(EQueueType::Graphics);
+    CommandList                 second(peer_queue);
+    std::array<CommandList*, 2> lists{&first, &second};
+    for (size_t index = 0; index < lists.size(); ++index) {
+        CommandList& list = *lists[index];
+        list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        const QueryToken query = list.BeginTimestampQuery("IndependentCompletion");
+        queries[index]         = query.GetFuture();
+        list.EndTimestampQuery(query);
+        completions[index] = list.TrackGpuCompletion("IndependentCompletion");
+    }
 
-    CommandList graphics(EQueueType::Graphics);
-
-    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    completions[0] = graphics.TrackGpuCompletion(
-        "Phase19ACrossQueueGraphicsCompletion"
-    );
-    QueryToken graphics_query =
-        graphics.BeginTimestampQuery("Phase17ACrossQueueGraphics");
-    futures[0] = graphics_query.GetFuture();
-    graphics.EndTimestampQuery(graphics_query);
-
-    CommandList compute(EQueueType::Compute);
-
-    compute.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    completions[1] = compute.TrackGpuCompletion(
-        "Phase19ACrossQueueComputeCompletion"
-    );
-    QueryToken compute_query =
-        compute.BeginTimestampQuery("Phase17ACrossQueueCompute");
-    futures[1] = compute_query.GetFuture();
-    compute.EndTimestampQuery(compute_query);
-
-    for (size_t index = 0; index < completions.size(); ++index) {
-        completions[index].Then(
-            [&, index](const GpuCompletionResult& _result) {
-                const size_t peer = 1 - index;
-                const auto peer_completion =
-                    completions[peer].TryGet();
-                const auto own_query = futures[index].TryGet();
-                const auto peer_query = futures[peer].TryGet();
-                if (GetCurrentRHIThreadRole() !=
-                        ERHIThreadRole::Completion ||
-                    _result.status !=
-                        GpuCompletionStatus::Ready ||
-                    !peer_completion.has_value() ||
-                    peer_completion->status !=
-                        GpuCompletionStatus::Ready ||
-                    !own_query.has_value() ||
-                    own_query->status != QueryStatus::Ready ||
-                    !peer_query.has_value() ||
-                    peer_query->status != QueryStatus::Ready ||
-                    !signal_succeeded(0) ||
-                    !signal_succeeded(1)) {
-                    callback_errors.fetch_add(
-                        1, std::memory_order_relaxed
-                    );
-                }
-                completion_callbacks[index].fetch_add(
-                    1, std::memory_order_release
-                );
+    for (size_t index = 0; index < lists.size(); ++index) {
+        auto advance = [&, index](uint32 expected) {
+            if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
+                phases[index].fetch_add(1, std::memory_order_acq_rel) != expected) {
+                errors.fetch_add(1, std::memory_order_relaxed);
             }
-        );
+        };
+        completions[index].Then([&, index, advance](const GpuCompletionResult& result) {
+            if (result.status != GpuCompletionStatus::Ready || queries[index].Status() != QueryStatus::Ready) {
+                errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            advance(0);
+        });
+        queries[index].Then([&, index, advance](const QueryResult& result) {
+            if (result.status != QueryStatus::Ready || completions[index].Status() != GpuCompletionStatus::Ready) {
+                errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (index == 0) {
+                // The later submit is held at a dependency gate. Its result
+                // stays Pending, and waiting for it on Completion must fail fast.
+                if (queries[1].TryGet().has_value()) {
+                    errors.fetch_add(1, std::memory_order_relaxed);
+                }
+                bool rejected_wait = false;
+                try {
+                    (void)queries[1].WaitFor(1ms);
+                } catch (const std::logic_error&) {
+                    rejected_wait = true;
+                }
+                if (!rejected_wait) {
+                    errors.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            advance(1);
+        });
+        lists[index]->AddCallback([advance] {
+            advance(2);
+        });
+        lists[index]->AddSuccessCallback([&, index, advance] {
+            advance(3);
+            if (index == 0) {
+                first_retired.release();
+            }
+        });
     }
 
-    futures[0].Then([&](const QueryResult& _result) {
-        if (GetCurrentRHIThreadRole() !=
-                ERHIThreadRole::Completion ||
-            _result.status != QueryStatus::Ready ||
-            !peer_ready(1) ||
-            completions[0].Status() !=
-                GpuCompletionStatus::Ready ||
-            completions[1].Status() !=
-                GpuCompletionStatus::Ready ||
-            completion_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            completion_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            !signal_succeeded(0) ||
-            !signal_succeeded(1)) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        query_callbacks[0].fetch_add(
-            1, std::memory_order_release
-        );
-    });
-    futures[1].Then([&](const QueryResult& _result) {
-        if (GetCurrentRHIThreadRole() !=
-                ERHIThreadRole::Completion ||
-            _result.status != QueryStatus::Ready ||
-            !peer_ready(0) ||
-            completions[0].Status() !=
-                GpuCompletionStatus::Ready ||
-            completions[1].Status() !=
-                GpuCompletionStatus::Ready ||
-            completion_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            completion_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            !signal_succeeded(0) ||
-            !signal_succeeded(1)) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        query_callbacks[1].fetch_add(
-            1, std::memory_order_release
-        );
-    });
-
-    graphics.AddCallback([&] {
-        if (GetCurrentRHIThreadRole() !=
-                ERHIThreadRole::Completion ||
-            query_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            query_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        blocking_callback_entered.release();
-        release_blocking_callback.acquire();
-        ordinary_callbacks[0].fetch_add(
-            1, std::memory_order_release
-        );
-        blocking_callback_finished.store(
-            true, std::memory_order_release
-        );
-    });
-    compute.AddCallback([&] {
-        if (GetCurrentRHIThreadRole() !=
-                ERHIThreadRole::Completion ||
-            query_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            query_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        ordinary_callbacks[1].fetch_add(
-            1, std::memory_order_release
-        );
-    });
-    graphics.AddSuccessCallback([&] {
-        if (ordinary_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        success_callbacks[0].fetch_add(
-            1, std::memory_order_release
-        );
-    });
-    compute.AddSuccessCallback([&] {
-        if (ordinary_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        success_callbacks[1].fetch_add(
-            1, std::memory_order_release
-        );
-    });
-
-    CmdSubmit graphics_submit = graphics.Submit();
-    graphics_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    graphics_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Compiled
-    );
-    graphics_submit.async_queue_scope = async_queue_scope;
-    graphics_submit.Signal(signals[0].Get(), 1);
-
-    CmdSubmit compute_submit = compute.Submit();
-    compute_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    compute_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Compiled
-    );
-    compute_submit.async_queue_scope = async_queue_scope;
-    compute_submit.Signal(signals[1].Get(), 1);
-
-    SourceSubmissionCapture        source_capture(async_queue_scope);
-    ScopedSourceSubmissionObserver source_observer(source_capture);
-    NativeSubmissionCapture        native_capture{};
-    ScopedNativeSubmissionObserver native_observer(native_capture);
-
+    CmdSubmit first_submit  = first.Submit();
+    CmdSubmit second_submit = second.Submit();
+    second_submit.Wait(peer_gate.Get(), 1);
     Array<RHISubmissionRequest> batch{};
-    batch.emplace_back(
-        EQueueType::Graphics, std::move(graphics_submit)
-    );
-    batch.emplace_back(
-        EQueueType::Compute, std::move(compute_submit)
-    );
-    RHIExecutor::Get().Submit(
-        std::move(batch), ERHIExecSubmitFlags::FlushGPU
-    );
+    batch.emplace_back(EQueueType::Graphics, std::move(first_submit));
+    batch.emplace_back(peer_queue, std::move(second_submit));
+    RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
 
-    if (!blocking_callback_entered.try_acquire_for(5s)) {
-        throw std::runtime_error(
-            "cross-queue timestamp batch did not enter its grouped callback"
-        );
+    const bool            first_completed_independently = first_retired.try_acquire_for(5s);
+    const bool            peer_pending                  = queries[1].Status() == QueryStatus::Pending;
+    std::atomic_bool      sync_failed{false};
+    std::binary_semaphore queue_synced{0};
+    std::jthread          local_sync;
+    bool                  queue_completed_independently = true;
+    if (cross_queue) {
+        local_sync                    = std::jthread([&] {
+            try {
+                device.GetCommandQueue(EQueueType::Graphics).Sync();
+            } catch (...) {
+                sync_failed.store(true, std::memory_order_release);
+            }
+            queue_synced.release();
+        });
+        queue_completed_independently = queue_synced.try_acquire_for(5s);
     }
 
-    auto queue_sync = [&](EQueueType _queue) {
-        device.GetCommandQueue(_queue).Sync();
-        if (!blocking_callback_finished.load(
-                std::memory_order_acquire
-            )) {
-            sync_before_callback_finished.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        queue_sync_returns.fetch_add(
-            1, std::memory_order_release
-        );
-        queue_sync_returned.release();
-    };
-
-    bool both_sync_waits_entered = false;
-    bool sync_returned_before_release = false;
-    size_t observed_sync_returns = 0;
-    {
-        ScopedQueueLocalSyncWaitObserver queue_sync_wait_observer(
-            queue_sync_wait_capture
-        );
-        std::jthread graphics_sync_thread(
-            [&] { queue_sync(EQueueType::Graphics); }
-        );
-        std::jthread compute_sync_thread(
-            [&] { queue_sync(EQueueType::Compute); }
-        );
-
-        // The observer fires only after CompleteAll has captured the target
-        // retirement serial and the associated Completion group. This closes
-        // the scheduler gap between starting the helper and actually entering
-        // the wait contract.
-        both_sync_waits_entered =
-            queue_sync_wait_capture.WaitForTwo(5s);
-        if (both_sync_waits_entered &&
-            queue_sync_returned.try_acquire_for(200ms)) {
-            sync_returned_before_release = true;
-            observed_sync_returns = 1;
-        }
-
-        release_callback_guard.Release();
-        while (observed_sync_returns < 2 &&
-               queue_sync_returned.try_acquire_for(5s)) {
-            ++observed_sync_returns;
-        }
-        graphics_sync_thread.join();
-        compute_sync_thread.join();
-    }
+    // Release the gate before reporting failures, so cleanup never inherits
+    // the intentionally blocked dependency from this test.
+    ReleaseTestSubmissionDependency(*peer_gate, 1);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-
-    for (size_t index = 0; index < futures.size(); ++index) {
-        const QueryResult result = futures[index].Get();
-        const GpuCompletionResult completion =
-            completions[index].Get();
-        if (result.status != QueryStatus::Ready ||
-            completion.status != GpuCompletionStatus::Ready ||
-            result.kind != QueryKind::Timestamp ||
-            !signal_succeeded(index) ||
-            query_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            completion_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            success_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1) {
-            throw std::runtime_error(
-                "cross-queue timestamp batch did not retire exactly once"
-            );
-        }
+    if (local_sync.joinable()) {
+        local_sync.join();
     }
-    if (!both_sync_waits_entered ||
-        !queue_sync_wait_capture.ValidGraphicsComputePair() ||
-        sync_returned_before_release ||
-        observed_sync_returns != 2 ||
-        queue_sync_returns.load(std::memory_order_acquire) != 2 ||
-        sync_before_callback_finished.load(
-            std::memory_order_acquire
-        ) != 0 ||
-        callback_errors.load(std::memory_order_acquire) != 0 ||
-        source_capture.Overflowed() ||
-        source_capture.Count() != 2 ||
-        native_capture.Overflowed() ||
-        native_capture.Count() != 2) {
-        throw std::runtime_error(
-            "queue-local Sync escaped the cross-queue completion group"
-        );
+    if (!first_completed_independently || !peer_pending || !queue_completed_independently ||
+        sync_failed.load(std::memory_order_acquire) || errors.load(std::memory_order_acquire) != 0 ||
+        phases[0].load(std::memory_order_acquire) != 4 || phases[1].load(std::memory_order_acquire) != 4 ||
+        queries[0].Get().status != QueryStatus::Ready || queries[1].Get().status != QueryStatus::Ready) {
+        throw std::runtime_error("a completed submit was coupled to its unfinished batch peer");
     }
-
-    constexpr std::array expected_queues{
-        EQueueType::Graphics,
-        EQueueType::Compute,
-    };
-    const uint64 batch_sequence =
-        source_capture.Event(0).batch_sequence;
-    for (size_t index = 0; index < expected_queues.size(); ++index) {
-        const VulkanSourceSubmissionEvent& source_event =
-            source_capture.Event(index);
-        const VulkanNativeSubmissionEvent& native_event =
-            native_capture.Event(index);
-        if (batch_sequence == 0 ||
-            source_event.batch_sequence != batch_sequence ||
-            source_event.source_index != index ||
-            source_event.queue != expected_queues[index] ||
-            source_event.async_queue_scope != async_queue_scope ||
-            native_event.queue != expected_queues[index] ||
-            native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.Succeeded()) {
-            throw std::runtime_error(
-                "cross-queue timestamp batch lost stable submission ownership"
-            );
-        }
-    }
-    if ((native_capture.Event(0).native_queue_handle ==
-         native_capture.Event(1).native_queue_handle) != native_alias) {
-        throw std::runtime_error(
-            "cross-queue timestamp batch disagreed with queue topology"
-        );
-    }
-
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    for (size_t index = 0; index < futures.size(); ++index) {
-        if (query_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            completion_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            success_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1) {
-            throw std::runtime_error(
-                "a second Sync replayed cross-queue batch callbacks"
-            );
-        }
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=TimestampQueryCrossQueueBatchPublication "
-        "sources=2 queues=Graphics,Compute native_alias={} "
-        "queries=batch_published_before_notify "
-        "completions=batch_published_before_notify "
-        "cross_future_wait=ready owner=Completion "
-        "queue_local_sync=blocked_until_group_settled "
-        "callbacks=exactly_once replay=0",
-        native_alias
-    );
+    LOG_INFO("[TESTCASE][PASS] name=TimestampQueryIndependentCompletion cross_queue={} "
+             "peer_pending=true local_callback_tiers=verified queue_local_sync=independent",
+             cross_queue);
 }
 
-void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
-    auto& device = RenderDevice::Get();
+void RunTimestampQueryMultiSegmentSourceRetirement() {
+    auto&            device            = RenderDevice::Get();
     constexpr uint64 async_queue_scope = 0x50483137514D4958ull;
 
     std::array<FenceRef, 2> signals{
         device.CreateFence(),
         device.CreateFence(),
     };
-    std::binary_semaphore first_translated{0};
-    std::binary_semaphore second_translated{0};
-    std::atomic<uint32> phase{0};
-    std::atomic<uint32> callback_errors{0};
-    std::atomic<uint32> query_callbacks{0};
+    std::binary_semaphore              first_translated{0};
+    std::binary_semaphore              second_translated{0};
+    std::array<std::atomic<uint32>, 2> phases{};
+    std::atomic<uint32>                callback_errors{0};
+    std::atomic<uint32>                query_callbacks{0};
     std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 2> success_callbacks{};
 
@@ -14663,8 +14031,8 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
         return fence != nullptr && signals[_index]->GetValue() >= 1 &&
                !fence->IsRejected(1) && !fence->IsFailed();
     };
-    auto advance_phase = [&](uint32 _expected) {
-        if (phase.fetch_add(1, std::memory_order_acq_rel) !=
+    auto advance_phase = [&](size_t _source, uint32 _expected) {
+        if (phases[_source].fetch_add(1, std::memory_order_acq_rel) !=
             _expected) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
@@ -14694,13 +14062,13 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
                 1, std::memory_order_relaxed
             );
         }
-        advance_phase(1);
+        advance_phase(0, 0);
         ordinary_callbacks[0].fetch_add(
             1, std::memory_order_release
         );
     });
     multi_segment.AddSuccessCallback([&] {
-        advance_phase(3);
+        advance_phase(0, 1);
         success_callbacks[0].fetch_add(
             1, std::memory_order_release
         );
@@ -14717,13 +14085,12 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
             _result.status != QueryStatus::Ready ||
-            !signal_succeeded(0) ||
             !signal_succeeded(1)) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
             );
         }
-        advance_phase(0);
+        advance_phase(1, 0);
         query_callbacks.fetch_add(
             1, std::memory_order_release
         );
@@ -14738,13 +14105,13 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
                 1, std::memory_order_relaxed
             );
         }
-        advance_phase(2);
+        advance_phase(1, 1);
         ordinary_callbacks[1].fetch_add(
             1, std::memory_order_release
         );
     });
     query_source.AddSuccessCallback([&] {
-        advance_phase(4);
+        advance_phase(1, 2);
         success_callbacks[1].fetch_add(
             1, std::memory_order_release
         );
@@ -14794,7 +14161,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     const QueryResult result = future.Get();
     if (result.status != QueryStatus::Ready ||
         result.kind != QueryKind::Timestamp ||
-        phase.load(std::memory_order_acquire) != 5 ||
+        (phases[0].load(std::memory_order_acquire) != 2 || phases[1].load(std::memory_order_acquire) != 3) ||
         callback_errors.load(std::memory_order_acquire) != 0 ||
         query_callbacks.load(std::memory_order_acquire) != 1 ||
         ordinary_callbacks[0].load(
@@ -14859,7 +14226,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     }
 
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (phase.load(std::memory_order_acquire) != 5 ||
+    if ((phases[0].load(std::memory_order_acquire) != 2 || phases[1].load(std::memory_order_acquire) != 3) ||
         query_callbacks.load(std::memory_order_acquire) != 1 ||
         ordinary_callbacks[0].load(
             std::memory_order_acquire
@@ -14880,10 +14247,10 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
 
     LOG_INFO(
         "[TESTCASE][PASS] "
-        "name=TimestampQueryMixedMultiSegmentCallbackTiers "
+        "name=TimestampQueryMultiSegmentSourceRetirement "
         "original_sources=2 executable_sources=3 "
         "source0_segments=2 source1_query=true "
-        "order=Query,AllOrdinary,AllSuccess "
+        "order=per_source "
         "owner=Completion callbacks=exactly_once replay=0"
     );
 }
@@ -14947,14 +14314,9 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
                !fence->IsRejected(1) && !fence->IsFailed();
     };
     graphics_future.Then([&](const QueryResult& _result) {
-        const std::optional<QueryResult> copy_result =
-            copy_future.TryGet();
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
             _result.status != QueryStatus::Ready ||
-            !copy_result.has_value() ||
-            copy_result->status != QueryStatus::Error ||
-            copy_result->error_reason.empty() ||
             !graphics_signal_succeeded()) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
@@ -14965,15 +14327,10 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         );
     });
     copy_future.Then([&](const QueryResult& _result) {
-        const std::optional<QueryResult> graphics_result =
-            graphics_future.TryGet();
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
             _result.status != QueryStatus::Error ||
-            _result.error_reason.empty() ||
-            !graphics_result.has_value() ||
-            graphics_result->status != QueryStatus::Ready ||
-            !graphics_signal_succeeded()) {
+            _result.error_reason.empty()) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
             );
@@ -14983,16 +14340,12 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         );
     });
     copy_completion.Then([&](const GpuCompletionResult& _result) {
-        const auto graphics_result = graphics_future.TryGet();
         const auto copy_result = copy_future.TryGet();
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
             _result.status != GpuCompletionStatus::Ready ||
-            !graphics_result.has_value() ||
-            graphics_result->status != QueryStatus::Ready ||
             !copy_result.has_value() ||
-            copy_result->status != QueryStatus::Error ||
-            !graphics_signal_succeeded()) {
+            copy_result->status != QueryStatus::Error) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
             );
@@ -15089,7 +14442,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         native_capture.Overflowed() ||
         native_capture.Count() != 2) {
         throw std::runtime_error(
-            "query-only Copy payload did not arrive at Completion group"
+            "query-only Copy payload did not reach its Completion owner"
         );
     }
 
@@ -15134,7 +14487,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         "sources=2 queues=Graphics,Copy "
         "copy_payload=query_only copy_query=Error "
         "copy_completion=Ready completion_only_copy=Ready "
-        "group_arrival=verified owner=Completion "
+        "independent_retirement=verified owner=Completion "
         "callbacks=exactly_once native_submit=2 replay=0"
     );
 }
@@ -15201,24 +14554,24 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
         };
         auto query_matches_expectation =
             [&](const QueryResult& _result) {
-            const auto* timestamp =
-                std::get_if<TimestampQueryResult>(&_result.payload);
-            if (_expect_ready) {
-                return _result.status == QueryStatus::Ready &&
+                const auto* timestamp =
+                    std::get_if<TimestampQueryResult>(&_result.payload);
+                if (_expect_ready) {
+                    return _result.status == QueryStatus::Ready &&
+                           _result.kind == QueryKind::Timestamp &&
+                           _result.error_reason.empty() &&
+                           timestamp != nullptr &&
+                           timestamp->valid_bits ==
+                               std::min(native_valid_bits, uint32{64}) &&
+                           timestamp->valid_bits != 0 &&
+                           timestamp->tick_period_ns > 0.0 &&
+                           timestamp->duration_ns >= 0.0;
+                }
+                return _result.status == QueryStatus::Error &&
                        _result.kind == QueryKind::Timestamp &&
-                       _result.error_reason.empty() &&
-                       timestamp != nullptr &&
-                       timestamp->valid_bits ==
-                           std::min(native_valid_bits, uint32{64}) &&
-                       timestamp->valid_bits != 0 &&
-                       timestamp->tick_period_ns > 0.0 &&
-                       timestamp->duration_ns >= 0.0;
-            }
-            return _result.status == QueryStatus::Error &&
-                   _result.kind == QueryKind::Timestamp &&
-                   !_result.error_reason.empty() &&
-                   timestamp == nullptr;
-        };
+                       !_result.error_reason.empty() &&
+                       timestamp == nullptr;
+            };
 
         CommandList commands(EQueueType::Copy);
 
@@ -15875,11 +15228,11 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     auto&            device            = RenderDevice::Get();
     constexpr uint64 async_queue_scope = 0x50483137514D4944ull;
 
-    FenceRef prefix_done = device.CreateFence();
-    FenceRef suffix_done = device.CreateFence();
-    std::binary_semaphore suffix_translate_entered{0};
-    std::binary_semaphore release_suffix_translate{0};
-    std::binary_semaphore prefix_query_callback_entered{0};
+    FenceRef                prefix_done = device.CreateFence();
+    FenceRef                suffix_done = device.CreateFence();
+    std::binary_semaphore   suffix_translate_entered{0};
+    std::binary_semaphore   release_suffix_translate{0};
+    std::binary_semaphore   prefix_retired{0};
     OneShotSemaphoreRelease release_suffix_guard(
         release_suffix_translate
     );
@@ -15912,6 +15265,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     });
     prefix.AddSuccessCallback([&] {
         prefix_success_callbacks.fetch_add(1, std::memory_order_release);
+        prefix_retired.release();
     });
     CmdSubmit prefix_submit = prefix.Submit();
     prefix_submit.SetTranslateExecutionClass(
@@ -15965,21 +15319,15 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     suffix_submit.async_queue_scope = async_queue_scope;
     suffix_submit.Signal(suffix_done.Get(), 1);
 
-    // A successful-batch notification barrier deliberately prevents an
-    // earlier callback from driving a later source's Translate. The test
-    // thread releases the blocked suffix only after proving that no callback
-    // escaped before every executable source reached a terminal packet.
+    // The accepted prefix retires independently while suffix translation is
+    // still blocked. The later failure must not delay or revoke its callbacks.
     prefix_completion.Then(
         [&](const GpuCompletionResult& _result) {
-            const auto suffix_result =
-                suffix_completion.TryGet();
             if (_result.status !=
                     GpuCompletionStatus::Ready ||
                 GetCurrentRHIThreadRole() !=
                     ERHIThreadRole::Completion ||
-                !suffix_result.has_value() ||
-                suffix_result->status !=
-                    GpuCompletionStatus::Error) {
+                prefix_future.Status() != QueryStatus::Ready) {
                 callback_errors.fetch_add(
                     1, std::memory_order_relaxed
                 );
@@ -16005,10 +15353,6 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         }
     );
     prefix_future.Then([&](const QueryResult& _result) {
-        prefix_query_callback_entered.release();
-        const bool suffix_terminal = suffix_future.WaitFor(500ms);
-        const std::optional<QueryResult> suffix_result =
-            suffix_future.TryGet();
         auto* prefix_fence =
             static_cast<VulkanTimeline*>(ResourceCast(prefix_done.Get()));
         if (_result.status != QueryStatus::Ready ||
@@ -16017,13 +15361,8 @@ void RunTimestampQueryMidBatchTranslateFailure() {
             prefix_done->GetValue() < 1 ||
             prefix_fence->IsRejected(1) ||
             prefix_fence->IsFailed() ||
-            !suffix_terminal ||
-            !suffix_result.has_value() ||
-            suffix_result->status != QueryStatus::Error ||
+            suffix_future.Status() != QueryStatus::Pending ||
             prefix_completion_callbacks.load(
-                std::memory_order_acquire
-            ) != 1 ||
-            suffix_completion_callbacks.load(
                 std::memory_order_acquire
             ) != 1) {
             callback_errors.fetch_add(1, std::memory_order_relaxed);
@@ -16080,24 +15419,16 @@ void RunTimestampQueryMidBatchTranslateFailure() {
             "mid-batch prefix completion did not preserve the terminal frontier"
         );
     }
-    const bool prefix_callback_entered_before_terminal =
-        prefix_query_callback_entered.try_acquire_for(100ms);
-    if (prefix_callback_entered_before_terminal) {
-        callback_errors.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (prefix_query_callbacks.load(std::memory_order_acquire) != 0 ||
+    const bool prefix_retired_before_suffix = prefix_retired.try_acquire_for(5s);
+    if (!prefix_retired_before_suffix ||
+        prefix_query_callbacks.load(std::memory_order_acquire) != 1 ||
+        prefix_completion_callbacks.load(std::memory_order_acquire) != 1 ||
+        prefix_ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+        prefix_success_callbacks.load(std::memory_order_acquire) != 1 ||
         suffix_query_callbacks.load(std::memory_order_acquire) != 0 ||
-        prefix_completion_callbacks.load(
-            std::memory_order_acquire
-        ) != 0 ||
-        suffix_completion_callbacks.load(
-            std::memory_order_acquire
-        ) != 0 ||
-        prefix_ordinary_callbacks.load(std::memory_order_acquire) != 0 ||
+        suffix_completion_callbacks.load(std::memory_order_acquire) != 0 ||
         suffix_ordinary_callbacks.load(std::memory_order_acquire) != 0) {
-        throw std::runtime_error(
-            "mid-batch timestamp callback escaped before suffix terminalization"
-        );
+        callback_errors.fetch_add(1, std::memory_order_relaxed);
     }
     release_suffix_guard.Release();
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -16130,15 +15461,14 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         suffix_ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
         prefix_success_callbacks.load(std::memory_order_acquire) != 1 ||
         suffix_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        (!prefix_callback_entered_before_terminal &&
-         !prefix_query_callback_entered.try_acquire()) ||
+        !prefix_retired_before_suffix ||
         callback_errors.load(std::memory_order_acquire) != 0 ||
         suffix_fence == nullptr ||
         (!suffix_fence->IsRejected(1) && !suffix_fence->IsFailed()) ||
         native_capture.Overflowed() ||
         native_capture.Count() != 1) {
         throw std::runtime_error(
-            "mid-batch timestamp Query rejection was not published before same-queue Completion notification"
+            "mid-batch timestamp submissions did not retire independently"
         );
     }
 
@@ -16174,9 +15504,8 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         "queues=Graphics,Graphics native_prefix_submit=1 "
         "suffix_translate=main-thread-released suffix_status=Error "
         "prefix_completion=Ready suffix_completion=Error "
-        "pre_terminal_callback_entry=0 "
-        "batch_terminal_before_notify=true "
-        "bounded_cross_future_wait=true "
+        "prefix_retired_before_suffix=true "
+        "independent_notification=true "
         "owner=Completion callbacks=exactly_once replay=0"
     );
 }
@@ -17232,9 +16561,9 @@ int main(int argc, const char** argv) {
         }
 
         if (timestamp_query_success_batch_mode) {
-            RunTimestampQuerySuccessfulBatchPublication();
-            RunTimestampQueryCrossQueueBatchPublication();
-            RunTimestampQueryMixedMultiSegmentCallbackTiers();
+            RunTimestampQueryIndependentCompletion(false);
+            RunTimestampQueryIndependentCompletion(true);
+            RunTimestampQueryMultiSegmentSourceRetirement();
             RunTimestampQueryCopyOnlyPayloadArrival();
             RunCopyTimestampQueryCapabilityAndIsolation();
             RenderDevice::Dispose();
@@ -17261,9 +16590,9 @@ int main(int argc, const char** argv) {
         }
         if (timestamp_query_mode) {
             RunTimestampQueryCompletionOwnership();
-            RunTimestampQuerySuccessfulBatchPublication();
-            RunTimestampQueryCrossQueueBatchPublication();
-            RunTimestampQueryMixedMultiSegmentCallbackTiers();
+            RunTimestampQueryIndependentCompletion(false);
+            RunTimestampQueryIndependentCompletion(true);
+            RunTimestampQueryMultiSegmentSourceRetirement();
             RunTimestampQueryCopyOnlyPayloadArrival();
             RunCopyTimestampQueryCapabilityAndIsolation();
             RunTimestampQueryPreparationRejection();

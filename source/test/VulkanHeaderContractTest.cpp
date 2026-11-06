@@ -31,8 +31,8 @@
 #include "rhi/backends/vulkan/VulkanFault.h"
 #include "rhi/backends/vulkan/VulkanMemoryAllocator.h"
 #include "rhi/backends/vulkan/VulkanPipeline.h"
-#include "rhi/backends/vulkan/VulkanQueue.h"
 #include "rhi/backends/vulkan/VulkanPlatform.h"
+#include "rhi/backends/vulkan/VulkanQueue.h"
 #include "rhi/backends/vulkan/VulkanRaytracingResource.h"
 #include "rhi/backends/vulkan/VulkanSubmission.h"
 #include "rhi/backends/vulkan/VulkanSurfaceSupport.h"
@@ -64,10 +64,10 @@ static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandRecorder>
 static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandRecorder>);
 // Submission packets carry the ownership gate and native resource lifetimes
 // across threads. Handoff cannot copy them or fail halfway through a move.
-static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanRecordedSubmission>);
-static_assert(std::is_nothrow_move_constructible_v<Moer::Render::VulkanRecordedSubmission>);
-static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanRecordedCopySubmission>);
-static_assert(std::is_nothrow_move_constructible_v<Moer::Render::VulkanRecordedCopySubmission>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanPendingSubmission>);
+static_assert(std::is_nothrow_move_constructible_v<Moer::Render::VulkanPendingSubmission>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanSubmissionCompletion>);
+static_assert(std::is_nothrow_move_constructible_v<Moer::Render::VulkanSubmissionCompletion>);
 static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanTemporaryBufferAllocator>);
 static_assert(!std::is_move_constructible_v<Moer::Render::VulkanTemporaryBufferAllocator>);
 

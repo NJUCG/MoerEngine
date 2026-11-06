@@ -103,12 +103,12 @@ WaitEvent VulkanCommandQueue::Execute(CmdSubmit&& _submit) {
     return {0, 0};
 }
 
-VulkanRecordedSubmission VulkanCommandQueue::ReserveSubmission(CmdSubmit&& _submit) noexcept {
+VulkanPendingSubmission VulkanCommandQueue::ReserveSubmission(CmdSubmit&& _submit) noexcept {
     assert(executor_claimed.load(std::memory_order_acquire));
     assert(GetCurrentRHIThreadRole() == ERHIThreadRole::Translate);
 
-    auto                     execution_lease = runtime_execution_gate.Acquire();
-    VulkanRecordedSubmission pending{
+    auto                    execution_lease = runtime_execution_gate.Acquire();
+    VulkanPendingSubmission pending{
         std::move(_submit),
         VulkanOperationContext{
             .operation  = EVulkanFaultOperation::QueueSubmit,
@@ -134,14 +134,15 @@ VulkanRecordedSubmission VulkanCommandQueue::ReserveSubmission(CmdSubmit&& _subm
 }
 
 VulkanSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
-    VulkanRecordedSubmission              _recorded,
-    const VulkanRuntimePreCompletionHook* _pre_completion
+    VulkanPendingSubmission         _recorded,
+    const VulkanSubmissionObserver* _pre_completion
 ) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
         "runtime native submit must run on the Submission owner"
     );
     assert(_recorded.execution_lease.OwnsGate() && "runtime recorded submit must retain queue execution ownership");
+    assert(_recorded.context.queue_type == queue.GetType());
     const uint64 submitted_timeline = _recorded.timeline;
     const bool   split_profiling_frame =
         _recorded.submit.EmitsProfilingQueries() && _recorded.submit.ProfilingPhase() != ERHIProfilingPhase::Complete;
@@ -189,9 +190,9 @@ VulkanSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
 }
 
 void VulkanCommandQueue::RejectRecordedForRuntime(
-    VulkanRecordedSubmission&& _recorded,
-    VkResult                   _result,
-    bool                       _recoverable
+    VulkanPendingSubmission&& _recorded,
+    VkResult                  _result,
+    bool                      _recoverable
 ) noexcept {
     assert(
         _recorded.execution_lease.OwnsGate() && "a failed Translate -> Submission handoff must retain queue ownership"
@@ -208,10 +209,9 @@ void VulkanCommandQueue::RejectRecordedForRuntime(
 }
 
 void VulkanCommandQueue::RejectForRuntime(
-    CmdSubmit&&                 _submit,
-    VkResult                    _result,
-    bool                        _recoverable,
-    VulkanBatchCompletionTicket _batch_completion
+    CmdSubmit&& _submit,
+    VkResult    _result,
+    bool        _recoverable
 ) noexcept {
     // This request never acquired recording ownership. Reject only its own
     // work; an active Translate/Submission packet may still own profiling state.
@@ -230,10 +230,8 @@ void VulkanCommandQueue::RejectForRuntime(
         _submit.signal_events.clear();
         _submit.signal_rejection_keepalives.clear();
         TerminalizeUnsubmittedSignals(vk_device, rejected_signals, outcome);
-        std::unique_lock<std::mutex>                      lock(event_mutex);
-        const uint64                                      retirement_serial = retirement_enqueued_serial + 1;
-        const std::shared_ptr<VulkanBatchCompletionGroup> completion_group =
-            _batch_completion.Valid() ? _batch_completion.group : nullptr;
+        std::unique_lock<std::mutex> lock(event_mutex);
+        const uint64                 retirement_serial = retirement_enqueued_serial + 1;
         event_queue.emplace_back(
             0,
             retirement_serial,
@@ -246,22 +244,10 @@ void VulkanCommandQueue::RejectForRuntime(
             false,
             false,
             std::move(_submit),
-            VulkanCommandContextBatch{},
+            UniquePtr<VulkanCommandContext>{},
             VulkanDescriptorBufferLease{},
-            Array<RHIResource*>{},
-            std::move(_batch_completion)
+            Array<RHIResource*>{}
         );
-        if (completion_group) {
-            std::erase_if(batch_completion_settlements, [](const VulkanBatchCompletionSettlement& settlement) {
-                return settlement.group.expired();
-            });
-            batch_completion_settlements.emplace_back(
-                VulkanBatchCompletionSettlement{
-                    .retirement_serial = retirement_serial,
-                    .group             = completion_group,
-                }
-            );
-        }
         retirement_enqueued_serial = retirement_serial;
         (void)rejected_signal_keepalives;
     } catch (...) {
@@ -275,7 +261,7 @@ void VulkanCommandQueue::RejectForRuntime(
 }
 
 VulkanOperationResult
-VulkanCommandQueue::SubmitRecorded(VulkanRecordedSubmission& _pending, const std::atomic_bool* _continue_waiting) {
+VulkanCommandQueue::SubmitRecorded(VulkanPendingSubmission& _pending, const std::atomic_bool* _continue_waiting) {
     assert(
         !_pending.submission_outcome.has_value() && !_pending.completion_enqueued &&
         "a terminal submission cannot be replayed"
@@ -301,9 +287,9 @@ VulkanCommandQueue::SubmitRecorded(VulkanRecordedSubmission& _pending, const std
         );
     }
 
-    VulkanPresentationSourceStateTransaction presentation_transaction;
+    VulkanPresentationStateUpdate presentation_transaction;
     try {
-        presentation_transaction = EvaluatePresentationSourceStateProgram(_pending.presentation_source_program);
+        presentation_transaction = EvaluatePresentationEvents(_pending.presentation_events);
     } catch (const std::logic_error& error) {
         return reject({EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT}, error.what());
     } catch (const std::bad_alloc& error) {
@@ -330,52 +316,43 @@ VulkanCommandQueue::SubmitRecorded(VulkanRecordedSubmission& _pending, const std
     for (const VkSemaphoreSubmitInfo& signal : _pending.native_signals) {
         queue.Signal(signal.semaphore, signal.stageMask);
     }
-    const VulkanOperationResult outcome = _pending.ordered_cmd_lists.empty() ?
-                                              queue.SubmitEmpty(_pending.context) :
-                                              queue.Submit(_pending.ordered_cmd_lists, _pending.context);
+    const VulkanOperationResult outcome = _pending.has_native_commands ?
+                                              queue.Submit(_pending.command_context->GetCommandList(), _pending.context) :
+                                              queue.SubmitEmpty(_pending.context);
     // Once accepted, later bookkeeping failure must still retire this packet
     // as GPU-submitted. Save the decision before publishing observable state.
     _pending.submission_outcome = outcome;
     if (outcome.Succeeded()) {
-        CommitAcceptedPresentationSourceStateTransaction(presentation_transaction);
+        CommitAcceptedPresentationState(presentation_transaction);
         MarkSubmissionAccepted(timeline, _pending.timeline, _pending.submit.signal_events);
     }
     return outcome;
 }
 
 void VulkanCommandQueue::CommitRuntimeSubmitCompletion(
-    VulkanRecordedSubmission&    _recorded,
+    VulkanPendingSubmission&     _recorded,
     const VulkanOperationResult& _outcome
 ) noexcept {
     assert(!_recorded.completion_enqueued);
     try {
         if (!_outcome.Succeeded()) {
-            _recorded.command_contexts.abandoned.reserve(
-                _recorded.command_contexts.abandoned.size() + _recorded.command_contexts.submitted.size()
-            );
             const std::string_view          rejection_reason = "Vulkan submission was rejected before GPU completion";
             const GpuCompletionPublishBatch completion_batch = _recorded.submit.gpu_completion_publish_batch.Valid() ?
                                                                    _recorded.submit.gpu_completion_publish_batch :
                                                                    GpuCompletionBackendAccess::BeginPublishBatch();
             _recorded.submit.PublishPendingGpuCompletionErrors(rejection_reason, completion_batch);
-            PublishUnsubmittedQueryErrors(_recorded.submit, &_recorded.command_contexts, rejection_reason);
+            PublishUnsubmittedQueryErrors(_recorded.submit, _recorded.command_context.get(), rejection_reason);
             TerminalizeUnsubmittedSignal(vk_device, timeline, _recorded.timeline, _outcome);
             Array<SignalEvent> rejected_signals           = std::move(_recorded.submit.signal_events);
             Array<FenceRef>    rejected_signal_keepalives = std::move(_recorded.submit.signal_rejection_keepalives);
             _recorded.submit.signal_events.clear();
             _recorded.submit.signal_rejection_keepalives.clear();
             TerminalizeUnsubmittedSignals(vk_device, rejected_signals, _outcome);
-            for (auto& command_context : _recorded.command_contexts.submitted) {
-                _recorded.command_contexts.abandoned.emplace_back(std::move(command_context));
-            }
-            _recorded.command_contexts.submitted.clear();
             (void)rejected_signal_keepalives;
         }
 
-        std::unique_lock<std::mutex>                      lock(event_mutex);
-        const uint64                                      retirement_serial = retirement_enqueued_serial + 1;
-        const std::shared_ptr<VulkanBatchCompletionGroup> completion_group =
-            _recorded.batch_completion.Valid() ? _recorded.batch_completion.group : nullptr;
+        std::unique_lock<std::mutex> lock(event_mutex);
+        const uint64                 retirement_serial = retirement_enqueued_serial + 1;
         event_queue.emplace_back(
             _recorded.timeline,
             retirement_serial,
@@ -384,22 +361,10 @@ void VulkanCommandQueue::CommitRuntimeSubmitCompletion(
             _outcome.Succeeded(),
             _outcome.Succeeded(),
             std::move(_recorded.submit),
-            std::move(_recorded.command_contexts),
+            std::move(_recorded.command_context),
             std::move(_recorded.descriptor_lease),
-            std::move(_recorded.deferred_releases),
-            std::move(_recorded.batch_completion)
+            std::move(_recorded.deferred_releases)
         );
-        if (completion_group) {
-            std::erase_if(batch_completion_settlements, [](const VulkanBatchCompletionSettlement& settlement) {
-                return settlement.group.expired();
-            });
-            batch_completion_settlements.emplace_back(
-                VulkanBatchCompletionSettlement{
-                    .retirement_serial = retirement_serial,
-                    .group             = completion_group,
-                }
-            );
-        }
         retirement_enqueued_serial    = retirement_serial;
         _recorded.completion_enqueued = true;
     } catch (...) {

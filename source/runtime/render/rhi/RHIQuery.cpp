@@ -1,10 +1,12 @@
 #include "rhi/RHIQuery.h"
 #include "misc/STL.h"
 #include "misc/Types.h"
+#include "rhi/RHIThreadOwnership.h"
 
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <stdexcept>
 #include <utility>
 
 namespace Moer::Render {
@@ -103,6 +105,9 @@ void QueryFuture::Wait() const {
         return;
     }
     std::unique_lock lock(state_->mutex);
+    if (state_->result.status == QueryStatus::Pending && !IsRHIBlockingCallAllowedOnCurrentThread()) {
+        throw std::logic_error("an RHI owner thread cannot block on a pending query");
+    }
     state_->cv.wait(lock, [state = state_] {
         return state->result.status != QueryStatus::Pending;
     });
@@ -113,6 +118,9 @@ bool QueryFuture::WaitFor(std::chrono::nanoseconds _timeout) const {
         return false;
     }
     std::unique_lock lock(state_->mutex);
+    if (state_->result.status == QueryStatus::Pending && !IsRHIBlockingCallAllowedOnCurrentThread()) {
+        throw std::logic_error("an RHI owner thread cannot block on a pending query");
+    }
     return state_->cv.wait_for(lock, _timeout, [state = state_] {
         return state->result.status != QueryStatus::Pending;
     });

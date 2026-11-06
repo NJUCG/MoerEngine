@@ -1,6 +1,9 @@
+// PIX includes Windows headers that require CONST, before shared shader headers undefine it.
+#include "D3D12Common.h"
+#include <WinPixEventRuntime/pix3.h>
+
 #include "D3D12Backend.h"
 #include "rhi/RHIMultiview.h"
-#include <WinPixEventRuntime/pix3.h>
 #include <algorithm>
 #include <cstring>
 

@@ -286,17 +286,16 @@ static void VisitPresentationTextureArguments(
 // change execution topology. Direct texture uses become concrete events;
 // bindless uses remain symbolic until Submission can observe the last
 // natively accepted descriptor membership.
-VulkanPresentationSourceStateProgram BuildPresentationSourceStateProgram(const CmdSubmit& _submit, EQueueType _queue) {
-    VulkanPresentationSourceStateProgram program{};
-    program.events.reserve(_submit.cmds.size());
+Array<VulkanPresentSourceEvent> CollectPresentationEvents(const CmdSubmit& _submit, EQueueType _queue) {
+    Array<VulkanPresentSourceEvent> events{};
 
     const auto record_texture = [&](Texture* _texture, bool _ready) {
         if (!IsPresentationSourceTexture(_texture)) {
             return;
         }
-        program.events.emplace_back(
-            VulkanPresentationSourceStateEvent{
-                .type    = EVulkanPresentationSourceStateEventType::TextureState,
+        events.emplace_back(
+            VulkanPresentSourceEvent{
+                .type    = EVulkanPresentSourceEvent::TextureState,
                 .texture = TextureRef(_texture),
                 .ready   = _ready,
             }
@@ -306,9 +305,9 @@ VulkanPresentationSourceStateProgram BuildPresentationSourceStateProgram(const C
         if (!_array) {
             return;
         }
-        program.events.emplace_back(
-            VulkanPresentationSourceStateEvent{
-                .type           = EVulkanPresentationSourceStateEventType::BindlessAccess,
+        events.emplace_back(
+            VulkanPresentSourceEvent{
+                .type           = EVulkanPresentSourceEvent::BindlessAccess,
                 .bindless_array = _array,
             }
         );
@@ -509,9 +508,9 @@ VulkanPresentationSourceStateProgram BuildPresentationSourceStateProgram(const C
                                 if (!IsPresentationSourceTexture(_update.texture.Get())) {
                                     return;
                                 }
-                                program.events.emplace_back(
-                                    VulkanPresentationSourceStateEvent{
-                                        .type             = EVulkanPresentationSourceStateEventType::BindlessTextureMembership,
+                                events.emplace_back(
+                                    VulkanPresentSourceEvent{
+                                        .type             = EVulkanPresentSourceEvent::BindlessTextureMembership,
                                         .texture          = _update.texture,
                                         .bindless_array   = bindless_array,
                                         .bindless_slot    = _update.array_idx,
@@ -538,11 +537,11 @@ VulkanPresentationSourceStateProgram BuildPresentationSourceStateProgram(const C
                 throw std::logic_error("unsupported command in presentation-state collection");
         }
     }
-    return program;
+    return events;
 }
 
-VulkanPresentationSourceStateTransaction
-EvaluatePresentationSourceStateProgram(const VulkanPresentationSourceStateProgram& _program) {
+VulkanPresentationStateUpdate
+EvaluatePresentationEvents(const Array<VulkanPresentSourceEvent>& _events) {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
         "presentation state evaluation requires the Submission owner"
@@ -553,8 +552,8 @@ EvaluatePresentationSourceStateProgram(const VulkanPresentationSourceStateProgra
         std::shared_ptr<Membership> membership{};
     };
 
-    VulkanPresentationSourceStateTransaction transaction{};
-    transaction.delta.reserve(_program.events.size());
+    VulkanPresentationStateUpdate transaction{};
+    transaction.delta.reserve(_events.size());
 
     Array<WorkingMembership>                   working_memberships{};
     UnorderedMap<VulkanBindlessArray*, size_t> working_membership_indices{};
@@ -595,28 +594,23 @@ EvaluatePresentationSourceStateProgram(const VulkanPresentationSourceStateProgra
             return;
         }
         auto existing = std::find_if(
-            transaction.delta.begin(), transaction.delta.end(), [&](const VulkanPresentationSourceStateDelta& _entry) {
-                return _entry.texture.Get() == _texture.Get();
+            transaction.delta.begin(), transaction.delta.end(), [&](const auto& _entry) {
+                return _entry.first.Get() == _texture.Get();
             }
         );
         if (existing != transaction.delta.end()) {
-            existing->ready = _ready;
+            existing->second = _ready;
             return;
         }
-        transaction.delta.emplace_back(
-            VulkanPresentationSourceStateDelta{
-                .texture = _texture,
-                .ready   = _ready,
-            }
-        );
+        transaction.delta.emplace_back(_texture, _ready);
     };
 
-    for (const VulkanPresentationSourceStateEvent& event : _program.events) {
+    for (const VulkanPresentSourceEvent& event : _events) {
         switch (event.type) {
-            case EVulkanPresentationSourceStateEventType::TextureState:
+            case EVulkanPresentSourceEvent::TextureState:
                 record_texture(event.texture, event.ready);
                 break;
-            case EVulkanPresentationSourceStateEventType::BindlessAccess: {
+            case EVulkanPresentSourceEvent::BindlessAccess: {
                 const WorkingMembership& working = get_working_membership(event.bindless_array);
                 for (const auto& [texture, record] : working.membership->textures) {
                     (void)texture;
@@ -626,7 +620,7 @@ EvaluatePresentationSourceStateProgram(const VulkanPresentationSourceStateProgra
                 }
                 break;
             }
-            case EVulkanPresentationSourceStateEventType::BindlessTextureMembership: {
+            case EVulkanPresentSourceEvent::BindlessTextureMembership: {
                 if (!event.texture || !IsPresentationSourceTexture(event.texture.Get()) || event.bindless_slot == 0 ||
                     (event.membership_delta != 1 && event.membership_delta != -1)) {
                     throw std::logic_error(
@@ -701,38 +695,28 @@ EvaluatePresentationSourceStateProgram(const VulkanPresentationSourceStateProgra
     transaction.membership_commits.reserve(working_memberships.size());
     for (WorkingMembership& working : working_memberships) {
         transaction.membership_commits.emplace_back(
-            VulkanPresentationSourceMembershipCommit{
-                .bindless_array = std::move(working.bindless_array),
-                .membership     = std::shared_ptr<const Membership>(std::move(working.membership)),
-            }
+            std::move(working.bindless_array), std::shared_ptr<const Membership>(std::move(working.membership))
         );
     }
     return transaction;
 }
 
-static void
-CommitAcceptedPresentationSourceStateDelta(const Array<VulkanPresentationSourceStateDelta>& _delta) noexcept {
-    for (const VulkanPresentationSourceStateDelta& entry : _delta) {
-        if (!entry.texture) {
-            continue;
-        }
-        static_cast<VulkanTexture*>(entry.texture.Get())->PublishPresentationSourceReady(entry.ready);
-    }
-}
-
-void CommitAcceptedPresentationSourceStateTransaction(VulkanPresentationSourceStateTransaction& _transaction) noexcept {
+void CommitAcceptedPresentationState(VulkanPresentationStateUpdate& _transaction) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
         "presentation state publication requires the Submission owner"
     );
-    for (VulkanPresentationSourceMembershipCommit& commit : _transaction.membership_commits) {
-        if (!commit.bindless_array || !commit.membership) {
-            continue;
+    for (auto& [bindless_array, membership] : _transaction.membership_commits) {
+        if (bindless_array && membership) {
+            static_cast<VulkanBindlessArray*>(bindless_array.Get())
+                ->PublishAcceptedPresentationSourceMembership(std::move(membership));
         }
-        static_cast<VulkanBindlessArray*>(commit.bindless_array.Get())
-            ->PublishAcceptedPresentationSourceMembership(std::move(commit.membership));
     }
-    CommitAcceptedPresentationSourceStateDelta(_transaction.delta);
+    for (const auto& [texture, ready] : _transaction.delta) {
+        if (texture) {
+            static_cast<VulkanTexture*>(texture.Get())->PublishPresentationSourceReady(ready);
+        }
+    }
 }
 
 VulkanSubmissionResult VulkanCommandQueue::PresentForRuntime(
@@ -831,7 +815,7 @@ VulkanSubmissionResult VulkanCommandQueue::PresentForRuntime(
                 .timeline    = current_timeline,
                 .work_serial = current_timeline,
             };
-            VulkanRecordedSubmission recorded{CmdSubmit{{}, {}, {}, {}}, context, current_timeline};
+            VulkanPendingSubmission recorded{CmdSubmit{{}, {}, {}, {}}, context, current_timeline};
             recorded.submit.callbacks.emplace_back([swapchain = std::move(_swapchain),
                                                     source    = std::move(source_texture)] {});
             recorded.deferred_releases  = vk_device.GetCommandRecorder(queue.GetType()).TakeDeferredReleases();
@@ -899,13 +883,13 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
         .timeline    = _timeline,
         .work_serial = _serial,
     };
-    VulkanRecordedSubmission recorded{CmdSubmit{{}, {}, {}, {}}, context, _timeline};
-    auto*                 swapchain = ResourceCast(_swapchain.Get());
-    VulkanOperationResult final_outcome{EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN};
-    bool                  present_accepted      = false;
-    bool                  recoverable_rejection = false;
-    EPresentStatus        receipt_status        = EPresentStatus::Unresolved;
-    EPresentStage         receipt_stage         = EPresentStage::None;
+    VulkanPendingSubmission recorded{CmdSubmit{{}, {}, {}, {}}, context, _timeline};
+    auto*                   swapchain = ResourceCast(_swapchain.Get());
+    VulkanOperationResult   final_outcome{EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN};
+    bool                    present_accepted      = false;
+    bool                    recoverable_rejection = false;
+    EPresentStatus          receipt_status        = EPresentStatus::Unresolved;
+    EPresentStage           receipt_stage         = EPresentStage::None;
 
     try {
         // Retain Copy inputs through the ordinary GPU completion callbacks.
@@ -932,10 +916,8 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
                 source_contract.valid ? "producer export is not ready" : source_contract.reason
             );
         } else {
-            recorded.command_contexts.submitted.push_back(
-                vk_device.GetCommandRecorder(queue.GetType()).AcquireContext()
-            );
-            auto&      command_context = *recorded.command_contexts.submitted.back();
+            recorded.command_context   = vk_device.GetCommandRecorder(queue.GetType()).AcquireContext();
+            auto&      command_context = *recorded.command_context;
             const auto acquire         = swapchain->AcquireNextImage(
                 command_context.GetImageReadySemaphore(), kPresentAcquireTimeoutNanoseconds
             );
@@ -1022,7 +1004,7 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
                 command_list.EndLabel();
                 VK_CHECK_RESULT(command_list.End());
 
-                recorded.ordered_cmd_lists.push_back(&command_list);
+                recorded.has_native_commands = true;
                 recorded.native_waits.push_back(
                     VkSemaphoreSubmitInfo{
                         .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,

@@ -2,6 +2,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIImpl.h"
 #include "rhi/RHIQuery.h"
+#include "rhi/RHIThreadOwnership.h"
 
 #include <atomic>
 #include <chrono>
@@ -470,6 +471,33 @@ void FutureIsThreadSafeOneShotAndContainsCallbackExceptions() {
     }
     submit.callbacks.clear();
     submit.query_tokens.clear();
+}
+
+void RhiOwnersCannotWaitForPendingQueries() {
+    constexpr ERHIThreadRole roles[]{ERHIThreadRole::Executor, ERHIThreadRole::Translate, ERHIThreadRole::Submission, ERHIThreadRole::Completion, ERHIThreadRole::RecordWorker};
+    for (ERHIThreadRole role : roles) {
+        CommandList       list(EQueueType::Graphics);
+        const QueryToken  token  = list.BeginTimestampQuery("OwnerWaitGuard");
+        const QueryFuture future = token.GetFuture();
+        list.EndTimestampQuery(token);
+        RHIThreadRoleScope scope(role);
+        ExpectThrows<std::logic_error>([&] {
+            future.Wait();
+        },
+                                       "RHI owner blocked on a pending query");
+        ExpectThrows<std::logic_error>([&] {
+            (void)future.WaitFor(0ms);
+        },
+                                       "RHI owner timed wait accepted a pending query");
+        ExpectThrows<std::logic_error>([&] {
+            (void)future.Get();
+        },
+                                       "RHI owner Get accepted a pending query");
+        Expect(!future.TryGet().has_value(), "nonblocking read of a pending query changed its result");
+        QueryBackendAccess::ResolveTimestamp(token, TimestampQueryResult{.begin_tick = 10, .end_tick = 20, .valid_bits = 64, .tick_period_ns = 1.0, .duration_ns = 10.0});
+        future.Wait();
+        Expect(future.WaitFor(0ms) && future.Get().status == QueryStatus::Ready, "RHI owner could not read an already terminal query");
+    }
 }
 
 void ReadyAndErrorResolutionRaceHasOneWinner() {
@@ -1453,6 +1481,7 @@ int main() {
         OcclusionQueueCapabilityAndCommandOpsAreExplicit();
         MixedQueryNestingIsStrictAndOcclusionIsNotRecursive();
         FutureIsThreadSafeOneShotAndContainsCallbackExceptions();
+        RhiOwnersCannotWaitForPendingQueries();
         ReadyAndErrorResolutionRaceHasOneWinner();
         ReadyBatchPublishesEveryPeerBeforeNotification();
         BulkErrorPathsPublishEveryPeerBeforeNotification();

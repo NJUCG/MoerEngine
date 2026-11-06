@@ -1,5 +1,5 @@
-#include "VulkanCommandRecorder.h"
 #include "VulkanCommandQueries.h"
+#include "VulkanCommandRecorder.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanQueueInternal.h"
@@ -14,44 +14,37 @@
 
 namespace Moer::Render {
 
-void VulkanCommandRecorder::Record(VulkanRecordedCopySubmission& _pending) noexcept {
+void VulkanCommandRecorder::RecordCopy(VulkanPendingSubmission& _pending) noexcept {
     assert(GetCurrentRHIThreadRole() == ERHIThreadRole::Translate);
     assert(queue_type == EQueueType::Copy);
     assert(_pending.execution_lease.OwnsGate());
-    if (_pending.native_submit_resolved) {
+    if (_pending.submission_outcome.has_value()) {
         return;
     }
     try {
-        _pending.presentation_source_program = BuildPresentationSourceStateProgram(_pending.submit, queue_type);
+        _pending.presentation_events = CollectPresentationEvents(_pending.submit, queue_type);
         if (device.IsFaulted()) {
             device.RecordRejectedSubmit();
-            _pending.retirement_outcome     = {EVulkanOperationStatus::Rejected, device.GetFirstFaultResult()};
-            _pending.native_submit_resolved = true;
+            _pending.submission_outcome = VulkanOperationResult{EVulkanOperationStatus::Rejected, device.GetFirstFaultResult()};
             return;
         }
 
-        auto reject_before_native_record = [&](const VulkanOperationResult&     _outcome,
-                                               std::string_view                 _reason,
-                                               UniquePtr<VulkanCommandContext>* _abandoned_command_context = nullptr) {
+        auto reject_before_native_record = [&](const VulkanOperationResult& _outcome,
+                                               std::string_view             _reason) {
             try {
                 LOG_ERROR(
                     "[RHIExecutor][Vulkan] Copy rejected before native "
                     "record: timeline={} reason={} VkResult={}",
-                    _pending.logical_timeline,
+                    _pending.timeline,
                     _reason,
                     static_cast<int32>(_outcome.result)
                 );
             } catch (...) {
             }
-            if (_abandoned_command_context != nullptr && *_abandoned_command_context) {
-                _pending.command_contexts.abandoned.reserve(_pending.command_contexts.abandoned.size() + 1);
-                _pending.command_contexts.abandoned.emplace_back(std::move(*_abandoned_command_context));
-            }
             device.RecordRejectedSubmit();
-            _pending.retirement_outcome    = _outcome;
+            _pending.submission_outcome    = _outcome;
             _pending.recoverable_rejection = _outcome.status == EVulkanOperationStatus::Rejected &&
                                              !device.IsFaulted() && _outcome.result != VK_ERROR_DEVICE_LOST;
-            _pending.native_submit_resolved = true;
         };
 
         if (!SupportsCompiledCommands(_pending.submit, EQueueType::Copy)) {
@@ -147,16 +140,15 @@ void VulkanCommandRecorder::Record(VulkanRecordedCopySubmission& _pending) noexc
         const bool suppress_timestamp_queries =
             timestamp_query_slot_count != 0 && timestamp_reset_mode == EVulkanTimestampQueryResetMode::Unsupported;
 
-        _pending.command_contexts.submitted.reserve(1);
-        _pending.command_contexts.abandoned.reserve(1);
-        auto command_context_ptr = AcquireContext();
+        _pending.command_context              = AcquireContext();
+        VulkanCommandContext& command_context = *_pending.command_context;
         try {
             if (timestamp_query_slot_count != 0) {
-                command_context_ptr->ConfigureTimestampCapabilityForRecording(
+                command_context.ConfigureTimestampCapabilityForRecording(
                     effective_timestamp_valid_bits, timestamp_reset_mode
                 );
             }
-            command_context_ptr->EnsureQueryCapacity(suppress_timestamp_queries ? 0 : timestamp_query_slot_count, 0);
+            command_context.EnsureQueryCapacity(suppress_timestamp_queries ? 0 : timestamp_query_slot_count, 0);
         } catch (const std::exception& error) {
             try {
                 LOG_ERROR(
@@ -172,8 +164,7 @@ void VulkanCommandRecorder::Record(VulkanRecordedCopySubmission& _pending) noexc
                     device_faulted ? EVulkanOperationStatus::Faulted : EVulkanOperationStatus::Rejected,
                     device_faulted ? device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY
                 },
-                "Copy query pool preparation failed",
-                &command_context_ptr
+                "Copy query pool preparation failed"
             );
             return;
         } catch (...) {
@@ -183,19 +174,17 @@ void VulkanCommandRecorder::Record(VulkanRecordedCopySubmission& _pending) noexc
                     device_faulted ? EVulkanOperationStatus::Faulted : EVulkanOperationStatus::Rejected,
                     device_faulted ? device.GetFirstFaultResult() : VK_ERROR_OUT_OF_POOL_MEMORY
                 },
-                "Copy query pool preparation failed",
-                &command_context_ptr
+                "Copy query pool preparation failed"
             );
             return;
         }
-        _pending.command_contexts.submitted.emplace_back(std::move(command_context_ptr));
-        RecordCopyCommands(*_pending.command_contexts.submitted.front(), _pending.submit, suppress_timestamp_queries);
+        RecordCopyCommands(command_context, _pending.submit, suppress_timestamp_queries);
+        _pending.has_native_commands = true;
         return;
     } catch (const VulkanCallError& error) {
         device.RecordRejectedSubmit();
         device.TryLatchFirstFault(_pending.context, error.GetResult(), false);
-        _pending.retirement_outcome     = {EVulkanOperationStatus::Faulted, error.GetResult()};
-        _pending.native_submit_resolved = true;
+        _pending.submission_outcome = VulkanOperationResult{EVulkanOperationStatus::Faulted, error.GetResult()};
     } catch (const std::exception& error) {
         try {
             LOG_ERROR("[RHIExecutor][Vulkan] Copy translation threw: {}", error.what());
@@ -208,10 +197,9 @@ void VulkanCommandRecorder::Record(VulkanRecordedCopySubmission& _pending) noexc
         }
     }
 
-    if (!_pending.native_submit_resolved) {
+    if (!_pending.submission_outcome.has_value()) {
         device.RecordRejectedSubmit();
-        _pending.retirement_outcome     = {EVulkanOperationStatus::Faulted, VK_ERROR_UNKNOWN};
-        _pending.native_submit_resolved = true;
+        _pending.submission_outcome = VulkanOperationResult{EVulkanOperationStatus::Faulted, VK_ERROR_UNKNOWN};
     }
 }
 
