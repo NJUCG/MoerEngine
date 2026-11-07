@@ -6272,6 +6272,7 @@ void RunParallelTranslateRecoverableRejection() {
     FenceRef                           recovered_done      = device.CreateFence();
     std::array<std::atomic<uint32>, 3> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 3> success_callbacks{};
+    std::atomic_bool                   failure_callback_observed_suffix{false};
     std::binary_semaphore              graphics_translated{0};
     std::binary_semaphore              compute_translated{0};
     std::binary_semaphore              recovered_translated{0};
@@ -6285,6 +6286,14 @@ void RunParallelTranslateRecoverableRejection() {
         MakeUnique<TranslateProbeCommand>(&graphics_translated), "RecoverableGraphicsTranslateProbe"
     );
     graphics.AddCallback([&] {
+        // Executor must publish the rejected suffix before handing the first
+        // failed packet to Completion, even if the sibling is still recorded.
+        failure_callback_observed_suffix.store(
+            ResourceCast(graphics_done.Get())->IsRejected(1) &&
+                ResourceCast(compute_done.Get())->IsRejected(1) &&
+                GetCurrentRHIThreadRole() == ERHIThreadRole::Completion,
+            std::memory_order_release
+        );
         ordinary_callbacks[0].fetch_add(1, std::memory_order_relaxed);
     });
     graphics.AddSuccessCallback([&] {
@@ -6363,6 +6372,9 @@ void RunParallelTranslateRecoverableRejection() {
     );
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
+    if (!failure_callback_observed_suffix.load(std::memory_order_acquire)) {
+        throw std::runtime_error("recoverable rejection notified Completion before publishing the suffix");
+    }
     if (!recovered_translated.try_acquire() ||
         !ResourceCast(recovered_done.Get())->Wait(1) ||
         ResourceCast(recovered_done.Get())->IsRejected(1) || ResourceCast(recovered_done.Get())->IsFailed()) {

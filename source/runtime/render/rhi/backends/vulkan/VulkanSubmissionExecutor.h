@@ -111,11 +111,6 @@ private:
         uint64                         next_publication_epoch{1};
     };
 
-    struct RuntimePreCompletionPublication {
-        std::shared_ptr<BatchRejectionPublication> rejection_publication{};
-        size_t                                     reject_from{0};
-    };
-
     struct PipelineSourceSlot {
         EQueueType                             queue{EQueueType::Ignore};
         uint64                                 async_queue_scope{0};
@@ -188,11 +183,10 @@ private:
         CmdSubmit&& _submit
     ) noexcept;
     [[nodiscard]] VulkanSubmissionResult SubmitRecordedSourceForRuntime(
-        EQueueType                               _queue,
-        std::optional<VulkanPendingSubmission>&& _packet,
-        const VulkanSubmissionObserver*          _pre_completion = nullptr
+        VulkanPendingSubmission    _packet,
+        BatchRejectionPublication* _rejection_publication = nullptr,
+        size_t                     _reject_from = 0
     ) noexcept;
-    static void PublishRuntimeFailureBeforeCompletion(void* _context, const VulkanSubmissionResult& _result) noexcept;
     void        RejectRecordedSourceForRuntime(
                EQueueType                               _queue,
                std::optional<VulkanPendingSubmission>&& _packet,

@@ -133,10 +133,7 @@ VulkanPendingSubmission VulkanCommandQueue::ReserveSubmission(CmdSubmit&& _submi
     return pending;
 }
 
-VulkanSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
-    VulkanPendingSubmission         _recorded,
-    const VulkanSubmissionObserver* _pre_completion
-) noexcept {
+VulkanSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(VulkanPendingSubmission& _recorded) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
         "runtime native submit must run on the Submission owner"
@@ -176,12 +173,6 @@ VulkanSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(
     };
     if (_recorded.submission_outcome->Succeeded()) {
         runtime_result.completion = WaitEvent{uint64(timeline), submitted_timeline};
-    }
-    if (_pre_completion != nullptr && _pre_completion->callback != nullptr) {
-        _pre_completion->callback(_pre_completion->context, runtime_result);
-    }
-    if (!_recorded.completion_enqueued) {
-        CommitRuntimeSubmitCompletion(_recorded, *_recorded.submission_outcome);
     }
     if (split_profiling_frame && !_recorded.submission_outcome->Succeeded()) {
         vk_device.GetCommandRecorder(queue.GetType()).ResetProfiling();

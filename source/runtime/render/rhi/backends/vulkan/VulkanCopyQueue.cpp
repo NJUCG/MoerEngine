@@ -150,10 +150,7 @@ VulkanPendingSubmission VulkanCopyQueue::ReserveSubmission(CmdSubmit&& _submit) 
     return recorded;
 }
 
-VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(
-    VulkanPendingSubmission         _recorded,
-    const VulkanSubmissionObserver* _pre_completion
-) noexcept {
+VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(VulkanPendingSubmission& _recorded) noexcept {
     assert(
         executor_claimed.load(std::memory_order_acquire) &&
         "runtime Copy submit requires an exclusively claimed queue"
@@ -336,17 +333,6 @@ VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(
                 uint64(timeline.Get()),
                 _recorded.timeline
             };
-    }
-    if (_pre_completion != nullptr &&
-        _pre_completion->callback != nullptr) {
-        _pre_completion->callback(
-            _pre_completion->context, runtime_result
-        );
-    }
-    if (!_recorded.completion_enqueued) {
-        CommitRuntimeSubmitCompletion(
-            _recorded, *_recorded.submission_outcome
-        );
     }
     return runtime_result;
 }

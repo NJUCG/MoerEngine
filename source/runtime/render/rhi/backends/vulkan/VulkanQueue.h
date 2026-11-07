@@ -86,10 +86,9 @@ private:
 
     [[nodiscard]] VulkanPendingSubmission ReserveSubmission(CmdSubmit&& _submit) noexcept;
 
-    VulkanSubmissionResult SubmitRecordedForRuntime(
-        VulkanPendingSubmission         _recorded,
-        const VulkanSubmissionObserver* _pre_completion = nullptr
-    ) noexcept;
+    // Determines the native submission result without transferring ownership.
+    // Executor publishes affected failures before committing Completion.
+    VulkanSubmissionResult SubmitRecordedForRuntime(VulkanPendingSubmission& _recorded) noexcept;
     void RejectRecordedForRuntime(VulkanPendingSubmission&& _recorded, VkResult _result, bool _recoverable) noexcept;
     void RejectForRuntime(
         CmdSubmit&& _submit,
@@ -166,10 +165,8 @@ private:
     void                    EnableRuntimeDependencyWaits() noexcept;
     void                    CancelRuntimeDependencyWaits() noexcept;
     VulkanPendingSubmission ReserveSubmission(CmdSubmit&& _submit) noexcept;
-    VulkanSubmissionResult  SubmitRecordedForRuntime(
-         VulkanPendingSubmission         _recorded,
-         const VulkanSubmissionObserver* _pre_completion = nullptr
-     ) noexcept;
+    // Retains the packet until Executor publishes failures and commits Completion.
+    VulkanSubmissionResult SubmitRecordedForRuntime(VulkanPendingSubmission& _recorded) noexcept;
     void
          RejectRecordedForRuntime(VulkanPendingSubmission&& _recorded, VkResult _result, bool _recoverable) noexcept;
     void RejectForRuntime(

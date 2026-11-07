@@ -53,20 +53,12 @@ struct VulkanSubmissionResult {
     }
 };
 
-// 提交决定观察器：在提交调用内同步接收 VulkanSubmissionResult，先于用户完成通知执行。
-// Executor 借此先公布受失败影响的后续请求结果，再允许 Completion 通知用户，
-// 避免较早的回调等待尚未公布的后续结果。context 由调用者保活到提交调用返回。
-struct VulkanSubmissionObserver {
-    void* context{nullptr};
-    void (*callback)(void*, const VulkanSubmissionResult&) noexcept {nullptr};
-};
-
 class VulkanTimeline;
 
 // 待提交请求的所有者：统一承载 Graphics、Compute、Copy 的工作描述和录制产物。
 // 从预留开始，跨越 Translate 录制与 Submission 提交决定，持有资源及执行租约。
-// 准备失败、提交被拒绝也沿此路径收尾；决定确定后，将资源和通知责任移交给
-// VulkanSubmissionCompletion，结束本请求对录制与提交阶段的占用。
+// 准备失败、提交被拒绝也沿此路径收尾；Executor 在决定确定后先公布受影响请求的失败，
+// 再将资源和通知责任移交给 VulkanSubmissionCompletion，结束录制与提交阶段的占用。
 struct VulkanPendingSubmission {
     explicit VulkanPendingSubmission(
         CmdSubmit&&            _submit,
