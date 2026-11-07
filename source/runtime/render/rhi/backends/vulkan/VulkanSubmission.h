@@ -13,9 +13,8 @@
 
 namespace Moer::Render {
 
-// 提交决定的返回值：供 Executor 判断本次操作的结果，以及后续工作能否依赖它。
-// completion 仅在原生提交接受工作后有效，表示一个可等待的 GPU 完成点。
-// GPU 是否执行完毕、资源何时回收，由 VulkanSubmissionCompletion 继续确认和处理。
+// Reports the submission decision to Executor.
+// Accepted GPU work includes a completion wait point.
 struct VulkanSubmissionResult {
     VulkanOperationResult    outcome{};
     std::optional<WaitEvent> completion{};
@@ -37,10 +36,8 @@ struct VulkanSubmissionResult {
 
 class VulkanTimeline;
 
-// 待提交请求的所有者：统一承载 Graphics、Compute、Copy 的工作描述和录制产物。
-// 从预留开始，跨越 Translate 录制与 Submission 提交决定，持有资源及执行租约。
-// 准备失败、提交被拒绝也沿此路径收尾；Executor 在决定确定后先公布受影响请求的失败，
-// 再将资源和通知责任移交给 VulkanSubmissionCompletion，结束录制与提交阶段的占用。
+// Owns work, recording outputs and leases until the submission decision.
+// Transfers cleanup and notification duties to VulkanSubmissionCompletion.
 struct VulkanPendingSubmission {
     explicit VulkanPendingSubmission(
         CmdSubmit&&            _submit,
@@ -62,16 +59,14 @@ struct VulkanPendingSubmission {
     Array<RHIResource*>                 deferred_releases;
     VulkanResourceStateValidator::Program resource_state_program;
     RHITransferableOwnershipGate::Lease execution_lease{};
-    // Empty until recording or submission determines an outcome. Rejection
-    // before vkQueueSubmit2 is also a decision, never a GPU completion.
+    // Set when recording or submission determines the outcome.
     std::optional<VulkanOperationResult> submission_outcome;
     bool                                 recoverable_rejection{false};
     bool                                 completion_enqueued{false};
 };
 
-// 完成与回收记录：接收待提交请求交来的资源，以及结果发布、回调和递延释放责任。
-// 对已接受的工作等待 GPU；对未提交的工作发布失败结果，并分别确认各项资源的回收条件。
-// 原生存储满足复用条件后归还，资源保活引用则覆盖所有用户回调。
+// Publishes results and runs callbacks, waiting for GPU work when submitted.
+// Retains resources through callbacks and releases storage when safe.
 struct VulkanSubmissionCompletion {
     VulkanSubmissionCompletion(
         uint64                            _timeline,

@@ -6,6 +6,7 @@
 #include "VulkanDevice.h"
 #include "VulkanQueue.h"
 #include "log/LogSystem.h"
+#include "misc/RAII.h"
 #include "platform/Platform.h"
 #include "profile/ProfileScope.h"
 #include "rhi/RHI.h"
@@ -18,12 +19,12 @@
 #include "VulkanTranslateWaveScheduler.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cassert>
 #include <latch>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <stdexcept>
 #include <string>
 
@@ -413,27 +414,11 @@ VulkanSubmissionExecutor::~VulkanSubmissionExecutor() {
     }
 }
 
-void VulkanSubmissionExecutor::CpuTaskCompletion::Signal(std::exception_ptr _failure) {
-    {
-        std::lock_guard lock(mutex);
-        failure = std::move(_failure);
-        done = true;
+VulkanSubmissionExecutor::BatchExecution::BatchExecution(RHISubmissionBatch& _batch, bool _pipeline) :
+    sequence(_batch.sequence) {
+    if (_pipeline) {
+        completion.emplace();
     }
-    cv.notify_all();
-}
-
-void VulkanSubmissionExecutor::CpuTaskCompletion::Wait() {
-    std::exception_ptr wait_failure{};
-    std::unique_lock lock(mutex);
-    cv.wait(lock, [this] { return done; });
-    wait_failure = failure;
-    lock.unlock();
-    if (wait_failure) {
-        std::rethrow_exception(wait_failure);
-    }
-}
-
-VulkanSubmissionExecutor::BatchRejectionPublication::BatchRejectionPublication(RHISubmissionBatch& _batch) {
     sources.reserve(_batch.submits.size());
     const GpuCompletionPublishBatch common_completion_batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
@@ -444,15 +429,19 @@ VulkanSubmissionExecutor::BatchRejectionPublication::BatchRejectionPublication(R
          source_index < _batch.submits.size();
          ++source_index) {
         RHISubmissionRequest&   entry = _batch.submits[source_index];
-        RejectionSourceSnapshot source{};
+        SubmissionSource        source{};
+        source.source_index      = source_index;
+        source.queue_type        = entry.queue;
+        source.async_queue_scope = entry.submit.async_queue_scope;
+        const auto& plan         = _batch.topology.source_plans[source_index];
+        if (plan.segment_plan_count != 0) {
+            source.key = _batch.topology.segments[plan.segment_plan_begin].key;
+        }
         source.signals.reserve(entry.submit.signal_events.size());
         for (const SignalEvent& signal : entry.submit.signal_events) {
             auto* fence = reinterpret_cast<Fence*>(signal.timeline_handle);
             if (fence != nullptr) {
-                source.signals.emplace_back(RejectionSignalHandle{
-                    .fence = FenceRef(fence),
-                    .value = signal.value,
-                });
+                source.signals.emplace_back(FenceRef(fence), signal.value);
             }
         }
 
@@ -480,7 +469,7 @@ VulkanSubmissionExecutor::BatchRejectionPublication::BatchRejectionPublication(R
     }
 }
 
-void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
+void VulkanSubmissionExecutor::BatchExecution::RejectFrom(
     size_t           _reject_from,
     int32            _result,
     bool             _recoverable,
@@ -498,7 +487,7 @@ void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
             _reason;
 
     uint64 publication_epoch = 0;
-    std::lock_guard lock(mutex);
+    std::lock_guard lock(publication_mutex);
     publication_epoch = next_publication_epoch++;
     if (publication_epoch == 0) {
         publication_epoch = next_publication_epoch++;
@@ -506,8 +495,8 @@ void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
     for (size_t source_index = begin;
          source_index < sources.size();
          ++source_index) {
-        RejectionSourceSnapshot& source = sources[source_index];
-        if (source.terminalized) {
+        SubmissionSource& source = sources[source_index];
+        if (source.publication_epoch != 0) {
             continue;
         }
         if (source.gpu_completion_batch.Valid()) {
@@ -523,7 +512,6 @@ void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
             );
         }
         source.publication_epoch = publication_epoch;
-        source.terminalized      = true;
     }
 
     // All matching host observations are terminal before external Fence code.
@@ -534,18 +522,18 @@ void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
     for (size_t source_index = begin;
          source_index < sources.size();
          ++source_index) {
-        RejectionSourceSnapshot& source = sources[source_index];
+        SubmissionSource& source = sources[source_index];
         if (source.publication_epoch != publication_epoch) {
             continue;
         }
-        for (const RejectionSignalHandle& signal : source.signals) {
+        for (const auto& [fence_ref, value] : source.signals) {
             auto* fence =
-                reinterpret_cast<VulkanTimeline*>(signal.fence.Get());
+                reinterpret_cast<VulkanTimeline*>(fence_ref.Get());
             if (fence == nullptr) {
                 continue;
             }
             if (_recoverable) {
-                fence->Reject(signal.value);
+                fence->Reject(value);
                 continue;
             }
             try {
@@ -554,86 +542,46 @@ void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
                 // Preserve terminal progress even if platform synchronization
                 // bookkeeping itself cannot publish the richer hard-fault
                 // classification.
-                fence->Reject(signal.value);
+                fence->Reject(value);
             }
         }
     }
 }
 
-VulkanSubmissionExecutor::PipelineBatchState::PipelineBatchState(
-    uint64                                     _sequence,
-    size_t                                     _source_count,
-    std::shared_ptr<CpuTaskCompletion>         _completion,
-    std::shared_ptr<BatchRejectionPublication> _rejection_publication
-) :
-    sequence(_sequence),
-    slots(_source_count),
-    completion(std::move(_completion)),
-    rejection_publication(std::move(_rejection_publication)) {}
-
-void VulkanSubmissionExecutor::PipelineBatchState::AddWork() noexcept {
+void VulkanSubmissionExecutor::BatchExecution::AddWork() noexcept {
     work_state.AddWork();
 }
 
-void VulkanSubmissionExecutor::PipelineBatchState::FinishWork() noexcept {
-    if (!work_state.FinishWork()) {
-        return;
-    }
-    bool expected = false;
-    if (completion_signalled.compare_exchange_strong(
-            expected, true, std::memory_order_acq_rel, std::memory_order_acquire
-        )) {
-        completion->Signal();
+void VulkanSubmissionExecutor::BatchExecution::FinishWork() noexcept {
+    if (work_state.FinishWork()) {
+        completion->set_value();
     }
 }
 
-void VulkanSubmissionExecutor::PipelineBatchState::Seal() noexcept {
-    if (!work_state.Seal()) {
-        return;
-    }
-    bool expected = false;
-    if (completion_signalled.compare_exchange_strong(
-            expected, true, std::memory_order_acq_rel, std::memory_order_acquire
-        )) {
-        completion->Signal();
+void VulkanSubmissionExecutor::BatchExecution::Seal() noexcept {
+    if (work_state.Seal()) {
+        completion->set_value();
     }
 }
 
-void VulkanSubmissionExecutor::PipelineBatchState::PublishFailure(
-    size_t _reject_from,
-    int32  _result,
-    bool   _recoverable
-) noexcept {
-    bool published_earlier_failure = false;
+void VulkanSubmissionExecutor::BatchExecution::PublishFailure(size_t first, int32 result, bool recoverable) noexcept {
     {
         std::lock_guard lock(failure_mutex);
-        if (_reject_from >= failure.reject_from) {
+        if (first >= reject_from) {
             return;
         }
-        failure.reject_from = _reject_from;
-        failure.result =
-            _result == static_cast<int32>(VK_SUCCESS) ?
-                static_cast<int32>(VK_ERROR_UNKNOWN) :
-                _result;
-        failure.recoverable = _recoverable;
-        published_earlier_failure = true;
+        reject_from = first;
+        failure     = {
+                .outcome               = {EVulkanOperationStatus::Rejected, result == VK_SUCCESS ? VK_ERROR_UNKNOWN : static_cast<VkResult>(result)},
+                .recoverable_rejection = recoverable,
+        };
     }
-    if (published_earlier_failure && rejection_publication) {
-        rejection_publication->PublishSuffix(
-            _reject_from,
-            _result,
-            _recoverable,
-            _recoverable ?
-                "Vulkan submission pipeline suffix was rejected by a dependency" :
-                "Vulkan submission pipeline suffix was rejected after a hard failure"
-        );
-    }
+    RejectFrom(first, result, recoverable, recoverable ? "Vulkan submission pipeline suffix was rejected by a dependency" : "Vulkan submission pipeline suffix was rejected after a hard failure");
 }
 
-VulkanSubmissionExecutor::PipelineFailure
-VulkanSubmissionExecutor::PipelineBatchState::ReadFailure() const noexcept {
+std::optional<VulkanSubmissionResult> VulkanSubmissionExecutor::BatchExecution::ReadFailure(size_t source_index) const noexcept {
     std::lock_guard lock(failure_mutex);
-    return failure;
+    return source_index >= reject_from ? std::optional{failure} : std::nullopt;
 }
 
 void VulkanSubmissionExecutor::Enqueue(RHISubmissionBatch&& _batch) {
@@ -672,7 +620,8 @@ void VulkanSubmissionExecutor::Enqueue(RHISubmissionBatch&& _batch) {
 }
 
 void VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
-    auto completion = std::make_shared<CpuTaskCompletion>();
+    std::promise<void> reply;
+    auto               completion = reply.get_future();
     {
         std::lock_guard lock(mutex);
         if (!accepting) {
@@ -682,7 +631,7 @@ void VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
             WorkerRequest{
                 .kind       = ERequestKind::Sync,
                 .sync_depth = _depth,
-                .completion = completion,
+                .completion = std::move(reply),
             }
         );
     }
@@ -690,7 +639,7 @@ void VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
 #if MOER_VULKAN_TEST_SUPPORT
     NotifyVulkanBackendSyncWait();
 #endif
-    completion->Wait();
+    completion.get();
 }
 
 void VulkanSubmissionExecutor::Flush() {
@@ -725,11 +674,8 @@ void VulkanSubmissionExecutor::BeginShutdown() noexcept {
 
 void VulkanSubmissionExecutor::ShutDown() {
     BeginShutdown();
-    std::shared_ptr<CpuTaskCompletion> completion{};
-    bool                        join_owner = false;
-
-    // Allocate the candidate stop completion before mutating shared lifecycle
-    // state. A failed allocation must leave the runtime fully retryable.
+    bool                     join_owner = false;
+    std::shared_future<void> completion;
     {
         std::lock_guard lock(mutex);
         if (stopped) {
@@ -737,33 +683,32 @@ void VulkanSubmissionExecutor::ShutDown() {
         }
         completion = stop_completion;
     }
-    std::shared_ptr<CpuTaskCompletion> candidate{};
-    if (!completion) {
-        candidate = std::make_shared<CpuTaskCompletion>();
+    // Allocate the reply before changing lifecycle state; failure remains retryable.
+    std::optional<std::promise<void>> reply;
+    std::shared_future<void>          candidate;
+    if (!completion.valid()) {
+        reply.emplace();
+        candidate = reply->get_future().share();
     }
-
     {
         std::lock_guard lock(mutex);
         if (stopped) {
             return;
         }
-        if (!stop_completion) {
-            WorkerRequest stop_request{
+        if (!stop_completion.valid()) {
+            requests.emplace_back(WorkerRequest{
                 .kind       = ERequestKind::Stop,
                 .sync_depth = ERHISyncDepth::Present,
-                .completion = candidate,
-            };
-            // deque insertion has the strong exception guarantee. Publish the
-            // shared stop state only after the request is owned by the FIFO.
-            requests.emplace_back(std::move(stop_request));
-            stop_completion = candidate;
+                .completion = std::move(reply),
+            });
+            stop_completion = std::move(candidate);
             join_owner = true;
         }
         accepting = false;
         completion = stop_completion;
     }
     cv.notify_one();
-    completion->Wait();
+    completion.get();
     if (join_owner) {
         if (translate_thread.joinable()) {
             translate_thread.join();
@@ -773,11 +718,12 @@ void VulkanSubmissionExecutor::ShutDown() {
             stopped = true;
         }
         cv.notify_all();
-        return;
+    } else {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [this] {
+            return stopped;
+        });
     }
-
-    std::unique_lock lock(mutex);
-    cv.wait(lock, [this] { return stopped; });
 }
 
 void VulkanSubmissionExecutor::RunTranslateThread() {
@@ -798,13 +744,14 @@ void VulkanSubmissionExecutor::RunTranslateThread() {
         }
 
         MOER_PROFILE_SCOPE("Vulkan.ProcessWorkerRequest");
-        BatchExceptionState exception_state{};
+        size_t                                                    first_unconsumed_source = 0;
+        std::shared_ptr<BatchExecution>                           execution;
         const VulkanSubmissionDetail::WorkerRequestDispatchResult dispatch_result =
             VulkanSubmissionDetail::DispatchWorkerRequestNoexcept(
                 request.kind,
                 [&] {
                     if (request.kind == ERequestKind::Submit) {
-                        ProcessBatch(request.batch, exception_state);
+                        ProcessBatch(request.batch, first_unconsumed_source, execution);
                     } else {
                         DrainPipelineBatches();
                         ProcessSync(request.sync_depth);
@@ -817,9 +764,9 @@ void VulkanSubmissionExecutor::RunTranslateThread() {
                     // rejection markers for this request.
                     DrainPipelineBatches();
                     LatchHardFailure(
-                        StreamPosition{
+                        SubmissionPosition{
                             request.batch.sequence,
-                            exception_state.first_unconsumed_source,
+                            first_unconsumed_source,
                         },
                         static_cast<int32>(VK_ERROR_UNKNOWN)
                     );
@@ -828,9 +775,9 @@ void VulkanSubmissionExecutor::RunTranslateThread() {
                         static_cast<int32>(VK_ERROR_UNKNOWN),
                         "unhandled submission request exception",
                         false,
-                        exception_state.first_unconsumed_source,
-                        &exception_state.first_unconsumed_source,
-                        exception_state.rejection_publication
+                        first_unconsumed_source,
+                        &first_unconsumed_source,
+                        execution
                     );
                 },
                 [&](const std::exception_ptr& _failure) {
@@ -846,9 +793,9 @@ void VulkanSubmissionExecutor::RunTranslateThread() {
                 [&](VulkanSubmissionDetail::EWorkerRequestFailurePhase _phase,
                     const std::exception_ptr&                          _exception) {
                     LatchHardFailure(
-                        StreamPosition{
+                        SubmissionPosition{
                             request.batch.sequence,
-                            exception_state.first_unconsumed_source,
+                            first_unconsumed_source,
                         },
                         static_cast<int32>(VK_ERROR_UNKNOWN)
                     );
@@ -891,11 +838,11 @@ void VulkanSubmissionExecutor::RunSubmissionThread() {
             work = std::move(submission_work.front());
             submission_work.pop_front();
         }
-        if (work.execute.valid()) {
+        if (work.valid()) {
             MOER_PROFILE_SCOPE("Vulkan.ExecuteSubmissionWork");
             // packaged_task captures exceptions and publishes them to the
             // waiting Translate owner; none may escape this service thread.
-            work.execute();
+            work();
         }
     }
 }
@@ -914,9 +861,9 @@ void VulkanSubmissionExecutor::StopSubmissionThread() {
 void VulkanSubmissionExecutor::WaitForPipelineCapacity() {
     while (in_flight_batches.size() >= batch_window) {
         MOER_PROFILE_SCOPE("Vulkan.WaitForPipelineCapacity");
-        std::shared_ptr<CpuTaskCompletion> completion = std::move(in_flight_batches.front());
+        auto completion = std::move(in_flight_batches.front());
         in_flight_batches.pop_front();
-        completion->Wait();
+        completion.get();
     }
 }
 
@@ -926,9 +873,9 @@ void VulkanSubmissionExecutor::DrainPipelineBatches() {
         "Submission owner must not wait on its own pipeline work"
     );
     while (!in_flight_batches.empty()) {
-        std::shared_ptr<CpuTaskCompletion> completion = std::move(in_flight_batches.front());
+        auto completion = std::move(in_flight_batches.front());
         in_flight_batches.pop_front();
-        completion->Wait();
+        completion.get();
     }
 }
 
@@ -1036,15 +983,12 @@ void VulkanSubmissionExecutor::UpdateStreamFrontier(
 }
 
 void VulkanSubmissionExecutor::LatchHardFailure(
-    StreamPosition _position,
-    int32          _result
+    SubmissionPosition _position,
+    int32              _result
 ) noexcept {
     std::lock_guard lock(hard_failure_mutex);
-    const bool earlier =
-        !hard_failure_position.has_value() ||
-        _position.batch_sequence < hard_failure_position->batch_sequence ||
-        (_position.batch_sequence == hard_failure_position->batch_sequence &&
-         _position.source_index < hard_failure_position->source_index);
+    const bool      earlier =
+        !hard_failure_position || _position < *hard_failure_position;
     if (!earlier) {
         return;
     }
@@ -1056,17 +1000,15 @@ void VulkanSubmissionExecutor::LatchHardFailure(
 }
 
 bool VulkanSubmissionExecutor::IsHardFailureAtOrBefore(
-    StreamPosition _position,
-    int32*         _result
+    SubmissionPosition _position,
+    int32*             _result
 ) const noexcept {
     std::lock_guard lock(hard_failure_mutex);
     if (!hard_failure_position.has_value()) {
         return false;
     }
     const bool rejected =
-        hard_failure_position->batch_sequence < _position.batch_sequence ||
-        (hard_failure_position->batch_sequence == _position.batch_sequence &&
-         hard_failure_position->source_index <= _position.source_index);
+        *hard_failure_position <= _position;
     if (rejected && _result != nullptr) {
         *_result = hard_failure_result;
     }
@@ -1100,20 +1042,20 @@ std::optional<VulkanPendingSubmission> VulkanSubmissionExecutor::TranslateSource
 }
 
 VulkanSubmissionResult VulkanSubmissionExecutor::SubmitRecordedSourceForRuntime(
-    VulkanPendingSubmission    _packet,
-    BatchRejectionPublication* _rejection_publication,
-    size_t                     _reject_from
+    VulkanPendingSubmission _packet,
+    BatchExecution*         _execution,
+    size_t                  _reject_from
 ) noexcept {
     // Own the packet and execution lease through failure publication and the
     // transfer to Completion. No exception may unwind accepted GPU work.
     auto submit_and_enqueue_completion = [&](auto& _queue) noexcept {
         const VulkanSubmissionResult result = _queue.SubmitRecordedForRuntime(_packet);
-        if (!result.outcome.Succeeded() && !result.WasSubmitted() && _rejection_publication != nullptr) {
+        if (!result.outcome.Succeeded() && !result.WasSubmitted() && _execution != nullptr) {
             const int32 failure_result = result.outcome.result == VK_SUCCESS ?
                                              static_cast<int32>(VK_ERROR_UNKNOWN) :
                                              static_cast<int32>(result.outcome.result);
             const bool recoverable = result.IsRecoverableRejection();
-            _rejection_publication->PublishSuffix(
+            _execution->RejectFrom(
                 _reject_from,
                 failure_result,
                 recoverable,
@@ -1226,25 +1168,22 @@ VkResult VulkanSubmissionExecutor::GetQueueFaultResult(
 }
 
 void VulkanSubmissionExecutor::ExecutePipelineSource(
-    const std::shared_ptr<PipelineBatchState>& _batch,
-    size_t                                     _source_index
+    const std::shared_ptr<BatchExecution>& _batch,
+    size_t                                 _source_index
 ) noexcept {
-    struct WorkCompletion final {
-        std::shared_ptr<PipelineBatchState> batch;
-        ~WorkCompletion() {
-            batch->FinishWork();
-        }
-    } work_completion{_batch};
+    auto finish_work = OnScopeExit([&]() noexcept {
+        _batch->FinishWork();
+    });
 
-    if (_source_index >= _batch->slots.size()) {
+    if (_source_index >= _batch->sources.size()) {
         LatchHardFailure(
-            StreamPosition{_batch->sequence, _source_index},
+            SubmissionPosition{_batch->sequence, _source_index},
             static_cast<int32>(VK_ERROR_UNKNOWN)
         );
         return;
     }
 
-    PipelineSourceSlot& slot = _batch->slots[_source_index];
+    SubmissionSource& slot = _batch->sources[_source_index];
     auto reject_packet =
         [&](VkResult _result,
             bool _recoverable,
@@ -1252,29 +1191,28 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
             if (_result == VK_SUCCESS) {
                 _result = VK_ERROR_UNKNOWN;
             }
-            if (_batch->rejection_publication) {
-                _batch->rejection_publication->PublishSuffix(
+            {
+                _batch->RejectFrom(
                     _source_index,
                     static_cast<int32>(_result),
                     _recoverable,
                     _reason
                 );
             }
-            if (slot.recorded_packet.has_value()) {
+            if (slot.recorded.has_value()) {
                 RejectRecordedSourceForRuntime(
-                    slot.queue,
-                    std::move(slot.recorded_packet),
+                    slot.queue_type,
+                    std::move(slot.recorded),
                     _result,
                     _recoverable
                 );
-                slot.recorded_packet.reset();
+                slot.recorded.reset();
             }
         };
 
     int32 hard_result = static_cast<int32>(VK_ERROR_UNKNOWN);
-    const PipelineFailure batch_failure = _batch->ReadFailure();
     if (IsHardFailureAtOrBefore(
-            StreamPosition{_batch->sequence, _source_index},
+            SubmissionPosition{_batch->sequence, _source_index},
             &hard_result
         )) {
         reject_packet(
@@ -1284,20 +1222,20 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
         );
         return;
     }
-    if (_source_index >= batch_failure.reject_from) {
+    if (auto failure = _batch->ReadFailure(_source_index)) {
         reject_packet(
-            static_cast<VkResult>(batch_failure.result),
-            batch_failure.recoverable,
-            batch_failure.recoverable ?
+            failure->outcome.result,
+            failure->IsRecoverableRejection(),
+            failure->IsRecoverableRejection() ?
                 "Vulkan pipeline source was rejected by a dependency" :
                 "Vulkan pipeline source was rejected after a hard failure"
         );
         return;
     }
 
-    if (!slot.recorded_packet.has_value()) {
-        if (_batch->rejection_publication) {
-            _batch->rejection_publication->PublishSuffix(
+    if (!slot.recorded.has_value()) {
+        {
+            _batch->RejectFrom(
                 _source_index,
                 static_cast<int32>(VK_ERROR_UNKNOWN),
                 false,
@@ -1305,7 +1243,7 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
             );
         }
         LatchHardFailure(
-            StreamPosition{_batch->sequence, _source_index + 1},
+            SubmissionPosition{_batch->sequence, _source_index + 1},
             static_cast<int32>(VK_ERROR_UNKNOWN)
         );
         _batch->PublishFailure(
@@ -1316,28 +1254,8 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
         ResetStreamScope();
         return;
     }
-    CmdSubmit* submit = slot.recorded_packet ? &slot.recorded_packet->submit : nullptr;
-    if (submit == nullptr) {
-        reject_packet(
-            VK_ERROR_UNKNOWN,
-            false,
-            "Vulkan pipeline source lost its submit payload"
-        );
-        _batch->PublishFailure(
-            _source_index + 1,
-            static_cast<int32>(VK_ERROR_UNKNOWN),
-            false
-        );
-        LatchHardFailure(
-            StreamPosition{_batch->sequence, _source_index + 1},
-            static_cast<int32>(VK_ERROR_UNKNOWN)
-        );
-        ResetStreamScope();
-        return;
-    }
-
     try {
-        PrepareStreamSubmit(*submit, slot.queue);
+        PrepareStreamSubmit(slot.recorded->submit, slot.queue_type);
     } catch (...) {
         ReportRequestFailure(
             ERequestKind::Submit,
@@ -1355,7 +1273,7 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
             false
         );
         LatchHardFailure(
-            StreamPosition{_batch->sequence, _source_index + 1},
+            SubmissionPosition{_batch->sequence, _source_index + 1},
             static_cast<int32>(VK_ERROR_UNKNOWN)
         );
         ResetStreamScope();
@@ -1364,9 +1282,9 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
 
     VulkanSubmissionResult submit_result =
         SubmitRecordedSourceForRuntime(
-            std::move(*slot.recorded_packet), _batch->rejection_publication.get(), _source_index
+            std::move(*slot.recorded), _batch.get(), _source_index
         );
-    slot.recorded_packet.reset();
+    slot.recorded.reset();
 
     if (submit_result.WasSubmitted()) {
         assert(submit_result.completion.has_value());
@@ -1377,19 +1295,19 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
             slot.original_source_index,
             slot.source_segment_index,
             slot.source_segment_count,
-            slot.queue,
+            slot.queue_type,
             slot.async_queue_scope,
             slot.cross_native_predecessor_wait
         );
 #endif
-        if (slot.queue == EQueueType::Copy) {
+        if (slot.queue_type == EQueueType::Copy) {
             last_copy_timeline = std::max(
                 last_copy_timeline,
                 submit_result.completion->value
             );
         }
         UpdateStreamFrontier(
-            slot.queue,
+            slot.queue_type,
             *submit_result.completion,
             slot.async_queue_scope == 0
         );
@@ -1407,7 +1325,7 @@ void VulkanSubmissionExecutor::ExecutePipelineSource(
     ResetStreamScope();
     if (!recoverable) {
         LatchHardFailure(
-            StreamPosition{_batch->sequence, _source_index + 1},
+            SubmissionPosition{_batch->sequence, _source_index + 1},
             failure_result
         );
     }
@@ -1471,13 +1389,13 @@ void VulkanSubmissionExecutor::ReportRequestFailure(
 }
 
 void VulkanSubmissionExecutor::RejectBatch(
-    RHISubmissionBatch&&                       _batch,
-    int32                                      _result,
-    std::string_view                           _reason,
-    bool                                       _recoverable,
-    size_t                                     _first_source,
-    size_t*                                    _next_unconsumed_source,
-    std::shared_ptr<BatchRejectionPublication> _rejection_publication
+    RHISubmissionBatch&&            _batch,
+    int32                           _result,
+    std::string_view                _reason,
+    bool                            _recoverable,
+    size_t                          _first_source,
+    size_t*                         _next_unconsumed_source,
+    std::shared_ptr<BatchExecution> _execution
 ) {
     const size_t first_source = std::min(_first_source, _batch.submits.size());
     const VkResult result =
@@ -1596,10 +1514,10 @@ void VulkanSubmissionExecutor::RejectBatch(
     );
 }
 
-void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExceptionState& _exception_state) {
+void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, size_t& _first_unconsumed_source, std::shared_ptr<BatchExecution>& _execution_state) {
     int32 latched_failure_result = static_cast<int32>(VK_ERROR_UNKNOWN);
     if (IsHardFailureAtOrBefore(
-            StreamPosition{_batch.sequence, 0},
+            SubmissionPosition{_batch.sequence, 0},
             &latched_failure_result
         )) {
         DrainPipelineBatches();
@@ -1609,7 +1527,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             "submission runtime is latched after a hard failure",
             false,
             0,
-            &_exception_state.first_unconsumed_source
+            &_first_unconsumed_source
         );
         return;
     }
@@ -1634,7 +1552,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
         // its queue receives this batch's rejection markers.
         DrainPipelineBatches();
         LatchHardFailure(
-            StreamPosition{_batch.sequence, 0},
+            SubmissionPosition{_batch.sequence, 0},
             static_cast<int32>(VK_ERROR_UNKNOWN)
         );
         RejectBatch(
@@ -1643,7 +1561,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             preflight.reason,
             true,
             0,
-            &_exception_state.first_unconsumed_source
+            &_first_unconsumed_source
         );
         return;
     }
@@ -1669,7 +1587,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
 #endif
             DrainPipelineBatches();
             LatchHardFailure(
-                StreamPosition{_batch.sequence, 0},
+                SubmissionPosition{_batch.sequence, 0},
                 static_cast<int32>(VK_ERROR_UNKNOWN)
             );
             RejectBatch(
@@ -1678,7 +1596,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                 executable_preflight.reason,
                 true,
                 0,
-                &_exception_state.first_unconsumed_source
+                &_first_unconsumed_source
             );
             return;
         }
@@ -1755,7 +1673,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
     }
 
     if (IsHardFailureAtOrBefore(
-            StreamPosition{_batch.sequence, 0},
+            SubmissionPosition{_batch.sequence, 0},
             &latched_failure_result
         )) {
         // Windowed admission can leave an already-accepted batch behind the
@@ -1768,7 +1686,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             "submission runtime latched while waiting for pipeline admission",
             false,
             0,
-            &_exception_state.first_unconsumed_source
+            &_first_unconsumed_source
         );
         return;
     }
@@ -1777,67 +1695,45 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
     // into a Translate worker. A pipeline failure can then publish every raw
     // or already-recorded suffix Future without waiting for per-queue
     // Completion packets that may sit behind a blocking callback.
-    auto rejection_publication =
-        std::make_shared<BatchRejectionPublication>(_batch);
-    _exception_state.rejection_publication =
-        rejection_publication;
-
-    struct PipelineSealGuard final {
-        std::shared_ptr<PipelineBatchState> state{};
-
-        void Seal() noexcept {
-            if (!state) {
-                return;
-            }
-            std::shared_ptr<PipelineBatchState> sealed_state =
-                std::move(state);
-            sealed_state->Seal();
-        }
-
-        ~PipelineSealGuard() {
-            Seal();
+    auto execution   = std::make_shared<BatchExecution>(_batch, pipeline_mode);
+    _execution_state = execution;
+    for (size_t index = 0; index < execution->sources.size(); ++index) {
+        auto&       source                   = execution->sources[index];
+        const auto& metadata                 = materialization.sources[index];
+        source.original_source_index         = metadata.original_source_index;
+        source.source_segment_index          = metadata.source_segment_index;
+        source.source_segment_count          = metadata.source_segment_count;
+        source.cross_native_predecessor_wait = metadata.cross_native_predecessor_wait;
+    }
+    auto seal_pipeline = [&]() noexcept {
+        if (pipeline_mode) {
+            execution->Seal();
         }
     };
-
-    std::shared_ptr<PipelineBatchState> pipeline_state{};
-    PipelineSealGuard                 pipeline_seal{};
+    auto seal_on_exit = OnScopeExit(seal_pipeline);
     if (pipeline_mode) {
-        auto completion = std::make_shared<CpuTaskCompletion>();
-        pipeline_state  = std::make_shared<PipelineBatchState>(
-            _batch.sequence,
-            _batch.submits.size(),
-            completion,
-            rejection_publication
-        );
-        pipeline_seal.state = pipeline_state;
-        in_flight_batches.emplace_back(std::move(completion));
+        in_flight_batches.emplace_back(execution->completion->get_future().share());
         if (!logged_cross_batch_pipeline) {
             logged_cross_batch_pipeline = true;
-            LOG_INFO(
-                "[RHIExecutor][Vulkan][SubmissionPipeline] "
-                "mode=bounded-cross-batch batch_window={} "
-                "per_native_lane_recorded_limit=1 "
-                "ordered_submission=stable",
-                batch_window
-            );
+            LOG_INFO("[RHIExecutor][Vulkan][SubmissionPipeline] mode=bounded-cross-batch batch_window={} per_native_lane_recorded_limit=1 ordered_submission=stable", batch_window);
         }
     }
 
     auto seal_and_drain_pipeline = [&]() noexcept {
-        if (!pipeline_state) {
+        if (!pipeline_mode) {
             return;
         }
         // The current state is itself present in in_flight_batches. Seal it
         // before waiting so an empty or partially handed-off failing batch
         // can publish its terminal completion instead of self-deadlocking.
-        pipeline_seal.Seal();
+        seal_pipeline();
         DrainPipelineBatches();
     };
     auto reject_remaining = [&](size_t _begin, VkResult _result, std::string_view _reason) {
         if (_result == VK_SUCCESS) {
             _result = VK_ERROR_UNKNOWN;
         }
-        rejection_publication->PublishSuffix(
+        execution->RejectFrom(
             _begin, static_cast<int32>(_result), false, _reason
         );
         // prepare_source may have admitted a later ready native lane before
@@ -1845,8 +1741,8 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
         // gpu_frontier for successfully submitted work, but force the next
         // batch (even one reusing the same graph scope id) to freeze a fresh
         // entry frontier and republish its first-lane waits.
-        if (pipeline_state) {
-            pipeline_state->PublishFailure(
+        if (pipeline_mode) {
+            execution->PublishFailure(
                 _begin, static_cast<int32>(_result), false
             );
             seal_and_drain_pipeline();
@@ -1854,50 +1750,50 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             ResetStreamScope();
         }
         LatchHardFailure(
-            StreamPosition{_batch.sequence, _begin},
+            SubmissionPosition{_batch.sequence, _begin},
             static_cast<int32>(_result)
         );
-        _exception_state.first_unconsumed_source =
+        _first_unconsumed_source =
             std::min(_begin, _batch.submits.size());
         RejectBatch(
             std::move(_batch),
             static_cast<int32>(_result),
             _reason,
             false,
-            _exception_state.first_unconsumed_source,
-            &_exception_state.first_unconsumed_source,
-            rejection_publication
+            _first_unconsumed_source,
+            &_first_unconsumed_source,
+            execution
         );
-        _exception_state.first_unconsumed_source = _batch.submits.size();
+        _first_unconsumed_source = _batch.submits.size();
     };
     auto reject_remaining_recoverable =
         [&](size_t _begin, VkResult _result, std::string_view _reason) {
             if (_result == VK_SUCCESS) {
                 _result = VK_ERROR_UNKNOWN;
             }
-            rejection_publication->PublishSuffix(
+            execution->RejectFrom(
                 _begin, static_cast<int32>(_result), true, _reason
             );
-            if (pipeline_state) {
-                pipeline_state->PublishFailure(
+            if (pipeline_mode) {
+                execution->PublishFailure(
                     _begin, static_cast<int32>(_result), true
                 );
                 seal_and_drain_pipeline();
             } else {
                 ResetStreamScope();
             }
-            _exception_state.first_unconsumed_source =
+            _first_unconsumed_source =
                 std::min(_begin, _batch.submits.size());
             RejectBatch(
                 std::move(_batch),
                 static_cast<int32>(_result),
                 _reason,
                 true,
-                _exception_state.first_unconsumed_source,
-                &_exception_state.first_unconsumed_source,
-                rejection_publication
+                _first_unconsumed_source,
+                &_first_unconsumed_source,
+                execution
             );
-            _exception_state.first_unconsumed_source = _batch.submits.size();
+            _first_unconsumed_source = _batch.submits.size();
         };
 
     auto same_native_queue = [&](EQueueType lhs, EQueueType rhs) {
@@ -2032,159 +1928,54 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             return false;
         }
 
-        struct TranslateGroupSlot {
-            size_t                                 source_index{0};
-            SubmissionKey                          key{};
-            EQueueType                             queue_type{EQueueType::Ignore};
-            uint64                                 async_queue_scope{0};
-            bool                                   prepared{false};
-            bool                                   attempted{false};
-            bool                                   terminalized{false};
-            std::optional<VulkanPendingSubmission> recorded{};
+        auto slots          = std::span(execution->sources).subspan(group_begin, group_size);
+        bool group_finished = false;
+        auto finish_group   = [&]() noexcept {
+            _first_unconsumed_source = std::max(_first_unconsumed_source, group_end);
+            group_finished           = true;
         };
-
-        Array<TranslateGroupSlot> slots{};
-        slots.reserve(group_size);
-        for (size_t local_index = 0; local_index < group_size; ++local_index) {
-            const size_t                    source_index = group_begin + local_index;
-            const RHISourceSubmitPlan&      source_plan  = _batch.topology.source_plans[source_index];
-            const RHISubmissionSegmentPlan& segment_plan =
-                _batch.topology.segments[source_plan.segment_plan_begin];
-            slots.emplace_back(TranslateGroupSlot{
-                .source_index      = source_index,
-                .key               = segment_plan.key,
-                .queue_type        = _batch.submits[source_index].queue,
-                .async_queue_scope = _batch.submits[source_index].submit.async_queue_scope,
-            });
-        }
-
-        // Group-wide terminalization is deliberately declared after the
-        // slots so its destructor runs first. It closes every translated
-        // packet and every untouched raw source before the outer request
-        // exception barrier can reject the later batch suffix.
-        struct TranslateGroupTerminalizer {
-            RHISubmissionBatch*                        batch{nullptr};
-            Array<TranslateGroupSlot>* slots{nullptr};
-            size_t                     group_end{0};
-            size_t*                    first_unconsumed_source{nullptr};
-            VulkanSubmissionExecutor*  owner{nullptr};
-            std::shared_ptr<BatchRejectionPublication> rejection_publication{};
-            std::shared_ptr<PipelineBatchState>* pipeline_state{nullptr};
-            PipelineSealGuard*         pipeline_seal{nullptr};
-            bool                       armed{true};
-
-            TranslateGroupTerminalizer(
-                RHISubmissionBatch*                        _batch,
-                Array<TranslateGroupSlot>*                 _slots,
-                size_t                                     _group_end,
-                size_t*                                    _first_unconsumed_source,
-                VulkanSubmissionExecutor*                  _owner,
-                std::shared_ptr<BatchRejectionPublication> _rejection_publication,
-                std::shared_ptr<PipelineBatchState>*       _pipeline_state,
-                PipelineSealGuard*                         _pipeline_seal
-            ) noexcept :
-                batch(_batch),
-                slots(_slots),
-                group_end(_group_end),
-                first_unconsumed_source(_first_unconsumed_source),
-                owner(_owner),
-                rejection_publication(std::move(_rejection_publication)),
-                pipeline_state(_pipeline_state),
-                pipeline_seal(_pipeline_seal) {}
-
-            TranslateGroupTerminalizer(const TranslateGroupTerminalizer&)            = delete;
-            TranslateGroupTerminalizer& operator=(const TranslateGroupTerminalizer&) = delete;
-
-            ~TranslateGroupTerminalizer() noexcept {
-                TerminalizeAll(VK_ERROR_UNKNOWN);
+        // The scope guard closes every packet still owned by Translate, after
+        // earlier handed-off work has published its Submission decisions.
+        auto reject_group = [&](VkResult result) noexcept {
+            if (group_finished) {
+                return;
             }
-
-            void TerminalizeAll(VkResult result) noexcept {
-                if (!armed) {
-                    return;
-                }
-                if (result == VK_SUCCESS) {
-                    result = VK_ERROR_UNKNOWN;
-                }
-                if (pipeline_state != nullptr && *pipeline_state) {
-                    // Direct queue rejection is observable through callbacks
-                    // and signals. Preserve every already-handed-off prefix
-                    // before terminalizing the current group, including this
-                    // guard's exception-unwind path.
-                    pipeline_seal->Seal();
-                    owner->DrainPipelineBatches();
-                }
-                size_t rejection_begin = group_end;
-                for (const TranslateGroupSlot& slot : *slots) {
-                    if (!slot.terminalized) {
-                        rejection_begin =
-                            std::min(rejection_begin, slot.source_index);
-                    }
-                }
-                if (rejection_begin < group_end &&
-                    rejection_publication) {
-                    // This guard also runs during exception unwinding, where
-                    // fail_group() may never execute. Publish terminal state
-                    // before any direct queue rejection can enqueue a
-                    // Completion packet.
-                    rejection_publication->PublishSuffix(
-                        rejection_begin,
-                        static_cast<int32>(result),
-                        false,
-                        "parallel Translate group failed before Completion notification"
-                    );
-                }
-                for (TranslateGroupSlot& slot : *slots) {
-                    if (slot.terminalized) {
-                        continue;
-                    }
-                    RHISubmissionRequest& entry = batch->submits[slot.source_index];
-                    if (slot.recorded.has_value()) {
-                        owner->RejectRecordedSourceForRuntime(
-                            slot.queue_type,
-                            std::move(slot.recorded),
-                            result,
-                            false
-                        );
-                        slot.recorded.reset();
-                    } else if (!slot.attempted) {
-                        owner->RejectSourceForRuntime(
-                            slot.queue_type,
-                            std::move(entry.submit),
-                            result,
-                            false
-                        );
-                    }
-                    // Runtime Translate normally returns a terminal packet.
-                    // If an attempted Translate returned no packet, its
-                    // payload has already been consumed and cannot be
-                    // terminalized a second time here.
-                    slot.terminalized = true;
-                }
-                if (first_unconsumed_source != nullptr) {
-                    *first_unconsumed_source = std::max(*first_unconsumed_source, group_end);
-                }
-                armed = false;
+            if (result == VK_SUCCESS) {
+                result = VK_ERROR_UNKNOWN;
             }
-
-            void Disarm() noexcept {
-                if (first_unconsumed_source != nullptr) {
-                    *first_unconsumed_source = std::max(*first_unconsumed_source, group_end);
-                }
-                armed = false;
+            if (pipeline_mode) {
+                seal_pipeline();
+                DrainPipelineBatches();
             }
-        } terminalizer{
-            &_batch,
-            &slots,
-            group_end,
-            &_exception_state.first_unconsumed_source,
-            this,
-            rejection_publication,
-            &pipeline_state,
-            &pipeline_seal,
+            size_t rejection_begin = group_end;
+            for (const auto& slot : slots) {
+                if (!slot.handed_off) {
+                    rejection_begin = std::min(rejection_begin, slot.source_index);
+                }
+            }
+            if (rejection_begin < group_end) {
+                execution->RejectFrom(rejection_begin, static_cast<int32>(result), false, "parallel Translate group failed before Completion notification");
+            }
+            for (auto& slot : slots) {
+                if (slot.handed_off) {
+                    continue;
+                }
+                auto& entry = _batch.submits[slot.source_index];
+                if (slot.recorded) {
+                    RejectRecordedSourceForRuntime(slot.queue_type, std::move(slot.recorded), result, false);
+                    slot.recorded.reset();
+                } else if (!slot.attempted) {
+                    RejectSourceForRuntime(slot.queue_type, std::move(entry.submit), result, false);
+                }
+                slot.handed_off = true;
+            }
+            finish_group();
         };
+        auto reject_on_exit = OnScopeExit([&]() noexcept {
+            reject_group(VK_ERROR_UNKNOWN);
+        });
 
-        auto slot_for_key = [&](const SubmissionKey& key) -> TranslateGroupSlot& {
+        auto slot_for_key = [&](const SubmissionKey& key) -> SubmissionSource& {
             assert(key.op_seq == _batch.sequence);
             assert(key.submit_idx >= first_segment);
             const size_t local_index = key.submit_idx - first_segment;
@@ -2193,7 +1984,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             return slots[local_index];
         };
         auto translate_slot =
-            [&](TranslateGroupSlot& slot, CmdSubmit&& submit) noexcept {
+            [&](SubmissionSource& slot, CmdSubmit&& submit) noexcept {
                 const VulkanExecutableSourceMetadata& metadata =
                     materialization.sources[slot.source_index];
                 const uint32 native_queue_id =
@@ -2246,8 +2037,8 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             }
             scheduler.Cancel();
             size_t rejection_begin = group_end;
-            for (const TranslateGroupSlot& slot : slots) {
-                if (!slot.terminalized) {
+            for (const SubmissionSource& slot : slots) {
+                if (!slot.handed_off) {
                     rejection_begin =
                         std::min(rejection_begin, slot.source_index);
                 }
@@ -2259,13 +2050,13 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                 rejection_begin,
                 rejection_source.value_or(failure_source)
             );
-            rejection_publication->PublishSuffix(
+            execution->RejectFrom(
                 rejection_begin,
                 static_cast<int32>(failure_result),
                 recoverable_failure,
                 failure_reason
             );
-            terminalizer.TerminalizeAll(failure_result);
+            reject_group(failure_result);
             LOG_ERROR(
                 "[RHIExecutor][Vulkan][ParallelTranslate] "
                 "batch={} failure_source={} reason={} result={} "
@@ -2290,7 +2081,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             if (wave.empty()) {
                 if (scheduler.IsComplete()) {
                     assert(next_release_local == slots.size());
-                    terminalizer.Disarm();
+                    finish_group();
                     return true;
                 }
                 return fail_group(
@@ -2301,11 +2092,10 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                 );
             }
 
-            Array<TranslateGroupSlot*> wave_slots{};
+            Array<SubmissionSource*> wave_slots{};
             wave_slots.reserve(wave.size());
             for (const SubmissionKey& key : wave) {
-                TranslateGroupSlot& slot = slot_for_key(key);
-                assert(!slot.prepared);
+                SubmissionSource& slot = slot_for_key(key);
                 if (!prepare_source(slot.source_index)) {
                     return fail_group(
                         slot.source_index,
@@ -2314,7 +2104,6 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                         "parallel Translate source lost its segment"
                     );
                 }
-                slot.prepared = true;
                 wave_slots.emplace_back(&slot);
             }
 
@@ -2329,7 +2118,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                 std::latch completed(static_cast<std::ptrdiff_t>(wave_slots.size()));
                 size_t     dispatched_count = 0;
                 for (; dispatched_count < wave_slots.size(); ++dispatched_count) {
-                    TranslateGroupSlot* slot = wave_slots[dispatched_count];
+                    SubmissionSource* slot = wave_slots[dispatched_count];
                     try {
                         RHISubmissionRequest* entry = &_batch.submits[slot->source_index];
                         (void)LambdaTask::Dispatch(
@@ -2352,7 +2141,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                 }
                 completed.wait();
             } else {
-                for (TranslateGroupSlot* slot : wave_slots) {
+                for (SubmissionSource* slot : wave_slots) {
                     RHISubmissionRequest& entry = _batch.submits[slot->source_index];
                     translate_slot(
                         *slot, std::move(entry.submit)
@@ -2363,7 +2152,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             std::optional<size_t> translation_failure_source{};
             VkResult              translation_failure_result = VK_ERROR_UNKNOWN;
             std::string_view      translation_failure_reason{"parallel Translate task dispatch failure"};
-            for (TranslateGroupSlot* slot : wave_slots) {
+            for (SubmissionSource* slot : wave_slots) {
                 if (!slot->attempted) {
                     if (!translation_failure_source) {
                         translation_failure_source = slot->source_index;
@@ -2382,7 +2171,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                     // for native-record failures. A missing packet is an
                     // unexpected handoff failure and has no Completion packet
                     // left for the group terminalizer to retire.
-                    slot->terminalized = true;
+                    slot->handed_off = true;
                     if (!translation_failure_source) {
                         translation_failure_source = slot->source_index;
                         translation_failure_result =
@@ -2418,47 +2207,25 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             // independent lane may already hold a recorded packet here;
             // it is released only after every earlier source is ready.
             while (next_release_local < slots.size()) {
-                TranslateGroupSlot& slot  = slots[next_release_local];
+                SubmissionSource&   slot  = slots[next_release_local];
                 const auto          state = scheduler.GetState(slot.key);
                 if (!state || *state != ETranslateWaveNodeState::Translated) {
                     break;
                 }
                 assert(slot.recorded.has_value());
-                assert(!slot.terminalized);
+                assert(!slot.handed_off);
 
                 RHISubmissionRequest& entry = _batch.submits[slot.source_index];
 
-                if (pipeline_state) {
-                    PipelineSourceSlot& pipeline_slot =
-                        pipeline_state->slots[slot.source_index];
-                    const VulkanExecutableSourceMetadata& source_metadata =
-                        materialization.sources[slot.source_index];
-                    pipeline_slot.queue                         = slot.queue_type;
-                    pipeline_slot.async_queue_scope             = slot.async_queue_scope;
-                    pipeline_slot.original_source_index         =
-                        source_metadata.original_source_index;
-                    pipeline_slot.source_segment_index          =
-                        source_metadata.source_segment_index;
-                    pipeline_slot.source_segment_count          =
-                        source_metadata.source_segment_count;
-                    pipeline_slot.cross_native_predecessor_wait =
-                        source_metadata.cross_native_predecessor_wait;
-                    pipeline_slot.recorded_packet =
-                        std::move(slot.recorded);
-                    slot.recorded.reset();
-
-                    pipeline_state->AddWork();
+                if (pipeline_mode) {
+                    execution->AddWork();
                     bool handoff_succeeded = false;
                     try {
-                        handoff_succeeded = EnqueueSubmissionWork(SubmissionWork{
-                            .execute = std::packaged_task<void()>(
-                                [this,
-                                 state = pipeline_state,
-                                 source_index = slot.source_index] {
-                                    ExecutePipelineSource(state, source_index);
-                                }
-                            ),
-                        });
+                        handoff_succeeded = EnqueueSubmissionWork(SubmissionWork(
+                            [this, state = execution, source_index = slot.source_index] {
+                                ExecutePipelineSource(state, source_index);
+                            }
+                        ));
                     } catch (...) {
                         ReportRequestFailure(
                             ERequestKind::Submit,
@@ -2467,14 +2234,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                         );
                     }
                     if (!handoff_succeeded) {
-                        pipeline_state->FinishWork();
-                        if (pipeline_slot.recorded_packet.has_value()) {
-                            slot.recorded =
-                                std::move(
-                                    pipeline_slot.recorded_packet
-                                );
-                            pipeline_slot.recorded_packet.reset();
-                        }
+                        execution->FinishWork();
                         return fail_group(
                             slot.source_index,
                             VK_ERROR_UNKNOWN,
@@ -2483,8 +2243,8 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                         );
                     }
 
-                    slot.terminalized = true;
-                    _exception_state.first_unconsumed_source =
+                    slot.handed_off = true;
+                    _first_unconsumed_source =
                         slot.source_index + 1;
                     if (!scheduler.MarkReleased(slot.key)) {
                         return fail_group(
@@ -2507,13 +2267,13 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                                                    batch_sequence = _batch.sequence,
                                                    source_index   = static_cast<uint32>(slot.source_index),
                                                    source_metadata =
-                                                        materialization.sources[slot.source_index],
-                                                   queue_type     = slot.queue_type,
-                                                   async_scope    = slot.async_queue_scope,
-                                                   rejection_publication]() mutable {
+                                                       materialization.sources[slot.source_index],
+                                                   queue_type  = slot.queue_type,
+                                                   async_scope = slot.async_queue_scope,
+                                                   execution]() mutable {
                             VulkanSubmissionResult result =
                                 SubmitRecordedSourceForRuntime(
-                                    std::move(**packet), rejection_publication.get(), source_index
+                                    std::move(**packet), execution.get(), source_index
                                 );
                             packet->reset();
 #if MOER_VULKAN_TEST_SUPPORT
@@ -2538,7 +2298,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                         VulkanSubmissionDetail::EWorkerRequestFailurePhase::Process,
                         std::current_exception()
                     );
-                    rejection_publication->PublishSuffix(
+                    execution->RejectFrom(
                         slot.source_index,
                         static_cast<int32>(VK_ERROR_UNKNOWN),
                         false,
@@ -2553,8 +2313,8 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                     slot.recorded.reset();
                     submit_result.outcome = {EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN};
                 }
-                slot.terminalized                        = true;
-                _exception_state.first_unconsumed_source = slot.source_index + 1;
+                slot.handed_off          = true;
+                _first_unconsumed_source = slot.source_index + 1;
                 if (!scheduler.MarkReleased(slot.key)) {
                     return fail_group(
                         slot.source_index,
@@ -2616,7 +2376,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
 
         RHISubmissionRequest& entry = _batch.submits[source_index];
         if (!prepare_source(source_index)) {
-            _exception_state.first_unconsumed_source = source_index + 1;
+            _first_unconsumed_source = source_index + 1;
             continue;
         }
 
@@ -2641,16 +2401,16 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                                                source_metadata = materialization.sources[source_index],
                                                async_scope,
                                                serial_control,
-                                               rejection_publication]() mutable {
+                                               execution]() mutable {
                         auto submit =
                             [this,
                              packet,
-                             &rejection_publication,
+                             &execution,
                              source_index]() mutable {
-                            return SubmitRecordedSourceForRuntime(
-                                std::move(*packet), rejection_publication.get(), source_index
-                            );
-                        };
+                                return SubmitRecordedSourceForRuntime(
+                                    std::move(*packet), execution.get(), source_index
+                                );
+                            };
                         VulkanSubmissionResult result =
 #if MOER_VULKAN_TEST_SUPPORT
                             serial_control ? ExecuteObservedSubmissionBoundary(
@@ -2686,7 +2446,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                     VulkanSubmissionDetail::EWorkerRequestFailurePhase::Process,
                     std::current_exception()
                 );
-                rejection_publication->PublishSuffix(
+                execution->RejectFrom(
                     source_index,
                     static_cast<int32>(VK_ERROR_UNKNOWN),
                     false,
@@ -2700,7 +2460,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             }
             // SubmitRecordedSourceForRuntime has now either submitted or terminalized this
             // source. Never reject it again if later bookkeeping/logging throws.
-            _exception_state.first_unconsumed_source = source_index + 1;
+            _first_unconsumed_source = source_index + 1;
             if (submit_result.WasSubmitted()) {
                 assert(submit_result.completion.has_value());
                 last_copy_timeline = std::max(
@@ -2751,26 +2511,24 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             VulkanSubmissionResult submit_result{};
             try {
                 submit_result = ExecuteOnSubmissionThread(
-                    [
-                        this,
-                        packet = &recorded,
-                        batch_sequence = _batch.sequence,
-                        source_index = static_cast<uint32>(source_index),
-                        source_metadata = materialization.sources[source_index],
-                        queue_type = entry.queue,
-                        async_scope,
-                        serial_control,
-                        rejection_publication
-                    ]() mutable {
+                    [this,
+                     packet          = &recorded,
+                     batch_sequence  = _batch.sequence,
+                     source_index    = static_cast<uint32>(source_index),
+                     source_metadata = materialization.sources[source_index],
+                     queue_type      = entry.queue,
+                     async_scope,
+                     serial_control,
+                     execution]() mutable {
                         auto submit =
                             [this,
                              packet,
-                             &rejection_publication,
+                             &execution,
                              source_index]() mutable {
-                            return SubmitRecordedSourceForRuntime(
-                                std::move(*packet), rejection_publication.get(), source_index
-                            );
-                        };
+                                return SubmitRecordedSourceForRuntime(
+                                    std::move(*packet), execution.get(), source_index
+                                );
+                            };
                         VulkanSubmissionResult result =
 #if MOER_VULKAN_TEST_SUPPORT
                             serial_control ? ExecuteObservedSubmissionBoundary(
@@ -2807,7 +2565,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                     VulkanSubmissionDetail::EWorkerRequestFailurePhase::Process,
                     std::current_exception()
                 );
-                rejection_publication->PublishSuffix(
+                execution->RejectFrom(
                     source_index,
                     static_cast<int32>(VK_ERROR_UNKNOWN),
                     false,
@@ -2822,7 +2580,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
             }
             // SubmitRecordedSourceForRuntime owns the recorded packet through its
             // terminal result, including native rejection.
-            _exception_state.first_unconsumed_source = source_index + 1;
+            _first_unconsumed_source = source_index + 1;
             if (submit_result.WasSubmitted()) {
                 assert(submit_result.completion.has_value());
                 update_frontier(
@@ -3010,7 +2768,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHISubmissionBatch& _batch, BatchExc
                 static_cast<int32>(present_result.outcome.result)
             );
             LatchHardFailure(
-                StreamPosition{_batch.sequence, _batch.submits.size()},
+                SubmissionPosition{_batch.sequence, _batch.submits.size()},
                 static_cast<int32>(
                     present_result.outcome.result == VK_SUCCESS ?
                         VK_ERROR_UNKNOWN :
@@ -3053,13 +2811,16 @@ void VulkanSubmissionExecutor::ProcessSync(ERHISyncDepth _depth) {
     LOG_INFO("[RHIExecutor][Vulkan] sync complete depth={}", static_cast<uint32>(_depth));
 }
 
-void VulkanSubmissionExecutor::CompleteRequest(
-    const std::shared_ptr<CpuTaskCompletion>& _completion,
-    std::exception_ptr                        _failure
-) {
-    if (_completion) {
-        _completion->Signal(std::move(_failure));
+void VulkanSubmissionExecutor::CompleteRequest(std::optional<std::promise<void>>& completion, std::exception_ptr failure) {
+    if (!completion) {
+        return;
     }
+    if (failure) {
+        completion->set_exception(std::move(failure));
+    } else {
+        completion->set_value();
+    }
+    completion.reset();
 }
 
 } // namespace Moer::Render
