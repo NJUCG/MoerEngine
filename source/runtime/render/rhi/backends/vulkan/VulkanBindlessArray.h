@@ -48,23 +48,6 @@ public:
         uint8  _array_layer,
         uint8  _array_count
     ) const;
-    struct PresentationSourceMembershipRecord {
-        TextureRef texture{};
-        uint32     count{0};
-    };
-    struct PresentationSourceMembership {
-        UnorderedMap<uint32, TextureRef>                                           slots{};
-        UnorderedMap<::Moer::Render::Texture*, PresentationSourceMembershipRecord> textures{};
-    };
-    using PresentationSourceMembershipSnapshot = std::shared_ptr<const PresentationSourceMembership>;
-
-    // Descriptor membership becomes visible only after the packet which
-    // updates it reaches vkQueueSubmit. CPU allocation state belongs to a
-    // different timeline and cannot classify an older immutable submit.
-    [[nodiscard]] PresentationSourceMembershipSnapshot
-    SnapshotAcceptedPresentationSourceMembership() const noexcept;
-    void
-         PublishAcceptedPresentationSourceMembership(PresentationSourceMembershipSnapshot _membership) noexcept;
     void FinalizeUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates, bool _gpu_update_succeeded);
     bool BeginUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates);
 
@@ -164,7 +147,6 @@ protected:
         uint32                    count{0};
     };
     UnorderedMap<uint64, ResourceAllocationRecord> resource_allocation_counts;
-    PresentationSourceMembershipSnapshot           accepted_presentation_source_membership;
     UnorderedMap<
         uint64,
         UnorderedMap<

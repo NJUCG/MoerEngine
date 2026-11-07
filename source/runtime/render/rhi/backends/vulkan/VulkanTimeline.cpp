@@ -190,4 +190,45 @@ VkResult VulkanTimeline::HandleGpuOperationFailure(
     return result;
 }
 
+void VulkanTimeline::PrepareSubmissionClock(uint64 value) {
+    std::lock_guard lock(m_state_mutex);
+    auto            end = m_submission_clocks.upper_bound(m_cached_gpu_completed_value);
+    for (auto it = m_submission_clocks.begin(); it != end; ++it) {
+        for (size_t i = 0; i < m_completed_clock.size(); ++i) {
+            m_completed_clock[i] = std::max(m_completed_clock[i], it->second[i]);
+        }
+    }
+    m_submission_clocks.erase(m_submission_clocks.begin(), end);
+    m_submission_clocks.try_emplace(value);
+}
+
+void VulkanTimeline::PublishSubmissionClock(uint64 value, const VulkanQueueClock& clock) noexcept {
+    std::lock_guard lock(m_state_mutex);
+    const auto      it = m_submission_clocks.find(value);
+    if (it == m_submission_clocks.end()) {
+        std::terminate();
+    }
+    it->second = clock;
+}
+
+VulkanQueueClock VulkanTimeline::GetSubmissionClock(uint64 value) const {
+    std::lock_guard lock(m_state_mutex);
+    if (m_rejected_values.contains(value) || value > m_submitted_value) {
+        return {};
+    }
+    const auto it = m_submission_clocks.lower_bound(value);
+    if (it != m_submission_clocks.end() && it->first <= m_submitted_value) {
+        return it->second;
+    }
+    return value <= m_cached_gpu_completed_value ? m_completed_clock : VulkanQueueClock{};
+}
+
+void VulkanTimeline::DiscardSubmissionClock(uint64 value) noexcept {
+    std::lock_guard lock(m_state_mutex);
+    const auto      it = m_submission_clocks.find(value);
+    if (it != m_submission_clocks.end() && it->second == VulkanQueueClock{}) {
+        m_submission_clocks.erase(it);
+    }
+}
+
 } // namespace Moer::Render

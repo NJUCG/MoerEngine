@@ -535,6 +535,22 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
     cmd_list.commands.back()->name = _name;
 }
 
+void CommandList::BeginResourceAccesses(std::span<const RHIResourceAccess> accesses, std::string_view label) {
+    ValidateRHICommandAccess("CommandList::BeginResourceAccesses");
+    for (const auto& access : accesses) {
+        std::visit([this](const auto& view) {
+            Retain(view);
+        },
+                   access.resource);
+    }
+    commands.push_back(MakeUnique<ResourceAccessScopeCmd>(accesses, true, label));
+}
+
+void CommandList::EndResourceAccesses() {
+    ValidateRHICommandAccess("CommandList::EndResourceAccesses");
+    commands.push_back(MakeUnique<ResourceAccessScopeCmd>(std::span<const RHIResourceAccess>{}, false, "EndResourceAccesses"));
+}
+
 CmdSubmit CommandList::Submit() {
     ValidateRHICommandAccess("CommandList::Submit");
     if (managed_recording_lease_count != 0) {

@@ -977,7 +977,6 @@ enum class ETextureUsageFlags : Moer::uint32 {
      * usage bit: native image usage is still supplied by TRANSFER_SRC, while
      * backends keep the idle/preferred state compatible with presentation.
      */
-    PRESENTATION_SOURCE = 1 << 17,
     // SRGB    = 1 << 18, // 这个Enum貌似没用
     PRESENT = 1 << 19,
     Num     = 20

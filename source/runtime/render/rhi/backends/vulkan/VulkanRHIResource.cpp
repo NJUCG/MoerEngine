@@ -118,6 +118,7 @@ VulkanBuffer::VulkanBuffer(
             }
         }
         buffer_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        concurrent_sharing                = true;
         buffer_info.queueFamilyIndexCount = static_cast<uint32>(queue_families.size());
         buffer_info.pQueueFamilyIndices   = queue_families.data();
     }

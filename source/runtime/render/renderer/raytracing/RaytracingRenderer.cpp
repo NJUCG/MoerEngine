@@ -305,7 +305,6 @@ struct RaytracingRenderer::RuntimeState {
             Extent2D(renderer.resolution.x, renderer.resolution.y),
             renderer.GetMainPresentationSurface().GetFormat(),
             ETextureUsageFlags::COLOR_ATTACHMENT |
-                ETextureUsageFlags::PRESENTATION_SOURCE |
                 ETextureUsageFlags::TRANSFER_SRC |
                 ETextureUsageFlags::TRANSFER_DST
         )),
@@ -324,7 +323,7 @@ struct RaytracingRenderer::RuntimeState {
             std::filesystem::create_directory(exported_file_path);
         }
 
-        InitializeGraphicsTexture(output);
+        InitializeGraphicsTexture(output, RenderGraph::TextureAccessType::TransferSource);
         rt_ctx->SetResolution(scene_extent);
         antialias_pass_info = AntialiasPass::CreateInfo{
             .motion              = rt_ctx->frame_rt.motion,
@@ -2117,11 +2116,10 @@ void RaytracingRenderer::RecreateOutputResources(uint2 new_extent) {
         Extent2D(new_extent.x, new_extent.y),
         GetMainPresentationSurface().GetFormat(),
         ETextureUsageFlags::COLOR_ATTACHMENT |
-            ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );
-    InitializeGraphicsTexture(state.output);
+    InitializeGraphicsTexture(state.output, RenderGraph::TextureAccessType::TransferSource);
 }
 
 bool RaytracingRenderer::RecreateSceneResources(uint2 new_extent) {

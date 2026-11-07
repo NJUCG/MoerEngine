@@ -107,16 +107,34 @@ public:
         Query,
         Scope,
         Custom,
+        ResourceAccessScope,
         Count
     };
 
     static constexpr std::array<std::string_view, static_cast<size_t>(EType::Count)> typenames = {
-        "UploadBuffer",    "CopyBackBuffer",      "BufferToBuffer", "BufferToTexture",
-        "TextureToBuffer", "UploadTexture",       "TextureToTexture", "CopyBackTexture",
-        "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
-        "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
-        "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Query",
-        "Scope",           "Custom"
+        "UploadBuffer",
+        "CopyBackBuffer",
+        "BufferToBuffer",
+        "BufferToTexture",
+        "TextureToBuffer",
+        "UploadTexture",
+        "TextureToTexture",
+        "CopyBackTexture",
+        "ShaderDispatch",
+        "BuildAccel",
+        "BuildTLAS",
+        "TraceRay",
+        "Barrier",
+        "QueueTransfer",
+        "SetDrawState",
+        "SetGeometryPassDrawState",
+        "MultiDraw",
+        "UpdateBindlessArray",
+        "ClearResource",
+        "Query",
+        "Scope",
+        "Custom",
+        "ResourceAccessScope"
     };
 
 private:
@@ -799,17 +817,35 @@ struct BarrierState {
     }
 };
 
-inline constexpr bool BarrierStateWrites(const BarrierState& _state) {
-    return (_state.access & ERHIAccessFlags::SHADER_WRITE) != ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::COLOR_ATTACHMENT_WRITE) !=
-               ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::DEPTH_STENCIL_WRITE) !=
-               ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::TRANSFER_WRITE) != ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::MEMORY_WRITE) != ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::CPU_WRITE_BIT) != ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::UNORDERED_ACCESS_VIEW) !=
-               ERHIAccessFlags::UNDEFINED;
+// One declared GPU access. The views borrow resources retained by CommandList;
+// the same declaration describes direct, bindless and external consumers.
+struct RHIResourceAccess {
+    std::variant<TextureView, BufferView> resource;
+    BarrierState                          state{};
+    ETextureAspectFlags                   texture_aspects{ETextureAspectFlags::NONE};
+};
+
+// Delimits one compiled recording scope. This is validation metadata, not a
+// native command or an implicit transition. An end marker has begin == false.
+struct ResourceAccessScopeCmd final : Command {
+    Array<RHIResourceAccess> accesses;
+    bool                     begin;
+    ResourceAccessScopeCmd(std::span<const RHIResourceAccess> values, bool begin_scope, std::string_view label) :
+        Command(EType::ResourceAccessScope, label),
+        accesses(values.begin(), values.end()),
+        begin(begin_scope) {}
+    EQueueType GetQueueType() const override {
+        return EQueueType::Ignore;
+    }
+};
+
+inline constexpr bool BarrierStateWrites(const BarrierState& state) {
+    constexpr auto writes = ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::COLOR_ATTACHMENT_WRITE |
+                            ERHIAccessFlags::DEPTH_STENCIL_WRITE | ERHIAccessFlags::TRANSFER_WRITE | ERHIAccessFlags::MEMORY_WRITE |
+                            ERHIAccessFlags::CPU_WRITE_BIT | ERHIAccessFlags::UNORDERED_ACCESS_VIEW |
+                            ERHIAccessFlags::TRANSFORM_FEEDBACK_WRITE_BIT_EXT | ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT |
+                            ERHIAccessFlags::COMMAND_PREPROCESS_WRITE_BIT_NV | ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT;
+    return (state.access & writes) != ERHIAccessFlags::UNDEFINED;
 }
 
 enum class EBarrierQueueTransferPhase : uint8 {
@@ -1849,6 +1885,15 @@ public:
     void Barriers(std::span<const BarrierCreateInfo> _barriers) {
         Barriers(_barriers, queue_type, queue_type);
     }
+
+    // Declarations include every possible bindless target, not only directly
+    // bound arguments. Candidate completeness is the caller's contract; table
+    // membership cannot establish which targets a GPU-selected index uses.
+    // Storage descriptors expose capabilities; declarations specify which
+    // bound subresources are actually read or written by this scope.
+    // Nested scopes inherit resources not redeclared by the child scope.
+    RENDER_API void BeginResourceAccesses(std::span<const RHIResourceAccess> accesses, std::string_view label);
+    RENDER_API void EndResourceAccesses();
 
     void Barriers(std::initializer_list<BarrierCreateInfo> _barriers) {
         Barriers(

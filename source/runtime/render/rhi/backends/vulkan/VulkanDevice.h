@@ -16,6 +16,7 @@
 #include "rhi/RHIImpl.h"
 #include "rhi/RHIMultiview.h"
 
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <optional>
@@ -270,6 +271,8 @@ public:
     void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
 
 private:
+    friend class VulkanResourceStateValidator;
+    std::array<std::array<uint64, 3>, 3> accepted_queue_clocks{};
     friend VulkanCommandQueue;
     friend VulkanCommandRecorder;
     friend class VulkanNativeQueue;

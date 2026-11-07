@@ -22,7 +22,7 @@ void VulkanCommandRecorder::RecordCopy(VulkanPendingSubmission& _pending) noexce
         return;
     }
     try {
-        _pending.presentation_events = CollectPresentationEvents(_pending.submit, queue_type);
+        _pending.resource_state_program = VulkanResourceStateValidator::Compile(_pending.submit);
         if (device.IsFaulted()) {
             device.RecordRejectedSubmit();
             _pending.submission_outcome = VulkanOperationResult{EVulkanOperationStatus::Rejected, device.GetFirstFaultResult()};

@@ -227,13 +227,13 @@ Raytracing 最终版本也完成了 110 秒运行并正常退出，日志没有�
 
 ### 6.2 输出规则与责任归属
 
-`CompiledPlan` 和 `LoweredPlan` 保留原来的边界、依赖、来源和诊断数据，`Lower` 的完整性验证不变。过滤放在 `MaterializeInstruction`：成功时输出 `std::optional<BarrierCreateInfo>`，有值表示实际 RHI 屏障，无值表示边界已经验证但无需 GPU 命令；失败仍返回 false 并给出错误。每次进入先清空输出，避免复用旧结果。
+`CompiledPlan` 和 `LoweredPlan` 保留边界、依赖、来源和诊断数据。`MaterializeInstruction` 成功时输出 `std::optional<BarrierCreateInfo>`：有值表示需要提交的屏障或导出状态证据，无值表示已验证且无需保留的只读导入边界。失败仍返回 false 并给出错误。每次进入先清空输出，避免复用旧结果。
 
 只有普通 Barrier 类型的 import/export 边界，且前后都是 Read、资源状态相等，才进入省略判断；存在 state transition、memory dependency、execution dependency、queue acquire、discard 或 transient alias 中任意一项时都保留。QueueRelease/QueueAcquire 不属于普通 Barrier，因此不会被省略。前后 shader stage 不要求相等：同队列、同状态的纯读取不会仅因着色阶段不同而产生 hazard。
 
 纹理物理绑定、aspect、范围和 uint8 TextureView 可表示性，以及 buffer 绑定与字节范围仍先检查。只读快速路径不会接受此前因为非法范围而被拒绝的指令。
 
-Present 导出仍保留实际屏障与 `publish_external_state`。除显式 PresentationSource 状态外，对带 PRESENTATION_SOURCE usage 的纹理导出也保守保留，因为 Vulkan 的提交检查需要这条记录发布呈现就绪状态。
+所有资源的导出都保留 `publish_external_state` 证据，由通用资源状态校验器在原生提交接受后发布。纯只读、同布局的导出不再录制第二条原生屏障；首个读取转换的目标可见性必须覆盖同原生队列上的兼容 shader 读取阶段及导出范围，导出证据只证明已建立的可见性。Present 使用普通 TransferSource 契约，不再依赖专用边界枚举、usage 标记或呈现就绪状态。
 
 合并录制和 active recording 两处都只追加有值输出；保活集合继续由访问声明生成，不能依赖屏障是否存在。没有把屏障决策移回 Vulkan，没有更改逐 Pass 命令流、图边界或外部资源访问契约。本轮减少的是屏障物化、复制、录制和后端处理；编译与 lowering 的诊断记录成本仍然存在。
 
@@ -245,10 +245,10 @@ Present 导出仍保留实际屏障与 `publish_external_state`。除显式 Pres
 
 新增用例检查：
 
-- 两个只读 Pass 同时读取 buffer 和 texture，覆盖完整/局部范围及合并/active 两条录制路径。编译计划仍有 2 条 import 和 2 条 export 边界证据，实际提交没有屏障命令，两个 Pass 的正文顺序不变。这里的 4→0 是测试图的结果，不代表 Sponza 全帧的屏障数量。
+- 两个只读 Pass 同时读取 buffer 和 texture，覆盖完整/局部范围及合并/active 两条录制路径。编译计划仍有 2 条 import 和 2 条 export 边界证据，实际提交没有原生屏障，两个 Pass 的正文顺序不变。这里的 4→0 是测试图的结果，不代表 Sponza 全帧的屏障数量。
 - 回调和正文不持有资源引用；图与外部引用销毁后，资源由录制结果和 submit 保活，最后一个 submit 释放后销毁。省掉屏障不会使资源提前释放。
 - 同 Storage 状态的初始 Write→Read 仍有 1 条屏障；初始 Write→Pass Write→导出 Read 仍有 2 条屏障。
-- 显式 PresentationSource 导出，以及带 PRESENTATION_SOURCE usage 的纹理导出，都保留 `publish_external_state`。
+- 普通 TransferSource 导出及其他资源导出均保留 `publish_external_state`，只读导出证据与实际原生屏障分别验证。
 - 256 层纹理不能由当前 uint8 TextureView 表示；即使全程同状态只读，两条录制路径仍在调用正文或发布结果之前拒绝它。
 
 已有 Lowering 与 RHI 契约测试继续覆盖同原生队列、同 family 不同队列、跨 family ownership transfer、缺失跨队列同步和显式屏障提交。测试不能替代真实 GPU 验证，运行记录另列如下。

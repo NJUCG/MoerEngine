@@ -563,13 +563,61 @@ void TestDepthAttachmentReadUsesBackendAttachmentLayout(TestSuite& suite) {
     );
 }
 
-void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
+void TestCompatibleShaderReadersShareVisibility(TestSuite& suite) {
+    constexpr std::string_view name    = "compatible shader readers share visibility on one native queue";
+    TextureRef                 texture = MoerNew(FakeTexture)(1, 1, ETextureAspectFlags::COLOR);
+    RenderGraph                graph(name);
+    const auto                 image = graph.ImportTexture("Input", texture, {.mip_count = 1, .layer_count = 1, .aspects = RenderGraph::TextureAspect::Color});
+    graph.SetInitialState(image, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+    graph.AddRecordPass("Produce", [=](RenderGraph::PassBuilder& pass) {
+        pass.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+            .Write(image, RenderGraph::TextureAccessType::TransferDestination);
+    },
+                        [](Moer::Render::CommandList&) {},
+                        RenderGraph::PassRecordPolicy::Serial);
+    const auto compute = graph.AddRecordPass("ComputeRead", [=](RenderGraph::PassBuilder& pass) {
+        pass.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+            .Read(image, RenderGraph::TextureAccessType::Sampled)
+            .SideEffect();
+    },
+                                             [](Moer::Render::CommandList&) {},
+                                             RenderGraph::PassRecordPolicy::Serial);
+    graph.AddRecordPass("GraphicsRead", [=](RenderGraph::PassBuilder& pass) {
+        pass.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+            .Read(image, RenderGraph::TextureAccessType::Sampled)
+            .DependsOn(compute)
+            .SideEffect();
+    },
+                        [](Moer::Render::CommandList&) {},
+                        RenderGraph::PassRecordPolicy::Serial);
+    graph.Export(image, RenderGraph::TextureAccessType::TransferSource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    const bool compiled = graph.Compile();
+    suite.Check(compiled, name, graph.GetCompileError());
+    if (!compiled) {
+        return;
+    }
+    RenderGraphLowering::LoweredPlan plan;
+    std::string                      error;
+    const bool                       lowered = RenderGraphLowering::Lower(graph, plan, error);
+    suite.Check(lowered, name, error);
+    if (!lowered) {
+        return;
+    }
+    const auto before     = plan.Before(compute);
+    const auto visibility = std::find_if(before.begin(), before.end(), [](const auto& barrier) {
+        return barrier.destination.layout == ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    });
+    const auto required   = ERHIPipelineStageFlags::PS_COMPUTE_SHADER | ERHIPipelineStageFlags::PS_ALL_GRAPHICS;
+    suite.Check(visibility != before.end() && (visibility->destination.stages & required) == required, name, "the first read transition must make the producer visible to both declared shader readers");
+}
+
+void TestTransferSourceLowering(TestSuite& suite) {
     constexpr std::string_view test_name =
-        "presentation source lowers to common transfer read";
+        "ordinary transfer-source lowering";
     TextureRef texture =
         MoerNew(FakeTexture)(1, 1, ETextureAspectFlags::COLOR);
 
-    RenderGraph graph("PresentationSourceLowering");
+    RenderGraph graph("TransferSourceLowering");
     const auto  color = graph.ImportTexture(
         "Color",
         texture,
@@ -596,7 +644,7 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
     );
     graph.Export(
         color,
-        RenderGraph::TextureBoundary::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -619,24 +667,24 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
                        RenderGraphLowering::InstructionKind::Barrier &&
                    instruction.export_boundary &&
                    instruction.after_state ==
-                       RenderGraph::ResourceState{RenderGraph::TextureBoundary::PresentationSource};
+                       RenderGraph::ResourceState{RenderGraph::TextureAccessType::TransferSource};
         }
     );
     suite.Check(
         transition != after_writer.end() &&
             transition->destination.layout ==
-                ETextureLayout::TEXTURE_LAYOUT_COMMON &&
+                ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC &&
             transition->destination.stages ==
                 ERHIPipelineStageFlags::PS_TRANSFER &&
             transition->destination.access ==
                 ERHIAccessFlags::TRANSFER_READ,
         test_name,
-        "presentation export must lower to COMMON / TRANSFER / TRANSFER_READ"
+        "presentation export must lower to TRANSFER_SRC / TRANSFER / TRANSFER_READ"
     );
 
     TextureRef rejected_texture =
         MoerNew(FakeTexture)(1, 1, ETextureAspectFlags::COLOR);
-    RenderGraph rejected_graph("PresentationSourceImportLoweringRejected");
+    RenderGraph rejected_graph("TransferSourceImportLoweringRejected");
     const auto rejected_color = rejected_graph.ImportTexture(
         "Color",
         rejected_texture,
@@ -648,7 +696,7 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
     );
     rejected_graph.SetInitialState(
         rejected_color,
-        RenderGraph::TextureBoundary::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -682,9 +730,9 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
         !imported_plan.prologue.empty() &&
             imported_plan.prologue.front().source.stages == ERHIPipelineStageFlags::PS_TRANSFER &&
             imported_plan.prologue.front().source.access == ERHIAccessFlags::TRANSFER_READ &&
-            imported_plan.prologue.front().source.layout == ETextureLayout::TEXTURE_LAYOUT_COMMON,
+            imported_plan.prologue.front().source.layout == ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC,
         test_name,
-        "presentation reimport must wait for the preceding copy read in GENERAL"
+        "presentation reimport must wait for the preceding copy read in TRANSFER_SRC"
     );
 }
 
@@ -1082,7 +1130,8 @@ void TestSameFamilyQueueBarrierLowersToAcquire(TestSuite& suite) {
             acquire != before_consumer.end() &&
             acquire->source.stages == ERHIPipelineStageFlags::PS_NONE &&
             acquire->source.access == ERHIAccessFlags::UNDEFINED &&
-            acquire->destination.stages == ERHIPipelineStageFlags::PS_COMPUTE_SHADER &&
+            (acquire->destination.stages == ERHIPipelineStageFlags::PS_COMPUTE_SHADER ||
+             acquire->destination.stages == ERHIPipelineStageFlags::PS_ALL_COMMANDS) &&
             acquire->destination.access == (ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::UNIFORM_READ),
         test_name,
         "the GPU wait must be paired with a destination-local acquire whose source scope is empty"
@@ -1812,7 +1861,8 @@ int main() {
     TestTextureFanInAndDeterminism(suite);
     TestShaderResourceAndSampledLayoutsRemainDistinct(suite);
     TestDepthAttachmentReadUsesBackendAttachmentLayout(suite);
-    TestPresentationSourceLowersToCommonTransferRead(suite);
+    TestTransferSourceLowering(suite);
+    TestCompatibleShaderReadersShareVisibility(suite);
     TestUntouchedImportedRangesNeedNoCommands(suite);
     TestAccelerationBuildInputScopes(suite);
     TestSameStateReadNeedsNoBarrier(suite);

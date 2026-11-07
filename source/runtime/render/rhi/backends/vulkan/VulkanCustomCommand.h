@@ -25,7 +25,8 @@ public:
 
     // Opt in only when the caller declares every public resource in RDG and
     // Execute synchronizes private work, returning public resources in their
-    // declared pass states. Compiled recording never infers GetResourceUsages.
+    // declared pass states. GetResourceUsages is checked against those public
+    // declarations; it never causes inferred barriers or preferred-state restoration.
     virtual bool PreservesCompiledResourceStates() const { return false; }
 
     void IterateArgs(const std::function<void(const TArg&, ERHIAccessFlags)>& visit) const final {

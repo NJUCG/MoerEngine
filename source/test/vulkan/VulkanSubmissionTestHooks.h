@@ -353,7 +353,7 @@ struct VulkanScriptedPresentOverrideForTesting {
     VulkanScriptedPresentCallback  callback{nullptr};
     // Opt-in for source-state boundary tests. Ordinary scripted outcomes do
     // not record/copy an image and therefore need no native source layout.
-    bool require_present_source_ready{false};
+    bool validate_source_access{false};
     // Optional race-injection point after the initial device-fault check has
     // passed but immediately before an invalid/not-ready source is
     // classified. This keeps fault-priority tests deterministic without

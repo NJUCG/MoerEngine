@@ -433,6 +433,7 @@ public:
                 Visit(static_cast<const BarrierCmd&>(*_cmd));
                 break;
             case Command::EType::QueueTransfer:
+            case Command::EType::ResourceAccessScope:
                 break;
             case Command::EType::SetDrawState:
                 Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
@@ -1390,6 +1391,7 @@ bool VulkanCommandRecorder::SupportsCompiledCommands(const CmdSubmit& submit, EQ
             case Command::EType::ClearResource:
             case Command::EType::Query:
             case Command::EType::Scope:
+            case Command::EType::ResourceAccessScope:
                 break;
             case Command::EType::BuildAccel:
             case Command::EType::BuildTLAS:
@@ -1663,6 +1665,10 @@ struct VulkanCommandPreparation {
         };
 
         for (const ExplicitBufferBarrier& barrier : _cmd->ExplicitBuffers()) {
+            if (barrier.publish_external_state && barrier.src_state == barrier.dst_state &&
+                !BarrierStateWrites(barrier.src_state) && barrier.queue_transfer.phase == EBarrierQueueTransferPhase::None) {
+                continue; // Accepted export evidence only; no GPU dependency is needed.
+            }
             if (barrier.src_state.texture_layout != ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ||
                 barrier.dst_state.texture_layout != ETextureLayout::TEXTURE_LAYOUT_UNDEFINED) {
                 throw std::invalid_argument("explicit buffer barrier cannot carry a texture layout");
@@ -1682,6 +1688,10 @@ struct VulkanCommandPreparation {
             );
         }
         for (const ExplicitTextureBarrier& barrier : _cmd->ExplicitTextures()) {
+            if (barrier.publish_external_state && barrier.src_state == barrier.dst_state &&
+                !BarrierStateWrites(barrier.src_state) && barrier.queue_transfer.phase == EBarrierQueueTransferPhase::None) {
+                continue;
+            }
             const VkImageLayout src_layout = VulkanEnumTranslator::METoVKImageLayout(barrier.src_state.texture_layout);
             const VkImageLayout dst_layout = VulkanEnumTranslator::METoVKImageLayout(barrier.dst_state.texture_layout);
             if (src_layout == VK_IMAGE_LAYOUT_MAX_ENUM || dst_layout == VK_IMAGE_LAYOUT_MAX_ENUM) {
@@ -1894,7 +1904,7 @@ void VulkanCommandRecorder::RecordCommands(VulkanPendingSubmission& pending) {
 
     QueryRequirements queries;
     try {
-        pending.presentation_events = CollectPresentationEvents(pending.submit, queue_type);
+        pending.resource_state_program = VulkanResourceStateValidator::Compile(pending.submit);
         queries                     = ValidateRecordingRequest(device, pending.submit, queue_type);
         if (!SupportsCompiledCommands(pending.submit, queue_type)) {
             throw VulkanCommandRecordingFailure{

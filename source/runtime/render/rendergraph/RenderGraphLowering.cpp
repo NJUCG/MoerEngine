@@ -4,6 +4,7 @@
 
 #include "misc/Types.h"
 #include <algorithm>
+#include <map>
 #include <memory_resource>
 #include <sstream>
 #include <tuple>
@@ -39,6 +40,17 @@ template<typename Enum>
     return static_cast<Enum>(
         static_cast<uint32>(lhs) | static_cast<uint32>(rhs)
     );
+}
+
+[[nodiscard]] bool IsShaderReadState(const ResourceState& state) {
+    if (const auto* texture = std::get_if<TextureAccessType>(&state)) {
+        return *texture == TextureAccessType::Sampled || *texture == TextureAccessType::Storage;
+    }
+    if (const auto* buffer = std::get_if<BufferAccessType>(&state)) {
+        return *buffer == BufferAccessType::ShaderRead || *buffer == BufferAccessType::Storage ||
+               *buffer == BufferAccessType::AccelerationStructureRead;
+    }
+    return false;
 }
 
 [[nodiscard]] bool ShaderStages(
@@ -130,17 +142,6 @@ template<typename Enum>
         scope.access             = ERHIAccessFlags::UNDEFINED;
         return true;
     }
-    if (RenderGraph::IsPresentationSource(state)) {
-        if (access != AccessMode::Read) {
-            error = "PresentationSource boundary must use Read access";
-            return false;
-        }
-        scope.has_texture_layout = true;
-        scope.layout             = ETextureLayout::TEXTURE_LAYOUT_COMMON;
-        scope.stages             = ERHIPipelineStageFlags::PS_TRANSFER;
-        scope.access             = ERHIAccessFlags::TRANSFER_READ;
-        return true;
-    }
     if (const auto* texture = std::get_if<TextureAccessType>(&state)) {
         scope.has_texture_layout = true;
         if (!TextureLayoutFor(*texture, scope.layout, error)) {
@@ -175,7 +176,9 @@ template<typename Enum>
                     ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS,
                     ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS
                 );
-                if (HasRead(access)) {
+                // Depth testing reads the attachment even for a logical Write
+                // declaration (which describes the graph's content version).
+                if (HasRead(access) || HasWrite(access)) {
                     scope.access = Or(scope.access, ERHIAccessFlags::DEPTH_STENCIL_READ);
                 }
                 if (HasWrite(access)) {
@@ -748,12 +751,6 @@ bool RenderGraphLowering::Lower(
             return fail("physical access uses an unsupported logical queue on resource '" +
                         resource.name + "'");
         }
-        if (access.state == ResourceState{TextureBoundary::PresentationSource}) {
-            return fail(
-                "PresentationSource is an export-boundary-only state on resource '" +
-                resource.name + "'"
-            );
-        }
     }
 
     auto validate_boundary = [&](const RenderGraph::ResourceDeclaration& resource,
@@ -766,13 +763,6 @@ bool RenderGraphLowering::Lower(
         if (!IsKnownAccess(state.boundary_access)) {
             error = "Unknown boundary access on resource '" + resource.name + "'";
             return false;
-        }
-        if (state.state == ResourceState{TextureBoundary::PresentationSource}) {
-            if (state.queue != RenderGraph::QueueRole::Graphics) {
-                error = "PresentationSource boundary requires the Graphics queue on resource '" +
-                        resource.name + "'";
-                return false;
-            }
         }
         if (!initial && RenderGraph::IsUndefined(state.state)) {
             error = "Undefined state cannot be an export destination on resource '" +
@@ -1026,8 +1016,39 @@ bool RenderGraphLowering::Lower(
     std::pmr::vector<std::pmr::vector<RenderGraph::ResourceHandle>> resources_by_pass(
         graph.passes.size(), &scratch
     );
+    std::pmr::map<std::tuple<uint32, uint32, ResourceState>, ERHIPipelineStageFlags> shader_read_stages(&scratch);
     for (const auto& access : compiled.accesses) {
         if (graph.resources[access.resource.resource_id].kind != ResourceKind::Token) {
+            const auto binding = binding_for(access.resource);
+            Scope      scope;
+            if (!MapScope(access.state, access.mode, access.domain, scope, error)) {
+                return false;
+            }
+            if (HasRead(access.mode) && !HasWrite(access.mode) &&
+                IsShaderReadState(access.state)) {
+                const auto native_queue = graph.queue_topology.Resolve(access.domain.queue).native_queue_id;
+                shader_read_stages[{access.resource.resource_id, native_queue, access.state}] |= scope.stages;
+            }
+            RHIResourceAccess declaration;
+            declaration.state = {scope.stages, scope.access, scope.layout};
+            if (binding.kind == ResourceKind::Texture && binding.texture) {
+                const auto& range = std::get<RenderGraph::TextureRange>(access.range);
+                TextureView view(binding.texture);
+                if (range.mip_first > 255 || range.mip_count > 255 || range.layer_first > 255 || range.layer_count > 255) {
+                    return fail("resource access range cannot be represented by an RHI view");
+                }
+                view.mip_level              = static_cast<uint8>(range.mip_first);
+                view.num_mips               = static_cast<uint8>(range.mip_count);
+                view.array_layer            = static_cast<uint8>(range.layer_first);
+                view.num_array              = static_cast<uint8>(range.layer_count);
+                declaration.resource        = view;
+                declaration.texture_aspects = static_cast<ETextureAspectFlags>(range.aspects);
+                find_mutable_pass(access.pass)->accesses.push_back(declaration);
+            } else if (binding.kind == ResourceKind::Buffer && binding.buffer) {
+                const auto& range    = std::get<RenderGraph::BufferRange>(access.range);
+                declaration.resource = BufferView(binding.buffer.Get(), range.offset, range.size, 1);
+                find_mutable_pass(access.pass)->accesses.push_back(declaration);
+            }
             auto& resources = resources_by_pass[access.pass.pass_id];
             // Compiler emits each pass in resource/cell order; retain one binding per resource.
             if (resources.empty() || resources.back() != access.resource) {
@@ -1035,6 +1056,32 @@ bool RenderGraphLowering::Lower(
             }
         }
     }
+    for (const auto& barrier : compiled.barriers) {
+        if (!barrier.export_boundary || !HasRead(barrier.after_access) || HasWrite(barrier.after_access)) {
+            continue;
+        }
+        Scope scope;
+        if (!MapScope(barrier.after_state, barrier.after_access, barrier.dst_domain, scope, error)) {
+            return false;
+        }
+        if (IsShaderReadState(barrier.after_state)) {
+            const auto native_queue = graph.queue_topology.Resolve(barrier.dst_domain.queue).native_queue_id;
+            shader_read_stages[{barrier.resource.resource_id, native_queue, barrier.after_state}] |= scope.stages;
+        }
+    }
+    const auto widen_read_scope = [&](RenderGraph::ResourceHandle resource, const ResourceState& state, const ExecutionDomain& domain, AccessMode access, Scope& scope) {
+        if (!HasRead(access) || HasWrite(access) || !IsShaderReadState(state)) {
+            return;
+        }
+        const auto native_queue = graph.queue_topology.Resolve(domain.queue).native_queue_id;
+        const auto stages       = shader_read_stages.find({resource.resource_id, native_queue, state});
+        if (stages != shader_read_stages.end()) {
+            scope.stages |= stages->second;
+        }
+        if ((scope.stages & ERHIPipelineStageFlags::PS_ALL_COMMANDS) != ERHIPipelineStageFlags::PS_NONE) {
+            scope.stages = ERHIPipelineStageFlags::PS_ALL_COMMANDS;
+        }
+    };
     for (auto& pass_entry : candidate.passes) {
         auto& resources = resources_by_pass[pass_entry.pass.pass_id];
         for (const auto resource : graph.passes[pass_entry.pass.pass_id].references) {
@@ -1305,6 +1352,11 @@ bool RenderGraphLowering::Lower(
             )) {
             return false;
         }
+        // A compatible read sequence does not receive a new barrier at each
+        // shader-stage change. Establish visibility for every declared shader
+        // reader on this native queue at the first read transition instead.
+        // Other queues keep their own semaphore/acquire visibility scopes.
+        widen_read_scope(barrier.resource, barrier.after_state, barrier.dst_domain, barrier.after_access, instruction.destination);
         if (instruction.queue_acquire && barrier.sources.empty()) {
             // The semaphore wait supplies the cross-queue memory dependency.
             // This destination-local barrier performs visibility/layout

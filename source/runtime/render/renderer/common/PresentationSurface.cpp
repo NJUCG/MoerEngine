@@ -226,7 +226,7 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
             return EPresentationSurfaceEnsureResult::RetryPending;
         }
         committed_frame_buffer->SetName(desc_.debug_name);
-        InitializeGraphicsTexture(committed_frame_buffer);
+        InitializeGraphicsTexture(committed_frame_buffer, RenderGraph::TextureAccessType::TransferSource);
     }
 
     if (!state_.Commit(window_frame, actual_extent)) {

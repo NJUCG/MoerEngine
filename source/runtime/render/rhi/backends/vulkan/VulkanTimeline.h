@@ -4,13 +4,16 @@
 #include "misc/Types.h"
 #include "rhi/RHIResource.h"
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
+#include <map>
 #include <mutex>
 
 namespace Moer::Render {
 
 class VulkanDevice;
+using VulkanQueueClock = std::array<uint64, 3>;
 
 // GPU signal progress backed by a VkSemaphore. CPU callbacks, query publication
 // and resource retirement are tracked separately by the owning queue.
@@ -45,6 +48,13 @@ public:
 
     RENDER_API void Fail(VkResult result);
     RENDER_API bool IsFailed() const;
+    // Submission dependency evidence. Reservation may allocate; publication
+    // follows native acceptance and never allocates. Old completed points are
+    // folded into one completed frontier instead of retained indefinitely.
+    void             PrepareSubmissionClock(uint64 value);
+    void             PublishSubmissionClock(uint64 value, const VulkanQueueClock& clock) noexcept;
+    void             DiscardSubmissionClock(uint64 value) noexcept;
+    VulkanQueueClock GetSubmissionClock(uint64 value) const;
     VkSemaphore     GetSemaphore() const noexcept {
         return m_timeline;
     }
@@ -63,6 +73,8 @@ private:
     UnorderedSet<uint64>     m_rejected_values;
     bool                    m_is_failed{false};
     VkResult                m_failure_result{VK_SUCCESS};
+    std::map<uint64, VulkanQueueClock> m_submission_clocks;
+    VulkanQueueClock                   m_completed_clock{};
 };
 
 using VulkanTimelineRef = CountableRef<VulkanTimeline>;

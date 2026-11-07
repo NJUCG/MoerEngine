@@ -20,11 +20,6 @@ void LogQueueErrorNoexcept(spdlog::format_string_t<Args...> _format, Args&&... _
 
 // Shared queue implementation operations. Ownership remains with the queue,
 // recorded submission and its existing completion records.
-struct VulkanPresentationStateUpdate {
-    Array<std::pair<TextureRef, bool>>                                                            delta{};
-    Array<std::pair<BindlessArrayRef, VulkanBindlessArray::PresentationSourceMembershipSnapshot>> membership_commits{};
-};
-
 void FinalizeRejectedBindlessUpdates(const CmdSubmit& _submit);
 
 void FinalizeBindlessUpdatesOnce(
@@ -52,13 +47,6 @@ void MarkSubmissionAccepted(
     uint64                    _timeline,
     const Array<SignalEvent>& _signal_events
 );
-
-Array<VulkanPresentSourceEvent> CollectPresentationEvents(const CmdSubmit& _submit, EQueueType _queue);
-
-VulkanPresentationStateUpdate
-EvaluatePresentationEvents(const Array<VulkanPresentSourceEvent>& _program);
-
-void CommitAcceptedPresentationState(VulkanPresentationStateUpdate& _transaction) noexcept;
 
 void TerminalizeUnsubmittedSignal(
     VulkanDevice&                _device,

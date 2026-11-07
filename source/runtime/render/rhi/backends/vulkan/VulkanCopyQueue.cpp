@@ -190,9 +190,9 @@ VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(VulkanPendingSu
                     !device.IsFaulted();
             } else {
                 std::optional<
-                    VulkanPresentationStateUpdate>
-                           presentation_transaction{};
-                const auto reject_presentation_transaction =
+                    VulkanResourceStateValidator>
+                           resource_validation{};
+                const auto reject_resource_validation =
                     [&](const VulkanOperationResult& _outcome,
                         std::string_view             _reason) {
                         try {
@@ -216,13 +216,11 @@ VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(VulkanPendingSu
                                 VK_ERROR_DEVICE_LOST;
                     };
                 try {
-                    presentation_transaction.emplace(
-                        EvaluatePresentationEvents(
-                            _recorded.presentation_events
-                        )
+                    resource_validation.emplace(
+                        device, EQueueType::Copy, _recorded.resource_state_program, &_recorded.submit, timeline.Get(), _recorded.timeline
                     );
                 } catch (const std::logic_error& error) {
-                    reject_presentation_transaction(
+                    reject_resource_validation(
                         VulkanOperationResult{
                             EVulkanOperationStatus::Rejected,
                             VK_ERROR_FEATURE_NOT_PRESENT
@@ -230,7 +228,7 @@ VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(VulkanPendingSu
                         error.what()
                     );
                 } catch (const std::bad_alloc& error) {
-                    reject_presentation_transaction(
+                    reject_resource_validation(
                         VulkanOperationResult{
                             EVulkanOperationStatus::Rejected,
                             VK_ERROR_OUT_OF_HOST_MEMORY
@@ -238,7 +236,7 @@ VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(VulkanPendingSu
                         error.what()
                     );
                 } catch (const std::exception& error) {
-                    reject_presentation_transaction(
+                    reject_resource_validation(
                         VulkanOperationResult{
                             EVulkanOperationStatus::Faulted,
                             VK_ERROR_UNKNOWN
@@ -246,12 +244,12 @@ VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(VulkanPendingSu
                         error.what()
                     );
                 } catch (...) {
-                    reject_presentation_transaction(
+                    reject_resource_validation(
                         VulkanOperationResult{
                             EVulkanOperationStatus::Faulted,
                             VK_ERROR_UNKNOWN
                         },
-                        "presentation-state transaction evaluation "
+                        "resource-state contract validation "
                         "failed"
                     );
                 }
@@ -287,9 +285,7 @@ VulkanSubmissionResult VulkanCopyQueue::SubmitRecordedForRuntime(VulkanPendingSu
                     _recorded.submission_outcome =
                         queue.Submit(vk_command_context.GetCommandList(), _recorded.context);
                     if (_recorded.submission_outcome->Succeeded()) {
-                        CommitAcceptedPresentationState(
-                            *presentation_transaction
-                        );
+                        resource_validation->Commit();
                         MarkSubmissionAccepted(
                             timeline.Get(),
                             _recorded.timeline,

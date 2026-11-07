@@ -645,6 +645,7 @@ struct ExplicitBufferBarrier {
     BarrierQueueTransfer queue_transfer{};
     uint64       offset{};
     uint64       byte_size{};
+    bool                 publish_external_state{false};
 };
 
 struct BarrierCmd : public Command {
@@ -752,12 +753,13 @@ public:
                         "buffer barriers cannot carry texture aspects"
                     );
                     explicit_buffers.emplace_back(ExplicitBufferBarrier{
-                        .handle     = reinterpret_cast<uint64>(_resource.GetBuffer()),
-                        .src_state  = _barrier.src_state,
-                        .dst_state  = _barrier.dst_state,
-                        .queue_transfer = _barrier.queue_transfer,
-                        .offset     = _resource.GetByteOffset(),
-                        .byte_size  = _resource.GetByteSize(),
+                        .handle                 = reinterpret_cast<uint64>(_resource.GetBuffer()),
+                        .src_state              = _barrier.src_state,
+                        .dst_state              = _barrier.dst_state,
+                        .queue_transfer         = _barrier.queue_transfer,
+                        .offset                 = _resource.GetByteOffset(),
+                        .byte_size              = _resource.GetByteSize(),
+                        .publish_external_state = _barrier.publish_external_state,
                     });
                 }
             },

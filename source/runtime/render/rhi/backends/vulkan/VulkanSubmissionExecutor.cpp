@@ -65,6 +65,7 @@ bool IsCopyCommand(Command::EType _type) {
         // both through VkCmdVisitor, so rejecting the label half
         // would reject an otherwise legal Copy timestamp source.
         case Command::EType::Scope:
+        case Command::EType::ResourceAccessScope:
         // Timestamp Query commands are legal ordering boundaries inside one
         // Copy segment. Multi-segment sources still reject all queries above,
         // and VulkanCopyQueue performs token/queue/LIFO preflight before native

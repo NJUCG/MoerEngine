@@ -353,8 +353,6 @@ public:
     /** Special graph boundaries, never ordinary pass accesses. */
     enum class TextureBoundary : uint8 {
         Undefined,
-        /** Presentation-copy source in GENERAL with transfer-read visibility. */
-        PresentationSource,
     };
 
     enum class BufferBoundary : uint8 {
@@ -413,11 +411,6 @@ public:
             return *buffer == BufferBoundary::Undefined;
         }
         return false;
-    }
-
-    [[nodiscard]] static constexpr bool IsPresentationSource(const ResourceState& state) {
-        const auto* boundary = std::get_if<TextureBoundary>(&state);
-        return boundary && *boundary == TextureBoundary::PresentationSource;
     }
 
     enum class EdgeReasonKind : uint8 {

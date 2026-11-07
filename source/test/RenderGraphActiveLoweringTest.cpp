@@ -161,7 +161,17 @@ private:
     if (!command || command->Type() != Command::EType::Barrier) {
         return nullptr;
     }
-    return static_cast<const BarrierCmd*>(command.get());
+    const auto* barrier       = static_cast<const BarrierCmd*>(command.get());
+    const auto  evidence_only = [](const auto& value) {
+        return value.publish_external_state && value.src_state == value.dst_state &&
+               !Moer::Render::BarrierStateWrites(value.src_state) &&
+               value.queue_transfer.phase == Moer::Render::EBarrierQueueTransferPhase::None;
+    };
+    if (std::all_of(barrier->ExplicitTextures().begin(), barrier->ExplicitTextures().end(), evidence_only) &&
+        std::all_of(barrier->ExplicitBuffers().begin(), barrier->ExplicitBuffers().end(), evidence_only)) {
+        return nullptr;
+    }
+    return barrier;
 }
 
 [[nodiscard]] const ProbeCommand* AsProbe(const Moer::UniquePtr<Command>& command) {
@@ -259,6 +269,9 @@ void TestRecordPassMaterializesExplicitBeforeBodyAfter(TestSuite& suite, bool me
         if (published.size() != 1) { return; }
     }
     CmdSubmit submit = merge ? merged.Submit() : published.front().command_list->Submit();
+    std::erase_if(submit.cmds, [](const auto& command) {
+        return command->Type() == Command::EType::ResourceAccessScope;
+    });
     if (merge) {
         suite.Check(submit.resource_state_ownership == ERHIResourceStateOwnership::Compiled,
                     test_name, "merged submission must preserve Compiled ownership");
@@ -443,10 +456,9 @@ void TestSameStateWriteBoundaryNeedsBarrier(TestSuite& suite, bool write_pass) {
 
 void TestPresentationPublicationSurvivesNoOpFiltering(TestSuite& suite) {
     using namespace Moer::Render;
-    constexpr std::string_view test_name = "unchanged presentation boundary still publishes its state";
-    for (const bool present_usage : {false, true}) {
-        TextureRef texture = MoerNew(FakeTexture)(1, 1, ETextureAspectFlags::COLOR, nullptr,
-            present_usage ? ETextureUsageFlags::PRESENTATION_SOURCE : ETextureUsageFlags::UNDEFINED);
+    constexpr std::string_view test_name = "unchanged external read boundary still publishes its state";
+    for (const bool sampled : {false, true}) {
+        TextureRef texture = MoerNew(FakeTexture)(1, 1, ETextureAspectFlags::COLOR, nullptr, ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::SAMPLED);
         // A presentation texture or a Present export must still publish its state.
         RenderGraphLowering::LoweredInstruction instruction{};
         instruction.resource_kind = RenderGraph::ResourceKind::Texture;
@@ -454,9 +466,9 @@ void TestPresentationPublicationSurvivesNoOpFiltering(TestSuite& suite) {
         instruction.range = RenderGraph::TextureRange{
             .aspects = RenderGraph::TextureAspect::Color, .mip_count = 1, .layer_count = 1};
         instruction.texture_aspects = ETextureAspectFlags::COLOR;
-        instruction.before_state = present_usage ?
-            RenderGraph::ResourceState{RenderGraph::TextureAccessType::Sampled} :
-            RenderGraph::ResourceState{RenderGraph::TextureBoundary::PresentationSource};
+        instruction.before_state    = sampled ?
+                                          RenderGraph::ResourceState{RenderGraph::TextureAccessType::Sampled} :
+                                          RenderGraph::ResourceState{RenderGraph::TextureAccessType::TransferSource};
         instruction.after_state = instruction.before_state;
         instruction.before_access = instruction.after_access = RenderGraph::AccessMode::Read;
         instruction.export_boundary = true;
@@ -468,8 +480,7 @@ void TestPresentationPublicationSurvivesNoOpFiltering(TestSuite& suite) {
         std::optional<BarrierCreateInfo> barrier;
         std::string error;
         suite.Check(RenderGraphLowering::MaterializeInstruction(instruction, barrier, error), test_name, error);
-        suite.Check(barrier && barrier->publish_external_state, test_name,
-            "Present readiness must still be published when no transition is needed");
+        suite.Check(barrier && barrier->publish_external_state, test_name, "external access must still be published when no transition is needed");
     }
 }
 
@@ -1618,6 +1629,9 @@ void TestCompiledChildGraphPreservesParentLeaseAndScope(TestSuite& suite) {
         return;
     }
     auto submission = published.front().command_list->Submit();
+    std::erase_if(submission.cmds, [](const auto& command) {
+        return command->Type() == Command::EType::ResourceAccessScope;
+    });
     suite.Check(
         submission.resource_state_ownership == ERHIResourceStateOwnership::Compiled &&
             submission.cmds.size() == 3 && AsProbe(submission.cmds[1]) &&

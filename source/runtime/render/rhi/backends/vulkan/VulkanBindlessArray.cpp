@@ -52,7 +52,6 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
     array_slot_claim_tokens(_max_size, 0),
     texture_slot_claim_tokens(_max_size, 0),
     buffer_slot_claim_tokens(_max_size, 0),
-    accepted_presentation_source_membership(std::make_shared<const PresentationSourceMembership>()),
     texture_view_infos(_max_size) {
     if (!_max_size || _max_size > RenderDevice::k_default_bindless_array_size)
         throw std::invalid_argument("Bindless array exceeds the shader table capacity");
@@ -936,19 +935,7 @@ bool VulkanBindlessArray::IsResourceAllocated(uint64 _resource) const {
     return resource_allocation_counts.find(_resource) != resource_allocation_counts.end();
 }
 
-VulkanBindlessArray::PresentationSourceMembershipSnapshot
-VulkanBindlessArray::SnapshotAcceptedPresentationSourceMembership() const noexcept {
-    return std::atomic_load_explicit(&accepted_presentation_source_membership, std::memory_order_acquire);
-}
 
-void VulkanBindlessArray::PublishAcceptedPresentationSourceMembership(
-    PresentationSourceMembershipSnapshot _membership
-) noexcept {
-    assert(_membership);
-    std::atomic_store_explicit(
-        &accepted_presentation_source_membership, std::move(_membership), std::memory_order_release
-    );
-}
 
 bool VulkanBindlessArray::IsTextureViewAllocated(
     uint64 _texture,

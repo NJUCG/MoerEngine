@@ -32,7 +32,7 @@ ImportRasterBuffer(RenderGraph& graph, std::string_view name, Buffer* buffer) {
 }
 
 inline RenderGraph::TextureHandle
-ImportRasterTexture(RenderGraph& graph, std::string_view name, Texture* texture) {
+ImportRasterTexture(RenderGraph& graph, std::string_view name, Texture* texture, RenderGraph::TextureAccessType boundary = RenderGraph::TextureAccessType::Sampled) {
     auto       aspects = RenderGraph::TextureAspect::None;
     const auto flags   = texture->GetAspectFlags();
     if (uint32(flags & ETextureAspectFlags::COLOR)) {
@@ -49,7 +49,6 @@ ImportRasterTexture(RenderGraph& graph, std::string_view name, Texture* texture)
         TextureRef(texture),
         {.mip_count = texture->GetNumMips(), .layer_count = texture->GetNumArray(), .aspects = aspects}
     );
-    const auto boundary = GraphicsTextureBoundary(*texture);
     graph.SetInitialState(handle, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
     graph.Export(handle, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
     return handle;

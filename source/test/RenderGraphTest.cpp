@@ -1713,9 +1713,9 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     );
 }
 
-void TestPresentationSourceBoundaryContract(TestSuite& suite) {
+void TestTransferSourceBoundaryContract(TestSuite& suite) {
     constexpr std::string_view test_name =
-        "presentation source boundary contract";
+        "ordinary transfer-source boundary contract";
     auto import_color = [](RenderGraph& graph, int& physical) {
         const auto texture = graph.ImportTexture(
             "Color",
@@ -1741,13 +1741,13 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
         return texture;
     };
 
-    RenderGraph valid_graph("ValidPresentationSource");
+    RenderGraph valid_graph("ValidTransferSource");
     int         valid_physical = 0;
     const auto  valid_texture =
         import_color(valid_graph, valid_physical);
     valid_graph.Export(
         valid_texture,
-        RenderGraph::TextureBoundary::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -1759,31 +1759,27 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
     );
 
     for (const auto [graph_name, queue] :
-         {std::pair{"ComputePresentationSourceRejected",
-                    RenderGraph::QueueRole::Compute},
-          std::pair{"CopyPresentationSourceRejected",
-                    RenderGraph::QueueRole::Copy},
-          std::pair{"UnownedPresentationSourceRejected",
-                    RenderGraph::QueueRole::None}}) {
+         {std::pair{"ComputeTransferSourceRejected", RenderGraph::QueueRole::Compute},
+          std::pair{"CopyTransferSourceRejected", RenderGraph::QueueRole::Copy},
+          std::pair{"UnownedTransferSourceRejected", RenderGraph::QueueRole::None}}) {
         RenderGraph queue_graph(graph_name);
         int         queue_physical = 0;
         const auto  queue_texture =
             import_color(queue_graph, queue_physical);
         queue_graph.Export(
             queue_texture,
-            RenderGraph::TextureBoundary::PresentationSource,
+            RenderGraph::TextureAccessType::TransferSource,
             queue,
             RenderGraph::AccessMode::Read
         );
         suite.Check(
-            !queue_graph.Compile() &&
-                Contains(queue_graph.GetCompileError(), "Graphics queue"),
+            queue == RenderGraph::QueueRole::None ? !queue_graph.Compile() : queue_graph.Compile(),
             test_name,
-            "a presentation source export accepted a non-Graphics owner queue"
+            "transfer-source exports must allow valid queues and reject an unowned known state"
         );
     }
 
-    RenderGraph initial_graph("PresentationSourceReimport");
+    RenderGraph initial_graph("TransferSourceReimport");
     int         initial_physical = 0;
     const auto  initial_texture = initial_graph.ImportTexture(
         "Color",
@@ -1794,7 +1790,7 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
     );
     initial_graph.SetInitialState(
         initial_texture,
-        RenderGraph::TextureBoundary::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -1823,13 +1819,13 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
         "a following graph must import the previous presentation-copy read boundary"
     );
 
-    RenderGraph write_graph("PresentationSourceWriteRejected");
+    RenderGraph write_graph("TransferSourceWriteRejected");
     int         write_physical = 0;
     const auto  write_texture =
         import_color(write_graph, write_physical);
     write_graph.Export(
         write_texture,
-        RenderGraph::TextureBoundary::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
@@ -1840,13 +1836,13 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
         "a presentation source boundary must reject write access"
     );
 
-    RenderGraph read_write_graph("PresentationSourceReadWriteRejected");
+    RenderGraph read_write_graph("TransferSourceReadWriteRejected");
     int         read_write_physical = 0;
     const auto  read_write_texture =
         import_color(read_write_graph, read_write_physical);
     read_write_graph.Export(
         read_write_texture,
-        RenderGraph::TextureBoundary::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::ReadWrite
     );
@@ -1857,7 +1853,7 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
         "a presentation source boundary must reject read-write access"
     );
 
-    RenderGraph depth_graph("DepthPresentationSourceRejected");
+    RenderGraph depth_graph("DepthTransferSourceRejected");
     int         depth_physical = 0;
     const auto  depth_texture = depth_graph.ImportTexture(
         "Depth",
@@ -1882,15 +1878,14 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
     );
     depth_graph.Export(
         depth_texture,
-        RenderGraph::TextureBoundary::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     suite.Check(
-        !depth_graph.Compile() &&
-            Contains(depth_graph.GetCompileError(), "selected aspects"),
+        depth_graph.Compile(),
         test_name,
-        "only a color aspect may be exported as a presentation source"
+        "a depth texture must support an ordinary transfer-source export"
     );
 }
 
@@ -4429,7 +4424,6 @@ public:
         ETextureUsageFlags usage =
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT |
-            ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST,
         ETextureAspectFlags aspects = ETextureAspectFlags::COLOR,
@@ -4620,7 +4614,6 @@ void TestUiDrawablePresentationContracts(TestSuite& suite) {
         "SmallDetachedFramebuffer",
         ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT |
-            ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST,
         ETextureAspectFlags::COLOR,
@@ -5235,7 +5228,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
             export_contract_valid && export_barrier &&
             export_barrier->export_boundary &&
             export_barrier->after_state ==
-                RenderGraph::ResourceState{RenderGraph::TextureBoundary::PresentationSource} &&
+                RenderGraph::ResourceState{RenderGraph::TextureAccessType::TransferSource} &&
             export_barrier->after_access == RenderGraph::AccessMode::Read;
     }
     const auto* compose_access = FindAccess(
@@ -5258,7 +5251,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     suite.Check(
         export_contract_valid,
         test_name,
-        "a presentation target was not exported as Graphics PresentationSource/Read"
+        "a presentation target was not exported as Graphics TransferSource/Read"
     );
     const std::string dump = graph.Dump();
     suite.Check(
@@ -5337,11 +5330,10 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT
     ));
-    TextureRef missing_presentation_usage(MoerNew(FakeUiTexture)(
-        "MissingPresentationUsage",
+    TextureRef missing_transfer_usage(MoerNew(FakeUiTexture)(
+        "MissingTransferUsage",
         ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT |
-            ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     ));
 
@@ -5385,7 +5377,7 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         "presentation usage"
     );
 
-    RenderGraph semantic_graph("UiFrameGraphMissingPresentationUsage");
+    RenderGraph semantic_graph("UiFrameGraphMissingTransferUsage");
     const auto  scene_handle = semantic_graph.ImportTexture(
         "SceneColor",
         scene_color,
@@ -5405,7 +5397,7 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
             prepared,
             scene_handle,
             scene_color,
-            missing_presentation_usage,
+            missing_transfer_usage,
             semantic_ready,
             semantic_passes
         ) &&
@@ -5413,10 +5405,9 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
             prepared->GetRecordingState() ==
                 UiFrameGraphPass::ERecordingState::Prepared,
         test_name,
-        "graph declaration accepted a target without PRESENTATION_SOURCE "
+        "graph declaration accepted a target without TRANSFER_SRC "
         "usage"
     );
-
 }
 
 void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
@@ -7146,7 +7137,7 @@ int main() {
     TestInvalidTypedRangeIsRejected(suite);
     TestUnknownTextureAspectIsRejected(suite);
     TestTextureAttachmentStateMatchesSelectedAspects(suite);
-    TestPresentationSourceBoundaryContract(suite);
+    TestTransferSourceBoundaryContract(suite);
     TestTypedAliasDescriptorMismatchIsRejected(suite);
     TestMultipleReadersProduceAllWarEdges(suite);
     TestExplicitStateValidation(suite);

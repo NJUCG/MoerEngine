@@ -3,6 +3,7 @@
 #include "RenderAPI.h"
 #include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 
 #include <optional>
@@ -110,6 +111,7 @@ public:
 
     struct PassInstructions {
         RenderGraph::PassHandle              pass{};
+        std::vector<RHIResourceAccess>       accesses{};
         std::vector<PhysicalBinding>         keepalive{};
         std::vector<LoweredInstruction>      before{};
         std::vector<LoweredInstruction>      after{};

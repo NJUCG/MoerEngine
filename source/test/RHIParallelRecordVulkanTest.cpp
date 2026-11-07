@@ -252,12 +252,12 @@ public:
     }
 };
 
-class BindlessPresentationAccessProbeCommand final
+class BindlessAccessProbeCommand final
     : public VkCustomDispatchCmd {
 public:
     bool PreservesCompiledResourceStates() const override { return true; }
 
-    explicit BindlessPresentationAccessProbeCommand(
+    explicit BindlessAccessProbeCommand(
         BindlessArrayRef _bindless,
         EQueueType       _queue = EQueueType::Graphics
     ) :
@@ -1017,15 +1017,15 @@ class ScopedScriptedPresentOverride final {
 public:
     explicit ScopedScriptedPresentOverride(
         ScriptedPresentCapture& _capture,
-        bool _require_present_source_ready = false,
-        bool _latch_fault_before_source_rejection = false,
-        bool _observe_source_rejection_owner = false
+        bool                    _validate_source_access              = false,
+        bool                    _latch_fault_before_source_rejection = false,
+        bool                    _observe_source_rejection_owner      = false
     ) :
         scripted_override{
             .context  = &_capture,
             .callback = &ScriptedPresentCapture::Observe,
-            .require_present_source_ready =
-                _require_present_source_ready,
+            .validate_source_access =
+                _validate_source_access,
             .before_source_rejection =
                 _latch_fault_before_source_rejection ?
                     &ScriptedPresentCapture::
@@ -2785,6 +2785,9 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         std::array<uint32, kElementCount> values{};
         std::array<uint32, kElementCount> readback{};
     };
+    const auto prepare_readback = [](CommandList& commands, const QueueBuffer& buffer) {
+        commands.Barriers({BarrierCreateInfo::Transition(buffer.buffer->GetView(), BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE), BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ))});
+    };
     QueueBuffer graphics_root{
         .buffer = device.CreateBuffer<uint32>(
             "active_rdg_async_graphics_root", kElementCount, usage
@@ -2952,6 +2955,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         CommandList compute_readback(EQueueType::Compute);
 
         compute_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        prepare_readback(compute_readback, compute_independent);
         compute_readback.CopyFrom(
             compute_independent.buffer->GetView(),
             WritableBytes(compute_independent.readback),
@@ -2964,6 +2968,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         );
         CommandList graphics_readback(EQueueType::Graphics);
         graphics_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        prepare_readback(graphics_readback, graphics_independent);
         graphics_readback.CopyFrom(
             graphics_independent.buffer->GetView(),
             WritableBytes(graphics_independent.readback),
@@ -3228,6 +3233,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         }
         CommandList physical_readback(EQueueType::Compute);
         physical_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        prepare_readback(physical_readback, shared_destination);
         physical_readback.CopyFrom(
             shared_destination.buffer->GetView(),
             WritableBytes(shared_destination.readback),
@@ -3450,6 +3456,8 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     CommandList compute_readback(EQueueType::Compute);
 
     compute_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    prepare_readback(compute_readback, compute_independent);
+    prepare_readback(compute_readback, compute_dependent);
     compute_readback.CopyFrom(
         compute_independent.buffer->GetView(),
         WritableBytes(compute_independent.readback),
@@ -3469,6 +3477,8 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     CommandList graphics_readback(EQueueType::Graphics);
 
     graphics_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    prepare_readback(graphics_readback, graphics_root);
+    prepare_readback(graphics_readback, graphics_independent);
     graphics_readback.CopyFrom(
         graphics_root.buffer->GetView(),
         WritableBytes(graphics_root.readback),
@@ -9478,1888 +9488,171 @@ void RunSerialControlPipelineBoundary() {
     }
 }
 
-void RunPresentSourceContractRejection() {
+void RunResourceStateValidation() {
     using namespace std::chrono_literals;
-
-    auto& device = RenderDevice::Get();
-    constexpr ETextureUsageFlags present_source_usage =
-        ETextureUsageFlags::PRESENTATION_SOURCE |
-        ETextureUsageFlags::TRANSFER_SRC |
-        ETextureUsageFlags::TRANSFER_DST;
-    TextureRef valid_source = device.CreateTexture(
-        "present_source_contract_valid",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef rejected_export_source = device.CreateTexture(
-        "present_source_contract_rejected_export",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef wrong_queue_source = device.CreateTexture(
-        "present_source_contract_wrong_queue_export",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef compiled_source = device.CreateTexture(
-        "present_source_contract_compiled",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef rejected_compiled_source =
-        device.CreateTexture(
-            "present_source_contract_rejected_compiled",
-            Extent3D(4, 4, 1),
-            PF_R8G8B8A8_UNORM,
-            present_source_usage
-        );
-    TextureRef backend_nonterminal_source =
-        device.CreateTexture(
-            "present_source_contract_backend_nonterminal",
-            Extent3D(4, 4, 1),
-            PF_R8G8B8A8_UNORM,
-            present_source_usage |
-                ETextureUsageFlags::COLOR_ATTACHMENT
-        );
-    TextureRef rejected_suffix_source = device.CreateTexture(
-        "present_source_contract_rejected_suffix",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef copy_commit_source = device.CreateTexture(
-        "present_source_contract_copy_commit",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef mutation_copy_source = device.CreateTexture(
-        "present_source_contract_mutation_copy_source",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC |
-            ETextureUsageFlags::TRANSFER_DST |
-            ETextureUsageFlags::COLOR_ATTACHMENT
-    );
-    TextureRef missing_usage_source = device.CreateTexture(
-        "present_source_contract_missing_usage",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC |
-            ETextureUsageFlags::TRANSFER_DST
-    );
-    TextureRef missing_transfer_source = device.CreateTexture(
-        "present_source_contract_missing_transfer_src",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::PRESENTATION_SOURCE |
-            ETextureUsageFlags::TRANSFER_DST
-    );
-    TextureRef multisampled_source = device.CreateTexture(
-        "present_source_contract_multisampled",
-        TextureInfo{
-            ETextureDimension::TEX_2D,
-            present_source_usage,
-            PF_R8G8B8A8_UNORM,
-            EClearAttachment{},
-            Extent3D(4, 4, 1),
-            1,
-            1,
-            4
+    auto&      device  = RenderDevice::Get();
+    const auto require = [](bool condition, const char* message) {
+        if (!condition) {
+            throw std::runtime_error(message);
         }
-    );
-    TextureRef incompatible_format_source = device.CreateTexture(
-        "present_source_contract_incompatible_format",
-        Extent3D(4, 4, 1),
-        PF_R16G16B16A16_SFLOAT,
-        present_source_usage
-    );
-    TextureRef compressed_source = device.CreateTexture(
-        "present_source_contract_compressed",
-        Extent3D(4, 4, 1),
-        PF_BC1_RGBA_UNORM_BLOCK,
-        present_source_usage
-    );
-    SwapchainRef scripted_swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
     };
-    SwapchainRef compressed_stride_swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
+    const auto   usage       = ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED;
+    auto         source      = device.CreateTexture("state_source", Extent3D(4, 4, 1), PF_R8G8B8A8_UNORM, usage);
+    auto         destination = device.CreateTexture("state_destination", Extent3D(4, 4, 1), PF_R8G8B8A8_UNORM, usage);
+    SwapchainRef swapchain{MoerNew(HeadlessScriptedSwapchain)()};
+    const auto   transfer_read  = BarrierState::Texture(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    const auto   transfer_write = BarrierState::Texture(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    const auto   sampled        = BarrierState::Texture(ERHIPipelineStageFlags::PS_ALL_COMMANDS, ERHIAccessFlags::SHADER_READ, ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto   barrier        = [](TextureView view, BarrierState before, BarrierState after, bool publish = false) {
+        auto value                   = BarrierCreateInfo::Transition(view, before, after, ETextureAspectFlags::COLOR);
+        value.publish_external_state = publish;
+        return value;
     };
-    compressed_stride_swapchain->format =
-        PF_R16G16B16A16_SFLOAT;
-    if (!valid_source.IsValid() ||
-        !rejected_export_source.IsValid() ||
-        !wrong_queue_source.IsValid() ||
-        !compiled_source.IsValid() ||
-        !rejected_compiled_source.IsValid() ||
-        !backend_nonterminal_source.IsValid() ||
-        !rejected_suffix_source.IsValid() ||
-        !copy_commit_source.IsValid() ||
-        !mutation_copy_source.IsValid() ||
-        !missing_usage_source.IsValid() ||
-        !missing_transfer_source.IsValid() ||
-        !multisampled_source.IsValid() ||
-        !incompatible_format_source.IsValid() ||
-        !compressed_source.IsValid() ||
-        !scripted_swapchain.IsValid() ||
-        !compressed_stride_swapchain.IsValid()) {
-        throw std::runtime_error(
-            "Present source-contract resources were not created"
-        );
-    }
-
-    ScriptedPresentCapture scripted_capture(
-        VulkanScriptedPresentResult{
-            .outcome = {
-                EVulkanOperationStatus::Recreate,
-                VK_ERROR_OUT_OF_DATE_KHR,
-            },
-        }
-    );
-    ScopedScriptedPresentOverride scripted_override(
-        scripted_capture,
-        true
-    );
-
-    uint32 rejected_count       = 0;
-    bool   copy_commit_verified = false;
-    const auto expect_rejected =
-        [&](
-            TextureView       _source,
-            std::string_view  _case_name,
-            const SwapchainRef& _swapchain
-        ) {
-            const uint32 scripted_before =
-                scripted_capture.count.load(
-                    std::memory_order_acquire
-                );
-            PresentReceiptRef receipt = MakeShared<PresentReceipt>();
-            RHIExecutor::Get().Present(
-                RHIPresentRequest(
-                    _swapchain,
-                    _source,
-                    receipt
-                ),
-                true
-            );
-            const PresentReceiptResult result =
-                receipt->WaitForSubmission(5s);
-            if (!result.resolved || result.submitted ||
-                result.recreate_swapchain ||
-                receipt->ResolutionAttemptCount() != 1 ||
-                scripted_capture.count.load(
-                    std::memory_order_acquire
-                ) != scripted_before) {
-                throw std::runtime_error(
-                    "Present source contract did not reject " +
-                    std::string(_case_name) +
-                    " before the scripted override"
-                );
-            }
-            ++rejected_count;
-        };
-
-    expect_rejected(
-        TextureView{},
-        "null source texture",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        missing_usage_source->GetView(),
-        "missing PRESENTATION_SOURCE usage",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        missing_transfer_source->GetView(),
-        "missing TRANSFER_SRC usage",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        multisampled_source->GetView(),
-        "multisampled source",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        incompatible_format_source->GetView(),
-        "size-incompatible format",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        compressed_source->GetView(),
-        "compressed format with matching block stride",
-        compressed_stride_swapchain
-    );
-
-    TextureView invalid_mip = valid_source->GetView();
-    invalid_mip.mip_level   = 1;
-    expect_rejected(
-        invalid_mip,
-        "nonzero mip",
-        scripted_swapchain
-    );
-
-    TextureView invalid_layer = valid_source->GetView();
-    invalid_layer.array_layer = 1;
-    expect_rejected(
-        invalid_layer,
-        "nonzero array layer",
-        scripted_swapchain
-    );
-
-    TextureView invalid_offset = valid_source->GetView();
-    invalid_offset.offset.x    = 1;
-    expect_rejected(
-        invalid_offset,
-        "nonzero offset",
-        scripted_swapchain
-    );
-
-    TextureView invalid_extent = valid_source->GetView();
-    --invalid_extent.extent.x;
-    expect_rejected(
-        invalid_extent,
-        "partial extent",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        valid_source->GetView(),
-        "fresh source without an accepted producer export",
-        scripted_swapchain
-    );
-
-    const auto make_compiled_publication =
-        [&](const TextureRef& _texture,
-            const FenceRef&   _signal,
-            uint64            _signal_value) {
-            CommandList producer(EQueueType::Graphics);
-            producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-            TransitionTestTexture(producer, _texture->GetView(0, static_cast<uint8>(_texture->GetNumMips())),
-                                  ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
-            producer.ClearResource(
-                _texture->GetView(),
-                float4(0.f, 0.f, 0.f, 1.f)
-            );
-            TransitionTestTexture(producer, _texture->GetView(0, static_cast<uint8>(_texture->GetNumMips())),
-                                  ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_COMMON, true);
-            CmdSubmit submit = producer.Submit();
-            submit.Signal(_signal.Get(), _signal_value);
-            return submit;
-        };
-
-    const auto create_bindless_present_source =
-        [&](std::string_view _name) {
-            return device.CreateTexture(
-                _name,
-                Extent3D(4, 4, 1),
-                PF_R8G8B8A8_UNORM,
-                present_source_usage |
-                    ETextureUsageFlags::SAMPLED
-            );
-        };
-    TextureRef bindless_access_then_add =
-        create_bindless_present_source(
-            "present_bindless_access_then_add"
-        );
-    TextureRef bindless_add_then_access =
-        create_bindless_present_source(
-            "present_bindless_add_then_access"
-        );
-    TextureRef bindless_duplicate =
-        create_bindless_present_source(
-            "present_bindless_duplicate"
-        );
-    TextureRef bindless_rejected_add =
-        create_bindless_present_source(
-            "present_bindless_rejected_add"
-        );
-    TextureRef bindless_rejected_free =
-        create_bindless_present_source(
-            "present_bindless_rejected_free"
-        );
-    TextureRef bindless_future_allocation =
-        create_bindless_present_source(
-            "present_bindless_future_allocation"
-        );
-    TextureRef bindless_segment_access_add =
-        create_bindless_present_source(
-            "present_bindless_segment_access_add"
-        );
-    TextureRef bindless_segment_add_access =
-        create_bindless_present_source(
-            "present_bindless_segment_add_access"
-        );
-    TextureRef bindless_accepted_add_prefix =
-        create_bindless_present_source(
-            "present_bindless_accepted_add_prefix"
-        );
-    TextureRef bindless_accepted_free_prefix =
-        create_bindless_present_source(
-            "present_bindless_accepted_free_prefix"
-        );
-    TextureRef bindless_cross_queue =
-        create_bindless_present_source(
-            "present_bindless_cross_queue"
-        );
-    TextureRef bindless_parallel_record =
-        create_bindless_present_source(
-            "present_bindless_parallel_record"
-        );
-    BindlessArrayRef bindless =
-        device.CreateBindlessArray(32);
-    BindlessArrayRef future_bindless =
-        device.CreateBindlessArray(8);
-    if (!bindless_access_then_add ||
-        !bindless_add_then_access ||
-        !bindless_duplicate ||
-        !bindless_rejected_add ||
-        !bindless_rejected_free ||
-        !bindless_future_allocation ||
-        !bindless_segment_access_add ||
-        !bindless_segment_add_access ||
-        !bindless_accepted_add_prefix ||
-        !bindless_accepted_free_prefix ||
-        !bindless_cross_queue ||
-        !bindless_parallel_record ||
-        !bindless ||
-        !future_bindless) {
-        throw std::runtime_error(
-            "bindless Present contract resources were not created"
-        );
-    }
-
-    const Sampler bindless_sampler(
-        SF_LINEAR, SAM_CLAMP_TO_EDGE
-    );
-    const auto add_bindless_access =
-        [&](CommandList&          _commands,
-            const BindlessArrayRef& _bindless,
-            std::string_view      _name,
-            EQueueType _queue = EQueueType::Graphics) {
-            _commands.AddCustomCommand(
-                MakeUnique<
-                    BindlessPresentationAccessProbeCommand>(
-                    _bindless, _queue
-                ),
-                _name
-            );
-        };
-    const auto submit_accepted_commands =
-        [&](CommandList& _commands, std::string_view _name) {
-            FenceRef accepted = device.CreateFence();
-            if (!accepted) {
-                throw std::runtime_error(
-                    "failed to create bindless Present acceptance fence"
-                );
-            }
-            CmdSubmit submit = _commands.Submit();
-            submit.Signal(accepted.Get(), 1);
-            RHIExecutor::Get().Submit(
-                _commands.GetQueueType(),
-                std::move(submit),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            auto* vk_accepted = ResourceCast(accepted.Get());
-            if (!vk_accepted->WaitSubmitted(1) ||
-                vk_accepted->IsRejected(1) ||
-                vk_accepted->IsFailed()) {
-                throw std::runtime_error(
-                    std::string(_name) +
-                    " did not reach native submission"
-                );
-            }
-        };
-    const auto submit_dependency_rejected_commands =
-        [&](CommandList& _commands, std::string_view _name) {
-            FenceRef dependency = device.CreateFence();
-            FenceRef rejected   = device.CreateFence();
-            if (!dependency || !rejected) {
-                throw std::runtime_error(
-                    "failed to create bindless Present rejection fences"
-                );
-            }
-            dependency->Reject(1);
-            CmdSubmit submit = _commands.Submit();
-            submit.Wait(dependency.Get(), 1);
-            submit.Signal(rejected.Get(), 1);
-            RHIExecutor::Get().Submit(
-                _commands.GetQueueType(),
-                std::move(submit),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            auto* vk_rejected = ResourceCast(rejected.Get());
-            if (!vk_rejected->IsRejected(1) ||
-                vk_rejected->IsFailed()) {
-                throw std::runtime_error(
-                    std::string(_name) +
-                    " was not recoverably rejected"
-                );
-            }
-        };
-    const auto publish_bindless_source =
-        [&](const TextureRef& _texture,
-            std::string_view  _name) {
-            FenceRef accepted = device.CreateFence();
-            if (!accepted) {
-                throw std::runtime_error(
-                    "failed to create bindless publication fence"
-                );
-            }
-            RHIExecutor::Get().Submit(
-                EQueueType::Graphics,
-                make_compiled_publication(
-                    _texture, accepted, 1
-                ),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            if (!ResourceCast(accepted.Get())->WaitSubmitted(1) ||
-                !ResourceCast(_texture.Get())
-                     ->IsPresentationSourceReady()) {
-                throw std::runtime_error(
-                    std::string(_name) +
-                    " failed to publish Present readiness"
-                );
-            }
-        };
-    const auto require_bindless_ready =
-        [&](const TextureRef& _texture,
-            bool              _expected,
-            std::string_view  _case_name) {
-            const bool ready =
-                ResourceCast(_texture.Get())
-                    ->IsPresentationSourceReady();
-            if (ready != _expected) {
-                throw std::runtime_error(
-                    std::string(_case_name) +
-                    (_expected ?
-                         " unexpectedly lost Present readiness" :
-                         " left stale Present readiness")
-                );
-            }
-        };
-
-    // Access -> Add: the access sees the accepted entry membership, not the
-    // frontend allocation created later in this same command source.
-    publish_bindless_source(
-        bindless_access_then_add, "bindless Access->Add"
-    );
-    CommandList access_then_add(EQueueType::Graphics);
-    access_then_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_bindless_access(
-        access_then_add,
-        bindless,
-        "BindlessPresentAccessThenAdd"
-    );
-    const uint32 access_then_add_slot =
-        bindless->AllocateTexture(
-            bindless_access_then_add->GetView(),
-            bindless_sampler
-        );
-    access_then_add.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        access_then_add, "bindless Access->Add"
-    );
-    require_bindless_ready(
-        bindless_access_then_add,
-        true,
-        "bindless Access->Add"
-    );
-
-    // Access -> Free still observes the old accepted slot before the update.
-    CommandList access_then_free(EQueueType::Graphics);
-    access_then_free.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_bindless_access(
-        access_then_free,
-        bindless,
-        "BindlessPresentAccessThenFree"
-    );
-    bindless->UnbindTexture(access_then_add_slot);
-    access_then_free.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        access_then_free, "bindless Access->Free"
-    );
-    require_bindless_ready(
-        bindless_access_then_add,
-        false,
-        "bindless Access->Free"
-    );
-
-    // Add -> Access sees the new descriptor membership from the preceding
-    // update command in the same source.
-    publish_bindless_source(
-        bindless_add_then_access, "bindless Add->Access"
-    );
-    const uint32 add_then_access_slot =
-        bindless->AllocateTexture(
-            bindless_add_then_access->GetView(),
-            bindless_sampler
-        );
-    CommandList add_then_access(EQueueType::Graphics);
-    add_then_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_then_access.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        add_then_access,
-        bindless,
-        "BindlessPresentAddThenAccess"
-    );
-    submit_accepted_commands(
-        add_then_access, "bindless Add->Access"
-    );
-    require_bindless_ready(
-        bindless_add_then_access,
-        false,
-        "bindless Add->Access"
-    );
-
-    // Free -> Access no longer sees the removed accepted slot.
-    publish_bindless_source(
-        bindless_add_then_access, "bindless Free->Access"
-    );
-    bindless->UnbindTexture(add_then_access_slot);
-    CommandList free_then_access(EQueueType::Graphics);
-    free_then_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    free_then_access.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        free_then_access,
-        bindless,
-        "BindlessPresentFreeThenAccess"
-    );
-    submit_accepted_commands(
-        free_then_access, "bindless Free->Access"
-    );
-    require_bindless_ready(
-        bindless_add_then_access,
-        true,
-        "bindless Free->Access"
-    );
-
-    // Two descriptor slots can reference one texture. Removing one slot must
-    // retain membership; removing the final slot must close it.
-    const uint32 duplicate_slot_a =
-        bindless->AllocateTexture(
-            bindless_duplicate->GetView(), bindless_sampler
-        );
-    const uint32 duplicate_slot_b =
-        bindless->AllocateTexture(
-            bindless_duplicate->GetView(), bindless_sampler
-        );
-    CommandList add_duplicate(EQueueType::Graphics);
-    add_duplicate.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_duplicate.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        add_duplicate, "bindless duplicate add"
-    );
-    publish_bindless_source(
-        bindless_duplicate, "bindless duplicate first free"
-    );
-    bindless->UnbindTexture(duplicate_slot_a);
-    CommandList free_one_duplicate(EQueueType::Graphics);
-    free_one_duplicate.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    free_one_duplicate.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        free_one_duplicate,
-        bindless,
-        "BindlessPresentFreeOneDuplicate"
-    );
-    submit_accepted_commands(
-        free_one_duplicate, "bindless duplicate first free"
-    );
-    require_bindless_ready(
-        bindless_duplicate,
-        false,
-        "bindless duplicate first free"
-    );
-    publish_bindless_source(
-        bindless_duplicate, "bindless duplicate final free"
-    );
-    bindless->UnbindTexture(duplicate_slot_b);
-    CommandList free_last_duplicate(EQueueType::Graphics);
-    free_last_duplicate.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    free_last_duplicate.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        free_last_duplicate,
-        bindless,
-        "BindlessPresentFreeLastDuplicate"
-    );
-    submit_accepted_commands(
-        free_last_duplicate, "bindless duplicate final free"
-    );
-    require_bindless_ready(
-        bindless_duplicate,
-        true,
-        "bindless duplicate final free"
-    );
-
-    // A rejected add never enters accepted descriptor membership.
-    publish_bindless_source(
-        bindless_rejected_add, "bindless rejected add"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_rejected_add->GetView(), bindless_sampler
-    );
-    CommandList rejected_add(EQueueType::Graphics);
-    rejected_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    rejected_add.UpdateBindlessArray(bindless);
-    submit_dependency_rejected_commands(
-        rejected_add, "bindless rejected add"
-    );
-    CommandList access_after_rejected_add(
-        EQueueType::Graphics
-    );
-    access_after_rejected_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_bindless_access(
-        access_after_rejected_add,
-        bindless,
-        "BindlessPresentAccessAfterRejectedAdd"
-    );
-    submit_accepted_commands(
-        access_after_rejected_add,
-        "bindless access after rejected add"
-    );
-    require_bindless_ready(
-        bindless_rejected_add,
-        true,
-        "bindless access after rejected add"
-    );
-
-    // Conversely, a rejected free preserves the last accepted membership.
-    const uint32 rejected_free_slot =
-        bindless->AllocateTexture(
-            bindless_rejected_free->GetView(),
-            bindless_sampler
-        );
-    CommandList accepted_before_rejected_free(
-        EQueueType::Graphics
-    );
-    accepted_before_rejected_free.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    accepted_before_rejected_free.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        accepted_before_rejected_free,
-        "bindless accepted add before rejected free"
-    );
-    publish_bindless_source(
-        bindless_rejected_free, "bindless rejected free"
-    );
-    bindless->UnbindTexture(rejected_free_slot);
-    CommandList rejected_free(EQueueType::Graphics);
-    rejected_free.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    rejected_free.UpdateBindlessArray(bindless);
-    submit_dependency_rejected_commands(
-        rejected_free, "bindless rejected free"
-    );
-    CommandList access_after_rejected_free(
-        EQueueType::Graphics
-    );
-    access_after_rejected_free.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_bindless_access(
-        access_after_rejected_free,
-        bindless,
-        "BindlessPresentAccessAfterRejectedFree"
-    );
-    submit_accepted_commands(
-        access_after_rejected_free,
-        "bindless access after rejected free"
-    );
-    require_bindless_ready(
-        bindless_rejected_free,
-        false,
-        "bindless access after rejected free"
-    );
-
-    // Seal S0 before a later frontend allocation. Even if Allocate happens
-    // before S0 reaches Translate, S0 must read accepted (empty) membership.
-    publish_bindless_source(
-        bindless_future_allocation,
-        "bindless future allocation"
-    );
-    CommandList future_access_commands(EQueueType::Graphics);
-    future_access_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_bindless_access(
-        future_access_commands,
-        future_bindless,
-        "BindlessPresentFutureAllocationAccess"
-    );
-    CmdSubmit sealed_future_access =
-        future_access_commands.Submit();
-    (void)future_bindless->AllocateTexture(
-        bindless_future_allocation->GetView(),
-        bindless_sampler
-    );
-    CommandList rejected_future_update(
-        EQueueType::Graphics
-    );
-    rejected_future_update.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    rejected_future_update.UpdateBindlessArray(
-        future_bindless
-    );
-    FenceRef future_access_done = device.CreateFence();
-    sealed_future_access.Signal(
-        future_access_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(sealed_future_access),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(future_access_done.Get())
-             ->WaitSubmitted(1)) {
-        throw std::runtime_error(
-            "sealed bindless access was not submitted"
-        );
-    }
-    require_bindless_ready(
-        bindless_future_allocation,
-        true,
-        "sealed bindless access with a future allocation"
-    );
-    submit_dependency_rejected_commands(
-        rejected_future_update,
-        "future bindless update"
-    );
-    CommandList access_after_rejected_future(
-        EQueueType::Graphics
-    );
-    access_after_rejected_future.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_bindless_access(
-        access_after_rejected_future,
-        future_bindless,
-        "BindlessPresentAccessAfterRejectedFutureUpdate"
-    );
-    submit_accepted_commands(
-        access_after_rejected_future,
-        "access after rejected future bindless update"
-    );
-    require_bindless_ready(
-        bindless_future_allocation,
-        true,
-        "access after rejected future bindless update"
-    );
-
-    constexpr uint64 bindless_segment_scope =
-        0x5042494e444c4553ull;
-    publish_bindless_source(
-        bindless_segment_access_add,
-        "segmented bindless Access->Add"
-    );
-    CommandList segmented_access_add(EQueueType::Graphics);
-    segmented_access_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_bindless_access(
-        segmented_access_add,
-        bindless,
-        "SegmentedBindlessAccess"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_segment_access_add->GetView(),
-        bindless_sampler
-    );
-    segmented_access_add.UpdateBindlessArray(bindless);
-    CmdSubmit segmented_access_add_submit =
-        segmented_access_add.Submit();
-    segmented_access_add_submit.async_queue_scope =
-        bindless_segment_scope;
-    segmented_access_add_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
-    };
-    FenceRef segmented_access_add_done =
-        device.CreateFence();
-    segmented_access_add_submit.Signal(
-        segmented_access_add_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(segmented_access_add_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(segmented_access_add_done.Get())
-             ->WaitSubmitted(1)) {
-        throw std::runtime_error(
-            "segmented bindless Access->Add was not submitted"
-        );
-    }
-    require_bindless_ready(
-        bindless_segment_access_add,
-        true,
-        "segmented bindless Access->Add"
-    );
-
-    publish_bindless_source(
-        bindless_segment_add_access,
-        "segmented bindless Add->Access"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_segment_add_access->GetView(),
-        bindless_sampler
-    );
-    CommandList segmented_add_access(EQueueType::Graphics);
-    segmented_add_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    segmented_add_access.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        segmented_add_access,
-        bindless,
-        "SegmentedBindlessAccessAfterAdd"
-    );
-    CmdSubmit segmented_add_access_submit =
-        segmented_add_access.Submit();
-    segmented_add_access_submit.async_queue_scope =
-        bindless_segment_scope + 1;
-    segmented_add_access_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
-    };
-    FenceRef segmented_add_access_done =
-        device.CreateFence();
-    segmented_add_access_submit.Signal(
-        segmented_add_access_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(segmented_add_access_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(segmented_add_access_done.Get())
-             ->WaitSubmitted(1)) {
-        throw std::runtime_error(
-            "segmented bindless Add->Access was not submitted"
-        );
-    }
-    require_bindless_ready(
-        bindless_segment_add_access,
-        false,
-        "segmented bindless Add->Access"
-    );
-
-    // A materialized accepted membership prefix survives an opaque rejected
-    // suffix and is visible to the next independently accepted source.
-    publish_bindless_source(
-        bindless_accepted_add_prefix,
-        "bindless accepted add prefix"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_accepted_add_prefix->GetView(),
-        bindless_sampler
-    );
-    CommandList accepted_add_prefix(EQueueType::Graphics);
-    accepted_add_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    accepted_add_prefix.UpdateBindlessArray(bindless);
-    accepted_add_prefix.AddCustomCommand(
-        MakeUnique<OpaquePresentationStateProbeCommand>(),
-        "RejectedAfterAcceptedBindlessAdd"
-    );
-    CmdSubmit accepted_add_prefix_submit =
-        accepted_add_prefix.Submit();
-    accepted_add_prefix_submit.async_queue_scope =
-        bindless_segment_scope + 2;
-    accepted_add_prefix_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
-    };
-    FenceRef accepted_add_prefix_done =
-        device.CreateFence();
-    accepted_add_prefix_submit.Signal(
-        accepted_add_prefix_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(accepted_add_prefix_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(accepted_add_prefix_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(accepted_add_prefix_done.Get())
-            ->IsFailed()) {
-        throw std::runtime_error(
-            "bindless accepted add prefix suffix was not "
-            "recoverably rejected"
-        );
-    }
-    CommandList access_after_add_prefix(
-        EQueueType::Graphics
-    );
-    access_after_add_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_bindless_access(
-        access_after_add_prefix,
-        bindless,
-        "BindlessPresentAccessAfterAcceptedAddPrefix"
-    );
-    submit_accepted_commands(
-        access_after_add_prefix,
-        "access after accepted bindless add prefix"
-    );
-    require_bindless_ready(
-        bindless_accepted_add_prefix,
-        false,
-        "access after accepted bindless add prefix"
-    );
-
-    const uint32 accepted_free_prefix_slot =
-        bindless->AllocateTexture(
-            bindless_accepted_free_prefix->GetView(),
-            bindless_sampler
-        );
-    CommandList add_before_free_prefix(
-        EQueueType::Graphics
-    );
-    add_before_free_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_before_free_prefix.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        add_before_free_prefix,
-        "add before accepted bindless free prefix"
-    );
-    publish_bindless_source(
-        bindless_accepted_free_prefix,
-        "bindless accepted free prefix"
-    );
-    bindless->UnbindTexture(accepted_free_prefix_slot);
-    CommandList accepted_free_prefix(
-        EQueueType::Graphics
-    );
-    accepted_free_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    accepted_free_prefix.UpdateBindlessArray(bindless);
-    accepted_free_prefix.AddCustomCommand(
-        MakeUnique<OpaquePresentationStateProbeCommand>(),
-        "RejectedAfterAcceptedBindlessFree"
-    );
-    CmdSubmit accepted_free_prefix_submit =
-        accepted_free_prefix.Submit();
-    accepted_free_prefix_submit.async_queue_scope =
-        bindless_segment_scope + 3;
-    accepted_free_prefix_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
-    };
-    FenceRef accepted_free_prefix_done =
-        device.CreateFence();
-    accepted_free_prefix_submit.Signal(
-        accepted_free_prefix_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(accepted_free_prefix_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(accepted_free_prefix_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(accepted_free_prefix_done.Get())
-            ->IsFailed()) {
-        throw std::runtime_error(
-            "bindless accepted free prefix suffix was not "
-            "recoverably rejected"
-        );
-    }
-    CommandList access_after_free_prefix(
-        EQueueType::Graphics
-    );
-    access_after_free_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    add_bindless_access(
-        access_after_free_prefix,
-        bindless,
-        "BindlessPresentAccessAfterAcceptedFreePrefix"
-    );
-    submit_accepted_commands(
-        access_after_free_prefix,
-        "access after accepted bindless free prefix"
-    );
-    require_bindless_ready(
-        bindless_accepted_free_prefix,
-        true,
-        "access after accepted bindless free prefix"
-    );
-
-    if (device.GetQueueTopology().compute.available) {
-        (void)bindless->AllocateTexture(
-            bindless_cross_queue->GetView(),
-            bindless_sampler
-        );
-        CommandList cross_queue_add(EQueueType::Graphics);
-        cross_queue_add.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-        cross_queue_add.UpdateBindlessArray(bindless);
-        submit_accepted_commands(
-            cross_queue_add,
-            "Graphics bindless add before Compute access"
-        );
-        publish_bindless_source(
-            bindless_cross_queue,
-            "Graphics bindless add before Compute access"
-        );
-        CommandList compute_access(EQueueType::Compute);
-        compute_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-        add_bindless_access(
-            compute_access,
-            bindless,
-            "BindlessPresentComputeAccess",
-            EQueueType::Compute
-        );
-        submit_accepted_commands(
-            compute_access,
-            "Compute bindless access after Graphics add"
-        );
-        require_bindless_ready(
-            bindless_cross_queue,
-            false,
-            "Compute bindless access after Graphics add"
-        );
-    }
-
-    // Carry the source-order program through an actually parallel inner
-    // recorder, not just the serial fallback. Four independent copies form a
-    // worker-eligible layer while the bindless update/access remain ordered
-    // serial islands in the same immutable source.
-    constexpr uint64 bindless_parallel_scope =
-        bindless_segment_scope + 4;
-    constexpr size_t bindless_parallel_copy_count = 4;
-    const EBufferUsageFlags bindless_parallel_buffer_usage =
-        EBufferUsageFlags::TRANSFER_SRC |
-        EBufferUsageFlags::TRANSFER_DST;
-    std::array<BufferRef, bindless_parallel_copy_count>
-        bindless_parallel_sources{};
-    std::array<BufferRef, bindless_parallel_copy_count>
-        bindless_parallel_destinations{};
-    for (size_t index = 0;
-         index < bindless_parallel_copy_count;
-         ++index) {
-        bindless_parallel_sources[index] =
-            device.CreateBuffer<uint32>(
-                "bindless_parallel_source_" +
-                    std::to_string(index),
-                kElementCount,
-                bindless_parallel_buffer_usage
-            );
-        bindless_parallel_destinations[index] =
-            device.CreateBuffer<uint32>(
-                "bindless_parallel_destination_" +
-                    std::to_string(index),
-                kElementCount,
-                bindless_parallel_buffer_usage
-            );
-        if (!bindless_parallel_sources[index] ||
-            !bindless_parallel_destinations[index]) {
-            throw std::runtime_error(
-                "failed to create bindless parallel-record buffers"
-            );
-        }
-    }
-
-    publish_bindless_source(
-        bindless_parallel_record,
-        "parallel-record bindless Add->Access"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_parallel_record->GetView(),
-        bindless_sampler
-    );
-    CommandList parallel_bindless_access(EQueueType::Graphics);
-    parallel_bindless_access.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    parallel_bindless_access.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        parallel_bindless_access,
-        bindless,
-        "BindlessPresentParallelRecordAccess"
-    );
-    for (size_t index = 0;
-         index < bindless_parallel_copy_count;
-         ++index) {
-        CopyTestTransfer(parallel_bindless_access,
-            bindless_parallel_sources[index]->GetView(),
-            bindless_parallel_destinations[index]->GetView(),
-            "BindlessParallelRecordCopy"
-        );
-    }
-    FenceRef parallel_bindless_done = device.CreateFence();
-    CmdSubmit parallel_bindless_submit =
-        parallel_bindless_access.Submit();
-    parallel_bindless_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    parallel_bindless_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Compiled
-    );
-    parallel_bindless_submit.async_queue_scope =
-        bindless_parallel_scope;
-    parallel_bindless_submit.Signal(
-        parallel_bindless_done.Get(), 1
-    );
-    SourceTranslationCapture parallel_bindless_capture(
-        bindless_parallel_scope,
-        EQueueType::Graphics
-    );
-    {
-        ScopedSourceTranslationObserver translation_observer(
-            parallel_bindless_capture
-        );
-        RHIExecutor::Get().Submit(
-            EQueueType::Graphics,
-            std::move(parallel_bindless_submit),
-            ERHIExecSubmitFlags::FlushGPU
-        );
+    const auto submit = [&](CommandList& commands, bool accepted) {
+        auto fence = device.CreateFence();
+        auto work  = commands.Submit();
+        work.Signal(fence.Get(), 1);
+        RHIExecutor::Get().Submit(commands.GetQueueType(), std::move(work), ERHIExecSubmitFlags::FlushGPU);
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    }
-    auto* vk_parallel_bindless_done =
-        ResourceCast(parallel_bindless_done.Get());
-    if (!vk_parallel_bindless_done->WaitSubmitted(1) ||
-        vk_parallel_bindless_done->IsRejected(1) ||
-        vk_parallel_bindless_done->IsFailed()) {
-        throw std::runtime_error(
-            "parallel bindless source did not reach native submission"
-        );
-    }
-    if (!parallel_bindless_capture.IsValid() ||
-        !parallel_bindless_capture.Seen(
-            0,
-            EVulkanSourceTranslationPhase::Recorded
-        )) {
-        throw std::runtime_error(
-            "parallel bindless source translation was not observed"
-        );
-    }
-    const VulkanSourceTranslationEvent&
-        parallel_bindless_translation =
-            parallel_bindless_capture.Event(
-                0,
-                EVulkanSourceTranslationPhase::Recorded
-            );
-    if (parallel_bindless_translation.async_queue_scope !=
-        bindless_parallel_scope) {
-        throw std::runtime_error(
-            "parallel bindless translation lost its async queue scope"
-        );
-    }
-    require_bindless_ready(
-        bindless_parallel_record,
-        false,
-        "parallel-record bindless Add->Access"
-    );
-
-    FenceRef compiled_done = device.CreateFence();
-    PresentReceiptRef compiled_receipt =
-        MakeShared<PresentReceipt>();
-    RHIPresentRequest compiled_present(
-        scripted_swapchain,
-        compiled_source->GetView(),
-        compiled_receipt
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        make_compiled_publication(
-            compiled_source,
-            compiled_done,
-            1
-        ),
-        ERHIExecSubmitFlags::FlushGPU,
-        &compiled_present
-    );
-    const PresentReceiptResult compiled_result =
-        compiled_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!ResourceCast(compiled_done.Get())
-             ->WaitSubmitted(1) ||
-        !ResourceCast(compiled_source.Get())
-             ->IsPresentationSourceReady() ||
-        !compiled_result.resolved ||
-        compiled_result.submitted ||
-        !compiled_result.recreate_swapchain ||
-        compiled_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != 1) {
-        throw std::runtime_error(
-            "accepted Compiled producer did not publish readiness "
-            "before its same-batch Present"
-        );
-    }
-
-    // An independently accepted mutation must close the publication from the
-    // previous packet even when no trailing BarrierCmd describes that touch.
-    FenceRef accepted_mutation_done = device.CreateFence();
-    CommandList accepted_mutation(EQueueType::Graphics);
-    accepted_mutation.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    TransitionTestTexture(accepted_mutation, compiled_source->GetView(),
-                          ETextureLayout::TEXTURE_LAYOUT_COMMON, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
-    accepted_mutation.ClearResource(
-        compiled_source->GetView(),
-        float4(0.25f, 0.f, 0.f, 1.f)
-    );
-    CmdSubmit accepted_mutation_submit =
-        accepted_mutation.Submit();
-    accepted_mutation_submit.Signal(
-        accepted_mutation_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(accepted_mutation_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(accepted_mutation_done.Get())->WaitSubmitted(1)) {
-        throw std::runtime_error("standalone Clear signal failed after recoverable Present");
-    }
-    if (ResourceCast(compiled_source.Get())->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "an accepted standalone Clear left stale Present readiness"
-        );
-    }
-    expect_rejected(
-        compiled_source->GetView(),
-        "source cleared by a later accepted packet",
-        scripted_swapchain
-    );
-
-    // Re-publish, then reject a later mutation before native acceptance. The
-    // rejected packet must not speculatively clear the accepted readiness.
-    FenceRef republished_done = device.CreateFence();
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        make_compiled_publication(
-            compiled_source,
-            republished_done,
-            1
-        ),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(republished_done.Get())->WaitSubmitted(1) ||
-        !ResourceCast(compiled_source.Get())
-             ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "accepted re-publication did not restore Present readiness"
-        );
-    }
-
-    FenceRef rejected_mutation_dependency = device.CreateFence();
-    FenceRef rejected_mutation_done       = device.CreateFence();
-    rejected_mutation_dependency->Reject(1);
-    CommandList rejected_mutation(EQueueType::Graphics);
-    rejected_mutation.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    rejected_mutation.ClearResource(
-        compiled_source->GetView(),
-        float4(0.f, 0.25f, 0.f, 1.f)
-    );
-    CmdSubmit rejected_mutation_submit =
-        rejected_mutation.Submit();
-    rejected_mutation_submit.Wait(
-        rejected_mutation_dependency.Get(), 1
-    );
-    rejected_mutation_submit.Signal(
-        rejected_mutation_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(rejected_mutation_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(rejected_mutation_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(rejected_mutation_done.Get())->IsFailed() ||
-        !ResourceCast(compiled_source.Get())
-             ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "a rejected standalone Clear polluted accepted Present readiness"
-        );
-    }
-
-    const uint32 scripted_before_rejected_mutation_present =
-        scripted_capture.count.load(std::memory_order_acquire);
-    PresentReceiptRef rejected_mutation_receipt =
-        MakeShared<PresentReceipt>();
-    RHIExecutor::Get().Present(
-        RHIPresentRequest(
-            scripted_swapchain,
-            compiled_source->GetView(),
-            rejected_mutation_receipt
-        ),
-        true
-    );
-    const PresentReceiptResult rejected_mutation_result =
-        rejected_mutation_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!rejected_mutation_result.resolved ||
-        rejected_mutation_result.submitted ||
-        !rejected_mutation_result.recreate_swapchain ||
-        rejected_mutation_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(std::memory_order_acquire) !=
-            scripted_before_rejected_mutation_present + 1) {
-        throw std::runtime_error(
-            "a rejected standalone Clear hid the last accepted publication"
-        );
-    }
-
-    // Keep the fixture on Graphics: the source was published there, and this
-    // test targets state-ledger invalidation rather than queue-family transfer
-    // ownership (covered separately by the explicit multi-queue tests).
-    constexpr EQueueType mutation_queue = EQueueType::Graphics;
-    FenceRef accepted_copy_mutation_done = device.CreateFence();
-    CommandList accepted_copy_mutation(mutation_queue);
-    accepted_copy_mutation.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    TransitionTestTexture(accepted_copy_mutation, mutation_copy_source->GetView(),
-                          ETextureLayout::TEXTURE_LAYOUT_COMMON, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
-    TransitionTestTexture(accepted_copy_mutation, compiled_source->GetView(),
-                          ETextureLayout::TEXTURE_LAYOUT_COMMON, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
-    CopyTestTransfer(accepted_copy_mutation,
-        mutation_copy_source->GetView(),
-        compiled_source->GetView(),
-        "PresentSourceAcceptedCopyMutation"
-    );
-    CmdSubmit accepted_copy_mutation_submit =
-        accepted_copy_mutation.Submit();
-    accepted_copy_mutation_submit.Signal(
-        accepted_copy_mutation_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        mutation_queue,
-        std::move(accepted_copy_mutation_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(accepted_copy_mutation_done.Get())
-             ->WaitSubmitted(1) ||
-        ResourceCast(compiled_source.Get())
-            ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "an accepted TextureToTexture copy left stale Present readiness"
-        );
-    }
-    expect_rejected(
-        compiled_source->GetView(),
-        "source overwritten by an accepted texture copy",
-        scripted_swapchain
-    );
-
-    FenceRef rejected_backend_dependency = device.CreateFence();
-    FenceRef rejected_backend_done = device.CreateFence();
-    rejected_backend_dependency->Reject(1);
-    CmdSubmit rejected_backend_submit =
-        make_compiled_publication(
-            rejected_compiled_source,
-            rejected_backend_done,
-            1
-        );
-    rejected_backend_submit.Wait(
-        rejected_backend_dependency.Get(),
-        1
-    );
-    PresentReceiptRef rejected_backend_receipt =
-        MakeShared<PresentReceipt>();
-    RHIPresentRequest rejected_backend_present(
-        scripted_swapchain,
-        rejected_compiled_source->GetView(),
-        rejected_backend_receipt
-    );
-    const uint32 scripted_before_rejected_backend =
-        scripted_capture.count.load(std::memory_order_acquire);
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(rejected_backend_submit),
-        ERHIExecSubmitFlags::FlushGPU,
-        &rejected_backend_present
-    );
-    const PresentReceiptResult rejected_backend_result =
-        rejected_backend_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!ResourceCast(rejected_backend_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(rejected_backend_done.Get())->IsFailed() ||
-        ResourceCast(rejected_compiled_source.Get())
-            ->IsPresentationSourceReady() ||
-        !rejected_backend_result.resolved ||
-        rejected_backend_result.submitted ||
-        rejected_backend_result.recreate_swapchain ||
-        rejected_backend_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != scripted_before_rejected_backend) {
-        throw std::runtime_error(
-            "rejected Compiled producer published readiness or "
-            "reached its same-batch Present"
-        );
-    }
-
-    FenceRef backend_nonterminal_done = device.CreateFence();
-    CommandList backend_nonterminal_producer(
-        EQueueType::Graphics
-    );
-    backend_nonterminal_producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    TransitionTestTexture(backend_nonterminal_producer, backend_nonterminal_source->GetView(),
-                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
-    backend_nonterminal_producer.ClearResource(
-        backend_nonterminal_source->GetView(),
-        float4(0.f, 0.f, 0.f, 1.f)
-    );
-    TransitionTestTexture(backend_nonterminal_producer, backend_nonterminal_source->GetView(),
-                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_COMMON, true);
-    TransitionTestTexture(backend_nonterminal_producer, backend_nonterminal_source->GetView(),
-                          ETextureLayout::TEXTURE_LAYOUT_COMMON, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
-    backend_nonterminal_producer.ClearResource(
-        backend_nonterminal_source->GetView(),
-        float4(0.f, 0.f, 0.25f, 1.f)
-    );
-    CmdSubmit backend_nonterminal_submit =
-        backend_nonterminal_producer.Submit();
-    backend_nonterminal_submit.Signal(
-        backend_nonterminal_done.Get(), 1
-    );
-    PresentReceiptRef backend_nonterminal_receipt =
-        MakeShared<PresentReceipt>();
-    RHIPresentRequest backend_nonterminal_present(
-        scripted_swapchain,
-        backend_nonterminal_source->GetView(),
-        backend_nonterminal_receipt
-    );
-    const uint32 scripted_before_backend_nonterminal =
-        scripted_capture.count.load(std::memory_order_acquire);
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(backend_nonterminal_submit),
-        ERHIExecSubmitFlags::FlushGPU,
-        &backend_nonterminal_present
-    );
-    const PresentReceiptResult backend_nonterminal_result =
-        backend_nonterminal_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!ResourceCast(backend_nonterminal_done.Get())
-             ->WaitSubmitted(1) ||
-        ResourceCast(backend_nonterminal_source.Get())
-            ->IsPresentationSourceReady() ||
-        !backend_nonterminal_result.resolved ||
-        backend_nonterminal_result.submitted ||
-        backend_nonterminal_result.recreate_swapchain ||
-        backend_nonterminal_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != scripted_before_backend_nonterminal) {
-        throw std::runtime_error(
-            "a Compiled publication followed by a terminal write "
-            "remained ready or reached Present"
-        );
-    }
-
-    const auto submit_source_state =
-        [&](const TextureRef& _texture,
-            EQueueType        _queue,
-            BarrierState      _source,
-            BarrierState _destination,
-            bool         _publish_external_state,
-            uint64       _signal_value) {
-            FenceRef accepted = device.CreateFence();
-            BarrierCreateInfo transition =
-                BarrierCreateInfo::Transition(
-                    _texture->GetView(),
-                    _source,
-                    _destination,
-                    ETextureAspectFlags::COLOR
-                );
-            transition.publish_external_state =
-                _publish_external_state;
-
-            CommandList producer(_queue);
-
-            producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-            producer.Barriers({transition});
-            CmdSubmit submit = producer.Submit();
-            submit.SetResourceStateOwnership(
-                ERHIResourceStateOwnership::Compiled
-            );
-            submit.Signal(accepted.Get(), _signal_value);
-            RHIExecutor::Get().Submit(
-                _queue,
-                std::move(submit),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            auto* vk_accepted = ResourceCast(accepted.Get());
-            if (vk_accepted->IsFailed() ||
-                vk_accepted->IsRejected(_signal_value)) {
-                throw std::runtime_error(
-                    "Present source state publication was not natively accepted"
-                );
-            }
-        };
-
-    const BarrierState undefined_state = BarrierState::Texture(
-        ERHIPipelineStageFlags::PS_NONE,
-        ERHIAccessFlags::UNDEFINED,
-        ETextureLayout::TEXTURE_LAYOUT_UNDEFINED
-    );
-    const BarrierState presentation_state = BarrierState::Texture(
-        ERHIPipelineStageFlags::PS_TRANSFER,
-        ERHIAccessFlags::TRANSFER_READ,
-        ETextureLayout::TEXTURE_LAYOUT_COMMON
-    );
-    const BarrierState transfer_write_state = BarrierState::Texture(
-        ERHIPipelineStageFlags::PS_TRANSFER,
-        ERHIAccessFlags::TRANSFER_WRITE,
-        ETextureLayout::TEXTURE_LAYOUT_COMMON
-    );
-    const RHIQueueTopology topology = device.GetQueueTopology();
-
-    // The materializer commits each accepted segment independently. Verify
-    // that a publication accepted by the first segment is closed by a later
-    // accepted mutation before the submit-level Present is resolved.
-    constexpr uint64 segmented_present_scope =
-        0x5048313850524553ull;
-    FenceRef segmented_present_done = device.CreateFence();
-    CommandList segmented_present_producer(
-        EQueueType::Graphics
-    );
-    segmented_present_producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    BarrierCreateInfo segmented_publication =
-        BarrierCreateInfo::Transition(
-            backend_nonterminal_source->GetView(),
-            undefined_state,
-            presentation_state,
-            ETextureAspectFlags::COLOR
-        );
-    segmented_publication.publish_external_state = true;
-    segmented_present_producer.Barriers(
-        {segmented_publication}
-    );
-    segmented_present_producer.Barriers(
-        {BarrierCreateInfo::Transition(
-            backend_nonterminal_source->GetView(),
-            presentation_state,
-            transfer_write_state,
-            ETextureAspectFlags::COLOR
-        )}
-    );
-    CmdSubmit segmented_present_submit =
-        segmented_present_producer.Submit();
-    segmented_present_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Compiled
-    );
-    segmented_present_submit.async_queue_scope =
-        segmented_present_scope;
-    segmented_present_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+        auto* native = ResourceCast(fence.Get());
+        require(native->WaitSubmitted(1) == accepted && native->IsRejected(1) != accepted, "resource-state contract produced an unexpected submission decision");
     };
-    segmented_present_submit.Signal(
-        segmented_present_done.Get(), 1
-    );
-    PresentReceiptRef segmented_present_receipt =
-        MakeShared<PresentReceipt>();
-    RHIPresentRequest segmented_present(
-        scripted_swapchain,
-        backend_nonterminal_source->GetView(),
-        segmented_present_receipt
-    );
-    const uint32 scripted_before_segmented_present =
-        scripted_capture.count.load(std::memory_order_acquire);
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(segmented_present_submit),
-        ERHIExecSubmitFlags::FlushGPU,
-        &segmented_present
-    );
-    const PresentReceiptResult segmented_present_result =
-        segmented_present_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!ResourceCast(segmented_present_done.Get())
-             ->WaitSubmitted(1) ||
-        ResourceCast(backend_nonterminal_source.Get())
-            ->IsPresentationSourceReady() ||
-        !segmented_present_result.resolved ||
-        segmented_present_result.submitted ||
-        segmented_present_result.recreate_swapchain ||
-        segmented_present_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != scripted_before_segmented_present) {
-        throw std::runtime_error(
-            "an accepted later segment did not close an earlier "
-            "presentation-source publication"
-        );
-    }
-
-    // A later materialized segment can reject before native recording without
-    // rolling back an earlier segment that Vulkan already accepted. The
-    // accepted publication remains the externally visible final state.
-    constexpr uint64 rejected_suffix_scope =
-        0x5048313852535546ull;
-    FenceRef rejected_suffix_done = device.CreateFence();
-    CommandList rejected_suffix_producer(
-        EQueueType::Graphics
-    );
-    rejected_suffix_producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    BarrierCreateInfo rejected_suffix_publication =
-        BarrierCreateInfo::Transition(
-            rejected_suffix_source->GetView(),
-            undefined_state,
-            presentation_state,
-            ETextureAspectFlags::COLOR
-        );
-    rejected_suffix_publication.publish_external_state = true;
-    rejected_suffix_producer.Barriers(
-        {rejected_suffix_publication}
-    );
-    rejected_suffix_producer.AddCustomCommand(
-        MakeUnique<OpaquePresentationStateProbeCommand>(),
-        "RejectedPresentationStateSuffix"
-    );
-    CmdSubmit rejected_suffix_submit =
-        rejected_suffix_producer.Submit();
-    rejected_suffix_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Compiled
-    );
-    rejected_suffix_submit.async_queue_scope =
-        rejected_suffix_scope;
-    rejected_suffix_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+    ScriptedPresentCapture        capture({.outcome = {EVulkanOperationStatus::Recreate, VK_ERROR_OUT_OF_DATE_KHR}});
+    ScopedScriptedPresentOverride override(capture, true);
+    const auto                    present = [&](TextureView view, bool accessible) {
+        const auto before  = capture.count.load();
+        auto       receipt = MakeShared<PresentReceipt>();
+        RHIExecutor::Get().Present(RHIPresentRequest(swapchain, view, receipt), true);
+        const auto result = receipt->WaitForSubmission(5s);
+        require(result.resolved && receipt->ResolutionAttemptCount() == 1, "resource validation did not resolve the Present receipt exactly once");
+        require(capture.count.load() == before + (accessible ? 1u : 0u), "Present did not use the ordinary external transfer-read contract");
     };
-    rejected_suffix_submit.Signal(
-        rejected_suffix_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(rejected_suffix_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(rejected_suffix_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(rejected_suffix_done.Get())->IsFailed() ||
-        !ResourceCast(rejected_suffix_source.Get())
-             ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "a rejected materialized suffix rolled back or hid its "
-            "accepted presentation-source prefix"
-        );
-    }
 
-    const uint32 scripted_before_rejected_suffix_present =
-        scripted_capture.count.load(std::memory_order_acquire);
-    PresentReceiptRef rejected_suffix_receipt =
-        MakeShared<PresentReceipt>();
-    RHIExecutor::Get().Present(
-        RHIPresentRequest(
-            scripted_swapchain,
-            rejected_suffix_source->GetView(),
-            rejected_suffix_receipt
-        ),
-        true
-    );
-    const PresentReceiptResult rejected_suffix_result =
-        rejected_suffix_receipt->WaitForSubmission(5s);
+    // Fresh ordinary textures cannot be consumed externally. No special usage
+    // bit is required once an accepted transition exports the selected range.
+    present(source->GetView(), false);
+    present(TextureView{}, false);
+    auto no_transfer = device.CreateTexture("state_missing_transfer_src", Extent3D(4, 4, 1), PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST);
+    present(no_transfer->GetView(), false);
+    auto incompatible_format = device.CreateTexture("state_incompatible_format", Extent3D(4, 4, 1), PF_R16G16B16A16_SFLOAT, usage);
+    present(incompatible_format->GetView(), false);
+    auto invalid_view     = source->GetView();
+    invalid_view.offset.x = 1;
+    present(invalid_view, false);
+    invalid_view             = source->GetView();
+    invalid_view.array_layer = 1;
+    present(invalid_view, false);
+    invalid_view          = source->GetView();
+    invalid_view.extent.x = 2;
+    present(invalid_view, false);
+    CommandList initialize;
+    initialize.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    initialize.Barriers({barrier(source->GetView(), {}, transfer_write), barrier(destination->GetView(), {}, transfer_write)});
+    initialize.ClearResource(source->GetView(), 0u);
+    initialize.Barriers({barrier(source->GetView(), transfer_write, transfer_read, true)});
+    submit(initialize, true);
+    present(source->GetView(), true);
+
+    // An ordinary copy and Present consume the same state. A compatible read
+    // does not invalidate an export simply because another command used it.
+    CommandList copy;
+    copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    copy.CopyFrom(source->GetView(), destination->GetView());
+    submit(copy, true);
+    present(source->GetView(), true);
+    present(source->GetView(), true);
+
+    // Prepare state changes, then fail later in the same native packet. None
+    // of that packet's candidate states may become observable.
+    CommandList rejected;
+    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    rejected.Barriers({barrier(source->GetView(), transfer_read, sampled)});
+    // Exercise the rejected write contract without recording an invalid native
+    // clear: Translate cannot inspect Submission's accepted resource history.
+    const RHIResourceAccess invalid_write{source->GetView(), transfer_write, ETextureAspectFlags::COLOR};
+    rejected.BeginResourceAccesses(std::span<const RHIResourceAccess>(&invalid_write, 1), "MissingTransferWriteTransition");
+    rejected.EndResourceAccesses();
+    submit(rejected, false);
+    present(source->GetView(), true);
+
+    CommandList mutation;
+    mutation.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    mutation.Barriers({barrier(source->GetView(), transfer_read, sampled)});
+    submit(mutation, true);
+    present(source->GetView(), false);
+    CommandList invalid_copy;
+    invalid_copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    invalid_copy.CopyFrom(source->GetView(), destination->GetView());
+    submit(invalid_copy, false);
+
+    // Bindless access declares its candidate resources, independently of table
+    // membership. Missing declarations are a command contract error.
+    auto        table = device.CreateBindlessArray(8);
+    CommandList undeclared;
+    undeclared.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    undeclared.AddCustomCommand(MakeUnique<BindlessAccessProbeCommand>(table), "UndeclaredBindless");
+    submit(undeclared, false);
+    CommandList empty_candidates;
+    empty_candidates.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    empty_candidates.BeginResourceAccesses({}, "MissingBindlessCandidates");
+    empty_candidates.AddCustomCommand(MakeUnique<BindlessAccessProbeCommand>(table), "EmptyBindlessCandidates");
+    empty_candidates.EndResourceAccesses();
+    submit(empty_candidates, false);
+    RHIResourceAccess candidate{source->GetView(), sampled, ETextureAspectFlags::COLOR};
+    CommandList       declared;
+    declared.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    declared.BeginResourceAccesses(std::span<const RHIResourceAccess>(&candidate, 1), "DeclaredBindlessCandidates");
+    declared.AddCustomCommand(MakeUnique<BindlessAccessProbeCommand>(table), "DeclaredBindless");
+    declared.EndResourceAccesses();
+    declared.Barriers({barrier(source->GetView(), sampled, transfer_read, true)});
+    submit(declared, true);
+    present(source->GetView(), true);
+
+    // A descriptor update does not itself access the target texture.
+    table->AllocateTexture(source->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
+    CommandList update;
+    update.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    update.UpdateBindlessArray(table);
+    submit(update, true);
+    present(source->GetView(), true);
+
+    // Subresource state is not a whole-texture boolean.
+    auto mip_texture     = device.CreateTexture("state_mips", TextureInfo{ETextureDimension::TEX_2D, usage, PF_R8G8B8A8_UNORM, EClearAttachment{}, Extent3D(4, 4, 1), 2, 1, 1});
+    auto first_mip       = mip_texture->GetView();
+    auto second_mip      = first_mip;
+    second_mip.mip_level = 1;
+    second_mip.extent    = {2, 2, 1};
+    CommandList mip_initialize;
+    mip_initialize.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    mip_initialize.Barriers({barrier(first_mip, {}, transfer_read, true)});
+    submit(mip_initialize, true);
+    present(first_mip, true);
+    CommandList invalid_mip;
+    invalid_mip.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const auto invalid_mip_readback = invalid_mip.Readback(second_mip);
+    submit(invalid_mip, false);
+
+    // Earlier accepted work survives a rejected successor.
+    CommandList prefix;
+    prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    prefix.Barriers({barrier(source->GetView(), transfer_read, transfer_write)});
+    prefix.ClearResource(source->GetView(), float4{1.0f, 0.0f, 0.0f, 1.0f});
+    prefix.Barriers({barrier(source->GetView(), transfer_write, transfer_read, true)});
+    submit(prefix, true);
+    CommandList suffix;
+    suffix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    suffix.Barriers({barrier(source->GetView(), sampled, transfer_write)}); // Stale source layout.
+    submit(suffix, false);
+    present(source->GetView(), true);
+    CommandList verify;
+    verify.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const auto pixels = verify.Readback(source->GetView());
+    submit(verify, true);
+    const auto result = pixels.Get();
+    require(result.status == ReadbackStatus::Ready && result.ByteSize() == 64 && result.Bytes()[0] == Moer::byte{255} && result.Bytes()[1] == Moer::byte{0} && result.Bytes()[2] == Moer::byte{0} && result.Bytes()[3] == Moer::byte{255}, "ordinary resource validation changed the GPU readback result");
     RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!rejected_suffix_result.resolved ||
-        rejected_suffix_result.submitted ||
-        !rejected_suffix_result.recreate_swapchain ||
-        rejected_suffix_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(std::memory_order_acquire) !=
-            scripted_before_rejected_suffix_present + 1) {
-        throw std::runtime_error(
-            "an accepted presentation-source prefix was not visible after "
-            "its recoverably rejected suffix"
-        );
-    }
-
-    if (topology.copy.available) {
-        // White-box seed isolates the Copy SubmitRecorded commit point from
-        // queue-family transfer ownership. The accepted explicit barrier is
-        // real queue work; if Copy omits its accepted delta commit, the seed
-        // remains observable here. Cross-queue ownership is covered by the
-        // dedicated explicit multi-queue fixtures.
-        auto* vk_copy_commit_source =
-            ResourceCast(copy_commit_source.Get());
-        vk_copy_commit_source->PublishPresentationSourceReady(true);
-        submit_source_state(
-            copy_commit_source,
-            EQueueType::Copy,
-            undefined_state,
-            transfer_write_state,
-            false,
-            1
-        );
-        if (vk_copy_commit_source->IsPresentationSourceReady()) {
-            throw std::runtime_error(
-                "an accepted Copy queue packet did not commit its "
-                "presentation-source invalidation"
-            );
-        }
-        expect_rejected(
-            copy_commit_source->GetView(),
-            "source invalidated by an accepted Copy queue packet",
-            scripted_swapchain
-        );
-        copy_commit_verified = true;
-    }
-
-    submit_source_state(
-        valid_source,
-        EQueueType::Graphics,
-        undefined_state,
-        presentation_state,
-        true,
-        1
-    );
-    auto* vk_valid_source = ResourceCast(valid_source.Get());
-    if (!vk_valid_source->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "accepted producer export did not publish Present readiness"
-        );
-    }
-
-    submit_source_state(
-        valid_source,
-        EQueueType::Graphics,
-        presentation_state,
-        transfer_write_state,
-        false,
-        2
-    );
-    if (vk_valid_source->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "a later accepted non-export state left stale Present readiness"
-        );
-    }
-    expect_rejected(
-        valid_source->GetView(),
-        "source moved away from its published presentation state",
-        scripted_swapchain
-    );
-
-    submit_source_state(
-        valid_source,
-        EQueueType::Graphics,
-        transfer_write_state,
-        presentation_state,
-        true,
-        3
-    );
-    if (!vk_valid_source->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "accepted producer re-export did not restore Present readiness"
-        );
-    }
-
-    if (topology.compute.available) {
-        submit_source_state(
-            wrong_queue_source,
-            EQueueType::Compute,
-            undefined_state,
-            presentation_state,
-            true,
-            1
-        );
-        if (ResourceCast(wrong_queue_source.Get())
-                ->IsPresentationSourceReady()) {
-            throw std::runtime_error(
-                "a non-Graphics export published Present readiness"
-            );
-        }
-        expect_rejected(
-            wrong_queue_source->GetView(),
-            "source exported by a non-Graphics queue",
-            scripted_swapchain
-        );
-    }
-
-    FenceRef rejected_dependency = device.CreateFence();
-    FenceRef rejected_export_done = device.CreateFence();
-    rejected_dependency->Reject(1);
-    BarrierCreateInfo rejected_export =
-        BarrierCreateInfo::Transition(
-            rejected_export_source->GetView(),
-            undefined_state,
-            presentation_state,
-            ETextureAspectFlags::COLOR
-        );
-    rejected_export.publish_external_state = true;
-    CommandList rejected_producer(EQueueType::Graphics);
-    rejected_producer.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-    rejected_producer.Barriers({rejected_export});
-    CmdSubmit rejected_submit = rejected_producer.Submit();
-    rejected_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Compiled
-    );
-    rejected_submit.Wait(rejected_dependency.Get(), 1);
-    rejected_submit.Signal(rejected_export_done.Get(), 1);
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(rejected_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(rejected_export_done.Get())->IsRejected(1) ||
-        ResourceCast(rejected_export_done.Get())->IsFailed() ||
-        ResourceCast(rejected_export_source.Get())
-            ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "a rejected producer export published Present readiness"
-        );
-    }
-    expect_rejected(
-        rejected_export_source->GetView(),
-        "source whose producer export was rejected",
-        scripted_swapchain
-    );
-
-    PresentReceiptRef valid_receipt = MakeShared<PresentReceipt>();
-    RHIExecutor::Get().Present(
-        RHIPresentRequest(
-            scripted_swapchain,
-            valid_source->GetView(),
-            valid_receipt
-        ),
-        true
-    );
-    const PresentReceiptResult valid_result =
-        valid_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!valid_result.resolved || valid_result.submitted ||
-        !valid_result.recreate_swapchain ||
-        valid_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != 4 ||
-        scripted_capture.timeline.load(
-            std::memory_order_acquire
-        ) == 0 ||
-        scripted_capture.wrong_owner.load(
-            std::memory_order_acquire
-        )) {
-        throw std::runtime_error(
-            "a valid Present source did not reach the scripted override"
-        );
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] name=PresentSourceContractRejection "
-        "rejected={} null=true usage=true transfer_src=true samples=true "
-        "format=true compressed=true mip=true layer=true offset=true extent=true "
-        "fresh=true accepted_export=true stale_clear=true "
-        "compiled_same_batch=true backend_rejected=true "
-        "marker_then_clear=true accepted_mutation_clear=true "
-        "rejected_mutation_preserves=true accepted_copy_mutation=true "
-        "marker_then_segmented_state_change=true "
-        "accepted_prefix_rejected_suffix=true copy_commit={} "
-        "wrong_queue_clear=true rejected_export_clear=true "
-        "bindless_source_order=true bindless_refcount=true "
-        "bindless_rejected_update=true bindless_segments=true "
-        "bindless_cross_queue={} bindless_parallel_record=true "
-        "valid_override=4 owner=Submission",
-        rejected_count,
-        copy_commit_verified ? "verified" : "skipped",
-        topology.compute.available ? "verified" : "skipped"
-    );
+    LOG_INFO("[TESTCASE][PASS] name=ResourceStateValidation ordinary_copy=true compatible_reads=true "
+             "rejected_state_preserved=true bindless_candidates=true subresources=true accepted_prefix=true");
 }
 
 void RunPresentPipelineBoundary() {
@@ -11367,10 +9660,10 @@ void RunPresentPipelineBoundary() {
 
     auto&                  device   = RenderDevice::Get();
     const RHIQueueTopology topology = device.GetQueueTopology();
-    const EQueueType prefix_queue =
+    const EQueueType       prefix_queue =
         topology.copy.available ?
-            EQueueType::Copy :
-            EQueueType::Graphics;
+                  EQueueType::Copy :
+                  EQueueType::Graphics;
     const uint32 prefix_native =
         prefix_queue == EQueueType::Copy ?
             topology.copy.native_queue_id :
@@ -11387,9 +9680,9 @@ void RunPresentPipelineBoundary() {
     const uint32 main_thread_id =
         Platform::GetCurrentThreadID();
 
-    SourceSubmissionCapture source_capture(async_queue_scope);
-    ScopedSourceSubmissionObserver source_observer(source_capture);
-    SubmissionBoundaryCapture boundary_capture{};
+    SourceSubmissionCapture          source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver   source_observer(source_capture);
+    SubmissionBoundaryCapture        boundary_capture{};
     ScopedSubmissionBoundaryObserver boundary_observer(
         boundary_capture
     );
@@ -11413,8 +9706,7 @@ void RunPresentPipelineBoundary() {
         "phase15f_present_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::PRESENTATION_SOURCE |
-            ETextureUsageFlags::TRANSFER_SRC |
+        ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );
     SwapchainRef scripted_swapchain{
@@ -11440,13 +9732,22 @@ void RunPresentPipelineBoundary() {
         0x15F00004u,
     };
     std::array<uint32, expected.size()> readback{};
-    FenceRef dependency = device.CreateFence();
-    FenceRef prefix_done = device.CreateFence();
-    FenceRef later_done  = device.CreateFence();
-    std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
-    std::array<std::atomic<uint32>, 2> success_callbacks{};
-    std::binary_semaphore later_translated{0};
-    bool dependency_release_attempted = false;
+    FenceRef                            dependency  = device.CreateFence();
+    FenceRef                            prefix_done = device.CreateFence();
+    FenceRef                            later_done  = device.CreateFence();
+    std::array<std::atomic<uint32>, 2>  ordinary_callbacks{};
+    std::array<std::atomic<uint32>, 2>  success_callbacks{};
+    std::binary_semaphore               later_translated{0};
+    bool                                dependency_release_attempted = false;
+    const bool                          ownership_transfer           = topology.Resolve(prefix_queue).family_id != topology.graphics.family_id;
+    const auto                          transfer_barrier             = [&](EBarrierQueueTransferPhase phase) {
+        const auto state      = BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ | ERHIAccessFlags::TRANSFER_WRITE);
+        auto       result     = BarrierCreateInfo::Transition(transfer_buffer->GetView(), state, state);
+        result.queue_transfer = phase == EBarrierQueueTransferPhase::Release ?
+                                                                         BarrierQueueTransfer::Release(prefix_queue, EQueueType::Graphics) :
+                                                                         BarrierQueueTransfer::Acquire(prefix_queue, EQueueType::Graphics);
+        return result;
+    };
 
     const auto release_dependency = [&] {
         if (dependency_release_attempted) {
@@ -11459,11 +9760,10 @@ void RunPresentPipelineBoundary() {
     try {
         CommandList prefix(prefix_queue);
         prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-        CopyTestTransfer(prefix,
-            OwnedBytes(expected),
-            transfer_buffer->GetView(),
-            "PresentBoundaryBlockedPrefix"
-        );
+        CopyTestTransfer(prefix, OwnedBytes(expected), transfer_buffer->GetView(), "PresentBoundaryBlockedPrefix");
+        if (ownership_transfer) {
+            prefix.Barriers({transfer_barrier(EBarrierQueueTransferPhase::Release)});
+        }
         prefix.AddCallback([&] {
             ordinary_callbacks[0].fetch_add(
                 1, std::memory_order_relaxed
@@ -11516,11 +9816,10 @@ void RunPresentPipelineBoundary() {
         CommandList later(EQueueType::Graphics);
 
         later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
-        CopyTestTransfer(later,
-            transfer_buffer->GetView(),
-            WritableBytes(readback),
-            "PresentBoundaryLaterReadback"
-        );
+        if (ownership_transfer) {
+            later.Barriers({transfer_barrier(EBarrierQueueTransferPhase::Acquire)});
+        }
+        CopyTestTransfer(later, transfer_buffer->GetView(), WritableBytes(readback), "PresentBoundaryLaterReadback");
         later.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &later_translated,
@@ -12112,7 +10411,7 @@ void RunPresentRetryRecovery() {
         "present_retry_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::PRESENTATION_SOURCE | ETextureUsageFlags::TRANSFER_SRC
+        ETextureUsageFlags::TRANSFER_SRC
     );
     BufferRef buffer = device.CreateBuffer<uint32>(
         "present_retry_recovery", 4, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
@@ -12149,6 +10448,7 @@ void RunPresentRetryRecovery() {
             readback.fill(0);
             CommandList recovered(EQueueType::Graphics);
             recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+            PrepareTestBufferTransfer(recovered, buffer->GetView());
             recovered.ClearResource(buffer->GetView(), expected);
             CopyTestTransfer(recovered, buffer->GetView(), WritableBytes(readback), "PresentRetryRecoveryReadback");
             recovered.AddSuccessCallback([&] {
@@ -12255,8 +10555,7 @@ void RunQueuedPresentShutdownBoundary() {
         "phase15f_shutdown_present_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::PRESENTATION_SOURCE |
-            ETextureUsageFlags::TRANSFER_SRC |
+        ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );
     SwapchainRef scripted_swapchain{
@@ -16622,8 +14921,8 @@ int main(int argc, const char** argv) {
             if (present_boundary) {
                 LOG_INFO("[TESTCASE][BEGIN] name=PresentRetryRecovery");
                 RunPresentRetryRecovery();
-                LOG_INFO("[TESTCASE][BEGIN] name=PresentSourceContractRejection");
-                RunPresentSourceContractRejection();
+                LOG_INFO("[TESTCASE][BEGIN] name=ResourceStateValidation");
+                RunResourceStateValidation();
                 LOG_INFO("[TESTCASE][BEGIN] name=SerialControlPipelineBoundary");
                 RunSerialControlPipelineBoundary();
                 LOG_INFO("[TESTCASE][BEGIN] name=PresentPipelineBoundary");

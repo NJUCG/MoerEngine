@@ -278,9 +278,9 @@ VulkanCommandQueue::SubmitRecorded(VulkanPendingSubmission& _pending, const std:
         );
     }
 
-    VulkanPresentationStateUpdate presentation_transaction;
+    std::optional<VulkanResourceStateValidator> resource_validation;
     try {
-        presentation_transaction = EvaluatePresentationEvents(_pending.presentation_events);
+        resource_validation.emplace(vk_device, queue.GetType(), _pending.resource_state_program, &_pending.submit, timeline, _pending.timeline);
     } catch (const std::logic_error& error) {
         return reject({EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT}, error.what());
     } catch (const std::bad_alloc& error) {
@@ -289,7 +289,7 @@ VulkanCommandQueue::SubmitRecorded(VulkanPendingSubmission& _pending, const std:
         return reject({EVulkanOperationStatus::Faulted, VK_ERROR_UNKNOWN}, error.what());
     } catch (...) {
         return reject(
-            {EVulkanOperationStatus::Faulted, VK_ERROR_UNKNOWN}, "presentation-state transaction evaluation failed"
+            {EVulkanOperationStatus::Faulted, VK_ERROR_UNKNOWN}, "resource-state contract validation failed"
         );
     }
 
@@ -314,7 +314,7 @@ VulkanCommandQueue::SubmitRecorded(VulkanPendingSubmission& _pending, const std:
     // as GPU-submitted. Save the decision before publishing observable state.
     _pending.submission_outcome = outcome;
     if (outcome.Succeeded()) {
-        CommitAcceptedPresentationState(presentation_transaction);
+        resource_validation->Commit();
         MarkSubmissionAccepted(timeline, _pending.timeline, _pending.submit.signal_events);
     }
     return outcome;

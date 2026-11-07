@@ -56,7 +56,7 @@ namespace Moer::Render::Raster {
       output,                                                                                                   \
       Tex2DTag,                                                                                                 \
       TexConfig::Default(PF_R8G8B8A8_SRGB)                                                                      \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::PRESENTATION_SOURCE |                                    \
+          .Usage(E_SAMPLED_COLOR |                                                                             \
                  ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST)                           \
           .OutputSize())                                                                                        \
     X(DepthBufferWithHandle,                                                                                    \
@@ -225,7 +225,13 @@ struct RasterTextures {
             initialized.emplace_back(hiz_current.tex);
             initialized.emplace_back(hiz_previous.tex);
         }
+        std::erase_if(initialized, [&](const auto& texture) {
+            return texture.Get() == output.tex.Get();
+        });
         InitializeGraphicsTextures(initialized);
+        if (create_output_resources) {
+            InitializeGraphicsTexture(output.tex, RenderGraph::TextureAccessType::TransferSource);
+        }
     }
 
     void LoadAndUploadAssets(RenderDevice& device, CommandList& cmd_list) {

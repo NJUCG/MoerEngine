@@ -104,7 +104,6 @@ bool SupportsUiPresentation(const TextureRef& texture) {
            HasTextureUsage(
                texture,
                ETextureUsageFlags::COLOR_ATTACHMENT |
-                   ETextureUsageFlags::PRESENTATION_SOURCE |
                    ETextureUsageFlags::TRANSFER_SRC |
                    ETextureUsageFlags::TRANSFER_DST
            );
@@ -371,7 +370,7 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
         }
         graph.SetInitialState(
             handle,
-            RenderGraph::TextureBoundary::PresentationSource,
+            RenderGraph::TextureAccessType::TransferSource,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -462,7 +461,10 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
         size_t sample_index = 0;
         for (const auto& texture : draw_packet.backend->CollectSampledTextures(draw_packet)) {
             const auto sample = ImportUiGraphTexture(graph, std::format("UI.sample.{}", sample_index++), texture);
-            const auto boundary = GraphicsTextureBoundary(*texture);
+            const bool output   = std::any_of(targets.begin(), targets.end(), [&](const auto& target) {
+                return target.Get() == texture.Get();
+            });
+            const auto boundary = output ? RenderGraph::TextureAccessType::TransferSource : RenderGraph::TextureAccessType::Sampled;
             graph.SetInitialState(sample, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
             graph.Export(sample, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
             sampled_handles.push_back(sample);
@@ -513,7 +515,7 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
     for (const auto target : target_handles) {
         graph.Export(
             target,
-            RenderGraph::TextureBoundary::PresentationSource,
+            RenderGraph::TextureAccessType::TransferSource,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -556,21 +558,23 @@ void UiFrameGraphPass::RecordCompiledDraw(
         throw std::runtime_error("invalid UI presentation targets");
     }
     Array<RenderGraph::TextureHandle> outputs, samples;
-    const auto                        import = [&](const TextureRef& texture, const char* name) {
+    const auto                        import = [&](const TextureRef& texture, const char* name, RenderGraph::TextureAccessType state) {
         const auto handle = ImportUiGraphTexture(
             graph, std::format("{}@{:x}", name, reinterpret_cast<uintptr_t>(texture.Get())), texture
         );
-        const auto state = GraphicsTextureBoundary(*texture);
         graph.SetInitialState(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
         graph.Export(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
         return handle;
     };
     for (const auto& target : targets) {
-        outputs.push_back(import(target, "Output"));
+        outputs.push_back(import(target, "Output", RenderGraph::TextureAccessType::TransferSource));
     }
     if (draw_frame.backend) {
         for (const auto& texture : draw_frame.backend->CollectSampledTextures(draw_frame)) {
-            samples.push_back(import(texture, "Sample"));
+            const bool output = std::any_of(targets.begin(), targets.end(), [&](const auto& target) {
+                return target.Get() == texture.Get();
+            });
+            samples.push_back(import(texture, "Sample", output ? RenderGraph::TextureAccessType::TransferSource : RenderGraph::TextureAccessType::Sampled));
         }
     }
     graph.AddRecordPass(

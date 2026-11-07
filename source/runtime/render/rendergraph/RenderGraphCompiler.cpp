@@ -150,16 +150,14 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
     if (RenderGraph::IsUndefined(state)) {
         return mode == RenderGraph::AccessMode::None;
     }
-    return RenderGraph::IsPresentationSource(state) &&
-           (mode == RenderGraph::AccessMode::Read || mode == RenderGraph::AccessMode::Unknown);
+    return false;
 }
 
 [[nodiscard]] bool TextureBoundarySupportsAspects(const RenderGraph::ResourceState& state, TextureAspect aspects) {
     if (const auto* type = std::get_if<RenderGraph::TextureAccessType>(&state)) {
         return TextureAccessSupportsAspects(*type, aspects);
     }
-    return RenderGraph::IsUndefined(state) ||
-           (RenderGraph::IsPresentationSource(state) && aspects == TextureAspect::Color);
+    return RenderGraph::IsUndefined(state);
 }
 
 [[nodiscard]] bool StatesCompatible(
@@ -342,14 +340,6 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
             for (const auto& declaration : declarations) {
                 if (RenderGraph::IsUnspecified(declaration.state)) {
                     return Fail("boundary state cannot be unspecified on resource '" + resource.name + "'");
-                }
-                const bool presentation_source = RenderGraph::IsPresentationSource(declaration.state);
-                if (presentation_source &&
-                    declaration.queue != RenderGraph::QueueRole::Graphics) {
-                    return Fail(
-                        "PresentationSource boundary requires the Graphics queue on resource '" +
-                        resource.name + "'"
-                    );
                 }
                 if (declaration.queue == RenderGraph::QueueRole::None &&
                     !RenderGraph::IsUndefined(declaration.state)) {

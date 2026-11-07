@@ -6,12 +6,15 @@
 #include "rhi/RHIResource.h"
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <span>
 
 namespace Moer::Render {
 
 class VulkanDevice;
+class VulkanResourceStateValidator;
+struct VulkanResourceStateSnapshot;
 
 struct VulkanBufferDescriptorKey {
     uint64   byte_offset{0};
@@ -78,6 +81,8 @@ public:
 
 private:
     friend class VulkanDescriptorHeap;
+    friend class VulkanResourceStateValidator;
+    std::shared_ptr<const VulkanResourceStateSnapshot> accepted_resource_state;
 
     VulkanDevice* m_device;
 
@@ -85,6 +90,7 @@ private:
     VulkanBufferDescriptorCacheSlots  m_descriptor_cache_slots[4];
 
     BufferAlloc m_alloc;
+    bool        concurrent_sharing{false};
     uint64      m_device_address = 0;
 };
 
@@ -143,15 +149,11 @@ public:
 
     void SetName(const std::string_view _name) override;
     bool b_present : 1             = false;
-    void PublishPresentationSourceReady(bool _ready) noexcept {
-        presentation_source_ready.store(_ready, std::memory_order_release);
-    }
-    [[nodiscard]] bool IsPresentationSourceReady() const noexcept {
-        return presentation_source_ready.load(std::memory_order_acquire);
-    }
 
 private:
     friend class VulkanDescriptorHeap;
+    friend class VulkanResourceStateValidator;
+    std::shared_ptr<const VulkanResourceStateSnapshot> accepted_resource_state;
 
     VulkanDevice* m_device;
 
@@ -174,7 +176,6 @@ private:
     UnorderedMap<uint64, VkImageView> m_views;
     UnorderedMap<uint64, VkImageView> m_attachment_views;
     mutable std::mutex                m_views_mutex;
-    std::atomic_bool                  presentation_source_ready{false};
 };
 
 using VulkanBufferRef  = CountableRef<VulkanBuffer>;

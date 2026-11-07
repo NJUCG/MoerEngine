@@ -3,6 +3,7 @@
 #include "VulkanCommandContext.h"
 #include "VulkanDescriptor.h"
 #include "VulkanFault.h"
+#include "VulkanResourceStateValidation.h"
 #include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIThreadOwnership.h"
@@ -11,25 +12,6 @@
 #include <utility>
 
 namespace Moer::Render {
-
-// 呈现源事件的类别：纹理就绪状态、bindless 访问，以及纹理成员关系变化。
-enum class EVulkanPresentSourceEvent : uint8 {
-    TextureState,
-    BindlessAccess,
-    BindlessTextureMembership,
-};
-
-// 呈现源状态事件：描述一条命令对呈现源就绪状态或 bindless 成员关系的影响。
-// Translate 按原始命令顺序收集；Submission 结合最近已被原生提交接受的成员关系求值，
-// 并在本次原生提交被接受后发布状态变化。
-struct VulkanPresentSourceEvent {
-    EVulkanPresentSourceEvent type{EVulkanPresentSourceEvent::TextureState};
-    TextureRef                texture{};
-    BindlessArrayRef          bindless_array{};
-    uint32                    bindless_slot{0};
-    int32                     membership_delta{0};
-    bool                      ready{false};
-};
 
 // 提交决定的返回值：供 Executor 判断本次操作的结果，以及后续工作能否依赖它。
 // completion 仅在原生提交接受工作后有效，表示一个可等待的 GPU 完成点。
@@ -78,7 +60,7 @@ struct VulkanPendingSubmission {
     Array<VkSemaphoreSubmitInfo>        native_signals;
     VulkanDescriptorBufferLease         descriptor_lease;
     Array<RHIResource*>                 deferred_releases;
-    Array<VulkanPresentSourceEvent>     presentation_events;
+    VulkanResourceStateValidator::Program resource_state_program;
     RHITransferableOwnershipGate::Lease execution_lease{};
     // Empty until recording or submission determines an outcome. Rejection
     // before vkQueueSubmit2 is also a decision, never a GPU completion.

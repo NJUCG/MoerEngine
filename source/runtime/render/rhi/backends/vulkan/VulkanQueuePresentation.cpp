@@ -70,9 +70,6 @@ ValidatePresentSourceContract(const TextureView& _view, const Swapchain* _swapch
     if (texture == nullptr) {
         return {false, "Vulkan Present requires a source texture"};
     }
-    if ((texture->GetUsage() & ETextureUsageFlags::PRESENTATION_SOURCE) != ETextureUsageFlags::PRESENTATION_SOURCE) {
-        return {false, "Vulkan present source must declare PRESENTATION_SOURCE usage"};
-    }
     if ((texture->GetUsage() & ETextureUsageFlags::TRANSFER_SRC) != ETextureUsageFlags::TRANSFER_SRC) {
         return {false, "Vulkan present source must declare TRANSFER_SRC usage"};
     }
@@ -199,526 +196,6 @@ static void ResolvePresentReceiptNoexcept(
 
 } // namespace
 
-[[nodiscard]] static bool IsPresentationSourceTexture(const Texture* _texture) noexcept {
-    return _texture != nullptr &&
-           (_texture->GetUsage() & ETextureUsageFlags::PRESENTATION_SOURCE) == ETextureUsageFlags::PRESENTATION_SOURCE;
-}
-
-[[nodiscard]] static bool IsAcceptedPresentationSourcePublication(
-    const ExplicitTextureBarrier& _barrier,
-    const VulkanTexture&          _texture
-) noexcept {
-    return _barrier.publish_external_state && _barrier.queue_transfer.phase == EBarrierQueueTransferPhase::None &&
-           _barrier.dst_state.stage == ERHIPipelineStageFlags::PS_TRANSFER &&
-           _barrier.dst_state.access == ERHIAccessFlags::TRANSFER_READ &&
-           _barrier.dst_state.texture_layout == ETextureLayout::TEXTURE_LAYOUT_COMMON &&
-           _barrier.texture_aspects == ETextureAspectFlags::COLOR && _barrier.mip_level == 0 &&
-           _barrier.mip_count == _texture.GetNumMips() && _barrier.array_layer == 0 &&
-           _barrier.array_count == _texture.GetNumArray();
-}
-
-template<typename TTextureVisitor, typename TBindlessVisitor>
-static void VisitPresentationTextureArgument(
-    const TArg&       _argument,
-    TTextureVisitor&  _texture_visitor,
-    TBindlessVisitor& _bindless_visitor
-) {
-    std::visit(
-        [&](const auto& _resource) {
-            using TResource = std::decay_t<decltype(_resource)>;
-            if constexpr (std::is_same_v<TResource, TextureView>) {
-                _texture_visitor(_resource.GetTexture());
-            } else if constexpr (std::is_same_v<TResource, TextureViewArray>) {
-                for (const TextureView& view : _resource) {
-                    _texture_visitor(view.GetTexture());
-                }
-            } else if constexpr (std::is_same_v<TResource, BindlessArrayRef>) {
-                if (_resource) {
-                    _bindless_visitor(_resource);
-                }
-            }
-        },
-        _argument
-    );
-}
-
-template<typename TTextureVisitor, typename TBindlessVisitor>
-static void VisitPresentationTextureArguments(
-    const ArrayArguments& _arguments,
-    TTextureVisitor&      _texture_visitor,
-    TBindlessVisitor&     _bindless_visitor
-) {
-    for (const TArg& argument : _arguments.args) {
-        VisitPresentationTextureArgument(argument, _texture_visitor, _bindless_visitor);
-    }
-}
-
-template<typename TTextureVisitor, typename TBindlessVisitor>
-static void VisitPresentationTextureArguments(
-    const ArrayArguments& _arguments,
-    const TCachedArgArray&,
-    TTextureVisitor&  _texture_visitor,
-    TBindlessVisitor& _bindless_visitor
-) {
-    VisitPresentationTextureArguments(_arguments, _texture_visitor, _bindless_visitor);
-}
-
-template<typename TTextureVisitor, typename TBindlessVisitor>
-static void VisitPresentationTextureArguments(
-    const TShaderArgArray& _arguments,
-    const TCachedArgArray& _cached_arguments,
-    TTextureVisitor&       _texture_visitor,
-    TBindlessVisitor&      _bindless_visitor
-) {
-    if (std::holds_alternative<ArrayArguments>(_arguments)) {
-        VisitPresentationTextureArguments(std::get<ArrayArguments>(_arguments), _texture_visitor, _bindless_visitor);
-        return;
-    }
-    if (std::holds_alternative<ArrayArgReference>(_arguments)) {
-        const uint32 index = std::get<ArrayArgReference>(_arguments).handle;
-        if (index < _cached_arguments.size()) {
-            VisitPresentationTextureArguments(_cached_arguments[index], _texture_visitor, _bindless_visitor);
-        }
-    }
-}
-
-// Freeze source command order before translation can
-// change execution topology. Direct texture uses become concrete events;
-// bindless uses remain symbolic until Submission can observe the last
-// natively accepted descriptor membership.
-Array<VulkanPresentSourceEvent> CollectPresentationEvents(const CmdSubmit& _submit, EQueueType _queue) {
-    Array<VulkanPresentSourceEvent> events{};
-
-    const auto record_texture = [&](Texture* _texture, bool _ready) {
-        if (!IsPresentationSourceTexture(_texture)) {
-            return;
-        }
-        events.emplace_back(
-            VulkanPresentSourceEvent{
-                .type    = EVulkanPresentSourceEvent::TextureState,
-                .texture = TextureRef(_texture),
-                .ready   = _ready,
-            }
-        );
-    };
-    const auto record_bindless = [&](const BindlessArrayRef& _array) {
-        if (!_array) {
-            return;
-        }
-        events.emplace_back(
-            VulkanPresentSourceEvent{
-                .type           = EVulkanPresentSourceEvent::BindlessAccess,
-                .bindless_array = _array,
-            }
-        );
-    };
-    const auto record_view = [&](const TextureView& _view) {
-        record_texture(_view.GetTexture(), false);
-    };
-    const auto record_shader_arguments = [&](const auto& _arguments, UnorderedSet<BindlessArray*>& _seen_bindless) {
-        auto record_unique_bindless = [&](const BindlessArrayRef& _array) {
-            if (_array && _seen_bindless.emplace(_array.Get()).second) {
-                record_bindless(_array);
-            }
-        };
-        auto record_direct_texture = [&](Texture* _texture) {
-            record_texture(_texture, false);
-        };
-        VisitPresentationTextureArguments(
-            _arguments, _submit.cached_args, record_direct_texture, record_unique_bindless
-        );
-    };
-    const auto record_render_pass = [&](const RenderPassInfo& _render_pass) {
-        if (_render_pass.depth_attachment.Valid()) {
-            record_texture(_render_pass.depth_attachment.target, false);
-        }
-        for (const ColorAttachment& attachment : _render_pass.color_attachments) {
-            record_texture(attachment.target, false);
-        }
-    };
-    const auto record_barrier = [&](const BarrierCmd& _command, uint64 _handle) {
-        auto* texture = reinterpret_cast<VulkanTexture*>(_handle);
-        if (!IsPresentationSourceTexture(texture)) {
-            return;
-        }
-
-        size_t                        reference_count      = 0;
-        const ExplicitTextureBarrier* explicit_publication = nullptr;
-        for (const TextureBarrier& barrier : _command.ReadTextures()) {
-            if (barrier.handle == _handle) {
-                ++reference_count;
-            }
-        }
-        for (const TextureBarrier& barrier : _command.WriteTextures()) {
-            if (barrier.handle == _handle) {
-                ++reference_count;
-            }
-        }
-        for (const ExplicitTextureBarrier& barrier : _command.ExplicitTextures()) {
-            if (barrier.handle == _handle) {
-                ++reference_count;
-                explicit_publication = &barrier;
-            }
-        }
-
-        bool ready = false;
-        if (_queue == EQueueType::Graphics && reference_count == 1) {
-            ready = explicit_publication != nullptr &&
-                    IsAcceptedPresentationSourcePublication(*explicit_publication, *texture);
-        }
-        record_texture(texture, ready);
-    };
-
-    for (const UniquePtr<Command>& command_owner : _submit.cmds) {
-        const Command* command = command_owner.get();
-        if (command == nullptr) {
-            continue;
-        }
-        switch (command->Type()) {
-            case Command::EType::CopyBackTexture: {
-                const auto& copy = *static_cast<const CopyBackTextureCmd*>(command);
-                record_texture(reinterpret_cast<Texture*>(copy.Handle()), false);
-                break;
-            }
-            case Command::EType::BufferToTexture: {
-                const auto& copy = *static_cast<const CopyBufferToTextureCmd*>(command);
-                record_texture(reinterpret_cast<Texture*>(copy.DstHandle()), false);
-                break;
-            }
-            case Command::EType::TextureToBuffer: {
-                const auto& copy = *static_cast<const CopyTextureToBufferCmd*>(command);
-                record_texture(reinterpret_cast<Texture*>(copy.SrcHandle()), false);
-                break;
-            }
-            case Command::EType::UploadTexture: {
-                const auto& upload = *static_cast<const UploadTextureCmd*>(command);
-                record_texture(reinterpret_cast<Texture*>(upload.Handle()), false);
-                break;
-            }
-            case Command::EType::TextureToTexture: {
-                const auto& copy = *static_cast<const CopyTextureCmd*>(command);
-                record_texture(reinterpret_cast<Texture*>(copy.SrcHandle()), false);
-                record_texture(reinterpret_cast<Texture*>(copy.DstHandle()), false);
-                break;
-            }
-            case Command::EType::ShaderDispatch: {
-                const auto&                  dispatch = *static_cast<const DispatchCmd*>(command);
-                UnorderedSet<BindlessArray*> seen_bindless{};
-                record_shader_arguments(dispatch.Args(_submit.cached_args), seen_bindless);
-                break;
-            }
-            case Command::EType::TraceRay: {
-                const auto&                  trace = *static_cast<const TraceRayCmd*>(command);
-                UnorderedSet<BindlessArray*> seen_bindless{};
-                record_shader_arguments(trace.Args(), seen_bindless);
-                break;
-            }
-            case Command::EType::Barrier: {
-                const auto& barrier_command = *static_cast<const BarrierCmd*>(command);
-                for (const TextureBarrier& barrier : barrier_command.ReadTextures()) {
-                    record_barrier(barrier_command, barrier.handle);
-                }
-                for (const TextureBarrier& barrier : barrier_command.WriteTextures()) {
-                    record_barrier(barrier_command, barrier.handle);
-                }
-                for (const ExplicitTextureBarrier& barrier : barrier_command.ExplicitTextures()) {
-                    record_barrier(barrier_command, barrier.handle);
-                }
-                break;
-            }
-            case Command::EType::QueueTransfer: {
-                const auto& transfer = *static_cast<const QueueTransferCmd*>(command);
-                if (transfer.IsImport()) {
-                    for (const auto& [view, state] : transfer.ImportTextures()) {
-                        (void)state;
-                        record_view(view);
-                    }
-                } else {
-                    for (const auto& [view, state] : transfer.ExportTextures()) {
-                        (void)state;
-                        record_view(view);
-                    }
-                }
-                break;
-            }
-            case Command::EType::SetDrawState: {
-                const auto&                  draw = *static_cast<const SetDrawStateCmd*>(command);
-                UnorderedSet<BindlessArray*> seen_bindless{};
-                record_shader_arguments(draw.Args(), seen_bindless);
-                record_render_pass(draw.RenderPassInfo());
-                break;
-            }
-            case Command::EType::MultiDraw: {
-                const auto&                  draw = *static_cast<const MultiDrawCmd*>(command);
-                UnorderedSet<BindlessArray*> seen_bindless{};
-                for (const DrawBatchElement& element : draw.draw_batch.draw_cmds) {
-                    record_shader_arguments(element.args, seen_bindless);
-                }
-                record_render_pass(draw.RenderPassInfo());
-                break;
-            }
-            case Command::EType::ClearResource: {
-                const auto& clear = *static_cast<const ClearResourceCmd*>(command);
-                if (clear.IsTexture()) {
-                    record_view(clear.Texture());
-                }
-                break;
-            }
-            case Command::EType::Custom: {
-                const auto& custom = *static_cast<const CustomCmd*>(command);
-                if (custom.CustomId() == CustomCmd::CustomCmdId::CUSTOM_DISPATCH) {
-                    UnorderedSet<BindlessArray*> seen_bindless{};
-                    auto                         record_unique_bindless = [&](const BindlessArrayRef& _array) {
-                        if (_array && seen_bindless.emplace(_array.Get()).second) {
-                            record_bindless(_array);
-                        }
-                    };
-                    auto record_custom_texture = [&](Texture* _texture) {
-                        record_texture(_texture, false);
-                    };
-                    static_cast<const CustomDispatchCmd&>(custom).IterateArgs([&](const TArg& argument,
-                                                                                  ERHIAccessFlags) {
-                        VisitPresentationTextureArgument(argument, record_custom_texture, record_unique_bindless);
-                    });
-                } else {
-                    // Vulkan cannot currently execute CUSTOM_RASTER, and an
-                    // unknown opaque command has no typed resource
-                    // declaration from which to prove that it leaves an
-                    // accepted presentation source untouched. Fail closed
-                    // before native recording instead of preserving stale
-                    // readiness.
-                    throw std::logic_error(
-                        "unsupported opaque custom command in "
-                        "presentation-state collection"
-                    );
-                }
-                break;
-            }
-            case Command::EType::UpdateBindlessArray: {
-                const auto&      update_command = *static_cast<const UpdateBindlessArrayCmd*>(command);
-                BindlessArrayRef bindless_array(update_command.Handle());
-                if (!bindless_array) {
-                    throw std::logic_error("bindless update has no array");
-                }
-                for (const BindlessArray::UpdateCmd& update : update_command.UpdateCommands()) {
-                    std::visit(
-                        [&](const auto& _update) {
-                            using TUpdate = std::decay_t<decltype(_update)>;
-                            if constexpr (std::is_same_v<TUpdate, BindlessArray::TextureUpdateInfo>) {
-                                if (!IsPresentationSourceTexture(_update.texture.Get())) {
-                                    return;
-                                }
-                                events.emplace_back(
-                                    VulkanPresentSourceEvent{
-                                        .type             = EVulkanPresentSourceEvent::BindlessTextureMembership,
-                                        .texture          = _update.texture,
-                                        .bindless_array   = bindless_array,
-                                        .bindless_slot    = _update.array_idx,
-                                        .membership_delta = _update.free ? -1 : 1,
-                                    }
-                                );
-                            }
-                        },
-                        update
-                    );
-                }
-                break;
-            }
-            case Command::EType::UploadBuffer:
-            case Command::EType::CopyBackBuffer:
-            case Command::EType::BufferToBuffer:
-            case Command::EType::BuildAccel:
-            case Command::EType::BuildTLAS:
-            case Command::EType::Query:
-            case Command::EType::Scope:
-                break;
-            case Command::EType::SetGeometryPassDrawState:
-            case Command::EType::Count:
-                throw std::logic_error("unsupported command in presentation-state collection");
-        }
-    }
-    return events;
-}
-
-VulkanPresentationStateUpdate
-EvaluatePresentationEvents(const Array<VulkanPresentSourceEvent>& _events) {
-    assert(
-        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
-        "presentation state evaluation requires the Submission owner"
-    );
-    using Membership = VulkanBindlessArray::PresentationSourceMembership;
-    struct WorkingMembership {
-        BindlessArrayRef            bindless_array{};
-        std::shared_ptr<Membership> membership{};
-    };
-
-    VulkanPresentationStateUpdate transaction{};
-    transaction.delta.reserve(_events.size());
-
-    Array<WorkingMembership>                   working_memberships{};
-    UnorderedMap<VulkanBindlessArray*, size_t> working_membership_indices{};
-
-    const auto& get_working_membership = [&](const BindlessArrayRef& _array) -> WorkingMembership& {
-        if (!_array) {
-            throw std::logic_error(
-                "presentation-state program references a null "
-                "bindless array"
-            );
-        }
-        auto*      bindless = static_cast<VulkanBindlessArray*>(_array.Get());
-        const auto existing = working_membership_indices.find(bindless);
-        if (existing != working_membership_indices.end()) {
-            return working_memberships[existing->second];
-        }
-
-        const auto accepted = bindless->SnapshotAcceptedPresentationSourceMembership();
-        if (!accepted) {
-            throw std::logic_error(
-                "bindless array has no accepted presentation "
-                "membership state"
-            );
-        }
-        const size_t index = working_memberships.size();
-        working_memberships.emplace_back(
-            WorkingMembership{
-                .bindless_array = _array,
-                .membership     = std::make_shared<Membership>(*accepted),
-            }
-        );
-        working_membership_indices.emplace(bindless, index);
-        return working_memberships.back();
-    };
-
-    const auto record_texture = [&](const TextureRef& _texture, bool _ready) {
-        if (!_texture || !IsPresentationSourceTexture(_texture.Get())) {
-            return;
-        }
-        auto existing = std::find_if(
-            transaction.delta.begin(), transaction.delta.end(), [&](const auto& _entry) {
-                return _entry.first.Get() == _texture.Get();
-            }
-        );
-        if (existing != transaction.delta.end()) {
-            existing->second = _ready;
-            return;
-        }
-        transaction.delta.emplace_back(_texture, _ready);
-    };
-
-    for (const VulkanPresentSourceEvent& event : _events) {
-        switch (event.type) {
-            case EVulkanPresentSourceEvent::TextureState:
-                record_texture(event.texture, event.ready);
-                break;
-            case EVulkanPresentSourceEvent::BindlessAccess: {
-                const WorkingMembership& working = get_working_membership(event.bindless_array);
-                for (const auto& [texture, record] : working.membership->textures) {
-                    (void)texture;
-                    if (record.count != 0) {
-                        record_texture(record.texture, false);
-                    }
-                }
-                break;
-            }
-            case EVulkanPresentSourceEvent::BindlessTextureMembership: {
-                if (!event.texture || !IsPresentationSourceTexture(event.texture.Get()) || event.bindless_slot == 0 ||
-                    (event.membership_delta != 1 && event.membership_delta != -1)) {
-                    throw std::logic_error(
-                        "invalid bindless presentation membership "
-                        "mutation"
-                    );
-                }
-                WorkingMembership& working           = get_working_membership(event.bindless_array);
-                auto&              membership        = *working.membership;
-                const auto         decrement_texture = [&](const TextureRef& _texture) {
-                    const auto texture = membership.textures.find(_texture.Get());
-                    if (texture == membership.textures.end() || texture->second.count == 0) {
-                        throw std::logic_error(
-                            "bindless presentation membership "
-                                    "slot/count mismatch"
-                        );
-                    }
-                    if (--texture->second.count == 0) {
-                        membership.textures.erase(texture);
-                    }
-                };
-                const auto increment_texture = [&](const TextureRef& _texture) {
-                    auto [texture, inserted] = membership.textures.try_emplace(
-                        _texture.Get(),
-                        VulkanBindlessArray::PresentationSourceMembershipRecord{
-                            .texture = _texture,
-                            .count   = 0,
-                        }
-                    );
-                    (void)inserted;
-                    if (texture->second.count == std::numeric_limits<uint32>::max()) {
-                        throw std::logic_error(
-                            "bindless presentation membership "
-                            "count overflow"
-                        );
-                    }
-                    ++texture->second.count;
-                };
-                auto slot = membership.slots.find(event.bindless_slot);
-                if (event.membership_delta > 0) {
-                    if (slot != membership.slots.end()) {
-                        if (slot->second.Get() == event.texture.Get()) {
-                            break;
-                        }
-                        decrement_texture(slot->second);
-                        slot->second = event.texture;
-                    } else {
-                        membership.slots.emplace(event.bindless_slot, event.texture);
-                    }
-                    increment_texture(event.texture);
-                    break;
-                }
-                // Clearing a slot which was never natively published is an
-                // accepted idempotent descriptor update. This can occur when
-                // a pending add is canceled/rejected before its later free.
-                if (slot == membership.slots.end()) {
-                    break;
-                }
-                if (slot->second.Get() != event.texture.Get()) {
-                    throw std::logic_error(
-                        "bindless presentation free targets a "
-                        "different accepted slot resource"
-                    );
-                }
-                decrement_texture(slot->second);
-                membership.slots.erase(slot);
-                break;
-            }
-        }
-    }
-
-    transaction.membership_commits.reserve(working_memberships.size());
-    for (WorkingMembership& working : working_memberships) {
-        transaction.membership_commits.emplace_back(
-            std::move(working.bindless_array), std::shared_ptr<const Membership>(std::move(working.membership))
-        );
-    }
-    return transaction;
-}
-
-void CommitAcceptedPresentationState(VulkanPresentationStateUpdate& _transaction) noexcept {
-    assert(
-        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
-        "presentation state publication requires the Submission owner"
-    );
-    for (auto& [bindless_array, membership] : _transaction.membership_commits) {
-        if (bindless_array && membership) {
-            static_cast<VulkanBindlessArray*>(bindless_array.Get())
-                ->PublishAcceptedPresentationSourceMembership(std::move(membership));
-        }
-    }
-    for (const auto& [texture, ready] : _transaction.delta) {
-        if (texture) {
-            static_cast<VulkanTexture*>(texture.Get())->PublishPresentationSourceReady(ready);
-        }
-    }
-}
-
 VulkanSubmissionResult VulkanCommandQueue::PresentForRuntime(
     SwapchainRef      _swapchain,
     TextureView       _source,
@@ -755,11 +232,10 @@ VulkanSubmissionResult VulkanCommandQueue::PresentForRuntime(
                 .recoverable_rejection = recoverable_rejection,
             };
         }
-        auto* vk_source_texture = static_cast<VulkanTexture*>(_source.texture);
         if (
-            !vk_source_texture->IsPresentationSourceReady()
+            !VulkanResourceStateValidator::ValidateExternalAccess(vk_device, queue.GetType(), {_source, {ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC}, ETextureAspectFlags::COLOR})
 #if MOER_VULKAN_TEST_SUPPORT
-            && (scripted_override == nullptr || scripted_override->require_present_source_ready)
+            && (scripted_override == nullptr || scripted_override->validate_source_access)
 #endif
         ) {
 #if MOER_VULKAN_TEST_SUPPORT
@@ -773,7 +249,7 @@ VulkanSubmissionResult VulkanCommandQueue::PresentForRuntime(
             );
             LogQueueErrorNoexcept(
                 "[RHIExecutor][Vulkan] rejected Present source before an "
-                "accepted producer export published GENERAL / TRANSFER_READ"
+                "accepted producer export published TRANSFER_SRC / TRANSFER_READ"
             );
             return {
                 .outcome               = rejection,
@@ -904,7 +380,7 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
             final_outcome = {EVulkanOperationStatus::Rejected, vk_device.GetFirstFaultResult()};
             AccumulatePresentReceiptOutcome(receipt_status, receipt_stage, final_outcome, EPresentStage::Validation);
         } else if (!source_contract.valid ||
-                   !static_cast<VulkanTexture*>(_source_view.texture)->IsPresentationSourceReady()) {
+                   !VulkanResourceStateValidator::ValidateExternalAccess(vk_device, queue.GetType(), {_source_view, {ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC}, ETextureAspectFlags::COLOR})) {
 #if MOER_VULKAN_TEST_SUPPORT
             InvokePresentSourceRejectionCallbackForTesting(scripted_override);
 #endif
@@ -913,7 +389,7 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
             AccumulatePresentReceiptOutcome(receipt_status, receipt_stage, final_outcome, EPresentStage::Validation);
             LOG_ERROR(
                 "[RHIExecutor][Vulkan] rejected Present source contract: {}",
-                source_contract.valid ? "producer export is not ready" : source_contract.reason
+                source_contract.valid ? "source range has no accepted external transfer-read state" : source_contract.reason
             );
         } else {
             recorded.command_context   = vk_device.GetCommandRecorder(queue.GetType()).AcquireContext();
@@ -935,24 +411,7 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
                 VK_CHECK_RESULT(command_list.Begin());
                 const std::string present_label = std::format("Present: {}", source_texture->GetName());
                 command_list.BeginLabel(present_label, {0.0f, 0.85f, 0.95f, 1.0f});
-                // The producer exports GENERAL; Present consumes that boundary.
-                barriers.Append(
-                    source_texture,
-                    VulkanEnumTranslator::METoVKImageAspectFlags(source_texture->GetAspectFlags()),
-                    0,
-                    1,
-                    0,
-                    1,
-                    EBarrierQueueTransferPhase::None,
-                    VK_QUEUE_FAMILY_IGNORED,
-                    VK_QUEUE_FAMILY_IGNORED,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                    VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT,
-                    VK_ACCESS_2_TRANSFER_READ_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL
-                );
+                // Source visibility/layout is established by its ordinary exported transfer-read contract.
                 barriers.Append(
                     swapchain_texture,
                     VK_IMAGE_ASPECT_COLOR_BIT,
@@ -980,7 +439,7 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
                     {0, 0, 0},
                     0,
                     0,
-                    VK_IMAGE_LAYOUT_GENERAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
                 );
                 barriers.Append(
@@ -1020,8 +479,9 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
                     }
                 );
                 recorded.deferred_releases = vk_device.GetCommandRecorder(queue.GetType()).TakeDeferredReleases();
-                // Keep Copy inputs alive until Present has been issued, even
-                // if GPU execution finishes immediately.
+                recorded.resource_state_program.emplace_back(RHIResourceAccess{
+                    _source_view, {ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC}, ETextureAspectFlags::COLOR
+                });
                 const VulkanOperationResult copy_result = SubmitRecorded(recorded);
                 final_outcome                           = copy_result;
                 recoverable_rejection                   = recorded.recoverable_rejection;

@@ -451,7 +451,13 @@ private:
                         !before[handle.pass_id].empty()) {
                         commands.Barriers(before[handle.pass_id]);
                     }
+                    if (job.state_ownership == ERHIResourceStateOwnership::Compiled) {
+                        commands.BeginResourceAccesses(lowered.passes[job.range.first_unit + offset].accesses, pass_name);
+                    }
                     job.lifetime->callbacks[offset](commands);
+                    if (job.state_ownership == ERHIResourceStateOwnership::Compiled) {
+                        commands.EndResourceAccesses();
+                    }
                     if (job.state_ownership == ERHIResourceStateOwnership::Compiled &&
                         !after[handle.pass_id].empty()) {
                         commands.Barriers(after[handle.pass_id]);

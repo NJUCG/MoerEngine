@@ -601,8 +601,6 @@ const char* ToString(RenderGraph::TextureBoundary state) {
     switch (state) {
         case RenderGraph::TextureBoundary::Undefined:
             return "undefined";
-        case RenderGraph::TextureBoundary::PresentationSource:
-            return "presentation-src";
     }
     return "unknown";
 }
@@ -1050,6 +1048,7 @@ RaiseTextureAspects(ETextureAspectFlags aspects) {
 }
 
 struct MaterializedPassState {
+    std::vector<RHIResourceAccess>                    accesses{};
     std::vector<BarrierCreateInfo>                    before{};
     std::vector<BarrierCreateInfo>                    after{};
     std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
@@ -1135,11 +1134,7 @@ bool RenderGraphLowering::MaterializeInstruction(
             return false;
         }
 
-        const bool publishes_presentation = instruction.export_boundary &&
-            (RenderGraph::IsPresentationSource(instruction.after_state) ||
-             (binding->GetUsage() & ETextureUsageFlags::PRESENTATION_SOURCE) ==
-                 ETextureUsageFlags::PRESENTATION_SOURCE);
-        if (read_only_boundary && !publishes_presentation) {
+        if (read_only_boundary && !instruction.export_boundary) {
             return true;
         }
         TextureView view(binding);
@@ -1154,6 +1149,11 @@ bool RenderGraphLowering::MaterializeInstruction(
             instruction.texture_aspects
         );
         barrier.publish_external_state = instruction.export_boundary;
+        // Read-only exports publish visibility established by the first read
+        // transition, including the external scope; no second GPU barrier is needed.
+        if (read_only_boundary) {
+            barrier.src_state = barrier.dst_state;
+        }
         if (!materialize_transfer()) { return false; }
         output = std::move(barrier);
         return true;
@@ -1167,7 +1167,7 @@ bool RenderGraphLowering::MaterializeInstruction(
             error = "buffer instruction has no physical binding or has an invalid range";
             return false;
         }
-        if (read_only_boundary) {
+        if (read_only_boundary && !instruction.export_boundary) {
             return true;
         }
         barrier = BarrierCreateInfo::Transition(
@@ -1175,6 +1175,10 @@ bool RenderGraphLowering::MaterializeInstruction(
             ToBarrierState(instruction.source, false),
             ToBarrierState(instruction.destination, false)
         );
+        barrier.publish_external_state = instruction.export_boundary;
+        if (read_only_boundary) {
+            barrier.src_state = barrier.dst_state;
+        }
         if (!materialize_transfer()) { return false; }
         output = std::move(barrier);
         return true;
@@ -1919,6 +1923,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             }
             auto& materialized = active_pass_states[pass_instructions.pass.pass_id];
             materialized.keepalive = pass_instructions.keepalive;
+            materialized.accesses  = pass_instructions.accesses;
             for (const auto& instruction : pass_instructions.before) {
                 if (!append_instruction(instruction, materialized.before, "before-pass")) {
                     return false;
@@ -1982,6 +1987,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         PassHandle          pass{};
         std::string         pass_name{};
         RecordCallback      record{};
+        std::vector<RHIResourceAccess>                    accesses{};
         std::vector<BarrierCreateInfo>                    before{};
         std::vector<BarrierCreateInfo>                    after{};
         std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
@@ -2215,6 +2221,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     recording_pass.before = std::move(pass_state.before);
                     recording_pass.after = std::move(pass_state.after);
                     recording_pass.keepalive = std::move(pass_state.keepalive);
+                    recording_pass.accesses  = std::move(pass_state.accesses);
                 }
                 job.passes.emplace_back(std::move(recording_pass));
                 if (configure_recording_source) {
@@ -2407,6 +2414,9 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     pass_name = pass.pass_name;
                     ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Record", pass.pass_name);
                     if (!pass.before.empty()) { job.command_list->Barriers(pass.before); }
+                    if (owns_explicit_state) {
+                        job.command_list->BeginResourceAccesses(pass.accesses, pass.pass_name);
+                    }
                     const uint64 seal_generation = job.command_list->GetSealGeneration();
                     if (job.gpu_profile_requested) {
                         ScopedGpuMarker pass_marker(
@@ -2428,6 +2438,9 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     }
                     if (job.command_list->GetTranslateExecutionClass() != job.translate_execution_class) {
                         throw std::logic_error("record callback changed its managed translation class");
+                    }
+                    if (owns_explicit_state) {
+                        job.command_list->EndResourceAccesses();
                     }
                     if (!pass.after.empty()) { job.command_list->Barriers(pass.after); }
                 }

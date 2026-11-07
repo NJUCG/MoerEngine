@@ -1008,7 +1008,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             auto import_graph_resources = [&](RenderGraph& graph) {
                 MOER_PROFILE_SCOPE("Raster.ImportGraphResources");
                 auto import_physical_texture = [&](std::string_view name, Texture* physical_texture) {
-                    return ImportRasterTexture(graph, name, physical_texture);
+                    return ImportRasterTexture(graph, name, physical_texture, physical_texture == raster_context.textures.output.tex.Get() ? RenderGraph::TextureAccessType::TransferSource : RenderGraph::TextureAccessType::Sampled);
                 };
                 auto import_texture = [&](std::string_view name, const auto& texture) {
                     // DepthBufferRef wraps a TextureRef while ordinary texture handles point at the
