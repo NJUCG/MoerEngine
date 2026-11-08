@@ -352,6 +352,46 @@ std::shared_ptr<const VulkanDescriptorRecordingPlan> PrepareDescriptorRecordingP
     return plan;
 }
 
+namespace {
+// Both transfers finish by copying their staging bytes on Completion. The
+// context retains staging storage through this callback for either command type.
+template<typename ReadbackCommand>
+void AddReadbackCompletion(VulkanDevice& device, VulkanCommandContext& context, const ReadbackCommand& command) {
+    const BufferView staging = command.staging_buffer;
+    const uint64 byte_size = command.ByteSize();
+    if (command.HasOwningReadback()) {
+        const ReadbackToken readback = command.OwningReadback();
+        context.AddOnComplete([staging, device = &device, readback, byte_size] {
+            // MaterializePayload uses a synchronous erased writer callback.
+            struct WriterContext {
+                VulkanDevice* device;
+                BufferView staging;
+                uint64 byte_size;
+            } writer{device, staging, byte_size};
+            (void)ReadbackBackendAccess::MaterializePayload(readback, &writer,
+                [](void* value, std::span<byte> destination) {
+                    const auto* writer = static_cast<const WriterContext*>(value);
+                    if (!writer || destination.size_bytes() != writer->byte_size) {
+                        throw std::runtime_error("Vulkan readback payload size mismatch");
+                    }
+                    writer->device->CopyData(destination.data(), writer->staging, writer->byte_size);
+                });
+        });
+    } else {
+        void* destination = [&]() -> void* {
+            if constexpr (requires { command.Data().data(); }) {
+                return command.Data().data();
+            } else {
+                return command.Data();
+            }
+        }();
+        context.AddOnComplete([staging, device = &device, destination, byte_size] {
+            device->CopyData(destination, staging, byte_size);
+        });
+    }
+}
+} // namespace
+
 class VulkanCommandVisitor {
     VulkanDevice*          m_device;
     VulkanCommandList&     cmd_list;
@@ -514,32 +554,7 @@ public:
             tmp_buffer.GetByteOffset()
         );
 
-        if (_cmd.HasOwningReadback()) {
-            const ReadbackToken readback     = _cmd.OwningReadback();
-            const uint64        logical_size = _cmd.ByteSize();
-            command_context.AddOnComplete([tmp_buffer, device = m_device, readback, logical_size] {
-                struct WriterContext {
-                    VulkanDevice* device{};
-                    BufferView    staging{};
-                    uint64        byte_size{};
-                } context{device, tmp_buffer, logical_size};
-                (void)ReadbackBackendAccess::MaterializePayload(
-                    readback, &context, [](void* _context, std::span<byte> _destination) {
-                        auto* writer = static_cast<WriterContext*>(_context);
-                        if (writer == nullptr || _destination.size_bytes() != writer->byte_size) {
-                            throw std::runtime_error("Vulkan buffer readback payload size mismatch");
-                        }
-                        writer->device->CopyData(_destination.data(), writer->staging, writer->byte_size);
-                    }
-                );
-            });
-        } else {
-            command_context.AddOnComplete(
-                [tmp_buffer, device = m_device, destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
-                    device->CopyData(destination, tmp_buffer, logical_size);
-                }
-            );
-        }
+        AddReadbackCompletion(*m_device, command_context, _cmd);
     }
 
     void Visit(const CopyBackTextureCmd& _cmd) {
@@ -557,32 +572,7 @@ public:
             _cmd.ArrayLayer()
         );
 
-        if (_cmd.HasOwningReadback()) {
-            const ReadbackToken readback     = _cmd.OwningReadback();
-            const uint64        logical_size = _cmd.ByteSize();
-            command_context.AddOnComplete([tmp_buffer, device = m_device, readback, logical_size] {
-                struct WriterContext {
-                    VulkanDevice* device{};
-                    BufferView    staging{};
-                    uint64        byte_size{};
-                } context{device, tmp_buffer, logical_size};
-                (void)ReadbackBackendAccess::MaterializePayload(
-                    readback, &context, [](void* _context, std::span<byte> _destination) {
-                        auto* writer = static_cast<WriterContext*>(_context);
-                        if (writer == nullptr || _destination.size_bytes() != writer->byte_size) {
-                            throw std::runtime_error("Vulkan texture readback payload size mismatch");
-                        }
-                        writer->device->CopyData(_destination.data(), writer->staging, writer->byte_size);
-                    }
-                );
-            });
-        } else {
-            command_context.AddOnComplete(
-                [tmp_buffer, device = m_device, destination(_cmd.Data()), logical_size = _cmd.ByteSize()] {
-                    device->CopyData(destination.data(), tmp_buffer, logical_size);
-                }
-            );
-        }
+        AddReadbackCompletion(*m_device, command_context, _cmd);
     }
 
     void Visit(const CopyTextureCmd& _cmd) {
