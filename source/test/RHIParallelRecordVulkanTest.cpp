@@ -10740,8 +10740,8 @@ void RunPresentHardFailureBoundary() {
         "phase15f_fault_priority_invalid_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC |
-            ETextureUsageFlags::TRANSFER_DST
+        // Missing TRANSFER_SRC must reach the source-rejection fault hook.
+        ETextureUsageFlags::TRANSFER_DST
     );
     SwapchainRef scripted_swapchain{
         MoerNew(HeadlessScriptedSwapchain)()
