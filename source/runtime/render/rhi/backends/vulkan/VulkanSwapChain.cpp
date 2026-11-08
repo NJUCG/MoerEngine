@@ -1,5 +1,5 @@
-#include "VulkanEnumTranslator.h"
 #include "VulkanSwapChain.h"
+#include "VulkanEnumTranslator.h"
 
 #include "PixelFormat.h"
 #include "VulkanDevice.h"
@@ -7,53 +7,19 @@
 #include "VulkanSurfaceSupport.h"
 #include "log/LogSystem.h"
 #include "misc/MMemory.h"
+#include "misc/RAII.h"
 #include "rhi/RHICommon.h"
 
 #include "misc/Types.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cassert>
-#include <exception>
 #include <string>
 #include <utility>
 
 namespace Moer::Render {
 
 namespace {
-
-class ScopedSurfaceCandidate {
-public:
-    explicit ScopedSurfaceCandidate(VkInstance instance) : instance(instance) {}
-
-    ~ScopedSurfaceCandidate() {
-        Reset();
-    }
-
-    ScopedSurfaceCandidate(const ScopedSurfaceCandidate&)            = delete;
-    ScopedSurfaceCandidate& operator=(const ScopedSurfaceCandidate&) = delete;
-
-    void Adopt(VkSurfaceKHR new_surface) {
-        Reset();
-        surface = new_surface;
-    }
-
-    [[nodiscard]] VkSurfaceKHR Release() noexcept {
-        const VkSurfaceKHR released = surface;
-        surface                     = VK_NULL_HANDLE;
-        return released;
-    }
-
-private:
-    void Reset() noexcept {
-        if (surface != VK_NULL_HANDLE) {
-            vkDestroySurfaceKHR(instance, surface, VK_NULL_HANDLE);
-            surface = VK_NULL_HANDLE;
-        }
-    }
-
-    VkInstance   instance{VK_NULL_HANDLE};
-    VkSurfaceKHR surface{VK_NULL_HANDLE};
-};
 
 VkCompositeAlphaFlagBitsKHR ChooseCompositeAlpha(const VkSurfaceCapabilitiesKHR& capabilities) {
     constexpr VkCompositeAlphaFlagBitsKHR preferred_modes[] = {
@@ -159,6 +125,48 @@ VkExtent2D ChooseSwapExtent(VkExtent2D _requested_extent, const VkSurfaceCapabil
     return extent;
 }
 
+VkResult CreateWindowSurface(VkInstance instance, const WindowNativeHandle& native_window, VkSurfaceKHR& surface) {
+    if (!native_window.IsValid() || native_window.window_system != EWindowSystemType::GLFW || instance == VK_NULL_HANDLE) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    return glfwCreateWindowSurface(
+        instance, reinterpret_cast<GLFWwindow*>(native_window.window_system_handle), nullptr, &surface
+    );
+}
+
+VkSwapchainCreateInfoKHR MakeSwapchainCreateInfo(
+    const SwapChainSupportDetails& details,
+    const SwapchainCreateInfo&     request,
+    VkSurfaceKHR                   surface,
+    VkSwapchainKHR                 old_swapchain,
+    const uint32 (&queue_families)[2]
+) {
+    const auto format      = ChooseSwapSurfaceFormat(details.formats, request.preferred_format);
+    uint32     image_count = details.capabilities.minImageCount + 1;
+    if (details.capabilities.maxImageCount > 0) {
+        image_count = std::min(image_count, details.capabilities.maxImageCount);
+    }
+    const bool concurrent = queue_families[0] != queue_families[1];
+    return {
+        .sType                 = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .surface               = surface,
+        .minImageCount         = image_count,
+        .imageFormat           = format.format,
+        .imageColorSpace       = format.colorSpace,
+        .imageExtent           = ChooseSwapExtent({request.size.x, request.size.y}, details.capabilities),
+        .imageArrayLayers      = 1,
+        .imageUsage            = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .imageSharingMode      = concurrent ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = concurrent ? 2u : 0u,
+        .pQueueFamilyIndices   = concurrent ? queue_families : nullptr,
+        .preTransform          = details.capabilities.currentTransform,
+        .compositeAlpha        = ChooseCompositeAlpha(details.capabilities),
+        .presentMode           = ChooseSwapPresentMode(details.present_modes, false),
+        .clipped               = VK_TRUE,
+        .oldSwapchain          = old_swapchain
+    };
+}
+
 } // namespace
 
 VkSwapchain::VkSwapchain(VulkanDevice& _device, const SwapchainCreateInfo& _info) :
@@ -243,24 +251,17 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         surface_info = {};
     }
 
-    const VkSwapchainKHR   committed_old_sc       = handle;
-    VkSurfaceKHR           candidate_surface      = surface;
-    const bool             candidate_owns_surface = surface_transition != ESwapchainSurfaceTransition::Reuse;
-    ScopedSurfaceCandidate candidate_surface_guard(device.GetInstance());
-    if (candidate_owns_surface) {
-        candidate_surface = VK_NULL_HANDLE;
-        const WindowNativeHandle native_window = _info.surface.source->GetNativeWindow();
-        VkResult                 native_result = VK_ERROR_INITIALIZATION_FAILED;
-        if (native_window.IsValid() && native_window.window_system == EWindowSystemType::GLFW &&
-            device.GetInstance() != VK_NULL_HANDLE) {
-            native_result = glfwCreateWindowSurface(
-                device.GetInstance(),
-                reinterpret_cast<GLFWwindow*>(native_window.window_system_handle),
-                nullptr,
-                &candidate_surface
-            );
+    VkSurfaceKHR candidate_surface         = surface;
+    const bool   candidate_owns_surface    = surface_transition != ESwapchainSurfaceTransition::Reuse;
+    const auto   cleanup_candidate_surface = OnScopeExit([&] {
+        if (candidate_owns_surface && candidate_surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(device.GetInstance(), candidate_surface, VK_NULL_HANDLE);
         }
-        candidate_surface_guard.Adopt(candidate_surface);
+    });
+    if (candidate_owns_surface) {
+        candidate_surface                      = VK_NULL_HANDLE;
+        const WindowNativeHandle native_window = _info.surface.source->GetNativeWindow();
+        VkResult                 native_result = CreateWindowSurface(device.GetInstance(), native_window, candidate_surface);
         if (native_result != VK_SUCCESS || candidate_surface == VK_NULL_HANDLE) {
             if (native_result == VK_SUCCESS) {
                 native_result = VK_ERROR_INITIALIZATION_FAILED;
@@ -327,51 +328,21 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    const auto&        details    = support_query.details;
-    VkSurfaceFormatKHR new_fmt    = ChooseSwapSurfaceFormat(details.formats, _info.preferred_format);
-    const VkExtent2D   new_extent = ChooseSwapExtent({_info.size.x, _info.size.y}, details.capabilities);
-    const Extent2D     new_size{new_extent.width, new_extent.height};
-    if (new_size.x == 0 || new_size.y == 0) {
+    const uint32 queue_family_indices[] = {
+        queue_families.graphics.value(), queue_families.present.value()
+    };
+    const auto create_info = MakeSwapchainCreateInfo(
+        support_query.details, _info, candidate_surface, surface_transition == ESwapchainSurfaceTransition::Reuse ? handle : VK_NULL_HANDLE, queue_family_indices
+    );
+    if (create_info.imageExtent.width == 0 || create_info.imageExtent.height == 0) {
         LOG_WARNING("Swapchain recreate skipped due to zero swapchain extent.");
         return false;
     }
-    VkPresentModeKHR   present_mode           = ChooseSwapPresentMode(details.present_modes, false);
-    const EPixelFormat new_format             = VulkanEnumTranslator::VKToMEFormat(new_fmt.format);
-    if (new_format == PF_UNDEFINED && new_fmt.format != VK_FORMAT_UNDEFINED) {
-        LOG_ERROR("Swapchain selected an unmapped Vulkan format: {}", static_cast<uint32>(new_fmt.format));
+    const auto new_format = VulkanEnumTranslator::VKToMEFormat(create_info.imageFormat);
+    if (new_format == PF_UNDEFINED && create_info.imageFormat != VK_FORMAT_UNDEFINED) {
+        LOG_ERROR("Swapchain selected an unmapped Vulkan format: {}", static_cast<uint32>(create_info.imageFormat));
         return false;
     }
-    const uint32 queue_family_indices[] = {
-        queue_families.graphics.value(),
-        queue_families.present.value(),
-    };
-    const bool use_concurrent_sharing = queue_family_indices[0] != queue_family_indices[1];
-    uint32     image_count            = details.capabilities.minImageCount + 1;
-    if (details.capabilities.maxImageCount > 0 && image_count > details.capabilities.maxImageCount) {
-        image_count = details.capabilities.maxImageCount;
-    }
-    const VkSwapchainKHR old_sc_for_create =
-        surface_transition == ESwapchainSurfaceTransition::Reuse ? committed_old_sc : VK_NULL_HANDLE;
-    VkSwapchainCreateInfoKHR create_info{
-        .sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-        .pNext            = nullptr,
-        .flags            = 0,
-        .surface          = candidate_surface,
-        .minImageCount    = image_count,
-        .imageFormat      = new_fmt.format,
-        .imageColorSpace  = new_fmt.colorSpace,
-        .imageExtent      = {new_size.x, new_size.y},
-        .imageArrayLayers = 1,
-        .imageUsage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        .imageSharingMode = use_concurrent_sharing ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = use_concurrent_sharing ? 2u : 0u,
-        .pQueueFamilyIndices   = use_concurrent_sharing ? queue_family_indices : nullptr,
-        .preTransform          = details.capabilities.currentTransform,
-        .compositeAlpha        = ChooseCompositeAlpha(details.capabilities),
-        .presentMode           = present_mode,
-        .clipped               = VK_TRUE,
-        .oldSwapchain          = old_sc_for_create
-    };
 
     auto fault_admission = device.AcquireFaultAdmission();
     if (device.IsFaulted()) {
@@ -380,23 +351,19 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
 
     VkSwapchainKHR        new_sc = VK_NULL_HANDLE;
     Array<SwapchainImage> new_swapchain_images;
-    bool                  old_resources_retired = false;
 
-    auto cleanup_new_resources = [&]() {
+    const auto cleanup_new_resources = OnScopeExit([&] {
         DestroyImages(new_swapchain_images);
         if (new_sc != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(device.GetDevice(), new_sc, VK_NULL_HANDLE);
-            new_sc = VK_NULL_HANDLE;
         }
-    };
-    auto retire_old_resources = [&]() {
-        if (old_resources_retired || committed_old_sc == VK_NULL_HANDLE) {
-            return;
+    });
+    const auto retire_old_resources  = [&] {
+        if (handle != VK_NULL_HANDLE) {
+            DestroyImages(swapchain_images);
+            vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
+            handle = VK_NULL_HANDLE;
         }
-        DestroyImages(swapchain_images);
-        vkDestroySwapchainKHR(device.GetDevice(), committed_old_sc, VK_NULL_HANDLE);
-        handle                = VK_NULL_HANDLE;
-        old_resources_retired = true;
     };
     auto check_device_result = [&](VkResult _result, EVulkanFaultOperation _operation) {
         observe_setup_result(_result);
@@ -419,115 +386,29 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         }
         return false;
     };
-    auto abort_transaction = [&]() {
-        cleanup_new_resources();
-    };
 
-    VkResult result = vkCreateSwapchainKHR(device.GetDevice(), &create_info, nullptr, &new_sc);
+    const auto result = vkCreateSwapchainKHR(device.GetDevice(), &create_info, nullptr, &new_sc);
     // Passing a non-null oldSwapchain retires it even when creation fails.
-    if (old_sc_for_create != VK_NULL_HANDLE) {
+    if (create_info.oldSwapchain != VK_NULL_HANDLE) {
         retire_old_resources();
     }
     if (result != VK_SUCCESS) {
         new_sc = VK_NULL_HANDLE;
     }
     if (!check_device_result(result, EVulkanFaultOperation::SwapchainCreate)) {
-        abort_transaction();
         return false;
     }
 
-    uint32         image_cnt = 0;
     Array<VkImage> images;
-    bool           images_ready = false;
-    for (uint32 attempt = 0; attempt < 4; ++attempt) {
-        result = vkGetSwapchainImagesKHR(device.GetDevice(), new_sc, &image_cnt, nullptr);
-        if (!check_device_result(result, EVulkanFaultOperation::SwapchainGetImages)) {
-            abort_transaction();
-            return false;
-        }
-        if (image_cnt == 0) {
-            check_device_result(
-                VK_ERROR_INITIALIZATION_FAILED, EVulkanFaultOperation::SwapchainGetImages
-            );
-            abort_transaction();
-            return false;
-        }
-
-        images.assign(image_cnt, VK_NULL_HANDLE);
-        uint32 fetched_image_cnt = image_cnt;
-        result = vkGetSwapchainImagesKHR(
-            device.GetDevice(), new_sc, &fetched_image_cnt, images.data()
-        );
-        if (result == VK_INCOMPLETE) {
-            continue;
-        }
-        if (!check_device_result(result, EVulkanFaultOperation::SwapchainGetImages)) {
-            abort_transaction();
-            return false;
-        }
-        if (fetched_image_cnt == 0) {
-            check_device_result(
-                VK_ERROR_INITIALIZATION_FAILED, EVulkanFaultOperation::SwapchainGetImages
-            );
-            abort_transaction();
-            return false;
-        }
-        image_cnt = fetched_image_cnt;
-        images.resize(image_cnt);
-        images_ready = true;
-        break;
-    }
-    if (!images_ready) {
-        LOG_ERROR("Swapchain image enumeration remained incomplete after four attempts.");
-        check_device_result(
-            VK_ERROR_INITIALIZATION_FAILED, EVulkanFaultOperation::SwapchainGetImages
-        );
-        abort_transaction();
+    if (!check_device_result(EnumerateImages(new_sc, images), EVulkanFaultOperation::SwapchainGetImages)) {
         return false;
     }
-
-    new_swapchain_images.resize(image_cnt);
-    VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    for (uint32 i = 0; i < image_cnt; i++) {
-        result = vkCreateSemaphore(
-            device.GetDevice(),
-            &semaphore_info,
-            VK_NULL_HANDLE,
-            &new_swapchain_images[i].render_finished_semaphore
-        );
-        if (result != VK_SUCCESS) {
-            new_swapchain_images[i].render_finished_semaphore = VK_NULL_HANDLE;
-        }
-        if (!check_device_result(result, EVulkanFaultOperation::SwapchainSemaphoreCreate)) {
-            abort_transaction();
-            return false;
-        }
-        device.SetResourceName(
-            uint64(new_swapchain_images[i].render_finished_semaphore),
-            VK_OBJECT_TYPE_SEMAPHORE,
-            "RenderFinishedSemaphore_" + std::to_string(i)
-        );
-    }
-
-    for (uint32 i = 0; i < image_cnt; i++) {
-        new_swapchain_images[i].texture = MoerNew(VulkanTexture)(
-            TextureInfo{
-                ETextureDimension::TEX_2D,
-                ETextureUsageFlags::PRESENT,
-                new_format,
-                EClearAttachment{},
-                {new_size.x, new_size.y, 1}
-            },
-            &device,
-            images[i]
-        );
-        new_swapchain_images[i].view = TextureView(new_swapchain_images[i].texture);
-    }
-    if (!check_device_result(VK_SUCCESS, EVulkanFaultOperation::SwapchainCreate)) {
-        abort_transaction();
+    if (!check_device_result(
+            CreateImageResources(images, new_format, create_info.imageExtent, new_swapchain_images),
+            EVulkanFaultOperation::SwapchainSemaphoreCreate
+        )) {
         return false;
     }
-
     // Ordinary identity replacement remains transactional. Forced recovery
     // has already retired its unusable native bundle, so this is a no-op for
     // that path.
@@ -535,17 +416,17 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
 
     if (candidate_owns_surface) {
         const VkSurfaceKHR old_surface = surface;
-        surface                        = candidate_surface_guard.Release();
+        surface                        = std::exchange(candidate_surface, VK_NULL_HANDLE);
         if (old_surface != VK_NULL_HANDLE) {
             vkDestroySurfaceKHR(device.GetInstance(), old_surface, VK_NULL_HANDLE);
         }
     }
-    surface_info                  = _info.surface;
-    handle                        = new_sc;
-    new_sc                        = VK_NULL_HANDLE;
-    size                          = new_size;
-    format                        = new_format;
-    swapchain_images              = std::move(new_swapchain_images);
+    surface_info = _info.surface;
+    handle       = new_sc;
+    new_sc       = VK_NULL_HANDLE;
+    size         = {create_info.imageExtent.width, create_info.imageExtent.height};
+    format       = new_format;
+    swapchain_images.swap(new_swapchain_images);
     present_serial                = 0;
     const bool presentation_ready = IsPresentationReady();
     if (presentation_ready) {
@@ -553,6 +434,70 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     }
     return presentation_ready;
 }
+VkResult VkSwapchain::EnumerateImages(VkSwapchainKHR swapchain, Array<VkImage>& images) const {
+    for (uint32 attempt = 0; attempt < 4; ++attempt) {
+        uint32   count  = 0;
+        VkResult result = vkGetSwapchainImagesKHR(device.GetDevice(), swapchain, &count, nullptr);
+        if (result != VK_SUCCESS || device.IsFaulted()) {
+            return result;
+        }
+        if (count == 0) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        images.assign(count, VK_NULL_HANDLE);
+        result = vkGetSwapchainImagesKHR(device.GetDevice(), swapchain, &count, images.data());
+        if (result == VK_INCOMPLETE) {
+            continue;
+        }
+        if (result != VK_SUCCESS || device.IsFaulted()) {
+            return result;
+        }
+        if (count == 0) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        images.resize(count);
+        return VK_SUCCESS;
+    }
+    LOG_ERROR("Swapchain image enumeration remained incomplete after four attempts.");
+    return VK_ERROR_INITIALIZATION_FAILED;
+}
+
+VkResult VkSwapchain::CreateImageResources(
+    std::span<const VkImage> images,
+    EPixelFormat             image_format,
+    VkExtent2D               extent,
+    Array<SwapchainImage>&   resources
+) {
+    resources.resize(images.size());
+    const VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    for (size_t i = 0; i < images.size(); ++i) {
+        const auto result = vkCreateSemaphore(
+            device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &resources[i].render_finished_semaphore
+        );
+        if (result != VK_SUCCESS) {
+            resources[i].render_finished_semaphore = VK_NULL_HANDLE;
+            return result;
+        }
+        if (device.IsFaulted()) {
+            return result;
+        }
+        device.SetResourceName(
+            uint64(resources[i].render_finished_semaphore), VK_OBJECT_TYPE_SEMAPHORE, "RenderFinishedSemaphore_" + std::to_string(i)
+        );
+    }
+    for (size_t i = 0; i < images.size(); ++i) {
+        resources[i].texture = MoerNew(VulkanTexture)(
+            TextureInfo{
+                ETextureDimension::TEX_2D, ETextureUsageFlags::PRESENT, image_format, EClearAttachment{}, {extent.width, extent.height, 1}
+            },
+            &device,
+            images[i]
+        );
+        resources[i].view = TextureView(resources[i].texture);
+    }
+    return VK_SUCCESS;
+}
+
 VkSwapchain::~VkSwapchain() {
     DestroyImages(swapchain_images);
     if (handle != VK_NULL_HANDLE) {
@@ -613,22 +558,22 @@ VkSwapchain::Present(VkQueue _queue, uint32 _index, uint64 _timeline, uint64 _wo
         };
         return present_result;
     }
-    VkSemaphore finished_semaphores[] = {GetRenderFinishedSemaphore(_index)};
+    VkSemaphore      finished_semaphores[] = {GetRenderFinishedSemaphore(_index)};
     VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     present_info.waitSemaphoreCount = 1;
     present_info.pWaitSemaphores    = finished_semaphores;
     present_info.swapchainCount     = 1;
     present_info.pSwapchains        = &handle;
     present_info.pImageIndices      = &_index;
-    present_result.outcome = device.PresentOnQueue(
+    present_result.outcome          = device.PresentOnQueue(
         _queue,
         present_info,
         VulkanOperationContext{
-            .operation   = EVulkanFaultOperation::QueuePresent,
-            .queue_type  = EQueueType::Graphics,
-            .queue       = _queue,
-            .timeline    = _timeline,
-            .work_serial = _work_serial,
+                     .operation   = EVulkanFaultOperation::QueuePresent,
+                     .queue_type  = EQueueType::Graphics,
+                     .queue       = _queue,
+                     .timeline    = _timeline,
+                     .work_serial = _work_serial,
         }
     );
     present_result.accepted =

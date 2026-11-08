@@ -5,6 +5,7 @@
 #include "VulkanFault.h"
 #include "misc/Types.h"
 #include "rhi/RHIResource.h"
+#include <span>
 
 namespace Moer::Render {
 
@@ -14,9 +15,9 @@ class VulkanTexture;
 class VkSwapchain : public Swapchain {
 public:
     struct AcquireResult {
-        VulkanOperationResult         outcome{};
-        VkSemaphore                   ready_semaphore{VK_NULL_HANDLE};
-        uint32                        image_index{UINT32_MAX};
+        VulkanOperationResult outcome{};
+        VkSemaphore           ready_semaphore{VK_NULL_HANDLE};
+        uint32                image_index{UINT32_MAX};
 
         [[nodiscard]] bool HasImage() const {
             return image_index != UINT32_MAX;
@@ -44,13 +45,20 @@ public:
 
 private:
     struct SwapchainImage {
-        VulkanTexture*               texture{nullptr};
-        TextureView                  view{};
-        VkSemaphore                  render_finished_semaphore{VK_NULL_HANDLE};
+        VulkanTexture* texture{nullptr};
+        TextureView    view{};
+        VkSemaphore    render_finished_semaphore{VK_NULL_HANDLE};
     };
 
-    [[nodiscard]] bool CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
-    void               DestroyImages(Array<SwapchainImage>& _images);
+    [[nodiscard]] bool     CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
+    [[nodiscard]] VkResult EnumerateImages(VkSwapchainKHR swapchain, Array<VkImage>& images) const;
+    [[nodiscard]] VkResult CreateImageResources(
+        std::span<const VkImage> images,
+        EPixelFormat             image_format,
+        VkExtent2D               extent,
+        Array<SwapchainImage>&   resources
+    );
+    void DestroyImages(Array<SwapchainImage>& _images);
 
     Array<SwapchainImage> swapchain_images;
 
