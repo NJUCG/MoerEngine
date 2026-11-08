@@ -186,146 +186,312 @@ RHIResourceAccess BufferAccess(Buffer* buffer, uint64 offset, uint64 size, ERHIA
     }
     return {BufferView(buffer, offset, size, 1), BarrierState::Buffer(stage, access)};
 }
+
+void ValidateDeclaredAccess(
+    const ResourceAccessScopeCmd*               scope,
+    const Array<const ResourceAccessScopeCmd*>& parents,
+    const Command&                              current,
+    const RHIResourceAccess&                    access,
+    bool                                        storage_binding
+) {
+    Intervals(access, [](uint64, uint64) {});
+    bool       covered = !scope;
+    const auto inspect = [&](const ResourceAccessScopeCmd* candidate) {
+        if (!candidate || std::none_of(candidate->accesses.begin(), candidate->accesses.end(), [&](const auto& declaration) {
+                return Identity(declaration) == Identity(access);
+            })) {
+            return false;
+        }
+        covered = Covered(candidate->accesses, access, storage_binding);
+        return true;
+    };
+    if (scope && !inspect(scope)) {
+        // Child graphs may describe only their private buffers. Resources
+        // inherited from an enclosing pass retain that pass's declaration;
+        // a child's own declaration still takes precedence over its parent.
+        for (auto it = parents.rbegin(); it != parents.rend(); ++it) {
+            if (inspect(*it)) {
+                break;
+            }
+        }
+    }
+    if (!covered) {
+        throw std::logic_error(std::format("pass '{}' command '{}' accesses undeclared resource '{}' or range", scope->name, current.name, ResourceName(access)));
+    }
+}
+
+template<typename Record>
+void CollectShaderArgumentAccesses(
+    const TArg&                                 argument,
+    const VulkanArgumentInfo*                   info,
+    const ResourceAccessScopeCmd*               scope,
+    const Array<const ResourceAccessScopeCmd*>& parents,
+    const Record&                               record
+) {
+    std::visit([&](const auto& resource) {
+        using Resource = std::decay_t<decltype(resource)>;
+        if constexpr (std::is_same_v<Resource, BindlessArrayRef>) {
+            const auto candidates = [](const ResourceAccessScopeCmd* declaration) {
+                return declaration && std::any_of(declaration->accesses.begin(), declaration->accesses.end(), [](const auto& access) {
+                           return (access.state.access & (ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)) != ERHIAccessFlags::UNDEFINED;
+                       });
+            };
+            if (resource && (!scope || (!candidates(scope) && std::none_of(parents.begin(), parents.end(), candidates)))) {
+                throw std::logic_error("bindless access requires an explicit resource-access scope and candidate declarations");
+            }
+        } else if constexpr (std::is_same_v<Resource, TextureView> || std::is_same_v<Resource, TextureViewArray> ||
+                             std::is_same_v<Resource, BufferView> || std::is_same_v<Resource, BufferViewArray>) {
+            if (info && info->resource_type == SRT_INVALID) {
+                return;
+            }
+            const bool writable = info && info->IsWritable();
+            const auto use      = [&](const auto& view) {
+                RHIResourceAccess access{view};
+                access.state = {ShaderStages(info), writable ? ERHIAccessFlags::SHADER_WRITE : ERHIAccessFlags::SHADER_READ, writable || (info && info->image_sampling == VulkanImageSampling::Storage) ? ETextureLayout::TEXTURE_LAYOUT_COMMON : ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                if constexpr (std::is_same_v<std::decay_t<decltype(view)>, TextureView>) {
+                    if (!view.GetTexture()) {
+                        throw std::logic_error("null shader texture access");
+                    }
+                    access.texture_aspects = view.GetTexture()->GetAspectFlags();
+                } else {
+                    access.state.texture_layout = ETextureLayout::TEXTURE_LAYOUT_UNDEFINED;
+                }
+                record(access, writable);
+            };
+            if constexpr (std::is_same_v<Resource, TextureViewArray> || std::is_same_v<Resource, BufferViewArray>) {
+                for (const auto& view : resource) {
+                    use(view);
+                }
+            } else {
+                use(resource);
+            }
+        }
+    },
+               argument);
+}
+
+template<typename Record>
+void CollectPipelineAccesses(
+    const ArrayArguments&                       arguments,
+    const PipelineHandle&                       pipeline,
+    const ResourceAccessScopeCmd*               scope,
+    const Array<const ResourceAccessScopeCmd*>& parents,
+    const Record&                               record
+) {
+    const auto* state = static_cast<const VulkanPipelineState*>(pipeline.GetState());
+    if (!state) {
+        throw std::logic_error("resource-state validation requires a valid shader pipeline");
+    }
+    const auto infos = state->GetArgumentInfos();
+    for (size_t i = 0; i < arguments.args.size(); ++i) {
+        if (i >= 64 || (state->GetActiveArgumentBits() & (uint64{1} << i)) == 0) {
+            continue;
+        }
+        CollectShaderArgumentAccesses(arguments.args[i], i < infos.size() ? &infos[i] : nullptr, scope, parents, record);
+    }
+}
+
+template<typename Record>
+void CollectAttachmentAccesses(const RenderPassInfo& pass, bool scoped, const Record& record) {
+    for (const auto& attachment : pass.color_attachments) {
+        record(TextureAccess(attachment.target, attachment.mip_level, attachment.array_layer, attachment.array_count, ERHIAccessFlags::COLOR_ATTACHMENT_WRITE, ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT));
+    }
+    if (pass.depth_attachment.Valid()) {
+        const auto& attachment = pass.depth_attachment;
+        auto        access     = ERHIAccessFlags::DEPTH_STENCIL_READ;
+        // An unscoped draw conservatively permits depth writes. A compiled
+        // pass supplies their exact contract, but a clear always writes.
+        if (!scoped || GetLoadOp(GetDepthAction(attachment.action)) == EAttachmentLoadOp::CLEAR ||
+            ((attachment.target->GetAspectFlags() & ETextureAspectFlags::STENCIL_SLICE) != ETextureAspectFlags::NONE &&
+             GetLoadOp(GetStencilAction(attachment.action)) == EAttachmentLoadOp::CLEAR)) {
+            access |= ERHIAccessFlags::DEPTH_STENCIL_WRITE;
+        }
+        record(TextureAccess(attachment.target, attachment.mip_level, attachment.array_layer, attachment.array_count, access, ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE));
+    }
+}
+
+template<typename Draw, typename Record>
+void CollectDrawAccesses(const Draw& draw, bool scoped, const Record& record) {
+    const auto buffers = [&](const auto& values, ERHIAccessFlags access) {
+        for (const auto& [buffer, range] : values) {
+            const auto [offset, size] = range;
+            // Legacy draw envelopes conservatively carry the whole buffer's
+            // size even when its starting offset is nonzero.
+            record(BufferAccess(buffer, offset, std::min(size, buffer->GetByteSize() - offset), access));
+        }
+    };
+    buffers(draw.VertexBuffers(), ERHIAccessFlags::VERTEX_ATTRIBUTE_READ);
+    buffers(draw.IndexBuffers(), ERHIAccessFlags::INDEX_READ);
+    buffers(draw.IndirectBuffers(), ERHIAccessFlags::INDIRECT_COMMAND_READ);
+    if constexpr (requires { draw.DrawCountBuffers(); }) {
+        buffers(draw.DrawCountBuffers(), ERHIAccessFlags::INDIRECT_COMMAND_READ);
+    }
+    CollectAttachmentAccesses(draw.RenderPassInfo(), scoped, record);
+}
+
+void AppendExplicitBarriers(VulkanResourceStateValidator::Program& program, const BarrierCmd& barriers) {
+    for (const auto& barrier : barriers.ExplicitTextures()) {
+        if (!barrier.handle) {
+            throw std::logic_error("null texture barrier");
+        }
+        TextureView view(reinterpret_cast<Texture*>(barrier.handle));
+        view.mip_level               = barrier.mip_level;
+        view.num_mips                = barrier.mip_count;
+        view.array_layer             = barrier.array_layer;
+        view.num_array               = barrier.array_count;
+        auto value                   = BarrierCreateInfo::Transition(view, barrier.src_state, barrier.dst_state, barrier.texture_aspects);
+        value.queue_transfer         = barrier.queue_transfer;
+        value.publish_external_state = barrier.publish_external_state;
+        program.emplace_back(value);
+    }
+    for (const auto& barrier : barriers.ExplicitBuffers()) {
+        auto value                   = BarrierCreateInfo::Transition(BufferView(reinterpret_cast<Buffer*>(barrier.handle), barrier.offset, barrier.byte_size, 1), barrier.src_state, barrier.dst_state);
+        value.queue_transfer         = barrier.queue_transfer;
+        value.publish_external_state = barrier.publish_external_state;
+        program.emplace_back(value);
+    }
+}
+
+template<typename Record>
+void CollectCommandAccesses(
+    const CmdSubmit&                            submit,
+    const Command&                              command,
+    const ResourceAccessScopeCmd*               scope,
+    const Array<const ResourceAccessScopeCmd*>& parents,
+    const Record&                               record
+) {
+    switch (command.Type()) {
+        case Command::EType::UploadBuffer: {
+            const auto& c = static_cast<const UploadBufferCmd&>(command);
+            record(BufferAccess(reinterpret_cast<Buffer*>(c.Handle()), c.Offset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_WRITE));
+            break;
+        }
+        case Command::EType::CopyBackBuffer: {
+            const auto& c = static_cast<const CopyBackBufferCmd&>(command);
+            record(BufferAccess(reinterpret_cast<Buffer*>(c.Handle()), c.Offset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_READ));
+            break;
+        }
+        case Command::EType::BufferToBuffer: {
+            const auto& c = static_cast<const CopyBufferCmd&>(command);
+            record(BufferAccess(reinterpret_cast<Buffer*>(c.SrcHandle()), c.SrcOffset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_READ));
+            record(BufferAccess(reinterpret_cast<Buffer*>(c.DstHandle()), c.DstOffset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_WRITE));
+            break;
+        }
+        case Command::EType::UploadTexture: {
+            const auto& c = static_cast<const UploadTextureCmd&>(command);
+            record(TextureAccess(reinterpret_cast<Texture*>(c.Handle()), c.MipLevel(), c.ArrayLayer(), 1, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST));
+            break;
+        }
+        case Command::EType::CopyBackTexture: {
+            const auto& c = static_cast<const CopyBackTextureCmd&>(command);
+            record(TextureAccess(reinterpret_cast<Texture*>(c.Handle()), c.MipLevel(), c.ArrayLayer(), 1, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC));
+            break;
+        }
+        case Command::EType::BufferToTexture: {
+            const auto& c = static_cast<const CopyBufferToTextureCmd&>(command);
+            record(BufferAccess(reinterpret_cast<Buffer*>(c.SrcHandle()), c.SrcOffset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_READ));
+            record(TextureAccess(reinterpret_cast<Texture*>(c.DstHandle()), c.MipLevel(), c.ArrayLayer(), 1, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST));
+            break;
+        }
+        case Command::EType::TextureToBuffer: {
+            const auto& c = static_cast<const CopyTextureToBufferCmd&>(command);
+            record(TextureAccess(reinterpret_cast<Texture*>(c.SrcHandle()), c.MipLevel(), c.ArrayLayer(), 1, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC));
+            record(BufferAccess(reinterpret_cast<Buffer*>(c.DstHandle()), c.DstOffset(), GetSizeFromImageFormat(c.Format(), c.Size()), ERHIAccessFlags::TRANSFER_WRITE));
+            break;
+        }
+        case Command::EType::TextureToTexture: {
+            const auto& c = static_cast<const CopyTextureCmd&>(command);
+            record(TextureAccess(reinterpret_cast<Texture*>(c.SrcHandle()), c.SrcMipLevel(), c.SrcArrayLayer(), 1, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC));
+            record(TextureAccess(reinterpret_cast<Texture*>(c.DstHandle()), c.DstMipLevel(), c.DstArrayLayer(), 1, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST));
+            break;
+        }
+        case Command::EType::ShaderDispatch: {
+            const auto& c = static_cast<const DispatchCmd&>(command);
+            CollectPipelineAccesses(c.Args(submit.cached_args), c.Pipeline(), scope, parents, record);
+            const auto parameter = c.Param();
+            if (const auto* indirect = std::get_if<DispatchIndirectParam>(&parameter)) {
+                record({indirect->indirect, BarrierState::Buffer(ERHIPipelineStageFlags::PS_DRAW_INDIRECT, ERHIAccessFlags::INDIRECT_COMMAND_READ)});
+            }
+            break;
+        }
+        case Command::EType::SetDrawState: {
+            const auto& c = static_cast<const SetDrawStateCmd&>(command);
+            CollectPipelineAccesses(c.Args(), c.Pipeline(), scope, parents, record);
+            CollectDrawAccesses(c, scope != nullptr, record);
+            break;
+        }
+        case Command::EType::MultiDraw: {
+            const auto& c = static_cast<const MultiDrawCmd&>(command);
+            for (const auto& element : c.draw_batch.draw_cmds) {
+                if (const auto* args = std::get_if<ArrayArguments>(&element.args)) {
+                    CollectPipelineAccesses(*args, element.handle, scope, parents, record);
+                } else {
+                    CollectPipelineAccesses(submit.cached_args.at(std::get<ArrayArgReference>(element.args).handle), element.handle, scope, parents, record);
+                }
+            }
+            CollectDrawAccesses(c, scope != nullptr, record);
+            break;
+        }
+        case Command::EType::TraceRay: {
+            const auto& c = static_cast<const TraceRayCmd&>(command);
+            CollectPipelineAccesses(c.Args(), c.Pipeline(), scope, parents, record);
+            break;
+        }
+        case Command::EType::ClearResource: {
+            const auto& c = static_cast<const ClearResourceCmd&>(command);
+            if (c.IsTexture()) {
+                if (!c.Texture().GetTexture()) {
+                    throw std::logic_error("null clear texture");
+                }
+                record({c.Texture(), {ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST}, c.Texture().GetTexture()->GetAspectFlags()});
+            } else {
+                record({c.Buffer(), BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE)});
+            }
+            break;
+        }
+        case Command::EType::Custom: {
+            const auto& c = static_cast<const CustomCmd&>(command);
+            if (c.CustomId() != CustomCmd::CustomCmdId::CUSTOM_DISPATCH) {
+                throw std::logic_error("opaque custom commands require explicit resource-access declarations");
+            }
+            const auto* native = dynamic_cast<const VkCustomDispatchCmd*>(&c);
+            if (!native) {
+                throw std::logic_error("Vulkan custom dispatch requires a Vulkan resource-usage contract");
+            }
+            for (const auto& usage : native->GetResourceUsages()) {
+                CollectShaderArgumentAccesses(usage.resource, &usage.info, scope, parents, record);
+            }
+            break;
+        }
+        default:
+            break; // Query/markers/table storage/AS have their own native protocols.
+    }
+}
 } // namespace
 
 VulkanResourceStateValidator::Program VulkanResourceStateValidator::Compile(const CmdSubmit& submit) {
     Program                              program;
     const ResourceAccessScopeCmd*        scope = nullptr;
     Array<const ResourceAccessScopeCmd*> parents;
-    const Command*                       current = nullptr;
-    const auto                           record  = [&](const RHIResourceAccess& access, bool storage_binding = false) {
-        Intervals(access, [](uint64, uint64) {});
-        bool       covered = !scope;
-        const auto inspect = [&](const ResourceAccessScopeCmd* candidate) {
-            if (!candidate || std::none_of(candidate->accesses.begin(), candidate->accesses.end(), [&](const auto& declaration) {
-                    return Identity(declaration) == Identity(access);
-                })) {
-                return false;
-            }
-            covered = Covered(candidate->accesses, access, storage_binding);
-            return true;
-        };
-        if (scope && !inspect(scope)) {
-            // Child graphs may describe only their private buffers. Resources
-            // inherited from an enclosing pass retain that pass's declaration;
-            // a child's own declaration still takes precedence over its parent.
-            for (auto it = parents.rbegin(); it != parents.rend(); ++it) {
-                if (inspect(*it)) {
-                    break;
-                }
-            }
-        }
-        if (!covered) {
-            throw std::logic_error(std::format("pass '{}' command '{}' accesses undeclared resource '{}' or range", scope->name, current->name, ResourceName(access)));
-        }
-        // A writable descriptor is a capability, not proof that every bound
-        // subresource is written. Explicit pass declarations describe its actual
-        // reads/writes (for example, read mip 0 and write mips 1..5 of one UAV
-        // array), and were already recorded at scope entry.
-        if (!storage_binding || !scope) {
-            program.emplace_back(access);
-        }
-    };
-    const auto shader_argument = [&](const TArg& argument, const VulkanArgumentInfo* info) {
-        std::visit([&](const auto& resource) {
-            using Resource = std::decay_t<decltype(resource)>;
-            if constexpr (std::is_same_v<Resource, BindlessArrayRef>) {
-                const auto candidates = [](const ResourceAccessScopeCmd* declaration) {
-                    return declaration && std::any_of(declaration->accesses.begin(), declaration->accesses.end(), [](const auto& access) {
-                               return (access.state.access & (ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE)) != ERHIAccessFlags::UNDEFINED;
-                           });
-                };
-                if (resource && (!scope || (!candidates(scope) && std::none_of(parents.begin(), parents.end(), candidates)))) {
-                    throw std::logic_error("bindless access requires an explicit resource-access scope and candidate declarations");
-                }
-            } else if constexpr (std::is_same_v<Resource, TextureView> || std::is_same_v<Resource, TextureViewArray> ||
-                                 std::is_same_v<Resource, BufferView> || std::is_same_v<Resource, BufferViewArray>) {
-                if (info && info->resource_type == SRT_INVALID) {
-                    return;
-                }
-                const bool writable = info && info->IsWritable();
-                const auto use      = [&](const auto& view) {
-                    RHIResourceAccess access{view};
-                    access.state = {ShaderStages(info), writable ? ERHIAccessFlags::SHADER_WRITE : ERHIAccessFlags::SHADER_READ, writable || (info && info->image_sampling == VulkanImageSampling::Storage) ? ETextureLayout::TEXTURE_LAYOUT_COMMON : ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                    if constexpr (std::is_same_v<std::decay_t<decltype(view)>, TextureView>) {
-                        if (!view.GetTexture()) {
-                            throw std::logic_error("null shader texture access");
-                        }
-                        access.texture_aspects = view.GetTexture()->GetAspectFlags();
-                    } else {
-                        access.state.texture_layout = ETextureLayout::TEXTURE_LAYOUT_UNDEFINED;
-                    }
-                    record(access, writable);
-                };
-                if constexpr (std::is_same_v<Resource, TextureViewArray> || std::is_same_v<Resource, BufferViewArray>) {
-                    for (const auto& view : resource) {
-                        use(view);
-                    }
-                } else {
-                    use(resource);
-                }
-            }
-        },
-                   argument);
-    };
-    const auto shader = [&](const ArrayArguments& arguments, const PipelineHandle& pipeline) {
-        const auto* state = static_cast<const VulkanPipelineState*>(pipeline.GetState());
-        if (!state) {
-            throw std::logic_error("resource-state validation requires a valid shader pipeline");
-        }
-        const auto infos = state->GetArgumentInfos();
-        for (size_t i = 0; i < arguments.args.size(); ++i) {
-            if (i >= 64 || (state->GetActiveArgumentBits() & (uint64{1} << i)) == 0) {
-                continue;
-            }
-            shader_argument(arguments.args[i], i < infos.size() ? &infos[i] : nullptr);
-        }
-    };
-    const auto attachments = [&](const RenderPassInfo& pass) {
-        for (const auto& attachment : pass.color_attachments) {
-            record(TextureAccess(attachment.target, attachment.mip_level, attachment.array_layer, attachment.array_count, ERHIAccessFlags::COLOR_ATTACHMENT_WRITE, ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT));
-        }
-        if (pass.depth_attachment.Valid()) {
-            const auto& attachment = pass.depth_attachment;
-            auto        access     = ERHIAccessFlags::DEPTH_STENCIL_READ;
-            // An unscoped draw conservatively permits depth writes. A compiled
-            // pass supplies their exact contract, but a clear always writes.
-            if (!scope || GetLoadOp(GetDepthAction(attachment.action)) == EAttachmentLoadOp::CLEAR ||
-                ((attachment.target->GetAspectFlags() & ETextureAspectFlags::STENCIL_SLICE) != ETextureAspectFlags::NONE &&
-                 GetLoadOp(GetStencilAction(attachment.action)) == EAttachmentLoadOp::CLEAR)) {
-                access |= ERHIAccessFlags::DEPTH_STENCIL_WRITE;
-            }
-            record(TextureAccess(attachment.target, attachment.mip_level, attachment.array_layer, attachment.array_count, access, ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE));
-        }
-    };
-    const auto geometry = [&](const auto& draw) {
-        const auto buffers = [&](const auto& values, ERHIAccessFlags access) {
-            for (const auto& [buffer, range] : values) {
-                const auto [offset, size] = range;
-                // Legacy draw envelopes conservatively carry the whole buffer's
-                // size even when its starting offset is nonzero.
-                record(BufferAccess(buffer, offset, std::min(size, buffer->GetByteSize() - offset), access));
-            }
-        };
-        buffers(draw.VertexBuffers(), ERHIAccessFlags::VERTEX_ATTRIBUTE_READ);
-        buffers(draw.IndexBuffers(), ERHIAccessFlags::INDEX_READ);
-        buffers(draw.IndirectBuffers(), ERHIAccessFlags::INDIRECT_COMMAND_READ);
-        if constexpr (requires { draw.DrawCountBuffers(); }) {
-            buffers(draw.DrawCountBuffers(), ERHIAccessFlags::INDIRECT_COMMAND_READ);
-        }
-        attachments(draw.RenderPassInfo());
-    };
     for (const auto& owner : submit.cmds) {
         if (!owner) {
             throw std::logic_error("resource-state validation encountered a null command");
         }
-        current = owner.get();
-        if (!current->CachedArgumentReferencesAreValid(submit.cached_args.size())) {
+        const auto& current = *owner;
+        if (!current.CachedArgumentReferencesAreValid(submit.cached_args.size())) {
             throw std::logic_error("resource-state validation encountered an invalid cached argument reference");
         }
-        switch (current->Type()) {
+        const auto record = [&](const RHIResourceAccess& access, bool storage_binding = false) {
+            ValidateDeclaredAccess(scope, parents, current, access, storage_binding);
+            // Scoped writable bindings are capabilities; scope declarations carry
+            // the actual per-subresource accesses and were appended at scope entry.
+            if (!storage_binding || !scope) {
+                program.emplace_back(access);
+            }
+        };
+        switch (current.Type()) {
             case Command::EType::ResourceAccessScope: {
-                const auto& marker = static_cast<const ResourceAccessScopeCmd&>(*current);
+                const auto& marker = static_cast<const ResourceAccessScopeCmd&>(current);
                 if (marker.begin) {
                     parents.push_back(scope);
                     scope = &marker;
@@ -342,134 +508,12 @@ VulkanResourceStateValidator::Program VulkanResourceStateValidator::Compile(cons
                 }
                 break;
             }
-            case Command::EType::Barrier: {
-                const auto& barriers = static_cast<const BarrierCmd&>(*current);
-                for (const auto& barrier : barriers.ExplicitTextures()) {
-                    if (!barrier.handle) {
-                        throw std::logic_error("null texture barrier");
-                    }
-                    TextureView view(reinterpret_cast<Texture*>(barrier.handle));
-                    view.mip_level               = barrier.mip_level;
-                    view.num_mips                = barrier.mip_count;
-                    view.array_layer             = barrier.array_layer;
-                    view.num_array               = barrier.array_count;
-                    auto value                   = BarrierCreateInfo::Transition(view, barrier.src_state, barrier.dst_state, barrier.texture_aspects);
-                    value.queue_transfer         = barrier.queue_transfer;
-                    value.publish_external_state = barrier.publish_external_state;
-                    program.emplace_back(value);
-                }
-                for (const auto& barrier : barriers.ExplicitBuffers()) {
-                    auto value                   = BarrierCreateInfo::Transition(BufferView(reinterpret_cast<Buffer*>(barrier.handle), barrier.offset, barrier.byte_size, 1), barrier.src_state, barrier.dst_state);
-                    value.queue_transfer         = barrier.queue_transfer;
-                    value.publish_external_state = barrier.publish_external_state;
-                    program.emplace_back(value);
-                }
+            case Command::EType::Barrier:
+                AppendExplicitBarriers(program, static_cast<const BarrierCmd&>(current));
                 break;
-            }
-            case Command::EType::UploadBuffer: {
-                const auto& c = static_cast<const UploadBufferCmd&>(*current);
-                record(BufferAccess(reinterpret_cast<Buffer*>(c.Handle()), c.Offset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_WRITE));
-                break;
-            }
-            case Command::EType::CopyBackBuffer: {
-                const auto& c = static_cast<const CopyBackBufferCmd&>(*current);
-                record(BufferAccess(reinterpret_cast<Buffer*>(c.Handle()), c.Offset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_READ));
-                break;
-            }
-            case Command::EType::BufferToBuffer: {
-                const auto& c = static_cast<const CopyBufferCmd&>(*current);
-                record(BufferAccess(reinterpret_cast<Buffer*>(c.SrcHandle()), c.SrcOffset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_READ));
-                record(BufferAccess(reinterpret_cast<Buffer*>(c.DstHandle()), c.DstOffset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_WRITE));
-                break;
-            }
-            case Command::EType::UploadTexture: {
-                const auto& c = static_cast<const UploadTextureCmd&>(*current);
-                record(TextureAccess(reinterpret_cast<Texture*>(c.Handle()), c.MipLevel(), c.ArrayLayer(), 1, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST));
-                break;
-            }
-            case Command::EType::CopyBackTexture: {
-                const auto& c = static_cast<const CopyBackTextureCmd&>(*current);
-                record(TextureAccess(reinterpret_cast<Texture*>(c.Handle()), c.MipLevel(), c.ArrayLayer(), 1, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC));
-                break;
-            }
-            case Command::EType::BufferToTexture: {
-                const auto& c = static_cast<const CopyBufferToTextureCmd&>(*current);
-                record(BufferAccess(reinterpret_cast<Buffer*>(c.SrcHandle()), c.SrcOffset(), c.ByteSize(), ERHIAccessFlags::TRANSFER_READ));
-                record(TextureAccess(reinterpret_cast<Texture*>(c.DstHandle()), c.MipLevel(), c.ArrayLayer(), 1, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST));
-                break;
-            }
-            case Command::EType::TextureToBuffer: {
-                const auto& c = static_cast<const CopyTextureToBufferCmd&>(*current);
-                record(TextureAccess(reinterpret_cast<Texture*>(c.SrcHandle()), c.MipLevel(), c.ArrayLayer(), 1, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC));
-                record(BufferAccess(reinterpret_cast<Buffer*>(c.DstHandle()), c.DstOffset(), GetSizeFromImageFormat(c.Format(), c.Size()), ERHIAccessFlags::TRANSFER_WRITE));
-                break;
-            }
-            case Command::EType::TextureToTexture: {
-                const auto& c = static_cast<const CopyTextureCmd&>(*current);
-                record(TextureAccess(reinterpret_cast<Texture*>(c.SrcHandle()), c.SrcMipLevel(), c.SrcArrayLayer(), 1, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC));
-                record(TextureAccess(reinterpret_cast<Texture*>(c.DstHandle()), c.DstMipLevel(), c.DstArrayLayer(), 1, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST));
-                break;
-            }
-            case Command::EType::ShaderDispatch: {
-                const auto& c = static_cast<const DispatchCmd&>(*current);
-                shader(c.Args(submit.cached_args), c.Pipeline());
-                const auto parameter = c.Param();
-                if (const auto* indirect = std::get_if<DispatchIndirectParam>(&parameter)) {
-                    record({indirect->indirect, BarrierState::Buffer(ERHIPipelineStageFlags::PS_DRAW_INDIRECT, ERHIAccessFlags::INDIRECT_COMMAND_READ)});
-                }
-                break;
-            }
-            case Command::EType::SetDrawState: {
-                const auto& c = static_cast<const SetDrawStateCmd&>(*current);
-                shader(c.Args(), c.Pipeline());
-                geometry(c);
-                break;
-            }
-            case Command::EType::MultiDraw: {
-                const auto& c = static_cast<const MultiDrawCmd&>(*current);
-                for (const auto& element : c.draw_batch.draw_cmds) {
-                    if (const auto* args = std::get_if<ArrayArguments>(&element.args)) {
-                        shader(*args, element.handle);
-                    } else {
-                        shader(submit.cached_args.at(std::get<ArrayArgReference>(element.args).handle), element.handle);
-                    }
-                }
-                geometry(c);
-                break;
-            }
-            case Command::EType::TraceRay: {
-                const auto& c = static_cast<const TraceRayCmd&>(*current);
-                shader(c.Args(), c.Pipeline());
-                break;
-            }
-            case Command::EType::ClearResource: {
-                const auto& c = static_cast<const ClearResourceCmd&>(*current);
-                if (c.IsTexture()) {
-                    if (!c.Texture().GetTexture()) {
-                        throw std::logic_error("null clear texture");
-                    }
-                    record({c.Texture(), {ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST}, c.Texture().GetTexture()->GetAspectFlags()});
-                } else {
-                    record({c.Buffer(), BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE)});
-                }
-                break;
-            }
-            case Command::EType::Custom: {
-                const auto& c = static_cast<const CustomCmd&>(*current);
-                if (c.CustomId() != CustomCmd::CustomCmdId::CUSTOM_DISPATCH) {
-                    throw std::logic_error("opaque custom commands require explicit resource-access declarations");
-                }
-                const auto* native = dynamic_cast<const VkCustomDispatchCmd*>(&c);
-                if (!native) {
-                    throw std::logic_error("Vulkan custom dispatch requires a Vulkan resource-usage contract");
-                }
-                for (const auto& usage : native->GetResourceUsages()) {
-                    shader_argument(usage.resource, &usage.info);
-                }
-                break;
-            }
             default:
-                break; // Query/markers/table storage/AS have their own native protocols.
+                CollectCommandAccesses(submit, current, scope, parents, record);
+                break;
         }
     }
     if (scope) {
