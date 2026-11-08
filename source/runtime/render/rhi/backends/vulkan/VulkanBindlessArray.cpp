@@ -17,6 +17,17 @@
 
 namespace Moer::Render {
 
+namespace {
+uint32 PopFreeSlot(std::deque<uint32>& slots) {
+    if (slots.empty()) {
+        return 0;
+    }
+    const uint32 slot = slots.front();
+    slots.pop_front();
+    return slot;
+}
+} // namespace
+
 static constexpr std::string_view s_bindless_index_buffer_name       = "VkBindless::IndexTable";
 static constexpr std::string_view s_bindless_buffer_descriptors_name = "VkBindless::BufferDescriptors";
 static constexpr std::string_view s_bindless_texture_descriptors_name =
@@ -551,14 +562,14 @@ UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
 uint32 VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
     std::unique_lock<std::mutex> lk(mtx);
     const uint32                 capacity              = static_cast<uint32>(bindings.size());
-    const uint32                 reused_array_slot     = free_slots.Pop();
-    const uint32                 reused_texture_slot   = free_texture_slots.Pop();
+    const uint32                 reused_array_slot     = PopFreeSlot(free_slots);
+    const uint32                 reused_texture_slot   = PopFreeSlot(free_texture_slots);
     auto                         rollback_reused_slots = [&] {
         if (reused_array_slot != 0 && reused_array_slot < capacity) {
-            free_slots.Push(reused_array_slot);
+            free_slots.push_back(reused_array_slot);
         }
         if (reused_texture_slot != 0 && reused_texture_slot < capacity) {
-            free_texture_slots.Push(reused_texture_slot);
+            free_texture_slots.push_back(reused_texture_slot);
         }
     };
     if ((reused_array_slot != 0 && reused_array_slot >= capacity) ||
@@ -576,8 +587,8 @@ uint32 VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler
     const uint32 texture_slot = reused_texture_slot == 0 ? texture_slot_offset++ : reused_texture_slot;
     if (array_slot_generations[slot_idx] == std::numeric_limits<uint64>::max() ||
         texture_slot_generations[texture_slot] == std::numeric_limits<uint64>::max()) {
-        free_slots.Push(slot_idx);
-        free_texture_slots.Push(texture_slot);
+        free_slots.push_back(slot_idx);
+        free_texture_slots.push_back(texture_slot);
         throw std::runtime_error("bindless texture slot generation exhausted");
     }
     const uint64 array_generation           = ++array_slot_generations[slot_idx];
@@ -612,14 +623,14 @@ uint32 VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler
 uint32 VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
     std::unique_lock<std::mutex> lk(mtx);
     const uint32                 capacity              = static_cast<uint32>(bindings.size());
-    const uint32                 reused_array_slot     = free_slots.Pop();
-    const uint32                 reused_buffer_slot    = free_buffer_slots.Pop();
+    const uint32                 reused_array_slot     = PopFreeSlot(free_slots);
+    const uint32                 reused_buffer_slot    = PopFreeSlot(free_buffer_slots);
     auto                         rollback_reused_slots = [&] {
         if (reused_array_slot != 0 && reused_array_slot < capacity) {
-            free_slots.Push(reused_array_slot);
+            free_slots.push_back(reused_array_slot);
         }
         if (reused_buffer_slot != 0 && reused_buffer_slot < capacity) {
-            free_buffer_slots.Push(reused_buffer_slot);
+            free_buffer_slots.push_back(reused_buffer_slot);
         }
     };
     if ((reused_array_slot != 0 && reused_array_slot >= capacity) ||
@@ -637,8 +648,8 @@ uint32 VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
     const uint32 buffer_slot = reused_buffer_slot == 0 ? buffer_slot_offset++ : reused_buffer_slot;
     if (array_slot_generations[slot_idx] == std::numeric_limits<uint64>::max() ||
         buffer_slot_generations[buffer_slot] == std::numeric_limits<uint64>::max()) {
-        free_slots.Push(slot_idx);
-        free_buffer_slots.Push(buffer_slot);
+        free_slots.push_back(slot_idx);
+        free_buffer_slots.push_back(buffer_slot);
         throw std::runtime_error("bindless buffer slot generation exhausted");
     }
     const uint64 array_generation         = ++array_slot_generations[slot_idx];
@@ -699,8 +710,8 @@ void                 VulkanBindlessArray::UnbindTexture(uint32 _array_idx) {
                         ++texture_slot_generations[_cmd.slot];
                         UntrackResource((uint64)_cmd.texture.Get());
                         UntrackTextureView(_array_idx);
-                        free_slots.Push(_cmd.array_idx);
-                        free_texture_slots.Push(_cmd.slot);
+                        free_slots.push_back(_cmd.array_idx);
+                        free_texture_slots.push_back(_cmd.slot);
 
                         update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                         LOG_DEBUG(
@@ -734,8 +745,8 @@ void                 VulkanBindlessArray::UnbindTexture(uint32 _array_idx) {
                         ++array_slot_generations[_cmd.array_idx];
                         ++buffer_slot_generations[_cmd.slot];
                         UntrackResource((uint64)_cmd.buffer.Get());
-                        free_slots.Push(_cmd.array_idx);
-                        free_buffer_slots.Push(_cmd.slot);
+                        free_slots.push_back(_cmd.array_idx);
+                        free_buffer_slots.push_back(_cmd.slot);
                         update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                         LOG_DEBUG(
                             "Cancelled a pending bindless buffer allocation before submission, array index: "
@@ -833,8 +844,8 @@ void VulkanBindlessArray::UnbindBuffer(uint32 _array_idx) {
                         ++texture_slot_generations[_cmd.slot];
                         UntrackResource((uint64)_cmd.texture.Get());
                         UntrackTextureView(_array_idx);
-                        free_slots.Push(_cmd.array_idx);
-                        free_texture_slots.Push(_cmd.slot);
+                        free_slots.push_back(_cmd.array_idx);
+                        free_texture_slots.push_back(_cmd.slot);
                         update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                         LOG_DEBUG(
                             "Cancelled a pending bindless texture allocation before submission, array index: "
@@ -867,8 +878,8 @@ void VulkanBindlessArray::UnbindBuffer(uint32 _array_idx) {
                         ++array_slot_generations[_cmd.array_idx];
                         ++buffer_slot_generations[_cmd.slot];
                         UntrackResource((uint64)_cmd.buffer.Get());
-                        free_slots.Push(_cmd.array_idx);
-                        free_buffer_slots.Push(_cmd.slot);
+                        free_slots.push_back(_cmd.array_idx);
+                        free_buffer_slots.push_back(_cmd.slot);
                         update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                         LOG_DEBUG(
                             "Cancelled a pending bindless buffer allocation before submission, array index: "
@@ -1524,12 +1535,12 @@ void VulkanBindlessArray::ApplyCompletionPlan(const UpdateCompletionPlan& plan, 
     }
     // Publish free slots only after every membership change is complete.
     for (const TextureUpdateInfo* retirement : plan.texture_retirements) {
-        free_slots.Push(retirement->array_idx);
-        free_texture_slots.Push(retirement->slot);
+        free_slots.push_back(retirement->array_idx);
+        free_texture_slots.push_back(retirement->slot);
     }
     for (const BufferUpdateInfo* retirement : plan.buffer_retirements) {
-        free_slots.Push(retirement->array_idx);
-        free_buffer_slots.Push(retirement->slot);
+        free_slots.push_back(retirement->array_idx);
+        free_buffer_slots.push_back(retirement->slot);
     }
 }
 

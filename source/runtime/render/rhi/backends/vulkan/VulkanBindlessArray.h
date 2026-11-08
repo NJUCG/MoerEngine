@@ -2,11 +2,10 @@
 
 #include "VulkanDescriptorBufferAllocator.h"
 #include "VulkanRHIResource.h"
-#include "misc/LockFree.h"
 #include "misc/Types.h"
 #include "rhi/RHICommand.h"
 
-#include <atomic>
+#include <deque>
 #include <memory>
 #include <mutex>
 
@@ -108,12 +107,13 @@ protected:
     void                        DiscardUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates) override;
     class VulkanDescriptorHeap& g_heap;
 
-    LockFreeQueueBase<uint32, true> free_texture_slots;
-    LockFreeQueueBase<uint32, true> free_buffer_slots;
-    LockFreeQueueBase<uint32, true> free_slots;
-    std::atomic<uint32>             texture_slot_offset;
-    std::atomic<uint32>             buffer_slot_offset;
-    std::atomic<uint32>             slot_offset;
+    // All slot allocation and retirement is serialized by mtx; retain FIFO reuse.
+    std::deque<uint32> free_texture_slots;
+    std::deque<uint32> free_buffer_slots;
+    std::deque<uint32> free_slots;
+    uint32             texture_slot_offset;
+    uint32             buffer_slot_offset;
+    uint32             slot_offset;
     Array<uint64>                   array_slot_generations;
     Array<uint64>                   texture_slot_generations;
     Array<uint64>                   buffer_slot_generations;
