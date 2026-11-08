@@ -166,81 +166,32 @@ public:
     ) override;
 
 private:
-    void SetInput(
-        nrd::UserPool&     _user_pool,
-        EResourceSlot      _index,
-        const TextureRef&  _texture
-    ) {
-        assert(_index < EResourceSlot::OUT_DIFFUSE && "Invalid resource slot index");
-        auto* vk_tex = ResourceCast(_texture);
-
-        auto& tex_barrier_desc_map = texture_barrier_descs[uint8(_index)];
-
-        auto desc_key = uint64(vk_tex->GetHandle());
-        if (tex_barrier_desc_map.contains(desc_key)) {
-            auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
-            nrd::Integration_SetResource(_user_pool, ResourceSlot(_index), &tex_barrier_desc);
-        } else {
-            auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
-            // Wrap required textures (better do it only once on initialization)
-            nri::TextureVKDesc tex_desc = {};
-
-            tex_desc.vkImage  = uint64(vk_tex->GetHandle());
-            tex_desc.vkFormat = Moer::Render::VulkanEnumTranslator::METoVKFormat(vk_tex->GetFormat());
-            tex_desc.vkImageType =
-                Moer::Render::VulkanEnumTranslator::METoVKImageType(vk_tex->GetDimension());
-            tex_desc.width     = vk_tex->GetWidth();
-            tex_desc.height    = vk_tex->GetHeight();
-            tex_desc.depth     = vk_tex->GetDepth();
-            tex_desc.mipNum    = vk_tex->GetNumMips();
-            tex_desc.layerNum  = vk_tex->GetNumArray();
-            tex_desc.sampleNum = 1; // 1x texture sampling
-
-            // You need to specify the current state of the resource here, after denoising NRD can modify
-            // this state. Application must continue state tracking from this point.
-            // Useful information:
-            //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
-            //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
-            CHECK_ASSERT(
-                nrd.nri.rhi.CreateTextureVK(
-                    *nrd.nri.device,
-                    tex_desc,
-                    (nri::Texture*&)tex_barrier_desc.texture
-                ) == nri::Result::SUCCESS,
-                "Failed to wrap an NRD input texture"
-            );
-            tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE;
-            tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE;
-            tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE;
-            tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE;
-            tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.mipOffset     = 0;
-            tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
-            tex_barrier_desc.layerOffset   = 0;
-            tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
-            tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
-            nrd::Integration_SetResource(_user_pool, ResourceSlot(_index), &tex_barrier_desc);
-        }
+    void SetInput(nrd::UserPool& user_pool, EResourceSlot index, const TextureRef& texture) {
+        assert(index < EResourceSlot::OUT_DIFFUSE && "Invalid resource slot index");
+        SetResource(
+            user_pool, index, texture,
+            {nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE, nri::StageBits::COMPUTE_SHADER}
+        );
     }
 
-    void SetOutput(
-        nrd::UserPool&     _user_pool,
-        EResourceSlot      _index,
-        const TextureRef&  _texture
+    void SetOutput(nrd::UserPool& user_pool, EResourceSlot index, const TextureRef& texture) {
+        assert(index >= EResourceSlot::OUT_DIFFUSE && "Output resource index is invalid");
+        SetResource(
+            user_pool, index, texture,
+            {nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::Layout::SHADER_RESOURCE_STORAGE, nri::StageBits::COMPUTE_SHADER}
+        );
+    }
+
+    void SetResource(
+        nrd::UserPool&         user_pool,
+        EResourceSlot          index,
+        const TextureRef&      texture,
+        nri::AccessLayoutStage initial_state
     ) {
-        assert(_index >= EResourceSlot::OUT_DIFFUSE && "Output resource index is invalid");
-        auto* vk_tex = ResourceCast(_texture);
-
-        auto& tex_barrier_desc_map = texture_barrier_descs[uint8(_index)];
-
-        auto desc_key = uint64(vk_tex->GetHandle());
-        if (tex_barrier_desc_map.contains(desc_key)) {
-            auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
-            nrd::Integration_SetResource(_user_pool, ResourceSlot(_index), &tex_barrier_desc);
-        } else {
-            auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
-            // Wrap required textures (better do it only once on initialization)
+        auto* vk_tex           = ResourceCast(texture);
+        auto [entry, inserted] = texture_barrier_descs[uint8(index)].try_emplace(uint64(vk_tex->GetHandle()));
+        auto& barrier          = entry->second;
+        if (inserted) {
             nri::TextureVKDesc tex_desc = {};
 
             tex_desc.vkImage  = uint64(vk_tex->GetHandle());
@@ -253,34 +204,21 @@ private:
             tex_desc.mipNum    = vk_tex->GetNumMips();
             tex_desc.layerNum  = vk_tex->GetNumArray();
             tex_desc.sampleNum = 1; // 1x texture sampling
-
-            // You need to specify the current state of the resource here, after denoising NRD can modify
-            // this state. Application must continue state tracking from this point.
-            // Useful information:
-            //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
-            //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
             CHECK_ASSERT(
-                nrd.nri.rhi.CreateTextureVK(
-                    *nrd.nri.device,
-                    tex_desc,
-                    (nri::Texture*&)tex_barrier_desc.texture
-                ) == nri::Result::SUCCESS,
-                "Failed to wrap an NRD output texture"
+                nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, (nri::Texture*&)barrier.texture) == nri::Result::SUCCESS,
+                "Failed to wrap an NRD texture"
             );
-            tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.mipOffset     = 0;
-            tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
-            tex_barrier_desc.layerOffset   = 0;
-            tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
-            tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
-            nrd::Integration_SetResource(_user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            // NRD updates cached states while denoising; initialize only a new wrapper.
+            barrier.before      = initial_state;
+            barrier.after       = initial_state;
+            barrier.mipOffset   = 0;
+            barrier.mipNum      = vk_tex->GetNumMips();
+            barrier.layerOffset = 0;
+            barrier.layerNum    = vk_tex->GetNumArray();
+            barrier.planes      = nri::PlaneBits::COLOR;
         }
-    };
+        nrd::Integration_SetResource(user_pool, ResourceSlot(index), &barrier);
+    }
 
 private:
     constexpr nrd::ResourceType ResourceSlot(const EResourceSlot _index) {
