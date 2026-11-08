@@ -170,6 +170,15 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::UNIFORM_READ);
     const auto shader_write = BarrierState::Buffer(ERHIPipelineStageFlags::PS_COMPUTE_SHADER,
         ERHIAccessFlags::SHADER_WRITE);
+    // Bindless indices hide their targets from shader arguments. Declare the
+    // candidates alongside ordinary bindings for the current access contract.
+    const std::array shader_accesses{
+        RHIResourceAccess{uniform->GetView(), shader_read},
+        RHIResourceAccess{input->GetView(), shader_read},
+        RHIResourceAccess{output->GetView(), shader_write},
+        RHIResourceAccess{texture->GetView(), sampled, ETextureAspectFlags::COLOR},
+        RHIResourceAccess{depth->GetView(), sampled, ETextureAspectFlags::DEPTH_SLICE},
+    };
     CommandList       upload;
     upload.Barriers({
         BarrierCreateInfo::Transition(texture->GetView(), undefined, texture_write, ETextureAspectFlags::COLOR),
@@ -203,8 +212,10 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         rejected.Barriers({BarrierCreateInfo::Transition(input->GetView(), shader_read, transfer_write)});
         rejected.CopyFrom(Bytes(poison), input->GetView());
         rejected.Barriers({BarrierCreateInfo::Transition(input->GetView(), transfer_write, shader_read)});
+        rejected.BeginResourceAccesses(shader_accesses, "DescriptorCapacityCandidates");
         rejected.Compute(bindless, uniform, output, input_views[0], depth->GetView(), table, input_index, 0u)
             .Dispatch(uint3(1, 1, 1));
+        rejected.EndResourceAccesses();
         rejected.AddCallback([&] { ++completed; });
         rejected.AddSuccessCallback([&] { ++succeeded; });
         auto submit = rejected.Submit();
@@ -229,6 +240,7 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
         auto&       readback = readbacks[batch];
         CommandList commands;
         commands.Barriers({BarrierCreateInfo::Transition(output->GetView(), transfer_read, shader_write)});
+        commands.BeginResourceAccesses(shader_accesses, "DescriptorReadbackCandidates");
         for (uint32 i = 0; i < readback.size(); ++i) {
             const uint32 iteration = batch * uint32(readback.size()) + i;
             if (large_constants && i % 4 == 3)
@@ -260,6 +272,7 @@ void RunDescriptorReadback(bool test_reservation_pressure) {
                 commands.Compute(arrays, std::span<BufferView>(input_views), output, input_index, iteration)
                     .Dispatch(uint3(1, 1, 1));
         }
+        commands.EndResourceAccesses();
         commands.Barriers({BarrierCreateInfo::Transition(output->GetView(), shader_write, transfer_read)});
         commands.CopyFrom(
             output->GetView(),
