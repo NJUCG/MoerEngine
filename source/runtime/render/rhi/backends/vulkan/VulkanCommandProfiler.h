@@ -23,7 +23,6 @@ struct ProfilerStorage {
     // constants so they cannot silently drift apart.
     static constexpr VkPipelineStageFlagBits kBeginTimestampStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
     static constexpr VkPipelineStageFlagBits kEndTimestampStage   = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    static constexpr VkPipelineStageFlags2   kResetQueryStage     = VK_PIPELINE_STAGE_2_NONE;
 
     ProfilerStorage(VkNativeQueryPool& _timestamp_pool);
     void CollectProfiling(VkCommandBuffer _cmd);

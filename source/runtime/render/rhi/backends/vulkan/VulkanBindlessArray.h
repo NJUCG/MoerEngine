@@ -40,14 +40,6 @@ public:
     uint32 AllocateBuffer(BufferView _buffer) override;
     void   UnbindTexture(uint32 _slot) override;
     void   UnbindBuffer(uint32 _slot) override;
-    bool   IsResourceAllocated(uint64 _handle) const;
-    bool   IsTextureViewAllocated(
-        uint64 _texture,
-        uint8  _mip_level,
-        uint8  _mip_count,
-        uint8  _array_layer,
-        uint8  _array_count
-    ) const;
     void FinalizeUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates, bool _gpu_update_succeeded);
     bool BeginUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates);
 
@@ -68,16 +60,6 @@ public:
 
     VkDescriptorSet GetLegacySet(VkDescriptorType type) const;
     VkAccessFlags2  GetDescriptorReadAccess() const;
-
-    void Lock() {
-        mtx.lock();
-    }
-    void Unlock() {
-        mtx.unlock();
-    }
-    std::unique_lock<std::mutex> AcquireLock() {
-        return std::unique_lock<std::mutex>(mtx);
-    }
 
 public:
     uint64               texture_offset_in_buffer;

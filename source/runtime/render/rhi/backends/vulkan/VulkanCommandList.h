@@ -50,10 +50,7 @@ private:
 // to the surrounding command context; recording here does not submit work.
 class VulkanCommandList {
 public:
-    explicit VulkanCommandList(
-        VulkanCommandPool&   _command_pool,
-        VkCommandBufferLevel _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY
-    );
+    explicit VulkanCommandList(VulkanCommandPool& _command_pool);
     ~VulkanCommandList();
     VulkanCommandList(const VulkanCommandList&)            = delete;
     VulkanCommandList& operator=(const VulkanCommandList&) = delete;
@@ -66,12 +63,7 @@ public:
 
     // Recording lifecycle.
     [[nodiscard]] VkResult Begin();
-    [[nodiscard]] VkResult BeginSecondary(
-        const VkCommandBufferInheritanceInfo& _inheritance,
-        VkCommandBufferUsageFlags             _flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
-    );
     [[nodiscard]] VkResult End();
-    void                   ExecuteSecondaryCommands(std::span<const VkCommandBuffer> _secondary_buffers);
 
     // Rendering scope.
     void BeginRendering(const VkRenderingInfo& _info);
@@ -221,7 +213,6 @@ public:
 private:
     VkCommandBuffer                                      command_buffer{VK_NULL_HANDLE};
     VulkanCommandPool&                                   command_pool;
-    VkCommandBufferLevel                                 level;
     std::shared_ptr<const VulkanDescriptorRecordingPlan> descriptor_recording_plan;
     VulkanDescriptorBufferAllocator::Cursor              descriptor_cursor;
     uint64                                               used_descriptor_bytes{0};

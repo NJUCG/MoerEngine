@@ -123,21 +123,6 @@ void VulkanCommandContext::NotifyQueriesAfterGpuCompletion(QueryPublishBatch _ba
     queries.NotifyQueriesAfterGpuCompletion(_batch);
 }
 
-bool VulkanCommandContext::CompleteSuccess() noexcept {
-    VulkanOperationContext context{
-        .operation  = EVulkanFaultOperation::QueryPoolResults,
-        .queue_type = queue_type,
-    };
-    const VkResult          prepare_result      = PrepareQueriesAfterGpuCompletion(context);
-    const bool              callbacks_succeeded = prepare_result == VK_SUCCESS && CompleteSuccessCallbacks();
-    const QueryPublishBatch query_batch         = QueryBackendAccess::BeginPublishBatch();
-    PublishQueriesAfterGpuCompletion(
-        query_batch, prepare_result == VK_SUCCESS, "Vulkan query result preparation failed"
-    );
-    NotifyQueriesAfterGpuCompletion(query_batch);
-    return prepare_result == VK_SUCCESS && callbacks_succeeded;
-}
-
 bool VulkanCommandContext::Reset() {
     if (image_acquisition_pending || !ResetCommandPool()) {
         return false;

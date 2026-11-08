@@ -29,9 +29,6 @@ public:
     VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties{};
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR    ray_tracing_pipeline_properties{};
 
-    // Mesh shading
-    VkPhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties{};
-
     // Cooperative operations
     VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperative_matrix_properties{};
     VkPhysicalDeviceCooperativeVectorPropertiesNV  cooperative_vector_properties{};

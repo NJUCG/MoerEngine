@@ -135,15 +135,11 @@ public:
     const VulkanOptionalDeviceProperties& GetOptionalProperties() const {
         return m_device_info.optional_properties;
     }
-    VkPhysicalDeviceMemoryProperties GetMemoryProperties() const {
-        return m_device_info.memory_properties;
-    }
     QueueFamilyIndices GetQueueFamilyIndices() const {
         return m_device_info.queue_family_indices;
     }
     // 查询当前设备是否启用了指定的 device extension（基于已启用扩展列表）
     bool HasDeviceExtension(std::string_view _ext_name) const;
-    bool IsAmdGpu() const;
 
     // Native queues and timestamp queries.
     // Read the family selected for an engine queue role during initialization.

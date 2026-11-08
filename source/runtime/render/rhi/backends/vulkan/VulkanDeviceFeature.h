@@ -90,8 +90,6 @@ public:
     bool m_has_khr_acceleration_structure                  = false;
     bool m_has_khr_ray_tracing_pipeline                    = false;
     bool m_has_khr_ray_query                               = false;
-    bool m_has_ext_mesh_shader                             = false;
-    bool m_allow_mesh_primitive_shading                    = false;
     bool m_has_khr_cooperative_matrix                      = false;
     bool m_has_khr_cooperative_matrix_robust_buffer_access = false;
     bool m_has_nv_cooperative_vector                       = false;

@@ -37,12 +37,6 @@ public:
     uint32 GetCount() const {
         return count;
     }
-    [[nodiscard]] VkResult GetResults(
-        std::span<uint64>  _results,
-        uint32             _first_query,
-        uint32             _query_count,
-        VkQueryResultFlags _flags
-    );
     VulkanDevice& GetDevice() const {
         return device;
     }

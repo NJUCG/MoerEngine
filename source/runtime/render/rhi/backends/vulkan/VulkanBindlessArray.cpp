@@ -931,40 +931,6 @@ void VulkanBindlessArray::UnbindBuffer(uint32 _array_idx) {
     temp_slot_to_cmd[_array_idx] = update_cmds.size() - 1;
 }
 
-bool VulkanBindlessArray::IsResourceAllocated(uint64 _resource) const {
-    return resource_allocation_counts.find(_resource) != resource_allocation_counts.end();
-}
-
-
-
-bool VulkanBindlessArray::IsTextureViewAllocated(
-    uint64 _texture,
-    uint8  _mip_level,
-    uint8  _mip_count,
-    uint8  _array_layer,
-    uint8  _array_count
-) const {
-    auto it = texture_view_ref_counts.find(_texture);
-    if (it == texture_view_ref_counts.end()) {
-        return false;
-    }
-    auto*  vk_texture = reinterpret_cast<VulkanTexture*>(_texture);
-    uint32 mip_level  = _mip_level;
-    uint32 mip_count =
-        _mip_count == kRemainingSubresource ? (vk_texture->GetNumMips() - mip_level) : _mip_count;
-    uint32 array_layer = _array_layer;
-    uint32 array_count =
-        _array_count == kRemainingSubresource ? (vk_texture->GetNumArray() - array_layer) : _array_count;
-    for (const auto& [view, ref_count] : it->second) {
-        (void)ref_count;
-        if (RangeOverlap(view.mip_level, view.mip_count, mip_level, mip_count) &&
-            RangeOverlap(view.array_layer, view.array_count, array_layer, array_count)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 namespace {
 
 uint64 ValidateUpdateCommandToken(const Array<BindlessArray::UpdateCmd>& updates) {

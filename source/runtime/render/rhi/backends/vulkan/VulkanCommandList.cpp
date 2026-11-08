@@ -78,15 +78,14 @@ std::string_view VulkanCommandPool::GetQueueName() const {
     }
 }
 
-VulkanCommandList::VulkanCommandList(VulkanCommandPool& _command_pool, VkCommandBufferLevel _level) :
-    command_pool(_command_pool),
-    level(_level) {
+VulkanCommandList::VulkanCommandList(VulkanCommandPool& _command_pool) :
+    command_pool(_command_pool) {
     VulkanDevice&               device              = command_pool.GetDevice();
     VkCommandBufferAllocateInfo command_buffer_info = {
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext              = nullptr,
         .commandPool        = command_pool.GetHandle(),
-        .level              = level,
+        .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 1
     };
     const VkResult result =
@@ -108,9 +107,7 @@ VulkanCommandList::VulkanCommandList(VulkanCommandPool& _command_pool, VkCommand
             (uint64)command_buffer,
             VK_OBJECT_TYPE_COMMAND_BUFFER,
             std::format(
-                "{}CommandBuffer_{}",
-                level == VK_COMMAND_BUFFER_LEVEL_PRIMARY ? "Primary" : "Secondary",
-                command_pool.GetQueueName()
+                "PrimaryCommandBuffer_{}", command_pool.GetQueueName()
             )
         );
     } catch (...) {
@@ -127,7 +124,6 @@ VulkanCommandList::~VulkanCommandList() {
 
 // Recording lifecycle.
 VkResult VulkanCommandList::Begin() {
-    assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     used_descriptor_bytes = 0;
     descriptor_cursor = {};
     ResetTransientDescriptors();
@@ -140,37 +136,10 @@ VkResult VulkanCommandList::Begin() {
     return vkBeginCommandBuffer(command_buffer, &begin_info);
 }
 
-VkResult VulkanCommandList::BeginSecondary(
-    const VkCommandBufferInheritanceInfo& _inheritance,
-    VkCommandBufferUsageFlags             _flags
-) {
-    assert(level == VK_COMMAND_BUFFER_LEVEL_SECONDARY);
-    used_descriptor_bytes = 0;
-    descriptor_cursor = {};
-    ResetTransientDescriptors();
-    VkCommandBufferBeginInfo begin_info = {
-        .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext            = nullptr,
-        .flags            = _flags,
-        .pInheritanceInfo = &_inheritance
-    };
-    return vkBeginCommandBuffer(command_buffer, &begin_info);
-}
-
 VkResult VulkanCommandList::End() {
     descriptor_cursor = {};
     descriptor_recording_plan.reset();
     return vkEndCommandBuffer(command_buffer);
-}
-
-void VulkanCommandList::ExecuteSecondaryCommands(std::span<const VkCommandBuffer> _secondary_buffers) {
-    assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-    if (_secondary_buffers.empty()) {
-        return;
-    }
-    vkCmdExecuteCommands(
-        command_buffer, static_cast<uint32>(_secondary_buffers.size()), _secondary_buffers.data()
-    );
 }
 
 // Rendering scope.

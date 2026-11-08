@@ -54,36 +54,6 @@ VkNativeQueryPool::~VkNativeQueryPool() {
     }
 }
 
-VkResult VkNativeQueryPool::GetResults(
-    std::span<uint64>  _data,
-    uint32             _first_query,
-    uint32             _query_count,
-    VkQueryResultFlags _flags
-) {
-    if (_query_count == 0) {
-        return VK_SUCCESS;
-    }
-    if (_first_query > count || _query_count > count - _first_query) {
-        throw std::out_of_range("Vulkan query result range exceeds the native pool");
-    }
-
-    const size_t values_per_query = (_flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) != 0 ? 2u : 1u;
-    if (_query_count > _data.size() / values_per_query) {
-        throw std::invalid_argument("Vulkan query result span is too small for the requested flags");
-    }
-    const VkDeviceSize stride = sizeof(uint64) * static_cast<VkDeviceSize>(values_per_query);
-    return vkGetQueryPoolResults(
-        device.GetDevice(),
-        query_pool,
-        _first_query,
-        _query_count,
-        _data.size_bytes(),
-        _data.data(),
-        stride,
-        VK_QUERY_RESULT_64_BIT | _flags
-    );
-}
-
 void VkNativeQueryPool::ResetHost(uint32 _first_query, uint32 _query_count) {
     if (_query_count == 0) {
         return;

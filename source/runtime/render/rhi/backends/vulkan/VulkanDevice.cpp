@@ -1029,12 +1029,6 @@ bool VulkanDevice::TryConvertCooperativeVectorMatrix(
     return true;
 }
 
-bool VulkanDevice::IsAmdGpu() const {
-    VkPhysicalDeviceProperties props{};
-    vkGetPhysicalDeviceProperties(m_gpu, &props);
-    return props.vendorID == 0x1002;
-}
-
 void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info) {
     _create_info = {};
 

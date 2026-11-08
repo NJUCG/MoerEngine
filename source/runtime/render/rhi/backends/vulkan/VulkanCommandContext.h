@@ -56,7 +56,6 @@ public:
     ) noexcept;
     void NotifyQueriesAfterGpuCompletion(QueryPublishBatch _batch) noexcept;
 
-    bool                      CompleteSuccess() noexcept;
     bool                      Reset();
     bool                      ResetAbandoned();
     [[nodiscard]] VkSemaphore GetImageReadySemaphore();
