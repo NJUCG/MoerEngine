@@ -21,9 +21,7 @@ struct VulkanBufferDescriptorKey {
     uint64   byte_size{0};
     VkFormat format{VK_FORMAT_UNDEFINED};
 
-    bool operator==(const VulkanBufferDescriptorKey& _other) const {
-        return byte_offset == _other.byte_offset && byte_size == _other.byte_size && format == _other.format;
-    }
+    bool operator==(const VulkanBufferDescriptorKey& _other) const = default;
 
     struct Hasher {
         size_t operator()(const VulkanBufferDescriptorKey& _key) const {
@@ -102,11 +100,7 @@ struct VulkanTextureDescriptorKey {
     uint8            array_layer;
     uint8            array_count;
 
-    bool operator==(const VulkanTextureDescriptorKey& _other) const {
-        return descriptor_type == _other.descriptor_type && layout == _other.layout &&
-               mip_level == _other.mip_level && mip_cnt == _other.mip_cnt &&
-               array_layer == _other.array_layer && array_count == _other.array_count;
-    }
+    bool operator==(const VulkanTextureDescriptorKey& _other) const = default;
 
     struct Hasher {
         size_t operator()(const VulkanTextureDescriptorKey& _key) const {
