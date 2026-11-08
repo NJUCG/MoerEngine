@@ -25,37 +25,21 @@ private:
 // Enabled optional capabilities, with no native chain or separate lifetime.
 class VulkanDeviceCapabilities final {
 public:
-    inline bool HasRaytracingExtensions() const {
-        return m_has_khr_acceleration_structure && (m_has_khr_ray_tracing_pipeline || m_has_khr_ray_query);
-    }
-
-    // cooperative 扩展与 feature bit 的原始支持状态。
-    inline bool SupportsCooperativeMatrix() const {
+    // Optional features that were enabled when creating the logical device.
+    inline bool IsCooperativeMatrixEnabled() const {
         return m_has_khr_cooperative_matrix;
     }
 
-    inline bool SupportsCooperativeMatrixRobustBufferAccess() const {
+    inline bool IsCooperativeMatrixRobustBufferAccessEnabled() const {
         return m_has_khr_cooperative_matrix_robust_buffer_access;
     }
 
-    inline bool SupportsCooperativeVector() const {
+    inline bool IsCooperativeVectorEnabled() const {
         return m_has_nv_cooperative_vector;
     }
 
-    inline bool SupportsCooperativeVectorTraining() const {
+    inline bool IsCooperativeVectorTrainingEnabled() const {
         return m_has_nv_cooperative_vector_training;
-    }
-
-    inline bool HasCooperativeMatrixEnabled() const {
-        return SupportsCooperativeMatrix();
-    }
-
-    inline bool HasCooperativeVectorEnabled() const {
-        return SupportsCooperativeVector();
-    }
-
-    inline bool HasCooperativeVectorTrainingEnabled() const {
-        return SupportsCooperativeVectorTraining();
     }
 
     // cooperative bundle 依赖的 core feature 前置条件。
@@ -68,18 +52,9 @@ public:
                m_has_storage_buffer_8bit_access || m_has_uniform_and_storage_buffer_8bit_access;
     }
 
-    inline bool HasCooperativeInferenceSupport() const {
-        return SupportsCooperativeMatrix() && SupportsCooperativeVector() && m_has_vulkan_memory_model &&
+    inline bool IsCooperativeInferenceEnabled() const {
+        return IsCooperativeMatrixEnabled() && IsCooperativeVectorEnabled() && m_has_vulkan_memory_model &&
                HasCooperativeLowPrecisionSupport() && HasCooperativeStorageSupport();
-    }
-
-    inline bool HasCooperativeInferenceEnabled() const {
-        return HasCooperativeMatrixEnabled() && HasCooperativeVectorEnabled() && m_has_vulkan_memory_model &&
-               HasCooperativeLowPrecisionSupport() && HasCooperativeStorageSupport();
-    }
-
-    inline bool IsExtensionCooperativeEnabled() const {
-        return HasCooperativeInferenceEnabled();
     }
 
     // optional extensions

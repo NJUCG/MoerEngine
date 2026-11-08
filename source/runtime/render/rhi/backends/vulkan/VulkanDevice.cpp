@@ -965,7 +965,7 @@ bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
 }
 
 bool VulkanDevice::IsExtensionCooperativeEnabled() const {
-    return m_device_info.capabilities.IsExtensionCooperativeEnabled();
+    return m_device_info.capabilities.IsCooperativeInferenceEnabled();
 }
 
 const CooperativeExtensionInfo& VulkanDevice::GetCooperativeExtensionInfo() const {
@@ -981,7 +981,7 @@ bool VulkanDevice::TryConvertCooperativeVectorMatrix(
         LOG_ERROR("VulkanRHI: TryConvertCooperativeVectorMatrix failed: {}", _message);
     };
 
-    if (!m_device_info.capabilities.SupportsCooperativeVector()) {
+    if (!m_device_info.capabilities.IsCooperativeVectorEnabled()) {
         log_error("VK_NV_cooperative_vector is not enabled on the current device.");
         return false;
     }

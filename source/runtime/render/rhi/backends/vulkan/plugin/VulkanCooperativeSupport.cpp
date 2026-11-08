@@ -45,10 +45,10 @@ BuildUnsupportedCooperativeExtensionList(const VulkanDeviceCapabilities& _option
         unsupported_extensions += _extension_name;
     };
 
-    if (!_optional_extensions.SupportsCooperativeMatrix()) {
+    if (!_optional_extensions.IsCooperativeMatrixEnabled()) {
         append_extension(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
     }
-    if (!_optional_extensions.SupportsCooperativeVector()) {
+    if (!_optional_extensions.IsCooperativeVectorEnabled()) {
         append_extension(VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME);
     }
 
@@ -74,13 +74,13 @@ void LogCooperativeSupportSummary(
     LOG_INFO(
         "VulkanRHI: Cooperative support - matrix={} robust={} matrix_modes={} vector={} training={} "
         "vector_modes={} inference_ready={} float16={} int8={} vulkan_memory_model={}",
-        _optional_extensions.SupportsCooperativeMatrix(),
-        _optional_extensions.SupportsCooperativeMatrixRobustBufferAccess(),
+        _optional_extensions.IsCooperativeMatrixEnabled(),
+        _optional_extensions.IsCooperativeMatrixRobustBufferAccessEnabled(),
         _optional_properties.cooperative_matrix_supports.size(),
-        _optional_extensions.SupportsCooperativeVector(),
-        _optional_extensions.SupportsCooperativeVectorTraining(),
+        _optional_extensions.IsCooperativeVectorEnabled(),
+        _optional_extensions.IsCooperativeVectorTrainingEnabled(),
         _optional_properties.cooperative_vector_supports.size(),
-        _optional_extensions.HasCooperativeInferenceEnabled(),
+        _optional_extensions.IsCooperativeInferenceEnabled(),
         _optional_extensions.m_has_shader_float16,
         _optional_extensions.m_has_shader_int8,
         _optional_extensions.m_has_vulkan_memory_model
@@ -93,13 +93,13 @@ CooperativeExtensionInfo BuildCooperativeExtensionInfo(
 ) {
     CooperativeExtensionInfo info{};
 
-    info.extension_enabled = _optional_extensions.IsExtensionCooperativeEnabled();
-    info.matrix_supported  = _optional_extensions.SupportsCooperativeMatrix();
+    info.extension_enabled = _optional_extensions.IsCooperativeInferenceEnabled();
+    info.matrix_supported  = _optional_extensions.IsCooperativeMatrixEnabled();
     info.matrix_robust_buffer_access_supported =
-        _optional_extensions.SupportsCooperativeMatrixRobustBufferAccess();
-    info.vector_supported              = _optional_extensions.SupportsCooperativeVector();
-    info.vector_training_supported     = _optional_extensions.SupportsCooperativeVectorTraining();
-    info.inference_ready               = _optional_extensions.HasCooperativeInferenceEnabled();
+        _optional_extensions.IsCooperativeMatrixRobustBufferAccessEnabled();
+    info.vector_supported              = _optional_extensions.IsCooperativeVectorEnabled();
+    info.vector_training_supported     = _optional_extensions.IsCooperativeVectorTrainingEnabled();
+    info.inference_ready               = _optional_extensions.IsCooperativeInferenceEnabled();
     info.low_precision_supported       = _optional_extensions.HasCooperativeLowPrecisionSupport();
     info.storage_supported             = _optional_extensions.HasCooperativeStorageSupport();
     info.vulkan_memory_model_supported = _optional_extensions.m_has_vulkan_memory_model;
