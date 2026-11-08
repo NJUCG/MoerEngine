@@ -179,7 +179,7 @@ private:
         VulkanPendingSubmission&     _recorded,
         const VulkanOperationResult& _outcome
     ) noexcept;
-    void ExecuteThread();
+    void CompletionThreadMain();
     void CompleteAll(uint64 _timeline);
 
     VulkanDevice&     device;
@@ -190,17 +190,17 @@ private:
     RHITransferableOwnershipGate runtime_execution_gate;
     std::atomic_bool             executor_claimed{false};
     std::atomic_bool             dependency_waits_enabled{true};
-    std::atomic<uint64>          last_frame{0};
+    std::atomic<uint64>          last_reserved_timeline{0};
 
     std::mutex                          event_mutex;
     std::condition_variable_any         queue_cv;
     std::condition_variable             settled_cv;
     DEQueue<VulkanSubmissionCompletion> event_queue;
-    std::atomic_bool                    enabled{false};
-    std::jthread                        thread;
-    std::atomic<uint64>                 cpu_settled_frame{0};
+    bool                                completion_worker_running{false}; // Protected by event_mutex.
+    std::jthread                        completion_thread;
+    uint64                              cpu_retired_timeline{0}; // Protected by event_mutex.
     uint64                              retirement_enqueued_serial{0};
-    std::atomic<uint64>                 retirement_settled_serial{0};
+    uint64                              retirement_settled_serial{0}; // Protected by event_mutex.
 };
 
 } // namespace Moer::Render

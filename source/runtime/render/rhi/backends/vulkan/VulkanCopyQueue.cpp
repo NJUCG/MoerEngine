@@ -21,19 +21,19 @@ VulkanCopyQueue::VulkanCopyQueue(VulkanDevice& _device) :
     device(_device),
     queue(EQueueType::Copy, _device) {
     timeline = MoerNew(VulkanTimeline)(_device);
-    enabled  = true;
+    completion_worker_running = true;
     try {
-        thread = std::jthread([this]() {
-            ExecuteThread();
+        completion_thread = std::jthread([this]() {
+            CompletionThreadMain();
         });
     } catch (...) {
         {
             std::lock_guard lock(event_mutex);
-            enabled.store(false, std::memory_order_release);
+            completion_worker_running = false;
         }
         queue_cv.notify_all();
-        if (thread.joinable()) {
-            thread.join();
+        if (completion_thread.joinable()) {
+            completion_thread.join();
         }
         timeline = nullptr;
         throw;
@@ -42,14 +42,14 @@ VulkanCopyQueue::VulkanCopyQueue(VulkanDevice& _device) :
 
 VulkanCopyQueue::~VulkanCopyQueue() {
     CancelRuntimeDependencyWaits();
-    CompleteAll(last_frame.load(std::memory_order_acquire));
+    CompleteAll(last_reserved_timeline.load(std::memory_order_acquire));
     {
         std::lock_guard lock(event_mutex);
-        enabled.store(false, std::memory_order_release);
+        completion_worker_running = false;
     }
     queue_cv.notify_all();
-    if (thread.joinable()) {
-        thread.join();
+    if (completion_thread.joinable()) {
+        completion_thread.join();
     }
     timeline = nullptr;
     device.RecordQueueSyncComplete();
@@ -134,7 +134,7 @@ VulkanPendingSubmission VulkanCopyQueue::ReserveSubmission(CmdSubmit&& _submit) 
         }
 
         std::unique_lock<std::mutex> execution_lock(exec_mutex);
-        recorded.timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+        recorded.timeline = last_reserved_timeline.fetch_add(1, std::memory_order_relaxed) + 1;
         recorded.context  = VulkanOperationContext{
              .operation   = EVulkanFaultOperation::QueueSubmit,
              .queue_type  = EQueueType::Copy,
@@ -453,7 +453,7 @@ FenceRef VulkanCopyQueue::GetFenceHandle() {
     return FenceRef(timeline);
 }
 
-void VulkanCopyQueue::ExecuteThread() {
+void VulkanCopyQueue::CompletionThreadMain() {
     Platform::SetCurrentThreadName("Vulkan Copy Completion");
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
     while (true) {
@@ -461,9 +461,9 @@ void VulkanCopyQueue::ExecuteThread() {
         {
             std::unique_lock<std::mutex> lock(event_mutex);
             queue_cv.wait(lock, [this]() {
-                return !enabled.load(std::memory_order_acquire) || !event_queue.empty();
+                return !completion_worker_running || !event_queue.empty();
             });
-            if (!enabled.load(std::memory_order_acquire) && event_queue.empty()) {
+            if (!completion_worker_running && event_queue.empty()) {
                 break;
             }
             evt.emplace(std::move(event_queue.front()));
@@ -478,24 +478,8 @@ void VulkanCopyQueue::ExecuteThread() {
         {
             // Pair predicate updates with CompleteAll's check-and-wait lock.
             std::lock_guard lock(event_mutex);
-            uint64 settled = cpu_settled_frame.load(std::memory_order_relaxed);
-            while (settled < event_timeline &&
-                   !cpu_settled_frame.compare_exchange_weak(
-                       settled,
-                       event_timeline,
-                       std::memory_order_release,
-                       std::memory_order_relaxed
-                   )) {
-            }
-            uint64 settled_serial =
-                retirement_settled_serial.load(std::memory_order_relaxed);
-            while (settled_serial < retirement_serial &&
-                   !retirement_settled_serial.compare_exchange_weak(
-                       settled_serial,
-                       retirement_serial,
-                       std::memory_order_release,
-                       std::memory_order_relaxed
-                   )) {}
+            cpu_retired_timeline = std::max(cpu_retired_timeline, event_timeline);
+            retirement_settled_serial = std::max(retirement_settled_serial, retirement_serial);
         }
         settled_cv.notify_all();
     }
@@ -505,8 +489,8 @@ void VulkanCopyQueue::CompleteAll(uint64 _timeline) {
     std::unique_lock lock(event_mutex);
     const uint64     target_retirement_serial = retirement_enqueued_serial;
     settled_cv.wait(lock, [this, _timeline, target_retirement_serial] {
-        return cpu_settled_frame.load(std::memory_order_acquire) >= _timeline &&
-               retirement_settled_serial.load(std::memory_order_acquire) >= target_retirement_serial;
+        return cpu_retired_timeline >= _timeline &&
+               retirement_settled_serial >= target_retirement_serial;
     });
 }
 
