@@ -96,6 +96,8 @@ private:
         uint64                      command_token
     );
 
+    void UnbindSlot(uint32 _array_idx);
+
     std::mutex mtx;
     void       TrackResource(RHIResource* _resource);
     void       UntrackResource(uint64 _handle);

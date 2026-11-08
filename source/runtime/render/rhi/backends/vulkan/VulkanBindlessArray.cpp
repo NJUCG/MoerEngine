@@ -13,6 +13,7 @@
 #include <format>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 
 namespace Moer::Render {
@@ -674,234 +675,69 @@ uint32 VulkanBindlessArray::AllocateBuffer(BufferView _buffer) {
     return slot_idx;
 }
 static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
-void                 VulkanBindlessArray::UnbindTexture(uint32 _array_idx) {
-    std::unique_lock<std::mutex> lk(mtx);
-    // Entries in this map have not been captured by CreateUpdateCommand yet;
-    // cancelling an allocation here is normal while the initial extent settles.
-    if (auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()) {
-        const UpdateCmd& src_cmd = update_cmds[iter->second];
-
-        std::visit(
-            [&](auto&& _cmd) {
-                using TCmd = std::decay_t<decltype(_cmd)>;
-                if constexpr (std::is_same_v<TCmd, TextureUpdateInfo>) {
-                    if (_cmd.free) {
-                        LOG_WARNING(
-                            "You are releasing a bindless texture that's pending releasing, array index: {}",
-                            _array_idx
-                        );
-                        return;
-                    } else {
-                        if (array_slot_generations[_cmd.array_idx] != _cmd.array_generation ||
-                            texture_slot_generations[_cmd.slot] != _cmd.slot_generation ||
-                            array_slot_claim_tokens[_cmd.array_idx] != 0 ||
-                            texture_slot_claim_tokens[_cmd.slot] != 0) {
-                            throw std::runtime_error(
-                                "pending bindless texture cancellation lost slot ownership"
-                            );
-                        }
-                        if (array_slot_generations[_cmd.array_idx] == std::numeric_limits<uint64>::max() ||
-                            texture_slot_generations[_cmd.slot] == std::numeric_limits<uint64>::max()) {
-                            throw std::runtime_error(
-                                "pending bindless texture cancellation generation exhausted"
-                            );
-                        }
-                        ++array_slot_generations[_cmd.array_idx];
-                        ++texture_slot_generations[_cmd.slot];
-                        UntrackResource((uint64)_cmd.texture.Get());
-                        UntrackTextureView(_array_idx);
-                        free_slots.push_back(_cmd.array_idx);
-                        free_texture_slots.push_back(_cmd.slot);
-
-                        update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
-                        LOG_DEBUG(
-                            "Cancelled a pending bindless texture allocation before submission, array index: "
-                                            "{}",
-                            _array_idx
-                        );
-                    }
-                } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>) {
-                    if (_cmd.free) {
-                        LOG_WARNING(
-                            "You are releasing a bindless buffer that's pending releasing, array index: {}",
-                            _array_idx
-                        );
-                        return;
-                    } else {
-                        if (array_slot_generations[_cmd.array_idx] != _cmd.array_generation ||
-                            buffer_slot_generations[_cmd.slot] != _cmd.slot_generation ||
-                            array_slot_claim_tokens[_cmd.array_idx] != 0 ||
-                            buffer_slot_claim_tokens[_cmd.slot] != 0) {
-                            throw std::runtime_error(
-                                "pending bindless buffer cancellation lost slot ownership"
-                            );
-                        }
-                        if (array_slot_generations[_cmd.array_idx] == std::numeric_limits<uint64>::max() ||
-                            buffer_slot_generations[_cmd.slot] == std::numeric_limits<uint64>::max()) {
-                            throw std::runtime_error(
-                                "pending bindless buffer cancellation generation exhausted"
-                            );
-                        }
-                        ++array_slot_generations[_cmd.array_idx];
-                        ++buffer_slot_generations[_cmd.slot];
-                        UntrackResource((uint64)_cmd.buffer.Get());
-                        free_slots.push_back(_cmd.array_idx);
-                        free_buffer_slots.push_back(_cmd.slot);
-                        update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
-                        LOG_DEBUG(
-                            "Cancelled a pending bindless buffer allocation before submission, array index: "
-                                            "{}",
-                            _array_idx
-                        );
-                    }
-                } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>) {
-                }
-            },
-            src_cmd
-        );
-        return;
-    }
-
-    if (_array_idx >= bindings.size()) {
-        LOG_WARNING("You are releasing an out-of-range bindless texture, array index: {}", _array_idx);
-        return;
-    }
-    const auto& binding = bindings[_array_idx];
-    if (binding.resource == nullptr) {
-        LOG_WARNING("You are releasing an empty bindless texture slot, array index: {}", _array_idx);
-        return;
-    }
-    if (binding.IsTexture()) {
-        update_cmds.emplace_back(
-            TextureUpdateInfo{
-                TextureRef(static_cast<Texture*>(binding.resource)),
-                s_spl,
-                PF_UNDEFINED,
-                _array_idx,
-                binding.descriptor_slot,
-                0,
-                0,
-                0,
-                0,
-                array_slot_generations[_array_idx],
-                texture_slot_generations[binding.descriptor_slot],
-                0,
-                true
-            }
-        );
-    } else if (binding.IsBuffer()) {
-        update_cmds.emplace_back(
-            BufferUpdateInfo{
-                BufferRef(static_cast<Buffer*>(binding.resource)),
-                _array_idx,
-                binding.descriptor_slot,
-                PF_UNDEFINED,
-                array_slot_generations[_array_idx],
-                buffer_slot_generations[binding.descriptor_slot],
-                0,
-                true
-            }
-        );
-    } else {
-        LOG_WARNING("You are releasing an empty bindless texture slot, array index: {}", _array_idx);
-        return;
-    }
-    temp_slot_to_cmd[_array_idx] = update_cmds.size() - 1;
+void VulkanBindlessArray::UnbindTexture(uint32 _array_idx) {
+    UnbindSlot(_array_idx);
 }
 
 void VulkanBindlessArray::UnbindBuffer(uint32 _array_idx) {
-    std::unique_lock<std::mutex> lk(mtx);
+    UnbindSlot(_array_idx);
+}
 
+void VulkanBindlessArray::UnbindSlot(uint32 _array_idx) {
+    std::unique_lock lock(mtx);
+    // An uncaptured update can be cancelled immediately. Captured updates keep
+    // their generation/token claims until the existing Completion path retires them.
     if (auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()) {
-        const UpdateCmd& src_cmd = update_cmds[iter->second];
-
-        std::visit(
-            [&](auto&& _cmd) {
-                using TCmd = std::decay_t<decltype(_cmd)>;
-                if constexpr (std::is_same_v<TCmd, TextureUpdateInfo>) {
-                    if (_cmd.free) {
-                        LOG_WARNING(
-                            "You are releasing a bindless texture that's pending releasing, array index: {}",
-                            _array_idx
-                        );
-                        return;
-                    } else {
-                        if (array_slot_generations[_cmd.array_idx] != _cmd.array_generation ||
-                            texture_slot_generations[_cmd.slot] != _cmd.slot_generation ||
-                            array_slot_claim_tokens[_cmd.array_idx] != 0 ||
-                            texture_slot_claim_tokens[_cmd.slot] != 0) {
-                            throw std::runtime_error(
-                                "pending bindless texture cancellation lost slot ownership"
-                            );
-                        }
-                        if (array_slot_generations[_cmd.array_idx] == std::numeric_limits<uint64>::max() ||
-                            texture_slot_generations[_cmd.slot] == std::numeric_limits<uint64>::max()) {
-                            throw std::runtime_error(
-                                "pending bindless texture cancellation generation exhausted"
-                            );
-                        }
-                        ++array_slot_generations[_cmd.array_idx];
-                        ++texture_slot_generations[_cmd.slot];
-                        UntrackResource((uint64)_cmd.texture.Get());
-                        UntrackTextureView(_array_idx);
-                        free_slots.push_back(_cmd.array_idx);
-                        free_texture_slots.push_back(_cmd.slot);
-                        update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
-                        LOG_DEBUG(
-                            "Cancelled a pending bindless texture allocation before submission, array index: "
-                            "{}",
-                            _array_idx
-                        );
-                    }
-                } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>) {
-                    if (_cmd.free) {
-                        LOG_WARNING(
-                            "You are releasing a bindless buffer that's pending releasing, array index: {}",
-                            _array_idx
-                        );
-                        return;
-                    } else {
-                        if (array_slot_generations[_cmd.array_idx] != _cmd.array_generation ||
-                            buffer_slot_generations[_cmd.slot] != _cmd.slot_generation ||
-                            array_slot_claim_tokens[_cmd.array_idx] != 0 ||
-                            buffer_slot_claim_tokens[_cmd.slot] != 0) {
-                            throw std::runtime_error(
-                                "pending bindless buffer cancellation lost slot ownership"
-                            );
-                        }
-                        if (array_slot_generations[_cmd.array_idx] == std::numeric_limits<uint64>::max() ||
-                            buffer_slot_generations[_cmd.slot] == std::numeric_limits<uint64>::max()) {
-                            throw std::runtime_error(
-                                "pending bindless buffer cancellation generation exhausted"
-                            );
-                        }
-                        ++array_slot_generations[_cmd.array_idx];
-                        ++buffer_slot_generations[_cmd.slot];
-                        UntrackResource((uint64)_cmd.buffer.Get());
-                        free_slots.push_back(_cmd.array_idx);
-                        free_buffer_slots.push_back(_cmd.slot);
-                        update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
-                        LOG_DEBUG(
-                            "Cancelled a pending bindless buffer allocation before submission, array index: "
-                            "{}",
-                            _array_idx
-                        );
-                    }
-                } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>) {
+        std::visit([&](const auto& command) {
+            using Update = std::decay_t<decltype(command)>;
+            if constexpr (!std::is_same_v<Update, InvalidUpdateInfo>) {
+                constexpr bool texture = std::is_same_v<Update, TextureUpdateInfo>;
+                const std::string_view kind = texture ? "texture" : "buffer";
+                if (command.free) {
+                    LOG_WARNING("Bindless {} release is already pending, array index: {}", kind, _array_idx);
+                    return;
                 }
-            },
-            src_cmd
-        );
+                auto& generations = texture ? texture_slot_generations : buffer_slot_generations;
+                auto& claims = texture ? texture_slot_claim_tokens : buffer_slot_claim_tokens;
+                auto& free_descriptors = texture ? free_texture_slots : free_buffer_slots;
+                if (array_slot_generations[command.array_idx] != command.array_generation ||
+                    generations[command.slot] != command.slot_generation ||
+                    array_slot_claim_tokens[command.array_idx] != 0 || claims[command.slot] != 0) {
+                    throw std::runtime_error("pending bindless cancellation lost slot ownership");
+                }
+                if (array_slot_generations[command.array_idx] == std::numeric_limits<uint64>::max() ||
+                    generations[command.slot] == std::numeric_limits<uint64>::max()) {
+                    throw std::runtime_error("pending bindless cancellation generation exhausted");
+                }
+                ++array_slot_generations[command.array_idx];
+                ++generations[command.slot];
+                const uint64 resource = [&] {
+                    if constexpr (texture) {
+                        return uint64(command.texture.Get());
+                    } else {
+                        return uint64(command.buffer.Get());
+                    }
+                }();
+                UntrackResource(resource);
+                if constexpr (texture) {
+                    UntrackTextureView(_array_idx);
+                }
+                free_slots.push_back(command.array_idx);
+                free_descriptors.push_back(command.slot);
+                update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                LOG_DEBUG("Cancelled a pending bindless {} allocation before submission, array index: {}", kind, _array_idx);
+            }
+        }, update_cmds[iter->second]);
         return;
     }
 
     if (_array_idx >= bindings.size()) {
-        LOG_WARNING("You are releasing an out-of-range bindless buffer, array index: {}", _array_idx);
+        LOG_WARNING("You are releasing an out-of-range bindless resource, array index: {}", _array_idx);
         return;
     }
     const auto& binding = bindings[_array_idx];
     if (binding.resource == nullptr) {
-        LOG_WARNING("You are releasing an empty bindless buffer slot, array index: {}", _array_idx);
+        LOG_WARNING("You are releasing an empty bindless resource slot, array index: {}", _array_idx);
         return;
     }
     if (binding.IsTexture()) {
@@ -936,7 +772,7 @@ void VulkanBindlessArray::UnbindBuffer(uint32 _array_idx) {
             }
         );
     } else {
-        LOG_WARNING("You are releasing an empty bindless buffer slot, array index: {}", _array_idx);
+        LOG_WARNING("You are releasing an empty bindless resource slot, array index: {}", _array_idx);
         return;
     }
     temp_slot_to_cmd[_array_idx] = update_cmds.size() - 1;
