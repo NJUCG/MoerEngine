@@ -15,7 +15,9 @@ namespace Moer::Render {
 inline constexpr uint32 s_queue_max_frame_in_flight = 3;
 inline constexpr uint32 s_query_max_storage         = 8 * 64;
 
-struct ProfilerStorage {
+// Timestamp slots, rolling GPU samples and per-frame CPU timings for one queue.
+struct VulkanTimestampProfiler {
+    // Fixed query capacity and serial timestamp stage contract.
     static constexpr int s_max_num_profiler_queries_per_frame = s_query_max_storage * 2; // *2 is for begin&end
     // These stages are part of the serial query golden contract.  Keep the
     // actual timestamp writes and the diagnostic event sourced from the same
@@ -23,7 +25,8 @@ struct ProfilerStorage {
     static constexpr VkPipelineStageFlagBits kBeginTimestampStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
     static constexpr VkPipelineStageFlagBits kEndTimestampStage   = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 
-    ProfilerStorage(VkNativeQueryPool& _timestamp_pool);
+    // Query-slot recording and completed frame collection.
+    VulkanTimestampProfiler(VkNativeQueryPool& _timestamp_pool);
     void CollectProfiling(VkCommandBuffer _cmd);
     int  GetQueryStorageIndex(std::string_view _name);
     bool IsQueryUsed(int _idx) {
@@ -32,6 +35,8 @@ struct ProfilerStorage {
     void SetQueryUsed(int _idx) {
         queries_used[_idx / s_max_num_profiler_queries_per_frame].set(_idx % s_max_num_profiler_queries_per_frame);
     }
+
+    // CPU timings and presentation of the previous profiling frame.
     void RegisterCpuTimestamp(std::string_view _name, double _timestamp) {
         cpu_timestamps[cur_frame][_name] = _timestamp;
     }
@@ -67,6 +72,7 @@ struct ProfilerStorage {
         VkPipelineStageFlagBits _stage = kEndTimestampStage
     );
 
+    // Borrowed pool and native result storage.
     VkNativeQueryPool& timestamp_pool;
     float              timestamp_period = 0.0f;
     std::array<uint64, s_max_num_profiler_queries_per_frame * 2> query_pool_results{};
@@ -75,6 +81,7 @@ struct ProfilerStorage {
     // first int contains the queried timestamp
     // next(last) int contains availability of the timestamp, available if nonzero
 
+    // Sliding window of completed GPU durations for one named scope.
     struct Sample {
         int                           index;
         uint64                        accumulated{0};
@@ -98,6 +105,7 @@ struct ProfilerStorage {
         }
     };
 
+    // Stable scope identities and per-frame query usage.
     UnorderedMap<std::string, Sample> name2sample;
     std::array<std::bitset<s_max_num_profiler_queries_per_frame>, s_queue_max_frame_in_flight> queries_used{};
 
@@ -118,8 +126,9 @@ public:
 private:
     friend class VulkanCommandRecorder;
 
+    // Native query storage precedes its borrower in construction order.
     VkNativeQueryPool timestamp_pool;
-    ProfilerStorage   storage;
+    VulkanTimestampProfiler   storage;
     ProfileData       cached_entry;
     std::mutex        mutex;
 

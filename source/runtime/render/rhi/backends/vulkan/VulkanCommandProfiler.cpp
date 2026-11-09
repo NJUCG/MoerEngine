@@ -8,12 +8,12 @@
 
 namespace Moer::Render {
 
-ProfilerStorage::ProfilerStorage(VkNativeQueryPool& _pool) : timestamp_pool(_pool) {
+VulkanTimestampProfiler::VulkanTimestampProfiler(VkNativeQueryPool& _pool) : timestamp_pool(_pool) {
 
     timestamp_period = timestamp_pool.GetDevice().GetCoreProperties().core_1_0.limits.timestampPeriod;
     name2sample.reserve(100);
 }
-void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
+void VulkanTimestampProfiler::CollectProfiling(VkCommandBuffer _cb) {
     bool b_any_query_used = queries_used[cur_frame].any();
     if (b_any_query_used) {
         VkResult result = vkGetQueryPoolResults(
@@ -64,7 +64,7 @@ void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
     queries_used[cur_frame].reset();
 }
 
-int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {
+int VulkanTimestampProfiler::GetQueryStorageIndex(std::string_view _name) {
     const std::string name{_name};
     if (const auto found = name2sample.find(name); found != name2sample.end()) {
         return found->second.index;
@@ -80,7 +80,7 @@ int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {
     return index;
 }
 
-void ProfilerStorage::BeginProfilerSession(
+void VulkanTimestampProfiler::BeginProfilerSession(
     VulkanCommandList&      _cmd_list,
     std::string_view        _name,
     VkPipelineStageFlagBits _stage
@@ -95,7 +95,7 @@ void ProfilerStorage::BeginProfilerSession(
     assert(IsQueryUsed(idx + 1) == false && "Query already used");
 }
 
-void ProfilerStorage::EndProfilerSession(
+void VulkanTimestampProfiler::EndProfilerSession(
     VulkanCommandList&      _cmd_list,
     std::string_view        _name,
     VkPipelineStageFlagBits _stage

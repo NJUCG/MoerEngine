@@ -32,6 +32,7 @@ public:
         }
     };
 
+    // Array lifetime and frontend slot allocation.
     VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size);
     ~VulkanBindlessArray() override;
 
@@ -39,9 +40,13 @@ public:
     uint32 AllocateBuffer(BufferView _buffer) override;
     void   UnbindTexture(uint32 _slot) override;
     void   UnbindBuffer(uint32 _slot) override;
+
+    // Ordered update admission and completion.
     void FinalizeUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates, bool _gpu_update_succeeded);
     bool BeginUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates);
 
+
+    // GPU index table and descriptor storage borrowed by command recording.
     uint64 ArrayHandle() const override {
         return reinterpret_cast<uint64>(m_index_buffer.Get());
     }
@@ -61,6 +66,7 @@ public:
     VkAccessFlags2  GetDescriptorReadAccess() const;
 
 public:
+    // Recording-visible table locations and current CPU bindings.
     uint64               texture_offset_in_buffer;
     uint64               buffer_descriptors_byte_offset = 0;
     Array<BindingRecord> bindings;
@@ -68,6 +74,7 @@ public:
 private:
     VulkanDevice* m_device;
 
+    // Owned descriptor sets and persistent GPU storage.
     struct LegacyDescriptorSets;
     std::unique_ptr<LegacyDescriptorSets> legacy_sets;
     void                                  CreateLegacySets(uint32 max_size);
@@ -82,6 +89,7 @@ private:
     VulkanBufferRef m_buffer_descriptors;
     VulkanBufferRef m_texture_sampler_descriptors;
 
+    // Completion validates a plan before applying slot/reference retirement.
     struct UpdateCompletionPlan;
     // Caller holds mtx. Plans borrow command data and never outlive that call.
     UpdateCompletionPlan
@@ -98,13 +106,15 @@ private:
 
     void UnbindSlot(uint32 _array_idx);
 
+    // Serializes slot mutation, pending updates and resource reference accounting.
     std::mutex mtx;
     void       TrackResource(RHIResource* _resource);
     void       UntrackResource(uint64 _handle);
     void       TrackTextureView(uint32 _array_idx, const TextureView& _view);
     void       UntrackTextureView(uint32 _array_idx);
 
-protected:
+private:
+    // Frontend update-command publication and cancellation hooks.
     UniquePtr<Command>          CreateUpdateCommand() override;
     void                        DiscardUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates) override;
     class VulkanDescriptorHeap& g_heap;
@@ -116,16 +126,23 @@ protected:
     uint32             texture_slot_offset;
     uint32             buffer_slot_offset;
     uint32             slot_offset;
+
+    // Generations prevent stale updates from retiring reused slots.
     Array<uint64>                   array_slot_generations;
     Array<uint64>                   texture_slot_generations;
     Array<uint64>                   buffer_slot_generations;
+
+    // One command may claim each slot lifecycle transition.
     Array<uint64>                   array_slot_claim_tokens;
     Array<uint64>                   texture_slot_claim_tokens;
     Array<uint64>                   buffer_slot_claim_tokens;
+
+    // Pending frontend mutations, coalesced by array slot.
     uint64                          next_update_command_token{0};
     Array<UpdateCmd>                update_cmds;
     UnorderedMap<uint32, uint32>    temp_slot_to_cmd;
 
+    // Keep resources and distinct texture views alive through update retirement.
     struct ResourceAllocationRecord {
         CountableRef<RHIResource> resource;
         uint32                    count{0};

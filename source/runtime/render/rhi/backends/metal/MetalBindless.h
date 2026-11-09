@@ -27,8 +27,10 @@ public:
     void   UnbindBuffer(uint32 index) override;
     uint64 ArrayHandle() const override { return reinterpret_cast<uint64>(this); }
 
+    // Apply membership only when its ordered update command executes.
     void Apply(const Array<UpdateCmd>& updates);
 
+    // Borrowed GPU tables and explicit resource residency for argument buffers.
     id<MTLBuffer> NativeIndices() const noexcept;
     id<MTLBuffer> NativeArguments(uint32 set) const noexcept;
 
@@ -42,6 +44,7 @@ protected:
     void DiscardUpdateCommand(const Array<UpdateCmd>& updates) override;
 
 private:
+    // Desired slots and applied references have different retirement boundaries.
     enum class Kind { Empty, Texture, Buffer };
     struct AppliedSlot {
         TextureRef texture{};
@@ -60,6 +63,7 @@ private:
         bool active{false};
     };
 
+    // Slot allocation, generations and sampler population.
     uint32 NextSlot();
 
     static uint64 NextGeneration(Slot& slot);
@@ -70,16 +74,21 @@ private:
 
     void Unbind(uint32 index, Kind kind);
 
+    // Owned native argument tables and immutable samplers.
     id<MTLDevice> device_;
     id<MTLBuffer> indices_;
     id<MTLBuffer> buffer_arguments_;
     id<MTLBuffer> texture_arguments_;
     id<MTLBuffer> sampler_arguments_;
     id<MTLSamplerState> samplers_[kSamplerCount]{};
+
+    // Frontend membership, committed references and pending update commands.
     std::vector<Slot> slots_;
     std::vector<AppliedSlot> applied_slots_;
     std::vector<uint32>      free_slots_;
     Array<UpdateCmd> pending_;
+
+    // Allocation frontier; mutex_ protects slot state and updates.
     const uint32             capacity_;
     uint32                   next_slot_{1};
     std::mutex mutex_;

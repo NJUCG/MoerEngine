@@ -142,6 +142,7 @@ private:
 
 class VulkanCopyQueue : public CopyQueue {
 public:
+    // RHI lifetime, submission and explicit synchronization.
     VulkanCopyQueue(VulkanDevice& _device);
     ~VulkanCopyQueue();
 
@@ -160,10 +161,13 @@ private:
     friend class VulkanDevice;
     friend class VulkanSubmissionExecutor;
 
+    // Executor claim and cancellation of dependency admission waits.
     [[nodiscard]] bool      ClaimRuntimeOwnership();
     void                    ReleaseRuntimeOwnership() noexcept;
     void                    EnableRuntimeDependencyWaits() noexcept;
     void                    CancelRuntimeDependencyWaits() noexcept;
+
+    // Translate reserves the packet; Submission decides acceptance.
     VulkanPendingSubmission ReserveSubmission(CmdSubmit&& _submit) noexcept;
     // Retains the packet until Executor publishes failures and commits Completion.
     VulkanSubmissionResult SubmitRecordedForRuntime(VulkanPendingSubmission& _recorded) noexcept;
@@ -179,19 +183,23 @@ private:
         VulkanPendingSubmission&     _recorded,
         const VulkanOperationResult& _outcome
     ) noexcept;
+    // Completion owns callbacks and retirement, including rejected work.
     void CompletionThreadMain();
     void CompleteAll(uint64 _timeline);
 
+    // Native queue and strongly owned completion timeline.
     VulkanDevice&     device;
     VulkanNativeQueue queue;
     VulkanTimelineRef timeline{nullptr};
 
+    // Reservation state and the recording-to-Submission ownership transfer.
     std::mutex                   exec_mutex;
     RHITransferableOwnershipGate runtime_execution_gate;
     std::atomic_bool             executor_claimed{false};
     std::atomic_bool             dependency_waits_enabled{true};
     std::atomic<uint64>          last_reserved_timeline{0};
 
+    // Queue contents and settled counters are protected by event_mutex.
     std::mutex                          event_mutex;
     std::condition_variable_any         queue_cv;
     std::condition_variable             settled_cv;

@@ -16,7 +16,7 @@ struct Footprint {
         return uint64(z * rows + row) * layout.Footprint.RowPitch;
     }
 };
-Footprint CopyFootprint(Context& context, GpuTexture& texture, uint3 extent) {
+Footprint CopyFootprint(DeviceContext& context, GpuTexture& texture, uint3 extent) {
     if (!extent.x || !extent.y || !extent.z || texture.GetNumSamples() != 1)
         throw std::invalid_argument("Invalid D3D12 linear texture copy extent or sample count");
     auto desc             = texture.resource->GetDesc();

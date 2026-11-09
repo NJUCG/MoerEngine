@@ -7,7 +7,8 @@
 #include <vector>
 
 namespace Moer::Render {
-struct MetalComputeBinding {
+// One logical argument mapping in a single shader stage.
+struct MetalShaderBinding {
     uint32         set{0};
     uint32         binding{0};
     EShaderArgType kind{SDA_Num};
@@ -16,15 +17,17 @@ struct MetalComputeBinding {
     bool texel_buffer{false};
 };
 
-struct MetalRenderBindings {
+// Per-stage bindless tables, scalar resources and constant upload location.
+struct MetalStageBindings {
     std::vector<std::pair<NSUInteger, uint32>> bindless_sets;
-    std::vector<MetalComputeBinding> scalar_bindings;
+    std::vector<MetalShaderBinding> scalar_bindings;
     NSUInteger constant_buffer_index{0};
     uint32                                     constant_byte_size{0};
 };
 
 class MetalPipelineState final : public PipelineState {
 public:
+    // Graphics and compute construction retain the corresponding native functions.
     MetalPipelineState(
         id<MTLRenderPipelineState>  pipeline,
         std::vector<MTLPixelFormat> color_formats,
@@ -34,8 +37,8 @@ public:
         id<MTLDepthStencilState>    depth_state,
         id<MTLFunction>             vertex_function,
         id<MTLFunction>             fragment_function,
-        MetalRenderBindings         vertex_bindings_layout,
-        MetalRenderBindings         fragment_bindings_layout,
+        MetalStageBindings         vertex_bindings_layout,
+        MetalStageBindings         fragment_bindings_layout,
         uint64                      active_argument_bits
     ) :
         PipelineState(active_argument_bits),
@@ -52,7 +55,7 @@ public:
     MetalPipelineState(
         id<MTLComputePipelineState> pipeline,
         id<MTLFunction>             function,
-        MetalRenderBindings         bindings,
+        MetalStageBindings         bindings,
         MTLSize                     local_size,
         uint64                      active_argument_bits
     ) :
@@ -61,13 +64,16 @@ public:
         compute_function_(function),
         compute_bindings_layout_(std::move(bindings)),
         local_size_(local_size) {}
+    // Native execution handles.
     id<MTLRenderPipelineState> NativeRender() const noexcept { return render_; }
     id<MTLComputePipelineState> NativeCompute() const noexcept { return compute_; }
+
+    // Compute stage argument layout and dispatch shape.
     id<MTLFunction> ComputeFunction() const noexcept { return compute_function_; }
-    const std::vector<MetalComputeBinding>& ComputeBindings() const noexcept {
+    const std::vector<MetalShaderBinding>& ComputeBindings() const noexcept {
         return compute_bindings_layout_.scalar_bindings;
     }
-    const MetalRenderBindings& ComputeBindingsLayout() const noexcept {
+    const MetalStageBindings& ComputeBindingsLayout() const noexcept {
         return compute_bindings_layout_;
     }
     const std::vector<std::pair<NSUInteger, uint32>>& ComputeBindlessSets() const noexcept {
@@ -77,6 +83,8 @@ public:
     NSUInteger ConstantBufferIndex() const noexcept {
         return compute_bindings_layout_.constant_buffer_index;
     }
+
+    // Graphics attachments, rasterization and shader-stage layouts.
     const std::vector<MTLPixelFormat>& ColorFormats() const noexcept { return color_formats_; }
     uint32                             VertexBindingCount() const noexcept {
         return vertex_bindings_;
@@ -86,20 +94,22 @@ public:
     id<MTLDepthStencilState> DepthState() const noexcept { return depth_state_; }
     id<MTLFunction> VertexFunction() const noexcept { return vertex_function_; }
     id<MTLFunction> FragmentFunction() const noexcept { return fragment_function_; }
-    const MetalRenderBindings& VertexBindingsLayout() const noexcept {
+    const MetalStageBindings& VertexBindingsLayout() const noexcept {
         return vertex_bindings_layout_;
     }
-    const MetalRenderBindings& FragmentBindingsLayout() const noexcept {
+    const MetalStageBindings& FragmentBindingsLayout() const noexcept {
         return fragment_bindings_layout_;
     }
+
+    // Optional tessellation capture and hull stages.
     bool IsTessellation() const noexcept { return hull_pipeline_ != nil; }
     void SetTessellation(
         id<MTLComputePipelineState> vertex_pipeline,
         id<MTLFunction>             vertex_function,
         id<MTLComputePipelineState> hull_pipeline,
         id<MTLFunction>             hull_function,
-        MetalRenderBindings         tess_vertex_bindings,
-        MetalRenderBindings         hull_bindings,
+        MetalStageBindings         tess_vertex_bindings,
+        MetalStageBindings         hull_bindings,
         uint32                      patch_points,
         uint32                      point_stride
     ) {
@@ -116,8 +126,8 @@ public:
     id<MTLFunction> TessVertexFunction() const noexcept { return tess_vertex_function_; }
     id<MTLComputePipelineState> HullPipeline() const noexcept { return hull_pipeline_; }
     id<MTLFunction> HullFunction() const noexcept { return hull_function_; }
-    const MetalRenderBindings& HullBindingsLayout() const noexcept { return hull_bindings_layout_; }
-    const MetalRenderBindings& TessVertexBindingsLayout() const noexcept { return tess_vertex_bindings_layout_; }
+    const MetalStageBindings& HullBindingsLayout() const noexcept { return hull_bindings_layout_; }
+    const MetalStageBindings& TessVertexBindingsLayout() const noexcept { return tess_vertex_bindings_layout_; }
     uint32                      PatchPoints() const noexcept {
         return patch_points_;
     }
@@ -126,26 +136,35 @@ public:
     }
 
 private:
+    // Native execution handles.
     id<MTLRenderPipelineState> render_{nil};
     id<MTLComputePipelineState> compute_{nil};
+
+    // Compute reflection and dispatch metadata.
     id<MTLFunction> compute_function_{nil};
-    MetalRenderBindings compute_bindings_layout_;
+    MetalStageBindings compute_bindings_layout_;
     MTLSize local_size_{MTLSizeMake(0, 0, 0)};
+
+    // Graphics render-target compatibility and fixed state.
     std::vector<MTLPixelFormat> color_formats_;
     uint32                      vertex_bindings_{0};
     RHIRasterizeInfo rasterizer_{};
     MTLPixelFormat depth_format_{MTLPixelFormatInvalid};
     id<MTLDepthStencilState> depth_state_{nil};
+
+    // Graphics stage functions and their binding metadata.
     id<MTLFunction> vertex_function_{nil};
     id<MTLFunction> fragment_function_{nil};
-    MetalRenderBindings vertex_bindings_layout_{};
-    MetalRenderBindings fragment_bindings_layout_{};
+    MetalStageBindings vertex_bindings_layout_{};
+    MetalStageBindings fragment_bindings_layout_{};
+
+    // Tessellation intermediate stage functions and patch layout.
     id<MTLComputePipelineState> tess_vertex_pipeline_{nil};
     id<MTLFunction> tess_vertex_function_{nil};
     id<MTLComputePipelineState> hull_pipeline_{nil};
     id<MTLFunction> hull_function_{nil};
-    MetalRenderBindings tess_vertex_bindings_layout_{};
-    MetalRenderBindings hull_bindings_layout_{};
+    MetalStageBindings tess_vertex_bindings_layout_{};
+    MetalStageBindings hull_bindings_layout_{};
     uint32                      patch_points_{0};
     uint32                      point_stride_{0};
 };

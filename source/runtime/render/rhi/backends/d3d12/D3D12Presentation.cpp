@@ -4,7 +4,7 @@
 #include <GLFW/glfw3native.h>
 
 namespace Moer::Render::D3D12 {
-SwapchainImpl::SwapchainImpl(Context& context, const SwapchainCreateInfo& info) :
+SwapchainImpl::SwapchainImpl(DeviceContext& context, const SwapchainCreateInfo& info) :
     context(context) {
     format = info.preferred_format;
     size   = {};
@@ -77,7 +77,7 @@ void Queue::Present(SwapchainRef swapchain, TextureView source, PresentReceiptRe
         std::lock_guard submit_lock(submission_mutex);
         std::lock_guard swapchain_lock(target.mutex);
         CmdSubmit       empty{Array<UniquePtr<Command>>{}, Array<std::function<void()>>{}, Array<std::function<void()>>{}, TCachedArgArray{}};
-        auto            packet = std::make_unique<Packet>(std::move(empty));
+        auto            packet = std::make_unique<SubmissionPacket>(std::move(empty));
         packet->resources.emplace_back(swapchain.Get());
         packet->resources.emplace_back(source.texture);
         Recorder recorder(context, *packet);

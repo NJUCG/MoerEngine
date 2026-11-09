@@ -52,6 +52,7 @@ public:
         VkBuffer      buffer{VK_NULL_HANDLE};
         VmaAllocation alloc{VK_NULL_HANDLE};
     };
+    // Resource lifetime and debug naming.
     VulkanBuffer() = delete;
     virtual ~VulkanBuffer();
     virtual void       Destroy() override;
@@ -60,6 +61,7 @@ public:
         return true;
     }
 
+    // Native allocation policy and handles.
     VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device);
     VulkanBuffer(
         std::string_view                  _name,
@@ -79,13 +81,16 @@ public:
 private:
     friend class VulkanDescriptorHeap;
     friend class VulkanResourceStateValidator;
+    // Published only after native submission accepts a state transaction.
     std::shared_ptr<const VulkanResourceStateSnapshot> accepted_resource_state;
 
     VulkanDevice* m_device;
 
+    // DescriptorHeap serializes descriptor cache access with its cache mutex.
     VulkanBufferDescriptorCacheSlots& GetDescriptorCacheSlots(VkDescriptorType _type);
     VulkanBufferDescriptorCacheSlots  m_descriptor_cache_slots[4];
 
+    // Owned allocation and immutable creation metadata.
     BufferAlloc m_alloc;
     bool        concurrent_sharing{false};
     uint64      m_device_address = 0;
@@ -114,6 +119,7 @@ struct VulkanTextureDescriptorKey {
 };
 class VulkanTexture final : public Texture {
 public:
+    // Resource lifetime, owned allocations and imported swapchain images.
     VulkanTexture() = delete;
     ~VulkanTexture();
     //for inner usage only
@@ -131,6 +137,7 @@ public:
     [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
         return true;
     }
+    // Lazily cached image views; shared recording access uses m_views_mutex.
     VkImageView GetView(
         uint32 _mip_level  = 0,
         uint32 _mip_cnt    = 1,
@@ -145,10 +152,12 @@ public:
 private:
     friend class VulkanDescriptorHeap;
     friend class VulkanResourceStateValidator;
+    // Published by the Submission owner on native acceptance.
     std::shared_ptr<const VulkanResourceStateSnapshot> accepted_resource_state;
 
     VulkanDevice* m_device;
 
+    // DescriptorHeap owns synchronization for descriptor cache slots.
     UnorderedMap<VulkanTextureDescriptorKey, uint32, VulkanTextureDescriptorKey::Hasher>
         m_descriptor_cache_slots;
 
@@ -161,6 +170,7 @@ private:
         uint32                             base_layer,
         uint32                             layer_count
     );
+    // A null allocation denotes a borrowed native image.
     struct TextureAlloc {
         VkImage       image;
         VmaAllocation alloc;

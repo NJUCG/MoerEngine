@@ -74,10 +74,10 @@ uint64 GetMetalActiveArgumentBits(const PipelineShaderInfo& shader_info) {
     return active_argument_bits;
 }
 
-MetalRenderBindings MetalRenderStageBindings(
+MetalStageBindings BuildMetalStageBindings(
     const PipelineShaderInfo& shader_info, const SingleShaderInfo& shader
 ) {
-    MetalRenderBindings layout;
+    MetalStageBindings layout;
     if (shader.shader_param_map == nullptr) return layout;
     const auto& reflection = shader.shader_param_map->reflect_map;
     const auto& metadata   = shader_info.argument_metadata;
@@ -130,7 +130,7 @@ MetalRenderBindings MetalRenderStageBindings(
         if (resource_it == reflection.end()) continue;
         const auto* resource = resource_it->second.GetSpirvReflection().TryGetResource();
         if (resource == nullptr || !resource->custom_flag.active) continue;
-        layout.scalar_bindings[index] = MetalComputeBinding{
+        layout.scalar_bindings[index] = MetalShaderBinding{
             resource->set, resource->binding, kind, true, false,
             resource->desc_type == VDT_UNIFORM_TEXEL_BUFFER ||
                 resource->desc_type == VDT_STORAGE_TEXEL_BUFFER};
@@ -286,15 +286,15 @@ PipelineHandle CreateMetalGraphicsPipeline(id<MTLDevice> device, GfxPsoCreateInf
             depth_state,
             tessellation ? domain : vertex,
             fragment,
-            MetalRenderStageBindings(shader_info, tessellation ? *ds_info : vs),
-            MetalRenderStageBindings(shader_info, ps),
+            BuildMetalStageBindings(shader_info, tessellation ? *ds_info : vs),
+            BuildMetalStageBindings(shader_info, ps),
             active_argument_bits
         );
         if (tessellation) {
             pipeline->SetTessellation(
                 tess_vertex_pipeline, vertex, hull_pipeline, hull,
-                MetalRenderStageBindings(shader_info, vs),
-                MetalRenderStageBindings(shader_info, *hs_info),
+                BuildMetalStageBindings(shader_info, vs),
+                BuildMetalStageBindings(shader_info, *hs_info),
                 create_info.patch_control_points, create_info.patch_control_point_stride);
         }
         return PipelineHandle{pipeline};
@@ -316,7 +316,7 @@ PipelineHandle CreateMetalComputePipeline(id<MTLDevice> device, PipelineShaderIn
                 std::string(error.localizedDescription.UTF8String ?: "unknown error"));
         }
         const uint64 active_argument_bits = GetMetalActiveArgumentBits(shader_info);
-        auto bindings = MetalRenderStageBindings(shader_info, shader);
+        auto bindings = BuildMetalStageBindings(shader_info, shader);
         const uint3 group = shader.compute_local_size;
         auto*        pipeline             = MoerNew(MetalPipelineState)(
             native_pipeline,

@@ -11,7 +11,7 @@ uint32 GetD3D12ValidationErrorCount() noexcept {
     return validation_error_count.load();
 }
 
-struct D3D12Device::Native : Context {};
+struct D3D12Device::Native : DeviceContext {};
 
 D3D12Device::D3D12Device(D3D12RHIConfig config) :
     native(std::make_unique<Native>()) {
@@ -198,16 +198,16 @@ void D3D12Device::FlushDebugMessages() const {
 } // namespace Moer::Render
 
 namespace Moer::Render::D3D12 {
-Context::~Context() {
+DeviceContext::~DeviceContext() {
     copy.reset();
     queue.reset();
     if (debug_callbacks)
         debug_callbacks->UnregisterMessageCallback(debug_callback_cookie);
 }
-BufferRef Context::Buffer(uint64 size, EBufferUsageFlags usage, D3D12_HEAP_TYPE heap) {
+BufferRef DeviceContext::Buffer(uint64 size, EBufferUsageFlags usage, D3D12_HEAP_TYPE heap) {
     return MoerNew(GpuBuffer)(*this, BufferInfo{size, 1, usage}, heap);
 }
-uint32 Context::SamplerIndex(Sampler sampler) const {
+uint32 DeviceContext::SamplerIndex(Sampler sampler) const {
     return uint32(sampler.filter) + SF_Num * (uint32(sampler.address_mode) + SAM_Num * uint32(sampler.compare_function));
 }
 } // namespace Moer::Render::D3D12

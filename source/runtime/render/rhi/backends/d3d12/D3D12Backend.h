@@ -41,13 +41,13 @@ private:
     std::map<uint32, uint32>     free_ranges;
 };
 
-struct Context;
+struct DeviceContext;
 
 // The submission mutex owns all resource-state changes. A resource's state is
 // its last ordered native use, including work still executing on the GPU.
 class GpuBuffer final : public Buffer {
 public:
-    GpuBuffer(Context&, const BufferInfo&, D3D12_HEAP_TYPE = D3D12_HEAP_TYPE_DEFAULT);
+    GpuBuffer(DeviceContext&, const BufferInfo&, D3D12_HEAP_TYPE = D3D12_HEAP_TYPE_DEFAULT);
     void SetName(std::string_view) override;
     bool SupportsOwningReadback() const noexcept override {
         return true;
@@ -63,7 +63,7 @@ public:
 
 class GpuTexture final : public Texture {
 public:
-    GpuTexture(Context&, const TextureInfo&);
+    GpuTexture(DeviceContext&, const TextureInfo&);
     void   SetName(std::string_view) override;
     uint32 GetMipByteSize(uint32) const override;
     bool   SupportsOwningReadback() const noexcept override {
@@ -137,7 +137,7 @@ ConstantLayout              ReflectConstantLayout(ID3D12ShaderReflectionType*);
 ConstantLayout              ReflectBufferLayout(ID3D12ShaderReflectionConstantBuffer*);
 ID3D12ShaderReflectionType* FindConstantType(ID3D12ShaderReflection*, std::string_view);
 
-PipelineHandle CreatePipeline(Context&, PipelineShaderInfo&&, const GfxPsoCreateInfo*);
+PipelineHandle CreatePipeline(DeviceContext&, PipelineShaderInfo&&, const GfxPsoCreateInfo*);
 
 // Membership is changed only by ordered update commands. Every bind snapshots
 // its table into submission-owned upload memory, so later updates cannot edit
@@ -152,9 +152,11 @@ public:
     uint64 ArrayHandle() const override {
         return uint64(this);
     }
+    // Publish desired membership through ordered update commands.
     UniquePtr<Command>    CreateUpdateCommand() override;
     void                  DiscardUpdateCommand(const Array<UpdateCmd>&) override;
     std::function<void()> Apply(const UpdateBindlessArrayCmd&);
+    // Each descriptor snapshot retains its underlying resources.
     struct Entry {
         TextureRef  texture;
         BufferRef   buffer;
@@ -162,9 +164,11 @@ public:
         BufferView  buffer_view{};
         Sampler     sampler{SF_LINEAR, SAM_REPEAT};
     };
+    // Read only committed membership when encoding a submission.
     Array<Entry> Snapshot();
 
 private:
+    // Protect desired/committed membership and generation-based rollback.
     std::mutex       mutex;
     Array<Entry>     desired;
     Array<Entry>     committed;
@@ -178,7 +182,7 @@ private:
 
 class Geometry final : public RaytracingGeometry {
 public:
-    Geometry(Context&, const RaytracingGeometryInfo&);
+    Geometry(DeviceContext&, const RaytracingGeometryInfo&);
     Buffer* GetUnderlyingBuffer() const override {
         return storage.Get();
     }
@@ -199,7 +203,7 @@ public:
 
 class Scene final : public RaytracingScene {
 public:
-    explicit Scene(Context&);
+    explicit Scene(DeviceContext&);
     RaytracingInstance& AddInstance() override;
     void                FreeInstance(uint32) override;
     void                MarkModified(uint32) override;
@@ -213,7 +217,7 @@ public:
     }
 
 private:
-    Context&          context;
+    DeviceContext&          context;
     RaytracingTlasRef current;
     RaytracingTlasRef previous;
     Array<uint32>     free_instances;
@@ -222,7 +226,9 @@ private:
 class Queue;
 class CopyQueueAdapter;
 
-struct Context {
+// Device-wide objects and capabilities shared by queues and resources.
+struct DeviceContext {
+    // Native device lifetime and validation callbacks.
     ComPtr<ID3D12InfoQueue1>          debug_callbacks;
     DWORD                             debug_callback_cookie = 0;
     ComPtr<IDXGIFactory6>             factory;
@@ -230,18 +236,26 @@ struct Context {
     ComPtr<ID3D12Device5>             device;
     ComPtr<D3D12MA::Allocator>        allocator;
     ComPtr<ID3D12InfoQueue>           info_queue;
+
+    // Device-owned descriptor heaps.
     std::unique_ptr<DescriptorHeap>   views;
     std::unique_ptr<DescriptorHeap>   cpu_views;
     std::unique_ptr<DescriptorHeap>   samplers;
     std::unique_ptr<DescriptorHeap>   rtvs;
     std::unique_ptr<DescriptorHeap>   dsvs;
+
+    // Ordered native submission and the CopyQueue adapter.
     std::unique_ptr<Queue>            queue;
     std::unique_ptr<CopyQueueAdapter> copy;
+
+    // Enabled capabilities and submission policy.
     bool                              raytracing      = false;
     bool                              mesh_shaders    = false;
     bool                              view_instancing = false;
     bool                              force_sync      = false;
-    ~Context();
+
+    // Device teardown and shared resource helpers.
+    ~DeviceContext();
     BufferRef Buffer(uint64 size, EBufferUsageFlags usage = EBufferUsageFlags::NONE, D3D12_HEAP_TYPE heap = D3D12_HEAP_TYPE_DEFAULT);
     uint32    SamplerIndex(Sampler) const;
 };
@@ -252,33 +266,43 @@ struct QueryRecord {
     bool       ended = false;
 };
 
-struct Packet {
+// One submission owns recording outputs until completion and rollback settle.
+struct SubmissionPacket {
+    // Optional presentation outcome.
     ComPtr<IDXGISwapChain3> presentation;
     PresentReceiptRef       present_receipt;
-    explicit Packet(CmdSubmit&& submit) :
+    explicit SubmissionPacket(CmdSubmit&& submit) :
         submit(std::move(submit)) {}
+
+    // Original request and native recording objects.
     CmdSubmit                                                    submit;
     uint64                                                       timeline = 0;
     ComPtr<ID3D12CommandAllocator>                               allocator;
     ComPtr<ID3D12GraphicsCommandList6>                           list;
+
+    // Native objects and descriptor ranges retained through GPU completion.
     Array<ComPtr<ID3D12CommandSignature>>                        signatures;
     Array<ComPtr<ID3D12Resource>>                                native_resources;
     Array<BufferRef>                                             buffers;
     Array<CountableRef<RHIResource>>                             resources;
     Array<std::pair<DescriptorHeap*, std::pair<uint32, uint32>>> descriptors;
+
+    // Completion readbacks, state rollback and failure diagnostics.
     Array<std::function<void()>>                                 readbacks;
     Array<std::function<void()>>                                 rollback;
     std::string                                                  error;
+
+    // Query pools and their submission-owned readback.
     ComPtr<ID3D12QueryHeap>                                      timestamps;
     ComPtr<ID3D12QueryHeap>                                      occlusion;
     BufferRef                                                    query_readback;
     Array<QueryRecord>                                           queries;
-    ~Packet();
+    ~SubmissionPacket();
 };
 
 class SwapchainImpl final : public Swapchain {
 public:
-    SwapchainImpl(Context&, const SwapchainCreateInfo&);
+    SwapchainImpl(DeviceContext&, const SwapchainCreateInfo&);
     bool Recreate(const SwapchainCreateInfo&) override;
     bool IsPresentationReady() const noexcept override {
         return swapchain && size.x && size.y;
@@ -286,7 +310,7 @@ public:
     WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept override {
         return surface.GetIdentity();
     }
-    Context&                      context;
+    DeviceContext&                      context;
     SwapchainSurfaceInfo          surface;
     ComPtr<IDXGISwapChain3>       swapchain;
     Array<ComPtr<ID3D12Resource>> backbuffers;
@@ -297,7 +321,8 @@ class Queue final : public CommandQueue {
     friend class SwapchainImpl;
 
 public:
-    explicit Queue(Context&);
+    // RHI queue lifetime and ordered execution.
+    explicit Queue(DeviceContext&);
     ~Queue();
     void        Wait(WaitEvent) override;
     WaitEvent   Execute(CmdSubmit&&) override;
@@ -306,6 +331,7 @@ public:
     ProfileData GetProfilerEntry() override {
         return {};
     }
+    // Borrowed native handles and an explicit completion boundary.
     ID3D12CommandQueue* Native() const {
         return queue.Get();
     }
@@ -315,17 +341,22 @@ public:
     void Sync(uint64);
 
 private:
+    // Native admission and asynchronous completion.
     void                                Complete(std::stop_token);
-    WaitEvent                           SubmitPacket(std::unique_ptr<Packet>);
+    WaitEvent                           SubmitPacket(std::unique_ptr<SubmissionPacket>);
     std::unique_lock<std::mutex>        LockIdle();
-    Context&                            context;
+
+    // Native state; submission_mutex serializes admission and resource-state changes.
+    DeviceContext&                            context;
     ComPtr<ID3D12CommandQueue>          queue;
     FenceRef                            timeline;
     uint64                              next_timeline = 0;
     std::mutex                          submission_mutex;
+
+    // Completion FIFO and retirement frontier are protected by completion_mutex.
     std::mutex                          completion_mutex;
     std::condition_variable_any         completion_cv;
-    std::deque<std::unique_ptr<Packet>> pending;
+    std::deque<std::unique_ptr<SubmissionPacket>> pending;
     uint64                              retired = 0;
     std::jthread                        worker;
 };
@@ -356,28 +387,35 @@ private:
 
 class Recorder {
 public:
-    Recorder(Context&, Packet&);
+    Recorder(DeviceContext&, SubmissionPacket&);
     void Record();
     void Transition(GpuBuffer&, D3D12_RESOURCE_STATES);
     void Transition(GpuTexture&, D3D12_RESOURCE_STATES, uint32 mip = 0, uint32 mips = UINT32_MAX, uint32 layer = 0, uint32 layers = UINT32_MAX);
 
 private:
+    // Submission-owned descriptor and upload allocation.
     uint32                                             Descriptor(DescriptorHeap&, uint32 count = 1);
     uint32                                             View(BufferView, ED3D12ShaderVariableType, uint32 index = UINT32_MAX);
     uint32                                             View(TextureView, ED3D12ShaderVariableType, uint32 index = UINT32_MAX);
     BufferRef                                          Upload(std::span<const byte>, uint64 min_size = 0);
+
+    // Shader arguments and graphics command encoding.
     void                                               Bind(PipelineHandle, const ArrayArguments&);
     void                                               RenderPass(const RenderPassInfo&);
     void                                               Mesh(const Pipeline&, const MeshDrawData&);
     void                                               Indirect(D3D12_INDIRECT_ARGUMENT_TYPE, const IndirectDrawParam&);
+
+    // Transfer, barriers, clears, acceleration structures and queries.
     void                                               Copy(const Command&);
     void                                               Barrier(const BarrierCmd&);
     void                                               Clear(const ClearResourceCmd&);
     void                                               Build(const BuildAccelerationStructuresCmd&);
     void                                               Build(const UpdateRaytracingSceneCmd&);
     void                                               Query(const QueryCmd&);
-    Context&                                           context;
-    Packet&                                            packet;
+
+    // Borrowed device/packet owners and recording-local binding state.
+    DeviceContext&                                           context;
+    SubmissionPacket&                                            packet;
     ID3D12GraphicsCommandList6*                        list;
     UnorderedMap<Bindless*, D3D12_GPU_VIRTUAL_ADDRESS> bindless_tables;
     uint32                                             render_view_mask = 0;

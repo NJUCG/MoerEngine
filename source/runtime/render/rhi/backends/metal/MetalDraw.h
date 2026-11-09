@@ -6,8 +6,8 @@
 #include <span>
 
 namespace Moer::Render {
-MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw);
-void                EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd& draw, std::span<const uint32> indirect_counts, NSMutableArray<id<MTLBuffer>>* staging_buffers, NSMutableArray<id<MTLTexture>>* texture_views, NSMutableArray<id<MTLSamplerState>>* sampler_states);
+MetalPipelineState* ValidateDraw(const SetDrawStateCmd& draw);
+void                EncodeDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd& draw, std::span<const uint32> indirect_counts, NSMutableArray<id<MTLBuffer>>* staging_buffers, NSMutableArray<id<MTLTexture>>* texture_views, NSMutableArray<id<MTLSamplerState>>* sampler_states);
 MetalPipelineState* ValidateComputeDispatch(const DispatchCmd& dispatch,
     const TCachedArgArray& cached_args);
 void EncodeComputeDispatch(id<MTLCommandBuffer> command_buffer,

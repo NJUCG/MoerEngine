@@ -83,7 +83,7 @@ DXGI_FORMAT VertexFormat(EVertexFormat format) {
     }
 }
 
-PipelineHandle CreatePipeline(Context& context, PipelineShaderInfo&& shaders, const GfxPsoCreateInfo* gfx) {
+PipelineHandle CreatePipeline(DeviceContext& context, PipelineShaderInfo&& shaders, const GfxPsoCreateInfo* gfx) {
     const auto error = gfx ? ValidateGraphicsShaderStages(shaders.shaders) : ValidateComputeShaderStages(shaders.shaders);
     if (!error.empty())
         throw std::invalid_argument(std::string(error));

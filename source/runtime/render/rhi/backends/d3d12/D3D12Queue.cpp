@@ -14,7 +14,7 @@ void RunCallbacks(Array<std::function<void()>>& callbacks) {
         }
 }
 } // namespace
-Queue::Queue(Context& context) :
+Queue::Queue(DeviceContext& context) :
     context(context),
     timeline(MoerNew(Timeline)(context.device.Get())) {
     const D3D12_COMMAND_QUEUE_DESC desc{D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_PRIORITY_NORMAL, D3D12_COMMAND_QUEUE_FLAG_NONE, 0};
@@ -41,13 +41,13 @@ void Queue::Wait(WaitEvent event) {
         throw std::runtime_error("D3D12 queue wait producer was not accepted");
     DX_CHECK_HRESULT(queue->Wait(fence->fence.Get(), event.value));
 }
-WaitEvent Queue::SubmitPacket(std::unique_ptr<Packet> owning_packet) {
+WaitEvent Queue::SubmitPacket(std::unique_ptr<SubmissionPacket> owning_packet) {
     // Allocate Completion's owner before native execution. An allocation
     // failure must not free resources already visible to the GPU.
     owning_packet->error.reserve(256);
     std::unique_lock completion_lock(completion_mutex);
     pending.push_back(std::move(owning_packet));
-    Packet* packet = pending.back().get();
+    SubmissionPacket* packet = pending.back().get();
     auto&   submit = packet->submit;
     if (packet->error.empty()) {
         for (const auto wait : submit.wait_events) {
@@ -106,7 +106,7 @@ WaitEvent Queue::Execute(CmdSubmit&& submit) {
     WaitEvent  event{};
     {
         std::lock_guard lock(submission_mutex);
-        auto            packet = std::make_unique<Packet>(std::move(submit));
+        auto            packet = std::make_unique<SubmissionPacket>(std::move(submit));
         try {
             Recorder(context, *packet).Record();
         } catch (const std::exception& error) {
@@ -149,7 +149,7 @@ std::unique_lock<std::mutex> Queue::LockIdle() {
 void Queue::Complete(std::stop_token stop) {
     RHIThreadRoleScope role(ERHIThreadRole::Completion);
     while (true) {
-        std::unique_ptr<Packet> packet;
+        std::unique_ptr<SubmissionPacket> packet;
         {
             std::unique_lock lock(completion_mutex);
             completion_cv.wait(lock, stop, [&] {

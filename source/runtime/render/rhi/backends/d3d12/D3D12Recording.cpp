@@ -88,7 +88,7 @@ D3D12_RESOURCE_STATES TextureState(ETextureState state, bool write) {
     }
 }
 
-Recorder::Recorder(Context& context, Packet& packet) :
+Recorder::Recorder(DeviceContext& context, SubmissionPacket& packet) :
     context(context),
     packet(packet) {
     DX_CHECK_HRESULT(context.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&packet.allocator)));

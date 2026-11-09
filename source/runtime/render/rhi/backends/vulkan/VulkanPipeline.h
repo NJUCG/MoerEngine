@@ -103,6 +103,7 @@ class VulkanPipelineState : public PipelineState {
     };
 
 public:
+    // Native pipeline lifetime.
     VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX, uint64 active_argument_bits = 0) :
         PipelineState(active_argument_bits),
         m_device(_device),
@@ -115,6 +116,7 @@ protected:
     void Destroy() override;
 
 public:
+    // Immutable native handles and rendering compatibility.
     inline VkPipeline GetHandle() const {
         return m_pipeline;
     }
@@ -138,6 +140,7 @@ public:
         return view_mask;
     }
 
+    // Shader argument metadata shared by recording and state validation.
     const VulkanArgumentInfo& GetArgumentInfo(uint32 argument_index) const {
         return m_argument_infos[argument_index];
     }
@@ -158,6 +161,8 @@ public:
                 return VK_PIPELINE_BIND_POINT_GRAPHICS;
         }
     }
+
+    // Build the native layout and its immutable recording template.
     void InitPipelineLayout(
         UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>&& set_layout_infos,
         std::optional<VkPushConstantRange>                          push_constant_range,
@@ -165,10 +170,11 @@ public:
         std::optional<VulkanBindlessIndexAddressBinding>            bindless_index_address
     );
 
-public:
+    // Shared by all recordings that use this pipeline.
     UniquePtr<VulkanPipelineBindingTemplate> binding_template;
 
 private:
+    // Layout construction helpers; temporary create data remains call-local.
     UniquePtr<VulkanPipelineBindingTemplate> BuildPipelineBindingTemplate(
         const UnorderedMap<uint32, VulkanDescriptorSetLayoutCreateInfo>& set_layout_infos,
         const std::optional<VkPushConstantRange>&                        push_constant_range
@@ -177,6 +183,7 @@ private:
 
 protected:
     friend VulkanDevice;
+    // Owned native objects and reflection data; device outlives the pipeline.
     VulkanDevice*                m_device;
     Array<VulkanArgumentInfo>    m_argument_infos;
     VkPipeline                   m_pipeline;

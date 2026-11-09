@@ -8,7 +8,7 @@ D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS BuildFlags(ERayTracingAccele
 }
 } // namespace
 
-Geometry::Geometry(Context& context, const RaytracingGeometryInfo& info) :
+Geometry::Geometry(DeviceContext& context, const RaytracingGeometryInfo& info) :
     RaytracingGeometry(info) {
     for (const auto& segment : info.segments) {
         D3D12_RAYTRACING_GEOMETRY_DESC desc{};
@@ -54,7 +54,7 @@ D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS Geometry::Inputs() const {
     inputs.Flags          = BuildFlags(info.build_flags);
     return inputs;
 }
-Scene::Scene(Context& context) :
+Scene::Scene(DeviceContext& context) :
     context(context) {}
 RaytracingInstance& Scene::AddInstance() {
     if (!free_instances.empty()) {

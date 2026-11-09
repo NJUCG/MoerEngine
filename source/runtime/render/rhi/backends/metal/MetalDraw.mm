@@ -20,7 +20,7 @@ struct TessellationBuffers {
 
 void BindTessComputeArgs(
     id<MTLCommandBuffer> command_buffer, id<MTLComputeCommandEncoder> encoder,
-    id<MTLFunction> function, const MetalRenderBindings& layout,
+    id<MTLFunction> function, const MetalStageBindings& layout,
     const SetDrawStateCmd& draw, NSMutableArray<id<MTLBuffer>>* staging_buffers
 ) {
     if (!layout.bindless_sets.empty() || !draw.Args().constants.empty()) {
@@ -129,7 +129,7 @@ TessellationBuffers EncodeTessellation(
 }
 } // namespace
 
-MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
+MetalPipelineState* ValidateDraw(const SetDrawStateCmd& draw) {
     auto*                 pipeline = dynamic_cast<MetalPipelineState*>(draw.Pipeline().GetState());
     const RenderPassInfo& pass = draw.RenderPassInfo();
     if (pipeline == nullptr || pipeline->NativeRender() == nil ||
@@ -190,7 +190,7 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
          !pipeline->FragmentBindingsLayout().bindless_sets.empty()) && bindless == nullptr) {
         Unsupported("missing graphics bindless array");
     }
-    const auto validate_texel_bindings = [&](const MetalRenderBindings& layout) {
+    const auto validate_texel_bindings = [&](const MetalStageBindings& layout) {
         for (uint32 index = 0; index < layout.scalar_bindings.size(); ++index) {
             const auto& binding = layout.scalar_bindings[index];
             if (!binding.active || !binding.texel_buffer)
@@ -343,7 +343,7 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
     return pipeline;
 }
 
-void EncodeSimpleDraw(
+void EncodeDraw(
     id<MTLCommandBuffer>                 command_buffer,
     const SetDrawStateCmd&               draw,
     std::span<const uint32>              indirect_counts,
@@ -427,7 +427,7 @@ void EncodeSimpleDraw(
             [encoder setFragmentBuffer:bindless->NativeArguments(table) offset:0 atIndex:set];
         }
     }
-    const auto bind_scalar = [&](const MetalRenderBindings& layout,
+    const auto bind_scalar = [&](const MetalStageBindings& layout,
                                  id<MTLFunction> function, bool vertex) {
         for (NSUInteger set = 0; set < layout.constant_buffer_index; ++set) {
             bool needed = false;
@@ -637,7 +637,7 @@ MetalPipelineState* ValidateComputeDispatch(
     const auto& bindings = pipeline->ComputeBindings();
     if (args.args.size() != bindings.size()) Unsupported("this compute argument count");
     for (uint32 index = 0; index < bindings.size(); ++index) {
-        const MetalComputeBinding& binding = bindings[index];
+        const MetalShaderBinding& binding = bindings[index];
         if (binding.constant) {
             if ((pipeline->GetActiveArgumentBits() & (uint64(1) << index)) && args.constants.empty()) {
                 Unsupported("empty compute push constants");

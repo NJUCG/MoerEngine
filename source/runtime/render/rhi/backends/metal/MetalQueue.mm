@@ -262,7 +262,7 @@ public:
                 continue;
             }
             if (command->Type() == Command::EType::SetDrawState) {
-                ValidateSimpleDraw(static_cast<const SetDrawStateCmd&>(*command));
+                ValidateDraw(static_cast<const SetDrawStateCmd&>(*command));
                 has_gpu_work = true;
                 continue;
             }
@@ -435,7 +435,7 @@ public:
                         }
                         encoded_work = false;
                     }
-                    EncodeSimpleDraw(
+                    EncodeDraw(
                         command_buffer, draw, indirect_counts, staging_buffers,
                         texture_views, sampler_states);
                     encoded_work = true;

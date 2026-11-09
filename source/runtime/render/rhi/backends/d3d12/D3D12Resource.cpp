@@ -47,7 +47,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE DescriptorHeap::Gpu(uint32 index) const {
     return {heap->GetGPUDescriptorHandleForHeapStart().ptr + uint64(index) * stride};
 }
 
-GpuBuffer::GpuBuffer(Context& context, const BufferInfo& info, D3D12_HEAP_TYPE heap) :
+GpuBuffer::GpuBuffer(DeviceContext& context, const BufferInfo& info, D3D12_HEAP_TYPE heap) :
     Buffer(info),
     heap_type(heap) {
     state                      = heap == D3D12_HEAP_TYPE_UPLOAD   ? D3D12_RESOURCE_STATE_GENERIC_READ :
@@ -109,7 +109,7 @@ DXGI_FORMAT StorageFormat(EPixelFormat format) {
         return DXGI_FORMAT_B8G8R8A8_UNORM;
     return Format(format);
 }
-GpuTexture::GpuTexture(Context& context, const TextureInfo& info) :
+GpuTexture::GpuTexture(DeviceContext& context, const TextureInfo& info) :
     Texture(info) {
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension        = info.dimension == ETextureDimension::TEX_3D ? D3D12_RESOURCE_DIMENSION_TEXTURE3D : D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -203,7 +203,7 @@ bool Timeline::Wait(uint64 value) {
         WaitForSingleObject(event, 20);
     return fence->GetCompletedValue() != UINT64_MAX && !IsRejected(value);
 }
-Packet::~Packet() {
+SubmissionPacket::~SubmissionPacket() {
     // Native execution clears the journal at handoff. Before that boundary,
     // destruction retains responsibility for undoing unsubmitted changes.
     for (auto it = rollback.rbegin(); it != rollback.rend(); ++it)

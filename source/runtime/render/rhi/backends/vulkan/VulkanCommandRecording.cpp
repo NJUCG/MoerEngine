@@ -397,7 +397,7 @@ class VulkanCommandVisitor {
     VulkanCommandList&     cmd_list;
     VulkanCommandContext&  command_context;
     const TCachedArgArray& cached_args;
-    ProfilerStorage*       profiler                = nullptr;
+    VulkanTimestampProfiler*       profiler                = nullptr;
     bool                   query_profiling_enabled = false;
 
     class ScopedNativeLabel {
@@ -423,7 +423,7 @@ public:
         VulkanCommandContext&  _command_context,
         VulkanCommandList&     _cmd_list,
         const TCachedArgArray& _cached_args,
-        ProfilerStorage*       _profiler                = nullptr,
+        VulkanTimestampProfiler*       _profiler                = nullptr,
         bool                   _query_profiling_enabled = false
     ) :
         m_device(&_device),
