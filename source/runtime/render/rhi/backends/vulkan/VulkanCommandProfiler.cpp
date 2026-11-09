@@ -14,13 +14,9 @@ ProfilerStorage::ProfilerStorage(VkNativeQueryPool& _pool) : timestamp_pool(_poo
     std::memset(queries_used, 0, sizeof(queries_used));
     std::memset(query_pool_results, 0, sizeof(query_pool_results));
     timestamp_period = timestamp_pool.GetDevice().GetCoreProperties().core_1_0.limits.timestampPeriod;
-    active           = true;
     name2sample.reserve(100);
 }
 void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
-    if (!active) {
-        return;
-    }
     bool b_any_query_used = false;
     //maybe should use last frame
     for (uint32 idx = 0; idx < s_max_num_profiler_queries_per_frame / 8; ++idx) {
@@ -101,9 +97,6 @@ void ProfilerStorage::BeginProfilerSession(
     std::string_view        _name,
     VkPipelineStageFlagBits _stage
 ) {
-    if (!active) {
-        return;
-    }
     const int storage_index = GetQueryStorageIndex(_name);
     if (storage_index < 0) {
         return;
@@ -119,9 +112,6 @@ void ProfilerStorage::EndProfilerSession(
     std::string_view        _name,
     VkPipelineStageFlagBits _stage
 ) {
-    if (!active) {
-        return;
-    }
     const int storage_index = GetQueryStorageIndex(_name);
     if (storage_index < 0) {
         return;

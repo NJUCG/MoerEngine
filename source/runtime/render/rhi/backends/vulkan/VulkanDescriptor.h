@@ -105,7 +105,6 @@ public:
     // lease retires. Transient binds use PrepareDescriptorRecordings instead.
     RENDER_API std::optional<uint64>
            ReserveDescriptorRange(const VulkanDescriptorBufferLease& _lease, uint64 _byte_size);
-    uint64 GetUsedDescriptorBytes(const VulkanDescriptorBufferLease& _lease) const;
 
     RENDER_API std::optional<std::vector<VulkanDescriptorBufferAllocator::Recording>> PrepareDescriptorRecordings(
         const VulkanDescriptorBufferLease&   _lease,

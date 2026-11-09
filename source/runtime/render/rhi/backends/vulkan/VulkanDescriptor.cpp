@@ -203,7 +203,6 @@ void VulkanDescriptorHeap::CreateNativeHeaps() {
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 .allocation_flags     = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-                .needs_device_address = true,
                 .queue_family_indices = std::span(families, families[0] == families[1] ? 1 : 2),
                 .min_alignment        = alignment,
             }
@@ -249,7 +248,6 @@ void VulkanDescriptorHeap::CreateDescriptorBuffer() {
                         VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .allocation_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-            .needs_device_address = true,
             .queue_family_indices = std::span(queue_families, queue_families[0] == queue_families[1] ? 1 : 2),
         }
     );
@@ -630,11 +628,6 @@ VulkanDescriptorHeap::ReserveDescriptorRange(const VulkanDescriptorBufferLease& 
         return std::nullopt;
     }
     return descriptor_allocator.ReserveRange(*_lease, _byte_size);
-}
-
-uint64 VulkanDescriptorHeap::GetUsedDescriptorBytes(const VulkanDescriptorBufferLease& _lease) const {
-    assert(_lease != nullptr && "descriptor usage query has no submission lease");
-    return descriptor_allocator.GetUsage(*_lease).used_bytes;
 }
 
 std::optional<std::vector<VulkanDescriptorBufferAllocator::Recording>>

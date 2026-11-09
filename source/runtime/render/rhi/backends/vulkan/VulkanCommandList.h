@@ -85,9 +85,6 @@ public:
             }
         }
     }
-    uint64 GetUsedDescriptorBytes() const {
-        return used_descriptor_bytes;
-    }
 
     // Vertex input and dynamic state.
     void SetVertexBuffers(
@@ -215,7 +212,6 @@ private:
     VulkanCommandPool&                                   command_pool;
     std::shared_ptr<const VulkanDescriptorRecordingPlan> descriptor_recording_plan;
     VulkanDescriptorBufferAllocator::Cursor              descriptor_cursor;
-    uint64                                               used_descriptor_bytes{0};
     // Same lifetime as this command buffer. Reset only when Begin is legal again.
     struct DescriptorPoolPage {
         VkDescriptorPool            pool           = VK_NULL_HANDLE;

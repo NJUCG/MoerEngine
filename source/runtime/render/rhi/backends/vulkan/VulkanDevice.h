@@ -148,9 +148,6 @@ public:
     VkQueue GetGraphicsQueue() const {
         return m_graphics_queue_handle;
     }
-    VkQueue GetPresentQueue() const {
-        return m_present_queue_handle;
-    }
     VkQueue GetComputeQueue() const {
         return m_compute_queue_handle;
     }

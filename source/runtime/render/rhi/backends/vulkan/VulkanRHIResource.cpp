@@ -83,7 +83,6 @@ VulkanBuffer::VulkanBuffer(std::string_view _name, const BufferInfo& _info, Vulk
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .allocation_flags     = GetBufferAllocationFlags(_info.usage),
-            .needs_device_address = true,
         }
     ) {}
 
@@ -150,7 +149,7 @@ VulkanBuffer::VulkanBuffer(
         );
     }
     try {
-        if (_allocation_info.needs_device_address) {
+        if ((_allocation_info.vk_usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0) {
             const VkBufferDeviceAddressInfo address_info{
                 .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
                 .buffer = m_alloc.buffer,
@@ -196,8 +195,6 @@ void VulkanBuffer::SetName(const std::string_view _name) {
 VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, VkImage _image) :
     Texture(_info),
     m_device(_device) {
-    b_present          = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
-
     if (_image != VK_NULL_HANDLE) {
         m_alloc.image = _image;
         m_alloc.alloc = {};

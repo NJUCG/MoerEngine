@@ -76,7 +76,6 @@ VulkanBindlessArray::VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size
             VulkanBufferAllocationInfo{
                 .vk_usage =
                     usage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                .needs_device_address = true,
             }
         );
     };

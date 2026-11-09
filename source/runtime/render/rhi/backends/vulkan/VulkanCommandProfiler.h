@@ -33,9 +33,6 @@ struct ProfilerStorage {
     void SetQueryUsed(int _idx) {
         queries_used[_idx / 8] |= (1 << (_idx % 8));
     }
-    bool IsActive() const {
-        return active;
-    }
     void RegisterCpuTimestamp(std::string_view _name, double _timestamp) {
         cpu_timestamps[cur_frame][_name] = _timestamp;
     }
@@ -71,7 +68,6 @@ struct ProfilerStorage {
         VkPipelineStageFlagBits _stage = kEndTimestampStage
     );
 
-    bool               active = false;
     VkNativeQueryPool& timestamp_pool;
     float              timestamp_period = 0.0f;
     uint64             query_pool_results[s_max_num_profiler_queries_per_frame * 2];

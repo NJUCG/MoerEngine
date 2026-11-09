@@ -16,8 +16,7 @@ enum class EVkInternalBufferUsage {
     Upload,
     Readback,
     Scratch,
-    ShaderBuffer,
-    ShaderBuffer_Constant
+    ShaderBuffer
 };
 
 // Buffers used by one command recording. The owner decides when GPU use has ended.

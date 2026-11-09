@@ -17,7 +17,6 @@ VulkanBufferAllocationInfo BuildTemporaryBufferAllocationInfo(EVkInternalBufferU
     VkBufferUsageFlags       usage{};
     VmaAllocationCreateFlags flags{};
     VmaMemoryUsage           mem_usage      = VMA_MEMORY_USAGE_AUTO;
-    bool                     device_address = false;
     switch (_usage) {
 
         case EVkInternalBufferUsage::Upload: {
@@ -36,21 +35,12 @@ VulkanBufferAllocationInfo BuildTemporaryBufferAllocationInfo(EVkInternalBufferU
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
             flags          = VMA_ALLOCATION_CREATE_STRATEGY_BEST_FIT_BIT;
             mem_usage      = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            device_address = true;
             break;
         }
         case EVkInternalBufferUsage::ShaderBuffer: {
             usage          = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
             flags          = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
             mem_usage      = VMA_MEMORY_USAGE_AUTO;
-            device_address = true;
-            break;
-        }
-        case EVkInternalBufferUsage::ShaderBuffer_Constant: {
-            usage          = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            flags          = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            mem_usage      = VMA_MEMORY_USAGE_AUTO;
-            device_address = true;
             break;
         }
         default:
@@ -60,7 +50,6 @@ VulkanBufferAllocationInfo BuildTemporaryBufferAllocationInfo(EVkInternalBufferU
         .vk_usage             = usage,
         .allocation_flags     = flags,
         .memory_usage         = mem_usage,
-        .needs_device_address = device_address,
     };
 }
 

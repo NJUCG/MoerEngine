@@ -124,7 +124,6 @@ VulkanCommandList::~VulkanCommandList() {
 
 // Recording lifecycle.
 VkResult VulkanCommandList::Begin() {
-    used_descriptor_bytes = 0;
     descriptor_cursor = {};
     ResetTransientDescriptors();
     VkCommandBufferBeginInfo begin_info = {
@@ -399,7 +398,6 @@ void VulkanCommandList::BindShaderArguments(
             "descriptor recording exceeded its prepared budget"
         );
     }
-    used_descriptor_bytes += binding_template.resource_descriptor_allocation_size;
 
     if (pipeline->GetDescriptorMode() == VulkanDescriptorMode::Heap) {
         for (const auto& [set_index, set] : binding_template.set_bindings) {

@@ -37,12 +37,9 @@ public:
     static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
     static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
 
-    static VkDescriptorType
-    METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type);
     static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
 
     static VkFilter             METoVKMinMagFilterMode(ESamplerFilter _filter);
-    static VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
     static VkSamplerAddressMode METoVKWrapMode(ESamplerAddressMode _address_mode);
 
     static VkCompareOp METoVKCompareOp(ECompareOption _compare_op);

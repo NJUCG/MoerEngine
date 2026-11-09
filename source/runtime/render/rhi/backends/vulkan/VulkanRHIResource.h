@@ -41,7 +41,6 @@ struct VulkanBufferAllocationInfo {
     VkBufferUsageFlags       vk_usage{0};
     VmaAllocationCreateFlags allocation_flags{0};
     VmaMemoryUsage           memory_usage{VMA_MEMORY_USAGE_AUTO};
-    bool                     needs_device_address{false};
     // Borrowed only during creation. Two or more distinct families use concurrent sharing.
     std::span<const uint32>   queue_family_indices{};
     VkDeviceSize              min_alignment = 1;
@@ -142,7 +141,6 @@ public:
     GetAttachmentView(uint32 _mip_level = 0, uint32 _mip_cnt = 1, uint32 _base_layer = 0, uint32 _layer_cnt = 1);
 
     void SetName(const std::string_view _name) override;
-    bool b_present : 1             = false;
 
 private:
     friend class VulkanDescriptorHeap;

@@ -803,59 +803,6 @@ VkBlendFactor VulkanEnumTranslator::METoVKBlendFactor(EBlendFactor _blend_factor
     }
 }
 
-VkDescriptorType VulkanEnumTranslator::METoVKDescriptorType(
-    EShaderParameterType           _type,
-    EShaderCodeResourceBindingType _binding_type
-) {
-
-    auto is_texture = [](EShaderCodeResourceBindingType type) {
-        return type == EShaderCodeResourceBindingType::TEXTURE_2D ||
-               type == EShaderCodeResourceBindingType::TEXTURE_2D_ARRAY ||
-               type == EShaderCodeResourceBindingType::TEXTURE_CUBE ||
-               type == EShaderCodeResourceBindingType::TEXTURE_CUBE_ARRAY ||
-               type == EShaderCodeResourceBindingType::TEXTURE_3D ||
-               type == EShaderCodeResourceBindingType::RW_TEXTURE_2D ||
-               type == EShaderCodeResourceBindingType::RW_TEXTURE_2D_ARRAY ||
-               type == EShaderCodeResourceBindingType::RW_TEXTURE_3D;
-    };
-    auto is_buffer = [](EShaderCodeResourceBindingType type) {
-        return type == EShaderCodeResourceBindingType::CONSTANT_BUFFER ||
-               type == EShaderCodeResourceBindingType::STRUCTURED_BUFFER ||
-               type == EShaderCodeResourceBindingType::BYTE_ADDRESS_BUFFER ||
-               type == EShaderCodeResourceBindingType::RW_BYTE_ADDRESSED_BUFFER ||
-               type == EShaderCodeResourceBindingType::RW_STRUCTURED_BUFFER;
-    };
-    auto is_acceleration_structure = [](EShaderCodeResourceBindingType type) {
-        return type == EShaderCodeResourceBindingType::RAYTRACING_ACCELERATION_STRUCTURE;
-    };
-    switch (_type) {
-        case EShaderParameterType::CBV:
-            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        case EShaderParameterType::SAMPLER:
-        case EShaderParameterType::BINDLESS_SAMPLER_INDEX: // MARK...
-            return VK_DESCRIPTOR_TYPE_SAMPLER;
-        case EShaderParameterType::SRV:
-            if (is_texture(_binding_type))
-                return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            if (is_buffer(_binding_type))
-                return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            if (is_acceleration_structure(_binding_type))
-                return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-            LOG_ERROR("Unsupported SRV type: {}", ToString(_binding_type));
-        case EShaderParameterType::UAV:
-            if (is_texture(_binding_type))
-                return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            if (is_buffer(_binding_type))
-                return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        case EShaderParameterType::BINDLESS_RESOURCE_INDEX: // MARK...
-            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        default:
-            LOG_CRITICAL("Unsupported EShaderParameterType: {}", static_cast<uint32>(_type));
-            return VK_DESCRIPTOR_TYPE_MAX_ENUM;
-    }
-}
-
 VkShaderStageFlags VulkanEnumTranslator::METoVKShaderStageFlags(EShaderType _type) {
     switch (_type) {
         case EShaderType::ST_VERTEX:
@@ -894,23 +841,6 @@ VkShaderStageFlags VulkanEnumTranslator::METoVKShaderStageFlags(EShaderType _typ
 
 VkFilter VulkanEnumTranslator::METoVKMinMagFilterMode(ESamplerFilter _filter) {
     return VulkanEnumTranslator::METoVKImageFilter(_filter);
-}
-
-VkSamplerMipmapMode VulkanEnumTranslator::METoVKMipmapMode(ESamplerFilter _filter) {
-    switch (_filter) {
-        case SF_NEAREST:
-        case SF_LINEAR:
-            return VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        case SF_CUBIC:
-            return VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        case SF_ANISOTROPIC_NEAREST:
-            return VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        case SF_ANISOTROPIC_LINEAR:
-            return VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        default:
-            LOG_CRITICAL("Unknown Mipmap ESamplerFilter {:d}", static_cast<uint8>(_filter));
-            return VK_SAMPLER_MIPMAP_MODE_MAX_ENUM;
-    }
 }
 
 VkSamplerAddressMode VulkanEnumTranslator::METoVKWrapMode(ESamplerAddressMode _address_mode) {

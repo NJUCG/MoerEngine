@@ -104,7 +104,6 @@ VulkanRaytracingGeometry::VulkanRaytracingGeometry(
             .vk_usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .memory_usage = VMA_MEMORY_USAGE_GPU_ONLY,
-            .needs_device_address = true,
         }
     );
 
@@ -325,7 +324,6 @@ VulkanBufferRef VulkanRaytracingScene::CreateInstanceBuffer(uint32 capacity) {
                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
             .allocation_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
             .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            .needs_device_address = true,
         }
     );
 }
@@ -407,7 +405,6 @@ bool VulkanRaytracingScene::EnsureAccelerationStructureStorage() {
             VulkanBufferAllocationInfo{
                 .vk_usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                .needs_device_address = true,
             }
         );
     }
@@ -421,7 +418,6 @@ bool VulkanRaytracingScene::EnsureAccelerationStructureStorage() {
                 .vk_usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                .needs_device_address = true,
             }
         );
         const VkAccelerationStructureCreateInfoKHR create_info{
