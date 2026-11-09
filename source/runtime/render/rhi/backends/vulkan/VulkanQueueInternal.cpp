@@ -136,6 +136,26 @@ void TerminalizeUnsubmittedSignals(
     }
 }
 
+void PublishUnsubmittedSubmissionErrors(
+    VulkanDevice& device,
+    VulkanTimeline* queue_timeline,
+    VulkanPendingSubmission& packet,
+    const VulkanOperationResult& outcome,
+    std::string_view reason
+) {
+    const auto completion_batch = packet.submit.gpu_completion_publish_batch.Valid() ?
+        packet.submit.gpu_completion_publish_batch : GpuCompletionBackendAccess::BeginPublishBatch();
+    packet.submit.PublishPendingGpuCompletionErrors(reason, completion_batch);
+    PublishUnsubmittedQueryErrors(packet.submit, packet.command_context.get(), reason);
+    TerminalizeUnsubmittedSignal(device, queue_timeline, packet.timeline, outcome);
+    auto signals = std::move(packet.submit.signal_events);
+    auto keepalives = std::move(packet.submit.signal_rejection_keepalives);
+    packet.submit.signal_events.clear();
+    packet.submit.signal_rejection_keepalives.clear();
+    TerminalizeUnsubmittedSignals(device, signals, outcome);
+    (void)keepalives;
+}
+
 QueryPublishBatch PublishUnsubmittedQueryErrors(
     CmdSubmit&            _submit,
     VulkanCommandContext* _command_context,

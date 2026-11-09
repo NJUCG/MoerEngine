@@ -382,37 +382,12 @@ void VulkanCopyQueue::CommitRuntimeSubmitCompletion(
     assert(!_recorded.completion_enqueued);
     try {
         if (!_outcome.Succeeded()) {
-            const std::string_view rejection_reason =
-                "Vulkan Copy submission was rejected before GPU completion";
-            const GpuCompletionPublishBatch completion_batch =
-                _recorded.submit.gpu_completion_publish_batch.Valid() ?
-                    _recorded.submit.gpu_completion_publish_batch :
-                    GpuCompletionBackendAccess::BeginPublishBatch();
-            _recorded.submit.PublishPendingGpuCompletionErrors(
-                rejection_reason, completion_batch
+            PublishUnsubmittedSubmissionErrors(
+                device, _recorded.timeline != 0 ? timeline.Get() : nullptr, _recorded, _outcome,
+                "Vulkan Copy submission was rejected before GPU completion"
             );
-            PublishUnsubmittedQueryErrors(_recorded.submit, _recorded.command_context.get(), rejection_reason);
-            if (_recorded.timeline != 0) {
-                TerminalizeUnsubmittedSignal(
-                    device,
-                    timeline.Get(),
-                    _recorded.timeline,
-                    _outcome
-                );
-            }
-            Array<SignalEvent> rejected_signals =
-                std::move(_recorded.submit.signal_events);
-            Array<FenceRef> rejected_signal_keepalives =
-                std::move(
-                    _recorded.submit.signal_rejection_keepalives
-                );
-            _recorded.submit.signal_events.clear();
-            _recorded.submit.signal_rejection_keepalives.clear();
-            TerminalizeUnsubmittedSignals(
-                device, rejected_signals, _outcome
-            );
-            (void)rejected_signal_keepalives;
         }
+
         std::unique_lock<std::mutex> lock(event_mutex);
         const uint64                 retirement_serial = retirement_enqueued_serial + 1;
         event_queue.emplace_back(

@@ -10,6 +10,7 @@
 #include "rhi/executor/RHIExecutor.h"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
 #include <limits>
 #include <stdexcept>
@@ -336,227 +337,172 @@ void VulkanBindlessArray::UntrackTextureView(uint32 _array_idx) {
     texture_view_infos[_array_idx] = {};
 }
 
-UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
-    std::unique_lock<std::mutex> lk(mtx);
-
-    Array<std::pair<uint32, uint32>> array_indices_dat;
-    Array<byte>                  array_dat;
-    Array<std::pair<uint32, uint32>> texture_indices_dat;
-    Array<byte>                  texture_dat;
-    Array<std::pair<uint32, uint32>> buffer_indices_dat;
-    Array<byte>                  buffer_dat;
-
-    {
-        VulkanDescriptorHeap& heap   = m_device->GetGlobalDescriptorHeap();
-        uint64 texture_handle_stride = heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
-        uint64 buffer_handle_stride  = heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        uint64                array_handle_stride   = sizeof(uint32);
-
-        // Apply pending changes to CPU bindings before recording GPU updates.
-        uint32 array_idx            = 0;
-        uint32 texture_cnt          = 0;
-        uint32 buffer_cnt           = 0;
-        uint64 update_command_token = 0;
-        if (!update_cmds.empty()) {
-            if (next_update_command_token == std::numeric_limits<uint64>::max()) {
-                throw std::runtime_error("bindless update command token exhausted");
+std::array<uint32, 3> VulkanBindlessArray::SnapshotPendingUpdates() {
+    std::array<uint32, 3> counts{};
+    auto& [array_count, texture_count, buffer_count] = counts;
+    uint64 command_token = 0;
+    if (!update_cmds.empty()) {
+        if (next_update_command_token == std::numeric_limits<uint64>::max()) {
+            throw std::runtime_error("bindless update command token exhausted");
+        }
+        command_token = ++next_update_command_token;
+    }
+    for (UpdateCmd& update : update_cmds) {
+        std::visit([&](auto& command) {
+            using T = std::decay_t<decltype(command)>;
+            if constexpr (std::is_same_v<T, TextureUpdateInfo> || std::is_same_v<T, BufferUpdateInfo>) {
+                command.command_token = command_token;
+                if (command.free) {
+                    auto& binding = bindings[command.array_idx];
+                    if constexpr (std::is_same_v<T, TextureUpdateInfo>) {
+                        assert(binding.IsTexture() && "Invalid texture binding");
+                        assert(command.texture.Get() == binding.resource && "Bindless texture release lost resource ownership");
+                    } else {
+                        assert(binding.IsBuffer() && "Invalid buffer binding");
+                        assert(command.buffer.Get() == binding.resource && "Bindless buffer release lost resource ownership");
+                    }
+                    binding = {};
+                    return;
+                }
+                ++array_count;
+                if constexpr (std::is_same_v<T, TextureUpdateInfo>) {
+                    ++texture_count;
+                } else {
+                    ++buffer_count;
+                }
             }
-            update_command_token = ++next_update_command_token;
-        }
+        }, update);
+    }
+    return counts;
+}
 
-        // Snapshot each pending mutation under one command identity.
-        for (UpdateCmd& cmd : update_cmds) {
-            std::visit(
-                [&](auto& _cmd) {
-                    using Tcmd = std::decay_t<decltype(_cmd)>;
-                    if constexpr (std::is_same_v<Tcmd, TextureUpdateInfo>) {
-                        _cmd.command_token = update_command_token;
-                        if (_cmd.free) {
-                            auto& binding = bindings[_cmd.array_idx];
-                            assert(
-                                binding.IsTexture() &&
-                                "Invalid texture binding"
-                            );
-                            assert(
-                                _cmd.texture.Get() == binding.resource &&
-                                "Bindless texture release lost resource ownership"
-                            );
+uint32 VulkanBindlessArray::WriteDescriptorUpdate(
+    const TextureUpdateInfo& update, std::span<byte> descriptor_data
+) {
+    bindings[update.array_idx] = BindingRecord{
+        .resource        = update.texture.Get(),
+        .descriptor_slot = update.slot,
+        .type            = EResourceType::Texture,
+    };
+    VulkanTexture* vk_texture = ResourceCast(update.texture.Get());
+    TextureView    view(vk_texture, update.format, update.mip_level, update.num_mips);
+    if (update.array_count > 0) {
+        view = view.Slice(update.array_layer, update.array_count);
+    }
 
-                            binding = BindingRecord{};
+    VkDescriptorImageInfo native_image{};
+    native_image.imageView = vk_texture->GetView(
+        view.mip_level,
+        view.num_mips,
+        view.array_layer,
+        view.num_array ? view.num_array : 1
+    );
+    native_image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet native_write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    native_write.dstSet          = GetLegacySet(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    native_write.dstArrayElement = update.slot;
+    native_write.descriptorCount = 1;
+    native_write.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    native_write.pImageInfo      = &native_image;
+    // Slots are unpublished until the GPU index-table update; retirement
+    // prevents overwriting descriptors still reachable by earlier draws.
+    vkUpdateDescriptorSets(m_device->GetDevice(), 1, &native_write, 0, nullptr);
+    if (m_device->GetDescriptorMode() != VulkanDescriptorMode::Sets) {
+        const auto descriptor =
+            g_heap.GetOrCreateImageDescriptor(&view, native_image.imageLayout);
+        g_heap.CopyDescriptorToMemory(
+            descriptor,
+            descriptor_data
+        );
+    }
+    return (m_device->GetSamplerIndex(update.sampler) & 0xff) | (update.slot & 0xffffff) << 8;
+}
 
-                        } else {
-                            ++array_idx;
-                            ++texture_cnt;
-                        }
+uint32 VulkanBindlessArray::WriteDescriptorUpdate(
+    const BufferUpdateInfo& update, std::span<byte> descriptor_data
+) {
+    bindings[update.array_idx] = BindingRecord{
+        .resource        = update.buffer.Get(),
+        .descriptor_slot = update.slot,
+        .type            = EResourceType::Buffer,
+    };
+    VulkanBuffer*    vk_buffer = ResourceCast(update.buffer.Get());
+    VkDescriptorType type      = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    if (update.format != PF_UNDEFINED) {
+        LOG_WARNING(
+            "Bindless buffer with format is not supported yet, current buffer: {}",
+            update.buffer->GetName()
+        );
+    }
+    VkDescriptorBufferInfo native_buffer{
+        vk_buffer->GetHandle(), 0, vk_buffer->GetByteSize()
+    };
+    VkWriteDescriptorSet native_write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    native_write.dstSet          = GetLegacySet(type);
+    native_write.dstArrayElement = update.slot;
+    native_write.descriptorCount = 1;
+    native_write.descriptorType  = type;
+    native_write.pBufferInfo     = &native_buffer;
+    vkUpdateDescriptorSets(m_device->GetDevice(), 1, &native_write, 0, nullptr);
+    if (m_device->GetDescriptorMode() != VulkanDescriptorMode::Sets) {
+        const auto descriptor =
+            g_heap.GetOrCreateBufferDescriptor(vk_buffer->GetView(update.format), type);
+        g_heap.CopyDescriptorToMemory(
+            descriptor,
+            descriptor_data
+        );
+    }
+    return update.slot;
+}
 
-                    } else if constexpr (std::is_same_v<Tcmd, BufferUpdateInfo>) {
-                        _cmd.command_token = update_command_token;
-                        if (_cmd.free) {
-                            auto& binding = bindings[_cmd.array_idx];
-                            assert(
-                                binding.IsBuffer() &&
-                                "Invalid buffer binding"
-                            );
-                            assert(
-                                _cmd.buffer.Get() == binding.resource &&
-                                "Bindless buffer release lost resource ownership"
-                            );
+UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand() {
+    std::unique_lock lock(mtx);
+    const uint64 texture_stride = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    const uint64 buffer_stride = g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    const auto [array_count, texture_count, buffer_count] = SnapshotPendingUpdates();
 
-                            binding = BindingRecord{};
+    Array<std::pair<uint32, uint32>> array_indices(array_count);
+    Array<std::pair<uint32, uint32>> texture_indices(texture_count);
+    Array<std::pair<uint32, uint32>> buffer_indices(buffer_count);
+    Array<byte> array_data(array_count * sizeof(uint32));
+    Array<byte> texture_data(texture_count * texture_stride);
+    Array<byte> buffer_data(buffer_count * buffer_stride);
+    uint32 array_index = 0, texture_index = 0, buffer_index = 0;
 
-                        } else {
-                            ++array_idx;
-                            ++buffer_cnt;
-                        }
-                    }
-                },
-                cmd
-            );
-        }
-
-        array_indices_dat.resize(array_idx);
-        texture_indices_dat.resize(texture_cnt);
-        buffer_indices_dat.resize(buffer_cnt);
-
-        array_dat.resize(array_idx * array_handle_stride);
-        texture_dat.resize(texture_cnt * texture_handle_stride);
-        buffer_dat.resize(buffer_cnt * buffer_handle_stride);
-
-        array_idx   = 0;
-        texture_cnt = 0;
-        buffer_cnt  = 0;
-
-        // Buffer binding 0 is addressed through a view that starts at the
-        // implementation-provided byte offset. Slots therefore remain
-        // relative to that binding and never truncate byte padding into a
-        // descriptor index.
-        // The index table stores encoded uint32 handles; descriptors live separately.
-        for (const UpdateCmd& cmd : update_cmds) {
-            std::visit(
-                [&](auto&& _cmd) {
-                    using Tcmd = std::decay_t<decltype(_cmd)>;
-                    if constexpr (std::is_same_v<Tcmd, TextureUpdateInfo>) {
-                        if (!_cmd.free) {
-                            bindings[_cmd.array_idx] = BindingRecord{
-                                .resource        = _cmd.texture.Get(),
-                                .descriptor_slot = _cmd.slot,
-                                .type            = EResourceType::Texture,
-                            };
-                            VulkanTexture* vk_texture = ResourceCast(_cmd.texture.Get());
-                            TextureView    view(vk_texture, _cmd.format, _cmd.mip_level, _cmd.num_mips);
-                            if (_cmd.array_count > 0) {
-                                view = view.Slice(_cmd.array_layer, _cmd.array_count);
-                            }
-
-                            VkDescriptorImageInfo native_image{};
-                            native_image.imageView = vk_texture->GetView(
-                                view.mip_level,
-                                view.num_mips,
-                                view.array_layer,
-                                view.num_array ? view.num_array : 1
-                            );
-                            native_image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                            VkWriteDescriptorSet native_write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                            native_write.dstSet          = GetLegacySet(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
-                            native_write.dstArrayElement = _cmd.slot;
-                            native_write.descriptorCount = 1;
-                            native_write.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                            native_write.pImageInfo      = &native_image;
-                            // Slots are unpublished until the GPU index-table update; retirement
-                            // prevents overwriting descriptors still reachable by earlier draws.
-                            vkUpdateDescriptorSets(m_device->GetDevice(), 1, &native_write, 0, nullptr);
-                            if (m_device->GetDescriptorMode() != VulkanDescriptorMode::Sets) {
-                                const auto descriptor =
-                                    heap.GetOrCreateImageDescriptor(&view, native_image.imageLayout);
-                                heap.CopyDescriptorToMemory(
-                                    descriptor,
-                                    std::span<byte>(texture_dat)
-                                        .subspan(texture_cnt * texture_handle_stride, texture_handle_stride)
-                                );
-                            }
-                            uint32 indirect_handle = (m_device->GetSamplerIndex(_cmd.sampler) & 0xff) |
-                                                     (_cmd.slot & 0xffffff) << 8;
-                            memcpy(
-                                array_dat.data() + array_idx * array_handle_stride,
-                                &indirect_handle,
-                                array_handle_stride
-                            );
-                            array_indices_dat[array_idx]     = {array_idx, _cmd.array_idx};
-                            texture_indices_dat[texture_cnt] = {texture_cnt, _cmd.slot};
-
-                            ++array_idx;
-                            ++texture_cnt;
-                        }
-
-                    } else if constexpr (std::is_same_v<Tcmd, BufferUpdateInfo>) {
-                        if (!_cmd.free) {
-                            bindings[_cmd.array_idx] = BindingRecord{
-                                .resource        = _cmd.buffer.Get(),
-                                .descriptor_slot = _cmd.slot,
-                                .type            = EResourceType::Buffer,
-                            };
-                            VulkanBuffer*    vk_buffer = ResourceCast(_cmd.buffer.Get());
-                            VkDescriptorType type      = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                            if (_cmd.format != PF_UNDEFINED) {
-                                LOG_WARNING(
-                                    "Bindless buffer with format is not supported yet, current buffer: {}",
-                                    _cmd.buffer->GetName()
-                                );
-                            }
-                            VkDescriptorBufferInfo native_buffer{
-                                vk_buffer->GetHandle(), 0, vk_buffer->GetByteSize()
-                            };
-                            VkWriteDescriptorSet native_write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                            native_write.dstSet          = GetLegacySet(type);
-                            native_write.dstArrayElement = _cmd.slot;
-                            native_write.descriptorCount = 1;
-                            native_write.descriptorType  = type;
-                            native_write.pBufferInfo     = &native_buffer;
-                            vkUpdateDescriptorSets(m_device->GetDevice(), 1, &native_write, 0, nullptr);
-                            if (m_device->GetDescriptorMode() != VulkanDescriptorMode::Sets) {
-                                const auto descriptor =
-                                    heap.GetOrCreateBufferDescriptor(vk_buffer->GetView(_cmd.format), type);
-                                heap.CopyDescriptorToMemory(
-                                    descriptor,
-                                    std::span<byte>(buffer_dat)
-                                        .subspan(buffer_cnt * buffer_handle_stride, buffer_handle_stride)
-                                );
-                            }
-                            memcpy(
-                                array_dat.data() + array_idx * array_handle_stride, &_cmd.slot, sizeof(uint32)
-                            );
-                            array_indices_dat[array_idx]   = {array_idx, _cmd.array_idx};
-                            buffer_indices_dat[buffer_cnt] = {buffer_cnt, _cmd.slot};
-
-                            ++array_idx;
-                            ++buffer_cnt;
-                        }
-                    }
-                },
-                cmd
-            );
-        }
+    // Index entries remain relative to their descriptor binding's byte offset.
+    for (const UpdateCmd& update : update_cmds) {
+        std::visit([&](const auto& command) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(command)>, TextureUpdateInfo> || std::is_same_v<std::decay_t<decltype(command)>, BufferUpdateInfo>) {
+                if (command.free) {
+                    return;
+                }
+                constexpr bool texture = std::is_same_v<std::decay_t<decltype(command)>, TextureUpdateInfo>;
+                auto& data = texture ? texture_data : buffer_data;
+                auto& indices = texture ? texture_indices : buffer_indices;
+                auto& index = texture ? texture_index : buffer_index;
+                const uint64 stride = texture ? texture_stride : buffer_stride;
+                const uint32 handle = WriteDescriptorUpdate(command, std::span<byte>(data).subspan(index * stride, stride));
+                std::memcpy(array_data.data() + array_index * sizeof(uint32), &handle, sizeof(handle));
+                array_indices[array_index] = {array_index, command.array_idx};
+                indices[index] = {index, command.slot};
+                ++array_index;
+                ++index;
+            }
+        }, update);
     }
     if (m_device->GetDescriptorMode() == VulkanDescriptorMode::Sets) {
-        texture_indices_dat.clear();
-        texture_dat.clear();
-        buffer_indices_dat.clear();
-        buffer_dat.clear();
+        texture_indices.clear();
+        texture_data.clear();
+        buffer_indices.clear();
+        buffer_data.clear();
     }
     temp_slot_to_cmd.clear();
-    UniquePtr<Command> cmd = MakeUnique<UpdateBindlessArrayCmd>(
-        this,
-        std::move(update_cmds),
-        std::move(array_dat),
-        std::move(array_indices_dat),
-        std::move(buffer_dat),
-        std::move(buffer_indices_dat),
-        std::move(texture_dat),
-        std::move(texture_indices_dat)
+    auto command = MakeUnique<UpdateBindlessArrayCmd>(
+        this, std::move(update_cmds), std::move(array_data), std::move(array_indices),
+        std::move(buffer_data), std::move(buffer_indices), std::move(texture_data), std::move(texture_indices)
     );
-
     update_cmds.clear();
-    return cmd;
+    return command;
 }
 
 uint32 VulkanBindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
@@ -860,37 +806,26 @@ bool VulkanBindlessArray::BeginUpdateCommand(const Array<BindlessArray::UpdateCm
         std::visit(
             [&](const auto& _cmd) {
                 using TCmd = std::decay_t<decltype(_cmd)>;
-                if constexpr (std::is_same_v<TCmd, TextureUpdateInfo>) {
+                if constexpr (std::is_same_v<TCmd, TextureUpdateInfo> || std::is_same_v<TCmd, BufferUpdateInfo>) {
+                    constexpr bool texture = std::is_same_v<TCmd, TextureUpdateInfo>;
                     if (!generation_matches(_cmd) || (!_cmd.free && all_current)) {
                         return;
                     }
+                    const auto& generations = texture ? texture_slot_generations : buffer_slot_generations;
+                    const auto& claim_tokens = texture ? texture_slot_claim_tokens : buffer_slot_claim_tokens;
+                    auto& claims = texture ? texture_claims : buffer_claims;
                     if (array_slot_generations[_cmd.array_idx] == std::numeric_limits<uint64>::max() ||
-                        texture_slot_generations[_cmd.slot] == std::numeric_limits<uint64>::max()) {
-                        throw std::runtime_error("bindless texture update generation exhausted");
+                        generations[_cmd.slot] == std::numeric_limits<uint64>::max()) {
+                        throw std::runtime_error(texture ? "bindless texture update generation exhausted" :
+                                                           "bindless buffer update generation exhausted");
                     }
-                    if (array_slot_claim_tokens[_cmd.array_idx] != 0 ||
-                        texture_slot_claim_tokens[_cmd.slot] != 0) {
-                        throw std::runtime_error("bindless texture slot already has a lifecycle claim");
+                    if (array_slot_claim_tokens[_cmd.array_idx] != 0 || claim_tokens[_cmd.slot] != 0) {
+                        throw std::runtime_error(texture ? "bindless texture slot already has a lifecycle claim" :
+                                                           "bindless buffer slot already has a lifecycle claim");
                     }
-                    if (!global_claims.emplace(_cmd.array_idx).second ||
-                        !texture_claims.emplace(_cmd.slot).second) {
-                        throw std::runtime_error("duplicate bindless texture update generation claim");
-                    }
-                } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>) {
-                    if (!generation_matches(_cmd) || (!_cmd.free && all_current)) {
-                        return;
-                    }
-                    if (array_slot_generations[_cmd.array_idx] == std::numeric_limits<uint64>::max() ||
-                        buffer_slot_generations[_cmd.slot] == std::numeric_limits<uint64>::max()) {
-                        throw std::runtime_error("bindless buffer update generation exhausted");
-                    }
-                    if (array_slot_claim_tokens[_cmd.array_idx] != 0 ||
-                        buffer_slot_claim_tokens[_cmd.slot] != 0) {
-                        throw std::runtime_error("bindless buffer slot already has a lifecycle claim");
-                    }
-                    if (!global_claims.emplace(_cmd.array_idx).second ||
-                        !buffer_claims.emplace(_cmd.slot).second) {
-                        throw std::runtime_error("duplicate bindless buffer update generation claim");
+                    if (!global_claims.emplace(_cmd.array_idx).second || !claims.emplace(_cmd.slot).second) {
+                        throw std::runtime_error(texture ? "duplicate bindless texture update generation claim" :
+                                                           "duplicate bindless buffer update generation claim");
                     }
                 }
             },

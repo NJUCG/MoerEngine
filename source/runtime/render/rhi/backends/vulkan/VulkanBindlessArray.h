@@ -5,7 +5,9 @@
 #include "misc/Types.h"
 #include "rhi/RHICommand.h"
 
+#include <array>
 #include <deque>
+#include <span>
 #include <memory>
 #include <mutex>
 
@@ -90,6 +92,11 @@ private:
     VulkanBufferRef m_texture_sampler_descriptors;
 
     // Completion validates a plan before applying slot/reference retirement.
+    // Caller holds mtx while snapshotting membership and encoding descriptors.
+    std::array<uint32, 3> SnapshotPendingUpdates();
+    uint32 WriteDescriptorUpdate(const TextureUpdateInfo& update, std::span<byte> descriptor_data);
+    uint32 WriteDescriptorUpdate(const BufferUpdateInfo& update, std::span<byte> descriptor_data);
+
     struct UpdateCompletionPlan;
     // Caller holds mtx. Plans borrow command data and never outlive that call.
     UpdateCompletionPlan

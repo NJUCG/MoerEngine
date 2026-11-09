@@ -1863,16 +1863,15 @@ bool VulkanSubmissionExecutor::ProcessSerialSource(
     return true;
 }
 
-bool VulkanSubmissionExecutor::ProcessParallelSources(
-    RHISubmissionBatch&                    _batch,
-    const std::shared_ptr<BatchExecution>& execution,
-    size_t                                 group_begin,
-    size_t                                 group_end,
-    size_t&                                _first_unconsumed_source
+namespace {
+bool BuildTranslateSchedule(
+    const RHISubmissionBatch& _batch,
+    size_t group_begin,
+    size_t group_end,
+    VulkanTranslateWaveDetail::TranslateWaveScheduler& scheduler
 ) {
-    const bool pipeline_mode  = execution->submission_tasks_done.has_value();
-    const auto queue_topology = RenderDevice::Get().GetQueueTopology();
     using namespace VulkanTranslateWaveDetail;
+    const auto queue_topology = RenderDevice::Get().GetQueueTopology();
 
     assert(group_begin < group_end);
     assert(group_end <= _batch.submits.size());
@@ -1909,8 +1908,61 @@ bool VulkanSubmissionExecutor::ProcessParallelSources(
         });
     }
 
+    return scheduler.Build(schedule_nodes);
+}
+} // namespace
+
+void VulkanSubmissionExecutor::RejectUnhandedSources(
+    RHISubmissionBatch& _batch,
+    const std::shared_ptr<BatchExecution>& execution,
+    std::span<SubmissionSource> sources,
+    VkResult result
+) noexcept {
+    assert(!sources.empty());
+    const size_t group_end = sources.back().source_index + 1;
+    if (result == VK_SUCCESS) {
+        result = VK_ERROR_UNKNOWN;
+    }
+    if (execution->submission_tasks_done) {
+        DrainBatchSubmissionTasks(execution);
+    }
+    size_t rejection_begin = group_end;
+    for (const auto& slot : sources) {
+        if (!slot.handed_off) {
+            rejection_begin = std::min(rejection_begin, slot.source_index);
+        }
+    }
+    if (rejection_begin < group_end) {
+        execution->PublishSuffixRejection(rejection_begin, static_cast<int32>(result), false, "parallel Translate group failed before Completion notification");
+    }
+    for (auto& slot : sources) {
+        if (slot.handed_off) {
+            continue;
+        }
+        auto& entry = _batch.submits[slot.source_index];
+        if (slot.recorded) {
+            RejectRecordedSourceForRuntime(std::move(*slot.recorded), result, false);
+            slot.recorded.reset();
+        } else if (!slot.attempted) {
+            RejectSourceForRuntime(slot.queue_type, std::move(entry.submit), result, false);
+        }
+        slot.handed_off = true;
+    }
+}
+
+bool VulkanSubmissionExecutor::ProcessParallelSources(
+    RHISubmissionBatch&                    _batch,
+    const std::shared_ptr<BatchExecution>& execution,
+    size_t                                 group_begin,
+    size_t                                 group_end,
+    size_t&                                _first_unconsumed_source
+) {
+    const bool pipeline_mode  = execution->submission_tasks_done.has_value();
+    using namespace VulkanTranslateWaveDetail;
+    const size_t group_size = group_end - group_begin;
+    const size_t first_segment = _batch.topology.source_plans[group_begin].segment_plan_begin;
     TranslateWaveScheduler scheduler{};
-    if (!scheduler.Build(schedule_nodes)) {
+    if (!BuildTranslateSchedule(_batch, group_begin, group_end, scheduler)) {
         const size_t error_node = scheduler.GetErrorNodeIndex();
         LOG_ERROR(
             "[RHIExecutor][Vulkan][ParallelTranslate] "
@@ -1937,34 +1989,7 @@ bool VulkanSubmissionExecutor::ProcessParallelSources(
         if (group_finished) {
             return;
         }
-        if (result == VK_SUCCESS) {
-            result = VK_ERROR_UNKNOWN;
-        }
-        if (pipeline_mode) {
-            DrainBatchSubmissionTasks(execution);
-        }
-        size_t rejection_begin = group_end;
-        for (const auto& slot : slots) {
-            if (!slot.handed_off) {
-                rejection_begin = std::min(rejection_begin, slot.source_index);
-            }
-        }
-        if (rejection_begin < group_end) {
-            execution->PublishSuffixRejection(rejection_begin, static_cast<int32>(result), false, "parallel Translate group failed before Completion notification");
-        }
-        for (auto& slot : slots) {
-            if (slot.handed_off) {
-                continue;
-            }
-            auto& entry = _batch.submits[slot.source_index];
-            if (slot.recorded) {
-                RejectRecordedSourceForRuntime(std::move(*slot.recorded), result, false);
-                slot.recorded.reset();
-            } else if (!slot.attempted) {
-                RejectSourceForRuntime(slot.queue_type, std::move(entry.submit), result, false);
-            }
-            slot.handed_off = true;
-        }
+        RejectUnhandedSources(_batch, execution, slots, result);
         finish_group();
     };
     auto reject_on_exit = OnScopeExit([&]() noexcept {

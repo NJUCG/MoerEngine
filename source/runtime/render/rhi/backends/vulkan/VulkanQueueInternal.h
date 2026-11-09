@@ -61,6 +61,15 @@ void TerminalizeUnsubmittedSignals(
     const VulkanOperationResult& _outcome
 );
 
+// Publish all host observations before Fence code can synchronously re-enter.
+void PublishUnsubmittedSubmissionErrors(
+    VulkanDevice& device,
+    VulkanTimeline* queue_timeline,
+    VulkanPendingSubmission& packet,
+    const VulkanOperationResult& outcome,
+    std::string_view reason
+);
+
 QueryPublishBatch PublishUnsubmittedQueryErrors(
     CmdSubmit&            _submit,
     VulkanCommandContext* _command_context,

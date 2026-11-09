@@ -130,6 +130,12 @@ private:
     );
     bool CanPipelineBatch(const RHISubmissionBatch& _batch) const;
     bool PrepareSource(RHISubmissionBatch& _batch, size_t _source_index, bool _pipeline);
+    void RejectUnhandedSources(
+        RHISubmissionBatch& _batch,
+        const std::shared_ptr<BatchExecution>& execution,
+        std::span<SubmissionSource> sources,
+        VkResult result
+    ) noexcept;
     bool ProcessParallelSources(
         RHISubmissionBatch&                    _batch,
         const std::shared_ptr<BatchExecution>& _execution,
