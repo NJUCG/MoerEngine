@@ -201,339 +201,27 @@ public:
         }
     }
     WaitEvent Execute(CmdSubmit&& submit) override {
-        if (!submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty()) {
-            Unsupported("GPU completion or query tokens");
-        }
-        for (const SignalEvent& signal : submit.signal_events) {
-            auto* fence = dynamic_cast<MetalFence*>(
-                reinterpret_cast<Fence*>(signal.timeline_handle));
-            if (fence == nullptr || signal.value == 0) {
-                Unsupported("this graphics signal fence");
-            }
-        }
-        // Frame profiling markers currently produce no Metal timestamp queries.
-        // A submit without query tokens may still carry the frame boundary and
-        // deferred-delete bit; Objective-C resource owners retire with CmdSubmit.
-        // Validate the complete submit before encoding any GPU work. A later
-        // unsupported command must not leave a partially executed submit.
-        bool has_gpu_work = false;
-        for (const auto& command : submit.cmds) {
-            if (command->Type() == Command::EType::Scope) {
-                // Scope commands only mark GPU debug/profiling regions. Metal
-                // timestamp collection is not enabled by this queue yet.
-                continue;
-            }
-            if (command->Type() == Command::EType::QueueTransfer) {
-                ValidateQueueTransfer(static_cast<const QueueTransferCmd&>(*command), EQueueType::Graphics);
-                continue;
-            }
-            if (command->Type() == Command::EType::Barrier) {
-                ValidateBarrier(static_cast<const BarrierCmd&>(*command));
-                continue;
-            }
-            if (command->Type() == Command::EType::UpdateBindlessArray) {
-                const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
-                if (dynamic_cast<MetalBindlessArray*>(update.Handle()) == nullptr) {
-                    Unsupported("a foreign bindless array");
-                }
-                continue;
-            }
-            if (command->Type() == Command::EType::UploadTexture) {
-                ValidateTextureUpload(static_cast<const UploadTextureCmd&>(*command));
-                has_gpu_work = true;
-                continue;
-            }
-            if (command->Type() == Command::EType::UploadBuffer) {
-                ValidateBufferUpload(static_cast<const UploadBufferCmd&>(*command));
-                has_gpu_work = true;
-                continue;
-            }
-            if (command->Type() == Command::EType::CopyBackBuffer) {
-                const auto& copy = static_cast<const CopyBackBufferCmd&>(*command);
-                auto* buffer = dynamic_cast<MetalBuffer*>(
-                    reinterpret_cast<Buffer*>(copy.Handle()));
-                if (buffer == nullptr || copy.Data() == nullptr ||
-                    copy.HasOwningReadback() || copy.ByteSize() == 0 ||
-                    copy.Offset() > buffer->GetByteSize() ||
-                    copy.ByteSize() > buffer->GetByteSize() - copy.Offset()) {
-                    Unsupported("this graphics buffer readback layout");
-                }
-                has_gpu_work = true;
-                continue;
-            }
-            if (command->Type() == Command::EType::SetDrawState) {
-                ValidateDraw(static_cast<const SetDrawStateCmd&>(*command));
-                has_gpu_work = true;
-                continue;
-            }
-            if (command->Type() == Command::EType::ShaderDispatch) {
-                ValidateComputeDispatch(
-                    static_cast<const DispatchCmd&>(*command), submit.cached_args);
-                has_gpu_work = true;
-                continue;
-            }
-            if (command->Type() != Command::EType::ClearResource) {
-                throw std::runtime_error("Metal RHI has not implemented graphics command " + command->name + " (type=" + std::to_string(static_cast<uint32>(command->Type())) + ")");
-            }
-            has_gpu_work = true;
-            const auto& clear = static_cast<const ClearResourceCmd&>(*command);
-            if (clear.IsBuffer() && clear.IsUInt()) {
-                const BufferView& view = clear.Buffer();
-                auto* buffer = dynamic_cast<MetalBuffer*>(view.GetBuffer());
-                if (buffer == nullptr || view.GetByteSize() == 0 ||
-                    view.GetByteOffset() % sizeof(uint32) != 0 ||
-                    view.GetByteSize() % sizeof(uint32) != 0 ||
-                    view.GetByteOffset() > buffer->GetByteSize() ||
-                    view.GetByteSize() > buffer->GetByteSize() - view.GetByteOffset()) {
-                    Unsupported("this buffer clear view");
-                }
-                continue;
-            }
-            if (!clear.IsTexture() || !clear.IsFloat4()) {
-                Unsupported("this clear value or resource");
-            }
-            const TextureView& view = clear.Texture();
-            auto* texture = dynamic_cast<MetalTexture*>(view.GetTexture());
-            if (texture == nullptr || view.format != texture->GetFormat() ||
-                view.mip_level != 0 || view.num_mips != 1 ||
-                view.array_layer != 0 || view.num_array != 1 ||
-                view.offset != uint3{0, 0, 0} || view.extent != texture->GetExtent()) {
-                Unsupported("this texture clear view");
-            }
-        }
+        const bool                                   has_gpu_work = ValidateSubmission(submit);
         std::list<MetalCompletionDispatcher::Packet> prepared;
         if (submit.lifetime || !submit.callbacks.empty() || !submit.success_callbacks.empty()) {
             prepared.emplace_back(); // Reserve before accepting GPU work.
         }
-        for (const WaitEvent& event : submit.wait_events) Wait(event);
+        for (const WaitEvent& event : submit.wait_events)
+            Wait(event);
         if (!has_gpu_work) {
             for (const auto& command : submit.cmds) {
-                if (command->Type() != Command::EType::UpdateBindlessArray) continue;
+                if (command->Type() != Command::EType::UpdateBindlessArray)
+                    continue;
                 const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
                 if (update.HandOffUpdates()) {
                     static_cast<MetalBindlessArray*>(update.Handle())->Apply(update.UpdateCommands());
                 }
             }
         }
-        if (has_gpu_work) @autoreleasepool {
-            MTLCommandBufferDescriptor* buffer_descriptor = [MTLCommandBufferDescriptor new];
-            buffer_descriptor.errorOptions = MTLCommandBufferErrorOptionEncoderExecutionStatus;
-            const auto make_command_buffer = [&]() {
-                return [queue_ commandBufferWithDescriptor:buffer_descriptor];
-            };
-            const auto gpu_error = [](id<MTLCommandBuffer> buffer) {
-                std::string message(
-                    [buffer.error.localizedDescription UTF8String] ?: "unknown GPU error");
-                NSArray<id<MTLCommandBufferEncoderInfo>>* encoders =
-                    buffer.error.userInfo[MTLCommandBufferEncoderInfoErrorKey];
-                for (id<MTLCommandBufferEncoderInfo> encoder in encoders) {
-                    if (encoder.errorState == MTLCommandEncoderErrorStateCompleted) continue;
-                    message += " [";
-                    message += encoder.label.UTF8String ?: "unnamed encoder";
-                    message += ":" + std::to_string(encoder.errorState) + "]";
-                }
-                return message;
-            };
-            id<MTLCommandBuffer> command_buffer = make_command_buffer();
-            if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
-            NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
-            NSMutableArray<id<MTLTexture>>* texture_views = [NSMutableArray array];
-            NSMutableArray<id<MTLSamplerState>>* sampler_states = [NSMutableArray array];
-            struct PendingReadback {
-                NSUInteger staging_index;
-                void* destination;
-                uint64 byte_size;
-            };
-            std::vector<PendingReadback> readbacks;
-            bool encoded_work = false;
-            for (const auto& command : submit.cmds) {
-                if (command->Type() == Command::EType::Scope ||
-                    command->Type() == Command::EType::QueueTransfer ||
-                    command->Type() == Command::EType::Barrier) continue;
-                if (command->Type() == Command::EType::UpdateBindlessArray) {
-                    if (encoded_work) {
-                        [command_buffer commit];
-                        [command_buffer waitUntilCompleted];
-                        if (command_buffer.status != MTLCommandBufferStatusCompleted) {
-                            throw std::runtime_error("Metal work before bindless update failed: " +
-                                gpu_error(command_buffer));
-                        }
-                        command_buffer = make_command_buffer();
-                        if (command_buffer == nil) {
-                            throw std::runtime_error("Cannot create Metal command buffer");
-                        }
-                        encoded_work = false;
-                    }
-                    const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
-                    if (update.HandOffUpdates()) {
-                        static_cast<MetalBindlessArray*>(update.Handle())->Apply(update.UpdateCommands());
-                    }
-                    continue;
-                }
-                encoded_work = true;
-                if (command->Type() == Command::EType::UploadTexture ||
-                    command->Type() == Command::EType::UploadBuffer) {
-                    id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
-                    if (blit == nil) throw std::runtime_error("Cannot encode Metal graphics upload");
-                    if (command->Type() == Command::EType::UploadTexture) {
-                        EncodeTextureUpload(queue_.device, blit, staging_buffers,
-                            static_cast<const UploadTextureCmd&>(*command));
-                    } else {
-                        EncodeBufferUpload(queue_.device, blit, staging_buffers,
-                            static_cast<const UploadBufferCmd&>(*command));
-                    }
-                    [blit endEncoding];
-                    continue;
-                }
-                if (command->Type() == Command::EType::SetDrawState) {
-                    const auto& draw = static_cast<const SetDrawStateCmd&>(*command);
-                    std::vector<uint32>                           indirect_counts(draw.DrawData().size(), 0);
-                    std::vector<std::pair<uint32, id<MTLBuffer>>> pending_counts;
-                    for (uint32 mesh_index = 0; mesh_index < draw.DrawData().size(); ++mesh_index) {
-                        const auto& indirect = draw.DrawData()[mesh_index].indirect_draw_param;
-                        if (!indirect) continue;
-                        indirect_counts[mesh_index] = indirect->count;
-                        if (!indirect->count_buffer) continue;
-                        const BufferView& view = *indirect->count_buffer;
-                        auto* source = static_cast<MetalBuffer*>(view.GetBuffer());
-                        id<MTLBuffer>     staging = [queue_.device
-                            newBufferWithLength:sizeof(uint32)
-                                        options:MTLResourceStorageModeShared];
-                        if (staging == nil) {
-                            throw std::runtime_error("Cannot allocate Metal indirect count staging");
-                        }
-                        [staging_buffers addObject:staging];
-                        pending_counts.emplace_back(mesh_index, staging);
-                        id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
-                        if (blit == nil) {
-                            throw std::runtime_error("Cannot encode Metal indirect count readback");
-                        }
-                        [blit copyFromBuffer:source->Native()
-                                 sourceOffset:view.GetByteOffset()
-                                     toBuffer:staging
-                            destinationOffset:0
-                                         size:sizeof(uint32)];
-                        [blit endEncoding];
-                    }
-                    if (!pending_counts.empty()) {
-                        // The count may be produced by an earlier dispatch in this submit.
-                        // Finish that work before deciding how many Metal draws to encode.
-                        [command_buffer commit];
-                        [command_buffer waitUntilCompleted];
-                        if (command_buffer.status != MTLCommandBufferStatusCompleted) {
-                            throw std::runtime_error("Metal indirect count readback failed: " +
-                                gpu_error(command_buffer));
-                        }
-                        for (const auto& [mesh_index, staging] : pending_counts) {
-                            uint32 count = 0;
-                            std::memcpy(&count, staging.contents, sizeof(count));
-                            indirect_counts[mesh_index] = std::min(count, indirect_counts[mesh_index]);
-                        }
-                        command_buffer = make_command_buffer();
-                        if (command_buffer == nil) {
-                            throw std::runtime_error("Cannot create Metal command buffer");
-                        }
-                        encoded_work = false;
-                    }
-                    EncodeDraw(
-                        command_buffer, draw, indirect_counts, staging_buffers,
-                        texture_views, sampler_states);
-                    encoded_work = true;
-                    continue;
-                }
-                if (command->Type() == Command::EType::ShaderDispatch) {
-                    EncodeComputeDispatch(
-                        command_buffer, staging_buffers, texture_views,
-                        static_cast<const DispatchCmd&>(*command), submit.cached_args);
-                    continue;
-                }
-                if (command->Type() == Command::EType::CopyBackBuffer) {
-                    const auto& copy = static_cast<const CopyBackBufferCmd&>(*command);
-                    auto* buffer = static_cast<MetalBuffer*>(
-                        reinterpret_cast<Buffer*>(copy.Handle()));
-                    id<MTLBuffer> staging = [queue_.device
-                        newBufferWithLength:copy.ByteSize()
-                        options:MTLResourceStorageModeShared];
-                    if (staging == nil) throw std::runtime_error("Cannot allocate Metal readback staging");
-                    [staging_buffers addObject:staging];
-                    readbacks.push_back({staging_buffers.count - 1, copy.Data(), copy.ByteSize()});
-                    id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
-                    if (blit == nil) throw std::runtime_error("Cannot encode Metal buffer readback");
-                    [blit copyFromBuffer:buffer->Native() sourceOffset:copy.Offset()
-                                toBuffer:staging destinationOffset:0 size:copy.ByteSize()];
-                    [blit endEncoding];
-                    continue;
-                }
-                const auto& clear = static_cast<const ClearResourceCmd&>(*command);
-                if (clear.IsBuffer()) {
-                    const BufferView& view = clear.Buffer();
-                    auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
-                    const uint32              value  = clear.UIntValue();
-                    id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
-                    if (blit == nil) throw std::runtime_error("Cannot encode Metal buffer clear");
-                    if ((value & 0xffu) == ((value >> 8) & 0xffu) &&
-                        (value & 0xffu) == ((value >> 16) & 0xffu) &&
-                        (value & 0xffu) == ((value >> 24) & 0xffu)) {
-                        [blit fillBuffer:buffer->Native()
-                                   range:NSMakeRange(view.GetByteOffset(), view.GetByteSize())
-                                   value:static_cast<uint8>(value)];
-                    } else {
-                        id<MTLBuffer> staging = [queue_.device
-                            newBufferWithLength:view.GetByteSize()
-                            options:MTLResourceStorageModeShared];
-                        if (staging == nil) throw std::runtime_error("Cannot allocate Metal buffer clear staging");
-                        auto* words = static_cast<uint32*>(staging.contents);
-                        for (uint64 i = 0; i < view.GetByteSize() / sizeof(uint32); ++i) {
-                            words[i] = value;
-                        }
-                        [staging_buffers addObject:staging];
-                        [blit copyFromBuffer:staging sourceOffset:0
-                                    toBuffer:buffer->Native()
-                          destinationOffset:view.GetByteOffset() size:view.GetByteSize()];
-                    }
-                    [blit endEncoding];
-                    continue;
-                }
-                auto* texture = static_cast<MetalTexture*>(clear.Texture().GetTexture());
-                const float4 color = clear.Float4Value();
-                MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
-                pass.colorAttachments[0].texture = texture->Native();
-                pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-                pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-                pass.colorAttachments[0].clearColor = MTLClearColorMake(
-                    color.x, color.y, color.z, color.w
-                );
-                id<MTLRenderCommandEncoder> encoder =
-                    [command_buffer renderCommandEncoderWithDescriptor:pass];
-                if (encoder == nil) throw std::runtime_error("Cannot encode Metal texture clear");
-                [encoder endEncoding];
-            }
-            [command_buffer commit];
-            [command_buffer waitUntilCompleted];
-            if (command_buffer.status != MTLCommandBufferStatusCompleted) {
-                throw std::runtime_error("Metal texture clear failed: " +
-                    gpu_error(command_buffer));
-            }
-            for (const PendingReadback& readback : readbacks) {
-                std::memcpy(readback.destination,
-                            [staging_buffers[readback.staging_index] contents],
-                            readback.byte_size);
-            }
+        if (has_gpu_work) {
+            EncodeSubmissionCommands(submit);
         }
-        for (const SignalEvent& signal : submit.signal_events) {
-            auto* fence = static_cast<MetalFence*>(
-                reinterpret_cast<Fence*>(signal.timeline_handle));
-            fence->MarkSubmitted(signal.value);
-            fence->Complete(signal.value);
-        }
-        if (!prepared.empty()) {
-            std::lock_guard lock(completion_enqueue_mutex_);
-            prepared.front().timeline = ++next_callback_timeline_;
-            prepared.front().callbacks = std::move(submit.callbacks);
-            prepared.front().success_callbacks = std::move(submit.success_callbacks);
-            prepared.front().lifetime          = std::move(submit.lifetime);
-            completions_.Enqueue(prepared);
-        }
+        PublishSubmissionCompletion(submit, prepared);
         return {0, 0};
     }
 
@@ -587,6 +275,373 @@ public:
     ProfileData GetProfilerEntry() override { return {}; }
 
 private:
+    static std::string DescribeGpuError(id<MTLCommandBuffer> buffer) {
+        std::string message(
+            [buffer.error.localizedDescription UTF8String] ?: "unknown GPU error"
+        );
+        NSArray<id<MTLCommandBufferEncoderInfo>>* encoders =
+            buffer.error.userInfo[MTLCommandBufferEncoderInfoErrorKey];
+        for (id<MTLCommandBufferEncoderInfo> encoder in encoders) {
+            if (encoder.errorState == MTLCommandEncoderErrorStateCompleted)
+                continue;
+            message += " [";
+            message += encoder.label.UTF8String ?: "unnamed encoder";
+            message += ":" + std::to_string(encoder.errorState) + "]";
+        }
+        return message;
+    }
+
+    void EncodeDrawCommand(
+        id<MTLCommandBuffer>&                command_buffer,
+        MTLCommandBufferDescriptor*          buffer_descriptor,
+        const SetDrawStateCmd&               draw,
+        NSMutableArray<id<MTLBuffer>>*       staging_buffers,
+        NSMutableArray<id<MTLTexture>>*      texture_views,
+        NSMutableArray<id<MTLSamplerState>>* sampler_states
+    ) {
+        std::vector<uint32>                           indirect_counts(draw.DrawData().size(), 0);
+        std::vector<std::pair<uint32, id<MTLBuffer>>> pending_counts;
+        for (uint32 mesh_index = 0; mesh_index < draw.DrawData().size(); ++mesh_index) {
+            const auto& indirect = draw.DrawData()[mesh_index].indirect_draw_param;
+            if (!indirect)
+                continue;
+            indirect_counts[mesh_index] = indirect->count;
+            if (!indirect->count_buffer)
+                continue;
+            const BufferView& view    = *indirect->count_buffer;
+            auto*             source  = static_cast<MetalBuffer*>(view.GetBuffer());
+            id<MTLBuffer>     staging = [queue_.device
+                newBufferWithLength:sizeof(uint32)
+                            options:MTLResourceStorageModeShared];
+            if (staging == nil) {
+                throw std::runtime_error("Cannot allocate Metal indirect count staging");
+            }
+            [staging_buffers addObject:staging];
+            pending_counts.emplace_back(mesh_index, staging);
+            id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+            if (blit == nil) {
+                throw std::runtime_error("Cannot encode Metal indirect count readback");
+            }
+            [blit copyFromBuffer:source->Native()
+                     sourceOffset:view.GetByteOffset()
+                         toBuffer:staging
+                destinationOffset:0
+                             size:sizeof(uint32)];
+            [blit endEncoding];
+        }
+        if (!pending_counts.empty()) {
+            // The count may be produced by an earlier dispatch in this submit.
+            // Finish that work before deciding how many Metal draws to encode.
+            [command_buffer commit];
+            [command_buffer waitUntilCompleted];
+            if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+                throw std::runtime_error("Metal indirect count readback failed: " + DescribeGpuError(command_buffer));
+            }
+            for (const auto& [mesh_index, staging] : pending_counts) {
+                uint32 count = 0;
+                std::memcpy(&count, staging.contents, sizeof(count));
+                indirect_counts[mesh_index] = std::min(count, indirect_counts[mesh_index]);
+            }
+            command_buffer = [queue_ commandBufferWithDescriptor:buffer_descriptor];
+            if (command_buffer == nil) {
+                throw std::runtime_error("Cannot create Metal command buffer");
+            }
+        }
+        EncodeDraw(
+            command_buffer, draw, indirect_counts, staging_buffers, texture_views, sampler_states
+        );
+    }
+
+    void EncodeClearCommand(
+        id<MTLCommandBuffer>           command_buffer,
+        const ClearResourceCmd&        clear,
+        NSMutableArray<id<MTLBuffer>>* staging_buffers
+    ) {
+        if (clear.IsBuffer()) {
+            const BufferView&         view   = clear.Buffer();
+            auto*                     buffer = static_cast<MetalBuffer*>(view.GetBuffer());
+            const uint32              value  = clear.UIntValue();
+            id<MTLBlitCommandEncoder> blit   = [command_buffer blitCommandEncoder];
+            if (blit == nil)
+                throw std::runtime_error("Cannot encode Metal buffer clear");
+            if ((value & 0xffu) == ((value >> 8) & 0xffu) &&
+                (value & 0xffu) == ((value >> 16) & 0xffu) &&
+                (value & 0xffu) == ((value >> 24) & 0xffu)) {
+                [blit fillBuffer:buffer->Native()
+                           range:NSMakeRange(view.GetByteOffset(), view.GetByteSize())
+                           value:static_cast<uint8>(value)];
+            } else {
+                id<MTLBuffer> staging = [queue_.device
+                    newBufferWithLength:view.GetByteSize()
+                                options:MTLResourceStorageModeShared];
+                if (staging == nil)
+                    throw std::runtime_error("Cannot allocate Metal buffer clear staging");
+                auto* words = static_cast<uint32*>(staging.contents);
+                for (uint64 i = 0; i < view.GetByteSize() / sizeof(uint32); ++i) {
+                    words[i] = value;
+                }
+                [staging_buffers addObject:staging];
+                [blit copyFromBuffer:staging
+                         sourceOffset:0
+                             toBuffer:buffer->Native()
+                    destinationOffset:view.GetByteOffset()
+                                 size:view.GetByteSize()];
+            }
+            [blit endEncoding];
+            return;
+        }
+        auto*                    texture     = static_cast<MetalTexture*>(clear.Texture().GetTexture());
+        const float4             color       = clear.Float4Value();
+        MTLRenderPassDescriptor* pass        = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture     = texture->Native();
+        pass.colorAttachments[0].loadAction  = MTLLoadActionClear;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        pass.colorAttachments[0].clearColor  = MTLClearColorMake(
+            color.x, color.y, color.z, color.w
+        );
+        id<MTLRenderCommandEncoder> encoder =
+            [command_buffer renderCommandEncoderWithDescriptor:pass];
+        if (encoder == nil)
+            throw std::runtime_error("Cannot encode Metal texture clear");
+        [encoder endEncoding];
+    }
+
+    // Reject unsupported work before allocating or accepting native commands.
+    static bool ValidateSubmission(const CmdSubmit& submit) {
+        if (!submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty()) {
+            Unsupported("GPU completion or query tokens");
+        }
+        for (const SignalEvent& signal : submit.signal_events) {
+            auto* fence = dynamic_cast<MetalFence*>(
+                reinterpret_cast<Fence*>(signal.timeline_handle)
+            );
+            if (fence == nullptr || signal.value == 0) {
+                Unsupported("this graphics signal fence");
+            }
+        }
+        // Frame profiling markers currently produce no Metal timestamp queries.
+        // A submit without query tokens may still carry the frame boundary and
+        // deferred-delete bit; Objective-C resource owners retire with CmdSubmit.
+        // Validate the complete submit before encoding any GPU work. A later
+        // unsupported command must not leave a partially executed submit.
+        bool has_gpu_work = false;
+        for (const auto& command : submit.cmds) {
+            if (command->Type() == Command::EType::Scope) {
+                // Scope commands only mark GPU debug/profiling regions. Metal
+                // timestamp collection is not enabled by this queue yet.
+                continue;
+            }
+            if (command->Type() == Command::EType::QueueTransfer) {
+                ValidateQueueTransfer(static_cast<const QueueTransferCmd&>(*command), EQueueType::Graphics);
+                continue;
+            }
+            if (command->Type() == Command::EType::Barrier) {
+                ValidateBarrier(static_cast<const BarrierCmd&>(*command));
+                continue;
+            }
+            if (command->Type() == Command::EType::UpdateBindlessArray) {
+                const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
+                if (dynamic_cast<MetalBindlessArray*>(update.Handle()) == nullptr) {
+                    Unsupported("a foreign bindless array");
+                }
+                continue;
+            }
+            if (command->Type() == Command::EType::UploadTexture) {
+                ValidateTextureUpload(static_cast<const UploadTextureCmd&>(*command));
+                has_gpu_work = true;
+                continue;
+            }
+            if (command->Type() == Command::EType::UploadBuffer) {
+                ValidateBufferUpload(static_cast<const UploadBufferCmd&>(*command));
+                has_gpu_work = true;
+                continue;
+            }
+            if (command->Type() == Command::EType::CopyBackBuffer) {
+                const auto& copy   = static_cast<const CopyBackBufferCmd&>(*command);
+                auto*       buffer = dynamic_cast<MetalBuffer*>(
+                    reinterpret_cast<Buffer*>(copy.Handle())
+                );
+                if (buffer == nullptr || copy.Data() == nullptr ||
+                    copy.HasOwningReadback() || copy.ByteSize() == 0 ||
+                    copy.Offset() > buffer->GetByteSize() ||
+                    copy.ByteSize() > buffer->GetByteSize() - copy.Offset()) {
+                    Unsupported("this graphics buffer readback layout");
+                }
+                has_gpu_work = true;
+                continue;
+            }
+            if (command->Type() == Command::EType::SetDrawState) {
+                ValidateDraw(static_cast<const SetDrawStateCmd&>(*command));
+                has_gpu_work = true;
+                continue;
+            }
+            if (command->Type() == Command::EType::ShaderDispatch) {
+                ValidateComputeDispatch(
+                    static_cast<const DispatchCmd&>(*command), submit.cached_args
+                );
+                has_gpu_work = true;
+                continue;
+            }
+            if (command->Type() != Command::EType::ClearResource) {
+                throw std::runtime_error("Metal RHI has not implemented graphics command " + command->name + " (type=" + std::to_string(static_cast<uint32>(command->Type())) + ")");
+            }
+            has_gpu_work      = true;
+            const auto& clear = static_cast<const ClearResourceCmd&>(*command);
+            if (clear.IsBuffer() && clear.IsUInt()) {
+                const BufferView& view   = clear.Buffer();
+                auto*             buffer = dynamic_cast<MetalBuffer*>(view.GetBuffer());
+                if (buffer == nullptr || view.GetByteSize() == 0 ||
+                    view.GetByteOffset() % sizeof(uint32) != 0 ||
+                    view.GetByteSize() % sizeof(uint32) != 0 ||
+                    view.GetByteOffset() > buffer->GetByteSize() ||
+                    view.GetByteSize() > buffer->GetByteSize() - view.GetByteOffset()) {
+                    Unsupported("this buffer clear view");
+                }
+                continue;
+            }
+            if (!clear.IsTexture() || !clear.IsFloat4()) {
+                Unsupported("this clear value or resource");
+            }
+            const TextureView& view    = clear.Texture();
+            auto*              texture = dynamic_cast<MetalTexture*>(view.GetTexture());
+            if (texture == nullptr || view.format != texture->GetFormat() ||
+                view.mip_level != 0 || view.num_mips != 1 ||
+                view.array_layer != 0 || view.num_array != 1 ||
+                view.offset != uint3{0, 0, 0} || view.extent != texture->GetExtent()) {
+                Unsupported("this texture clear view");
+            }
+        }
+        return has_gpu_work;
+    }
+
+    // Completion allocation precedes encoding; callbacks retain the submitted lifetime.
+    void PublishSubmissionCompletion(
+        CmdSubmit&                                    submit,
+        std::list<MetalCompletionDispatcher::Packet>& prepared
+    ) {
+        for (const SignalEvent& signal : submit.signal_events) {
+            auto* fence = static_cast<MetalFence*>(
+                reinterpret_cast<Fence*>(signal.timeline_handle)
+            );
+            fence->MarkSubmitted(signal.value);
+            fence->Complete(signal.value);
+        }
+        if (!prepared.empty()) {
+            std::lock_guard lock(completion_enqueue_mutex_);
+            prepared.front().timeline          = ++next_callback_timeline_;
+            prepared.front().callbacks         = std::move(submit.callbacks);
+            prepared.front().success_callbacks = std::move(submit.success_callbacks);
+            prepared.front().lifetime          = std::move(submit.lifetime);
+            completions_.Enqueue(prepared);
+        }
+    }
+
+    void EncodeSubmissionCommands(const CmdSubmit& submit) {
+        @autoreleasepool {
+            MTLCommandBufferDescriptor* buffer_descriptor = [MTLCommandBufferDescriptor new];
+            buffer_descriptor.errorOptions                = MTLCommandBufferErrorOptionEncoderExecutionStatus;
+            const auto make_command_buffer                = [&]() {
+                return [queue_ commandBufferWithDescriptor:buffer_descriptor];
+            };
+            id<MTLCommandBuffer> command_buffer = make_command_buffer();
+            if (command_buffer == nil)
+                throw std::runtime_error("Cannot create Metal command buffer");
+            NSMutableArray<id<MTLBuffer>>*       staging_buffers = [NSMutableArray array];
+            NSMutableArray<id<MTLTexture>>*      texture_views   = [NSMutableArray array];
+            NSMutableArray<id<MTLSamplerState>>* sampler_states  = [NSMutableArray array];
+            struct PendingReadback {
+                NSUInteger staging_index;
+                void*      destination;
+                uint64     byte_size;
+            };
+            std::vector<PendingReadback> readbacks;
+            bool                         encoded_work = false;
+            for (const auto& command : submit.cmds) {
+                if (command->Type() == Command::EType::Scope ||
+                    command->Type() == Command::EType::QueueTransfer ||
+                    command->Type() == Command::EType::Barrier)
+                    continue;
+                if (command->Type() == Command::EType::UpdateBindlessArray) {
+                    if (encoded_work) {
+                        [command_buffer commit];
+                        [command_buffer waitUntilCompleted];
+                        if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+                            throw std::runtime_error("Metal work before bindless update failed: " + DescribeGpuError(command_buffer));
+                        }
+                        command_buffer = make_command_buffer();
+                        if (command_buffer == nil) {
+                            throw std::runtime_error("Cannot create Metal command buffer");
+                        }
+                        encoded_work = false;
+                    }
+                    const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
+                    if (update.HandOffUpdates()) {
+                        static_cast<MetalBindlessArray*>(update.Handle())->Apply(update.UpdateCommands());
+                    }
+                    continue;
+                }
+                encoded_work = true;
+                if (command->Type() == Command::EType::UploadTexture ||
+                    command->Type() == Command::EType::UploadBuffer) {
+                    id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+                    if (blit == nil)
+                        throw std::runtime_error("Cannot encode Metal graphics upload");
+                    if (command->Type() == Command::EType::UploadTexture) {
+                        EncodeTextureUpload(queue_.device, blit, staging_buffers, static_cast<const UploadTextureCmd&>(*command));
+                    } else {
+                        EncodeBufferUpload(queue_.device, blit, staging_buffers, static_cast<const UploadBufferCmd&>(*command));
+                    }
+                    [blit endEncoding];
+                    continue;
+                }
+                if (command->Type() == Command::EType::SetDrawState) {
+                    EncodeDrawCommand(command_buffer, buffer_descriptor, static_cast<const SetDrawStateCmd&>(*command), staging_buffers, texture_views, sampler_states);
+                    encoded_work = true;
+                    continue;
+                }
+                if (command->Type() == Command::EType::ShaderDispatch) {
+                    EncodeComputeDispatch(
+                        command_buffer, staging_buffers, texture_views, static_cast<const DispatchCmd&>(*command), submit.cached_args
+                    );
+                    continue;
+                }
+                if (command->Type() == Command::EType::CopyBackBuffer) {
+                    const auto& copy   = static_cast<const CopyBackBufferCmd&>(*command);
+                    auto*       buffer = static_cast<MetalBuffer*>(
+                        reinterpret_cast<Buffer*>(copy.Handle())
+                    );
+                    id<MTLBuffer> staging = [queue_.device
+                        newBufferWithLength:copy.ByteSize()
+                                    options:MTLResourceStorageModeShared];
+                    if (staging == nil)
+                        throw std::runtime_error("Cannot allocate Metal readback staging");
+                    [staging_buffers addObject:staging];
+                    readbacks.push_back({staging_buffers.count - 1, copy.Data(), copy.ByteSize()});
+                    id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+                    if (blit == nil)
+                        throw std::runtime_error("Cannot encode Metal buffer readback");
+                    [blit copyFromBuffer:buffer->Native()
+                             sourceOffset:copy.Offset()
+                                 toBuffer:staging
+                        destinationOffset:0
+                                     size:copy.ByteSize()];
+                    [blit endEncoding];
+                    continue;
+                }
+                EncodeClearCommand(command_buffer, static_cast<const ClearResourceCmd&>(*command), staging_buffers);
+            }
+            [command_buffer commit];
+            [command_buffer waitUntilCompleted];
+            if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+                throw std::runtime_error("Metal texture clear failed: " + DescribeGpuError(command_buffer));
+            }
+            for (const PendingReadback& readback : readbacks) {
+                std::memcpy(readback.destination, [staging_buffers[readback.staging_index] contents], readback.byte_size);
+            }
+        }
+    }
+
+    // Native queue outlives callback dispatch and its FIFO publication state.
     id<MTLCommandQueue> queue_;
     MetalCompletionDispatcher completions_;
     std::mutex completion_enqueue_mutex_;
