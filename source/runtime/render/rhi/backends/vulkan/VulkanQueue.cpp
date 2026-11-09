@@ -39,8 +39,6 @@ VulkanCommandQueue::VulkanCommandQueue(VulkanDevice& _device, EQueueType _type) 
             completion_thread.join();
         }
 
-        MoerDelete(timeline);
-        timeline = nullptr;
         throw;
     }
 }
@@ -60,7 +58,7 @@ VulkanCommandQueue::~VulkanCommandQueue() {
     queue_cv.notify_all();
     completion_thread.join();
 
-    MoerDelete(timeline);
+    timeline = nullptr;
     vk_device.RecordQueueSyncComplete();
 }
 
@@ -172,7 +170,7 @@ VulkanSubmissionResult VulkanCommandQueue::SubmitRecordedForRuntime(VulkanPendin
         .recoverable_rejection = _recorded.recoverable_rejection,
     };
     if (_recorded.submission_outcome->Succeeded()) {
-        runtime_result.completion = WaitEvent{uint64(timeline), submitted_timeline};
+        runtime_result.completion = WaitEvent{uint64(timeline.Get()), submitted_timeline};
     }
     if (split_profiling_frame && !_recorded.submission_outcome->Succeeded()) {
         vk_device.GetCommandRecorder(queue.GetType()).ResetProfiling();
@@ -280,7 +278,7 @@ VulkanCommandQueue::SubmitRecorded(VulkanPendingSubmission& _pending, const std:
 
     std::optional<VulkanResourceStateValidator> resource_validation;
     try {
-        resource_validation.emplace(vk_device, queue.GetType(), _pending.resource_state_program, &_pending.submit, timeline, _pending.timeline);
+        resource_validation.emplace(vk_device, queue.GetType(), _pending.resource_state_program, &_pending.submit, timeline.Get(), _pending.timeline);
     } catch (const std::logic_error& error) {
         return reject({EVulkanOperationStatus::Rejected, VK_ERROR_FEATURE_NOT_PRESENT}, error.what());
     } catch (const std::bad_alloc& error) {
@@ -294,7 +292,7 @@ VulkanCommandQueue::SubmitRecorded(VulkanPendingSubmission& _pending, const std:
     }
 
     constexpr VkPipelineStageFlags2 completion_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    queue.Signal(timeline, _pending.timeline, completion_stage);
+    queue.Signal(timeline.Get(), _pending.timeline, completion_stage);
     for (const WaitEvent& event : _pending.submit.wait_events) {
         queue.Wait(reinterpret_cast<VulkanTimeline*>(event.timeline_handle), event.value, completion_stage);
     }
@@ -315,7 +313,7 @@ VulkanCommandQueue::SubmitRecorded(VulkanPendingSubmission& _pending, const std:
     _pending.submission_outcome = outcome;
     if (outcome.Succeeded()) {
         resource_validation->Commit();
-        MarkSubmissionAccepted(timeline, _pending.timeline, _pending.submit.signal_events);
+        MarkSubmissionAccepted(timeline.Get(), _pending.timeline, _pending.submit.signal_events);
     }
     return outcome;
 }
@@ -333,7 +331,7 @@ void VulkanCommandQueue::CommitRuntimeSubmitCompletion(
                                                                    GpuCompletionBackendAccess::BeginPublishBatch();
             _recorded.submit.PublishPendingGpuCompletionErrors(rejection_reason, completion_batch);
             PublishUnsubmittedQueryErrors(_recorded.submit, _recorded.command_context.get(), rejection_reason);
-            TerminalizeUnsubmittedSignal(vk_device, timeline, _recorded.timeline, _outcome);
+            TerminalizeUnsubmittedSignal(vk_device, timeline.Get(), _recorded.timeline, _outcome);
             Array<SignalEvent> rejected_signals           = std::move(_recorded.submit.signal_events);
             Array<FenceRef>    rejected_signal_keepalives = std::move(_recorded.submit.signal_rejection_keepalives);
             _recorded.submit.signal_events.clear();

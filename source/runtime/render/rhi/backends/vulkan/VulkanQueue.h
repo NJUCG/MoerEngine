@@ -120,7 +120,7 @@ private:
 
     VulkanDevice&     vk_device;
     VulkanNativeQueue queue;
-    VulkanTimeline*   timeline{nullptr};
+    VulkanTimelineRef timeline{nullptr};
 
     // The gate transfers recording ownership with each submission packet.
     std::mutex                   exec_mtx;

@@ -8,7 +8,6 @@ namespace Moer::Render::VulkanSubmissionDetail {
 namespace {
 
 struct VulkanOriginalSourceMaterialization {
-    bool                                               multi_segment{false};
     size_t                                             executable_begin{0};
     size_t                                             executable_count{1};
     std::shared_ptr<VulkanMultiSegmentCompletionState> completion{};
@@ -35,8 +34,11 @@ MaterializeMultiSegmentBatch(RHISubmissionBatch& _batch, const RHIQueueTopology&
         throw std::runtime_error("multi-segment materialization exceeds SubmissionKey capacity");
     }
 
+#if MOER_VULKAN_TEST_SUPPORT
     result.sources.reserve(executable_source_count);
+#endif
     if (!result.changed) {
+#if MOER_VULKAN_TEST_SUPPORT
         for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
             result.sources.emplace_back(VulkanExecutableSourceMetadata{
                 .original_source_index = static_cast<uint32>(source_index),
@@ -44,6 +46,7 @@ MaterializeMultiSegmentBatch(RHISubmissionBatch& _batch, const RHIQueueTopology&
                 .source_segment_count  = 1,
             });
         }
+#endif
         return result;
     }
 
@@ -57,17 +60,18 @@ MaterializeMultiSegmentBatch(RHISubmissionBatch& _batch, const RHIQueueTopology&
         const RHISourceSubmitPlan&      source_plan   = _batch.topology.source_plans[source_index];
 
         VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
-        materialization.multi_segment                        = source_plan.segment_plan_count > 1;
         materialization.executable_begin                     = executable_sources.size();
-        materialization.executable_count = materialization.multi_segment ? source_plan.segment_plan_count : 1;
+        materialization.executable_count = source_plan.segment_plan_count > 1 ? source_plan.segment_plan_count : 1;
 
-        if (!materialization.multi_segment) {
+        if (materialization.executable_count == 1) {
             executable_sources.emplace_back(source_entry.queue, MakeEmptySubmit());
+#if MOER_VULKAN_TEST_SUPPORT
             result.sources.emplace_back(VulkanExecutableSourceMetadata{
                 .original_source_index = static_cast<uint32>(source_index),
                 .source_segment_index  = 0,
                 .source_segment_count  = 1,
             });
+#endif
             continue;
         }
 
@@ -163,17 +167,21 @@ MaterializeMultiSegmentBatch(RHISubmissionBatch& _batch, const RHIQueueTopology&
             }
 
             executable_sources.emplace_back(descriptor.queue, std::move(segment_submit));
+#if MOER_VULKAN_TEST_SUPPORT
             result.sources.emplace_back(VulkanExecutableSourceMetadata{
                 .original_source_index         = static_cast<uint32>(source_index),
                 .source_segment_index          = static_cast<uint32>(segment_index),
                 .source_segment_count          = static_cast<uint32>(source_plan.segment_plan_count),
                 .cross_native_predecessor_wait = cross_native_predecessor_wait,
             });
+#endif
         }
     }
 
     assert(executable_sources.size() == executable_source_count);
+#if MOER_VULKAN_TEST_SUPPORT
     assert(result.sources.size() == executable_source_count);
+#endif
 
     // Build and validate the flattened immutable topology before moving any
     // command, callback, or external synchronization ownership out of the
@@ -184,7 +192,7 @@ MaterializeMultiSegmentBatch(RHISubmissionBatch& _batch, const RHIQueueTopology&
     for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
         const RHISubmissionRequest&                source_entry    = _batch.submits[source_index];
         const VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
-        if (!materialization.multi_segment) {
+        if (materialization.executable_count == 1) {
             descriptions.emplace_back(RHISourceSubmitDescription{
                 .root_queue      = source_entry.queue,
                 .command_count   = source_entry.submit.cmds.size(),
@@ -218,7 +226,7 @@ MaterializeMultiSegmentBatch(RHISubmissionBatch& _batch, const RHIQueueTopology&
     for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
         RHISubmissionRequest&                source_entry    = _batch.submits[source_index];
         VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
-        if (!materialization.multi_segment) {
+        if (materialization.executable_count == 1) {
             executable_sources[materialization.executable_begin].submit = std::move(source_entry.submit);
             continue;
         }

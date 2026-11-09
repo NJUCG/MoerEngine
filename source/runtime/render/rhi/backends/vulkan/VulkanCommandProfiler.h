@@ -7,7 +7,7 @@
 
 #include <array>
 #include <chrono>
-#include <cstring>
+#include <bitset>
 #include <mutex>
 
 namespace Moer::Render {
@@ -17,7 +17,6 @@ inline constexpr uint32 s_query_max_storage         = 8 * 64;
 
 struct ProfilerStorage {
     static constexpr int s_max_num_profiler_queries_per_frame = s_query_max_storage * 2; // *2 is for begin&end
-    static constexpr int s_total_query_count = s_max_num_profiler_queries_per_frame * s_queue_max_frame_in_flight;
     // These stages are part of the serial query golden contract.  Keep the
     // actual timestamp writes and the diagnostic event sourced from the same
     // constants so they cannot silently drift apart.
@@ -28,10 +27,10 @@ struct ProfilerStorage {
     void CollectProfiling(VkCommandBuffer _cmd);
     int  GetQueryStorageIndex(std::string_view _name);
     bool IsQueryUsed(int _idx) {
-        return queries_used[_idx / 8] & (1 << (_idx % 8));
+        return queries_used[_idx / s_max_num_profiler_queries_per_frame].test(_idx % s_max_num_profiler_queries_per_frame);
     }
     void SetQueryUsed(int _idx) {
-        queries_used[_idx / 8] |= (1 << (_idx % 8));
+        queries_used[_idx / s_max_num_profiler_queries_per_frame].set(_idx % s_max_num_profiler_queries_per_frame);
     }
     void RegisterCpuTimestamp(std::string_view _name, double _timestamp) {
         cpu_timestamps[cur_frame][_name] = _timestamp;
@@ -70,7 +69,7 @@ struct ProfilerStorage {
 
     VkNativeQueryPool& timestamp_pool;
     float              timestamp_period = 0.0f;
-    uint64             query_pool_results[s_max_num_profiler_queries_per_frame * 2];
+    std::array<uint64, s_max_num_profiler_queries_per_frame * 2> query_pool_results{};
     StaticArray<UnorderedMap<std::string_view, double>, s_queue_max_frame_in_flight> cpu_timestamps;
     // each result contain two int(VK_QUERY_RESULT_WITH_AVAILABILITY_BIT)
     // first int contains the queried timestamp
@@ -78,20 +77,18 @@ struct ProfilerStorage {
 
     struct Sample {
         int                           index;
-        uint64                        accumulated;
-        size_t                        next_idx_to_store;
+        uint64                        accumulated{0};
+        size_t                        next_idx_to_store{0};
         static constexpr int          s_range = 13;
-        std::array<uint64, s_range>   deltas;
+        std::array<uint64, s_range>   deltas{};
 
-        Sample(int _idx) : index(_idx), accumulated(0), next_idx_to_store(0) {
-            std::memset(deltas.data(), 0, sizeof(deltas));
-        }
+        Sample(int _idx) : index(_idx) {}
         Sample() : Sample(0) {}
 
         void Reset() {
             next_idx_to_store = 0;
             accumulated       = 0;
-            std::memset(deltas.data(), 0, sizeof(deltas));
+            deltas.fill(0);
         }
         void Record(uint64 _value) {
             next_idx_to_store = (next_idx_to_store + 1) % s_range;
@@ -102,7 +99,7 @@ struct ProfilerStorage {
     };
 
     UnorderedMap<std::string, Sample> name2sample;
-    ubyte                             queries_used[s_total_query_count / 8];
+    std::array<std::bitset<s_max_num_profiler_queries_per_frame>, s_queue_max_frame_in_flight> queries_used{};
 
     uint64 cur_frame = 0;
 };

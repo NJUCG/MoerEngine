@@ -535,7 +535,7 @@ VulkanSubmissionResult VulkanCommandQueue::PresentSwapchain(
         .recoverable_rejection = recoverable_rejection,
     };
     if (gpu_submitted) {
-        result.completion = WaitEvent{uint64(timeline), _timeline};
+        result.completion = WaitEvent{uint64(timeline.Get()), _timeline};
     }
     return result;
 }

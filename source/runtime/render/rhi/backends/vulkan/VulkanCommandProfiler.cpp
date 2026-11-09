@@ -5,26 +5,16 @@
 
 #include <cassert>
 #include <chrono>
-#include <cstring>
 
 namespace Moer::Render {
 
 ProfilerStorage::ProfilerStorage(VkNativeQueryPool& _pool) : timestamp_pool(_pool) {
 
-    std::memset(queries_used, 0, sizeof(queries_used));
-    std::memset(query_pool_results, 0, sizeof(query_pool_results));
     timestamp_period = timestamp_pool.GetDevice().GetCoreProperties().core_1_0.limits.timestampPeriod;
     name2sample.reserve(100);
 }
 void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
-    bool b_any_query_used = false;
-    //maybe should use last frame
-    for (uint32 idx = 0; idx < s_max_num_profiler_queries_per_frame / 8; ++idx) {
-        if (queries_used[idx + cur_frame * s_max_num_profiler_queries_per_frame / 8]) {
-            b_any_query_used = true;
-            break;
-        }
-    }
+    bool b_any_query_used = queries_used[cur_frame].any();
     if (b_any_query_used) {
         VkResult result = vkGetQueryPoolResults(
             timestamp_pool.GetDevice().GetDevice(),
@@ -32,7 +22,7 @@ void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
             s_max_num_profiler_queries_per_frame * cur_frame,
             s_max_num_profiler_queries_per_frame,
             sizeof(query_pool_results),
-            query_pool_results,
+            query_pool_results.data(),
             sizeof(query_pool_results[0]) * 2, // each result contain two int
             VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT
         );
@@ -61,7 +51,7 @@ void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
             }
         }
     } else {
-        memset(query_pool_results, 0, sizeof(query_pool_results));
+        query_pool_results.fill(0);
     }
 
     vkCmdResetQueryPool(
@@ -71,9 +61,7 @@ void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
         s_max_num_profiler_queries_per_frame
     );
 
-    memset(
-        queries_used + s_max_num_profiler_queries_per_frame * cur_frame / 8, 0, s_max_num_profiler_queries_per_frame / 8
-    );
+    queries_used[cur_frame].reset();
 }
 
 int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {

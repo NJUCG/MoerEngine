@@ -179,7 +179,7 @@ void VulkanSubmissionCompletion::Complete(VulkanDevice& _device, VulkanTimeline&
 void VulkanCommandQueue::ProcessCompletion(VulkanSubmissionCompletion& _completion) {
     const uint64 event_timeline    = _completion.timeline;
     const uint64 retirement_serial = _completion.retirement_serial;
-    _completion.Complete(vk_device, *timeline);
+    _completion.Complete(vk_device, *timeline.Get());
     {
         // Pair predicate updates with CompleteAll's check-and-wait lock.
         std::lock_guard lock(event_mutex);

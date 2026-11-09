@@ -128,6 +128,7 @@ private:
     Array<std::function<void()>> success_callbacks{};
 };
 
+#if MOER_VULKAN_TEST_SUPPORT
 struct VulkanExecutableSourceMetadata {
     uint32 original_source_index{0};
     uint32 source_segment_index{0};
@@ -135,11 +136,15 @@ struct VulkanExecutableSourceMetadata {
     bool   cross_native_predecessor_wait{false};
 };
 
+#endif
+
 struct VulkanSegmentMaterializationResult {
     bool                                  changed{false};
     size_t                                original_source_count{0};
     size_t                                cross_native_wait_count{0};
+#if MOER_VULKAN_TEST_SUPPORT
     Array<VulkanExecutableSourceMetadata> sources{};
+#endif
 };
 
 inline CmdSubmit MakeEmptySubmit() {
