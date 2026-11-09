@@ -83,19 +83,17 @@ DXGI_FORMAT VertexFormat(EVertexFormat format) {
     }
 }
 
-PipelineHandle CreatePipeline(DeviceContext& context, PipelineShaderInfo&& shaders, const GfxPsoCreateInfo* gfx) {
-    const auto error = gfx ? ValidateGraphicsShaderStages(shaders.shaders) : ValidateComputeShaderStages(shaders.shaders);
-    if (!error.empty())
-        throw std::invalid_argument(std::string(error));
-    if (gfx && gfx->view_mask && (!context.view_instancing || std::bit_width(gfx->view_mask) > D3D12_MAX_VIEW_INSTANCE_COUNT))
-        throw std::invalid_argument("D3D12 multiview requires view instancing and at most four views");
+namespace {
+uint64 ReflectPipelineBindings(
+    const PipelineShaderInfo& shaders,
+    Array<Binding>& bindings,
+    Array<D3D12_ROOT_PARAMETER1>& roots,
+    Array<D3D12_DESCRIPTOR_RANGE1>& ranges
+) {
     const auto arguments = shaders.argument_metadata.GetArguments();
     if (arguments.size() > 64)
         throw std::invalid_argument("D3D12 pipelines support at most 64 logical arguments");
     uint64                         active = 0;
-    Array<Binding>                 bindings;
-    Array<D3D12_ROOT_PARAMETER1>   roots;
-    Array<D3D12_DESCRIPTOR_RANGE1> ranges;
     ranges.reserve(shaders.shaders.size() * arguments.size());
     for (const auto& shader : shaders.shaders) {
         ComPtr<ID3D12ShaderReflection> native_reflection;
@@ -183,11 +181,12 @@ PipelineHandle CreatePipeline(DeviceContext& context, PipelineShaderInfo&& shade
         dwords += root.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE ? 1 : 2;
     if (dwords > 64)
         throw std::invalid_argument("D3D12 root signature exceeds 64 DWORDs");
-    auto*          pipeline = MoerNew(Pipeline)(active);
-    PipelineHandle owner{pipeline};
-    pipeline->bindings  = std::move(bindings);
-    pipeline->compute   = gfx == nullptr;
-    pipeline->view_mask = gfx ? gfx->view_mask : 0;
+    return active;
+}
+
+void CreateRootSignature(
+    DeviceContext& context, Pipeline& pipeline, std::span<const D3D12_ROOT_PARAMETER1> roots
+) {
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC signature{};
     signature.Version  = D3D_ROOT_SIGNATURE_VERSION_1_1;
     signature.Desc_1_1 = {uint32(roots.size()), roots.data(), 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT | D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED};
@@ -196,17 +195,111 @@ PipelineHandle CreatePipeline(DeviceContext& context, PipelineShaderInfo&& shade
     if (FAILED(serialized) && errors)
         LOG_ERROR("D3D12 root signature: {}", static_cast<const char*>(errors->GetBufferPointer()));
     DX_CHECK_HRESULT(serialized);
-    DX_CHECK_HRESULT(context.device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&pipeline->signature)));
-    if (!gfx) {
-        const auto&                       shader = shaders.shaders.front();
-        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
-        desc.pRootSignature = pipeline->signature.Get();
-        desc.CS             = {shader.shader_data.data(), shader.shader_data.size()};
-        DX_CHECK_HRESULT(context.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pipeline->state)));
-        return owner;
+    DX_CHECK_HRESULT(context.device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&pipeline.signature)));
+}
+
+void CreateComputePipeline(DeviceContext& context, Pipeline& pipeline, const SingleShaderInfo& shader) {
+    D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+    desc.pRootSignature = pipeline.signature.Get();
+    desc.CS             = {shader.shader_data.data(), shader.shader_data.size()};
+    DX_CHECK_HRESULT(context.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pipeline.state)));
+}
+
+Array<D3D12_INPUT_ELEMENT_DESC> BuildVertexInputLayout(
+    Pipeline& pipeline, const GfxPsoCreateInfo& gfx, ID3D12ShaderReflection* vertex_reflection
+) {
+    Array<D3D12_SIGNATURE_PARAMETER_DESC> inputs;
+    if (vertex_reflection) {
+        D3D12_SHADER_DESC shader_desc{};
+        vertex_reflection->GetDesc(&shader_desc);
+        for (uint32 i = 0; i < shader_desc.InputParameters; ++i) {
+            D3D12_SIGNATURE_PARAMETER_DESC input{};
+            vertex_reflection->GetInputParameterDesc(i, &input);
+            if (input.SystemValueType == D3D_NAME_UNDEFINED)
+                inputs.push_back(input);
+        }
     }
+    Array<D3D12_INPUT_ELEMENT_DESC> elements;
+    uint32                          location = 0;
+    for (uint32 slot = 0; slot < gfx.vertex_stream.bindings.size(); ++slot) {
+        const auto& binding = gfx.vertex_stream.bindings[slot];
+        uint32      offset  = 0;
+        for (const auto& element : binding.vertex_elements) {
+            if (location >= inputs.size())
+                throw std::invalid_argument("D3D12 vertex input count mismatch");
+            const auto& input    = inputs[location++];
+            const bool  instance = binding.input_rate == VIR_INSTANCE;
+            elements.push_back({input.SemanticName, input.SemanticIndex, VertexFormat(element.format), slot, offset, instance ? D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA : D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, instance ? 1u : 0u});
+            offset += GetVertexFormatByteSize(element.format);
+        }
+        pipeline.vertex_strides.push_back(offset);
+    }
+    return elements;
+}
+
+void ConfigureGraphicsFixedState(
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc, Pipeline& pipeline, const GfxPsoCreateInfo& gfx
+) {
+    const auto& raster                         = gfx.rasterizer_info;
+    desc.RasterizerState                       = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    desc.RasterizerState.FillMode              = raster.fill_mode == FM_LINE ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
+    desc.RasterizerState.CullMode              = raster.cull_mode == RCM_BACK ? D3D12_CULL_MODE_BACK : raster.cull_mode == RCM_FRONT ? D3D12_CULL_MODE_FRONT :
+                                                                                                                                       D3D12_CULL_MODE_NONE;
+    desc.RasterizerState.FrontCounterClockwise = raster.b_front_counter_clockwise;
+    desc.RasterizerState.DepthClipEnable       = !raster.b_depth_clamp_enable;
+    desc.RasterizerState.DepthBias             = int32(raster.depth_bias);
+    desc.RasterizerState.DepthBiasClamp        = raster.depth_bias_clamp;
+    desc.RasterizerState.SlopeScaledDepthBias  = raster.depth_bias_slop_factor;
+    const auto& depth                          = gfx.depth_stencil_info;
+    desc.DepthStencilState                     = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    desc.DepthStencilState.DepthEnable         = gfx.depth_stencil_format != PF_UNDEFINED;
+    desc.DepthStencilState.DepthWriteMask      = depth.b_enable_depth_write ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
+    desc.DepthStencilState.DepthFunc           = D3D12_COMPARISON_FUNC(uint32(depth.depth_test_op) + 1);
+    desc.DepthStencilState.StencilEnable       = depth.b_enable_front_face_stencil || depth.b_enable_back_face_stencil;
+    desc.DepthStencilState.StencilReadMask     = depth.stencil_readmask;
+    desc.DepthStencilState.StencilWriteMask    = depth.stencil_writemask;
+    desc.DepthStencilState.FrontFace           = {D3D12_STENCIL_OP(uint32(depth.front_face_stencil_fail_stencil_op) + 1), D3D12_STENCIL_OP(uint32(depth.front_face_depth_fail_stencil_op) + 1), D3D12_STENCIL_OP(uint32(depth.front_face_pass_stencil_op) + 1), D3D12_COMPARISON_FUNC(uint32(depth.front_face_stencil_test) + 1)};
+    desc.DepthStencilState.BackFace            = {D3D12_STENCIL_OP(uint32(depth.back_face_stencil_fail_stencil_op) + 1), D3D12_STENCIL_OP(uint32(depth.back_face_depth_fail_stencil_op) + 1), D3D12_STENCIL_OP(uint32(depth.back_face_pass_stencil_op) + 1), D3D12_COMPARISON_FUNC(uint32(depth.back_face_stencil_test) + 1)};
+    desc.DSVFormat                             = Format(gfx.depth_stencil_format);
+    desc.BlendState                            = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    desc.BlendState.AlphaToCoverageEnable      = gfx.multisample_info.b_alpha_to_converge;
+    desc.BlendState.IndependentBlendEnable     = true;
+    desc.NumRenderTargets                      = gfx.color_attachment_count;
+    for (uint32 i = 0; i < desc.NumRenderTargets; ++i) {
+        const auto& blend = gfx.color_attachments_info[i].blend_state_info;
+        auto&       rt    = desc.BlendState.RenderTarget[i];
+        rt.BlendEnable    = blend.color_src_blend_factor != BF_ONE || blend.color_dst_blend_factor != BF_ZERO ||
+                         blend.alpha_src_blend_factor != BF_ONE || blend.alpha_dst_blend_factor != BF_ZERO;
+        rt.SrcBlend              = Blend(blend.color_src_blend_factor);
+        rt.DestBlend             = Blend(blend.color_dst_blend_factor);
+        rt.BlendOp               = D3D12_BLEND_OP(uint32(blend.color_blend_op) + 1);
+        rt.SrcBlendAlpha         = Blend(blend.alpha_src_blend_factor);
+        rt.DestBlendAlpha        = Blend(blend.alpha_dst_blend_factor);
+        rt.BlendOpAlpha          = D3D12_BLEND_OP(uint32(blend.alpha_blend_op) + 1);
+        rt.RenderTargetWriteMask = uint8(blend.color_write_mask);
+        desc.RTVFormats[i]       = Format(gfx.color_attachments_info[i].pixel_format);
+    }
+    constexpr D3D_PRIMITIVE_TOPOLOGY topologies[] = {D3D_PRIMITIVE_TOPOLOGY_POINTLIST, D3D_PRIMITIVE_TOPOLOGY_LINELIST, D3D_PRIMITIVE_TOPOLOGY_LINESTRIP, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ};
+    if (gfx.primitive_topology == EPrimitiveTopology::PATCH_LIST) {
+        if (!gfx.patch_control_points || gfx.patch_control_points > 32)
+            throw std::invalid_argument("D3D12 patch size must be 1..32");
+        pipeline.topology         = D3D_PRIMITIVE_TOPOLOGY(D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST + gfx.patch_control_points - 1);
+        desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+    } else {
+        pipeline.topology         = topologies[uint32(gfx.primitive_topology)];
+        desc.PrimitiveTopologyType = gfx.primitive_topology == EPrimitiveTopology::POINT_LIST ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT :
+                                     gfx.primitive_topology <= EPrimitiveTopology::LINE_STRIP ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE :
+                                                                                                 D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    }
+    desc.SampleDesc.Count = gfx.multisample_info.sample_count;
+    desc.SampleMask       = UINT32_MAX;
+}
+
+void CreateGraphicsPipeline(
+    DeviceContext& context, Pipeline& pipeline, const PipelineShaderInfo& shaders, const GfxPsoCreateInfo& gfx
+) {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
-    desc.pRootSignature = pipeline->signature.Get();
+    desc.pRootSignature = pipeline.signature.Get();
     ComPtr<ID3D12ShaderReflection> vertex_reflection;
     D3D12_SHADER_BYTECODE          mesh{}, amplification{};
     for (const auto& shader : shaders.shaders) {
@@ -230,7 +323,7 @@ PipelineHandle CreatePipeline(DeviceContext& context, PipelineShaderInfo&& shade
                 break;
             case ST_MESH:
                 mesh           = code;
-                pipeline->mesh = true;
+                pipeline.mesh = true;
                 break;
             case ST_AMPLIFICATION:
                 amplification = code;
@@ -239,107 +332,54 @@ PipelineHandle CreatePipeline(DeviceContext& context, PipelineShaderInfo&& shade
                 break;
         }
     }
-    Array<D3D12_SIGNATURE_PARAMETER_DESC> inputs;
-    if (vertex_reflection) {
-        D3D12_SHADER_DESC shader_desc{};
-        vertex_reflection->GetDesc(&shader_desc);
-        for (uint32 i = 0; i < shader_desc.InputParameters; ++i) {
-            D3D12_SIGNATURE_PARAMETER_DESC input{};
-            vertex_reflection->GetInputParameterDesc(i, &input);
-            if (input.SystemValueType == D3D_NAME_UNDEFINED)
-                inputs.push_back(input);
-        }
-    }
-    Array<D3D12_INPUT_ELEMENT_DESC> elements;
-    uint32                          location = 0;
-    for (uint32 slot = 0; slot < gfx->vertex_stream.bindings.size(); ++slot) {
-        const auto& binding = gfx->vertex_stream.bindings[slot];
-        uint32      offset  = 0;
-        for (const auto& element : binding.vertex_elements) {
-            if (location >= inputs.size())
-                throw std::invalid_argument("D3D12 vertex input count mismatch");
-            const auto& input    = inputs[location++];
-            const bool  instance = binding.input_rate == VIR_INSTANCE;
-            elements.push_back({input.SemanticName, input.SemanticIndex, VertexFormat(element.format), slot, offset, instance ? D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA : D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, instance ? 1u : 0u});
-            offset += GetVertexFormatByteSize(element.format);
-        }
-        pipeline->vertex_strides.push_back(offset);
-    }
-    desc.InputLayout                           = {elements.data(), uint32(elements.size())};
-    const auto& raster                         = gfx->rasterizer_info;
-    desc.RasterizerState                       = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-    desc.RasterizerState.FillMode              = raster.fill_mode == FM_LINE ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
-    desc.RasterizerState.CullMode              = raster.cull_mode == RCM_BACK ? D3D12_CULL_MODE_BACK : raster.cull_mode == RCM_FRONT ? D3D12_CULL_MODE_FRONT :
-                                                                                                                                       D3D12_CULL_MODE_NONE;
-    desc.RasterizerState.FrontCounterClockwise = raster.b_front_counter_clockwise;
-    desc.RasterizerState.DepthClipEnable       = !raster.b_depth_clamp_enable;
-    desc.RasterizerState.DepthBias             = int32(raster.depth_bias);
-    desc.RasterizerState.DepthBiasClamp        = raster.depth_bias_clamp;
-    desc.RasterizerState.SlopeScaledDepthBias  = raster.depth_bias_slop_factor;
-    const auto& depth                          = gfx->depth_stencil_info;
-    desc.DepthStencilState                     = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-    desc.DepthStencilState.DepthEnable         = gfx->depth_stencil_format != PF_UNDEFINED;
-    desc.DepthStencilState.DepthWriteMask      = depth.b_enable_depth_write ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
-    desc.DepthStencilState.DepthFunc           = D3D12_COMPARISON_FUNC(uint32(depth.depth_test_op) + 1);
-    desc.DepthStencilState.StencilEnable       = depth.b_enable_front_face_stencil || depth.b_enable_back_face_stencil;
-    desc.DepthStencilState.StencilReadMask     = depth.stencil_readmask;
-    desc.DepthStencilState.StencilWriteMask    = depth.stencil_writemask;
-    desc.DepthStencilState.FrontFace           = {D3D12_STENCIL_OP(uint32(depth.front_face_stencil_fail_stencil_op) + 1), D3D12_STENCIL_OP(uint32(depth.front_face_depth_fail_stencil_op) + 1), D3D12_STENCIL_OP(uint32(depth.front_face_pass_stencil_op) + 1), D3D12_COMPARISON_FUNC(uint32(depth.front_face_stencil_test) + 1)};
-    desc.DepthStencilState.BackFace            = {D3D12_STENCIL_OP(uint32(depth.back_face_stencil_fail_stencil_op) + 1), D3D12_STENCIL_OP(uint32(depth.back_face_depth_fail_stencil_op) + 1), D3D12_STENCIL_OP(uint32(depth.back_face_pass_stencil_op) + 1), D3D12_COMPARISON_FUNC(uint32(depth.back_face_stencil_test) + 1)};
-    desc.DSVFormat                             = Format(gfx->depth_stencil_format);
-    desc.BlendState                            = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-    desc.BlendState.AlphaToCoverageEnable      = gfx->multisample_info.b_alpha_to_converge;
-    desc.BlendState.IndependentBlendEnable     = true;
-    desc.NumRenderTargets                      = gfx->color_attachment_count;
-    for (uint32 i = 0; i < desc.NumRenderTargets; ++i) {
-        const auto& blend = gfx->color_attachments_info[i].blend_state_info;
-        auto&       rt    = desc.BlendState.RenderTarget[i];
-        rt.BlendEnable    = blend.color_src_blend_factor != BF_ONE || blend.color_dst_blend_factor != BF_ZERO ||
-                         blend.alpha_src_blend_factor != BF_ONE || blend.alpha_dst_blend_factor != BF_ZERO;
-        rt.SrcBlend              = Blend(blend.color_src_blend_factor);
-        rt.DestBlend             = Blend(blend.color_dst_blend_factor);
-        rt.BlendOp               = D3D12_BLEND_OP(uint32(blend.color_blend_op) + 1);
-        rt.SrcBlendAlpha         = Blend(blend.alpha_src_blend_factor);
-        rt.DestBlendAlpha        = Blend(blend.alpha_dst_blend_factor);
-        rt.BlendOpAlpha          = D3D12_BLEND_OP(uint32(blend.alpha_blend_op) + 1);
-        rt.RenderTargetWriteMask = uint8(blend.color_write_mask);
-        desc.RTVFormats[i]       = Format(gfx->color_attachments_info[i].pixel_format);
-    }
-    constexpr D3D_PRIMITIVE_TOPOLOGY topologies[] = {D3D_PRIMITIVE_TOPOLOGY_POINTLIST, D3D_PRIMITIVE_TOPOLOGY_LINELIST, D3D_PRIMITIVE_TOPOLOGY_LINESTRIP, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ};
-    if (gfx->primitive_topology == EPrimitiveTopology::PATCH_LIST) {
-        if (!gfx->patch_control_points || gfx->patch_control_points > 32)
-            throw std::invalid_argument("D3D12 patch size must be 1..32");
-        pipeline->topology         = D3D_PRIMITIVE_TOPOLOGY(D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST + gfx->patch_control_points - 1);
-        desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
-    } else {
-        pipeline->topology         = topologies[uint32(gfx->primitive_topology)];
-        desc.PrimitiveTopologyType = gfx->primitive_topology == EPrimitiveTopology::POINT_LIST ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT :
-                                     gfx->primitive_topology <= EPrimitiveTopology::LINE_STRIP ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE :
-                                                                                                 D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    }
-    desc.SampleDesc.Count = gfx->multisample_info.sample_count;
-    desc.SampleMask       = UINT32_MAX;
-    if (pipeline->mesh || gfx->view_mask) {
-        if (pipeline->mesh && !context.mesh_shaders)
+    auto elements = BuildVertexInputLayout(pipeline, gfx, vertex_reflection.Get());
+    desc.InputLayout = {elements.data(), uint32(elements.size())};
+    ConfigureGraphicsFixedState(desc, pipeline, gfx);
+    if (pipeline.mesh || gfx.view_mask) {
+        if (pipeline.mesh && !context.mesh_shaders)
             throw std::runtime_error("Adapter does not support mesh shaders");
         CD3DX12_PIPELINE_STATE_STREAM2 stream(desc);
         stream.AS = amplification;
         stream.MS = mesh;
         D3D12_VIEW_INSTANCE_LOCATION locations[D3D12_MAX_VIEW_INSTANCE_COUNT]{};
-        if (gfx->view_mask) {
-            const uint32 count = std::bit_width(gfx->view_mask);
+        if (gfx.view_mask) {
+            const uint32 count = std::bit_width(gfx.view_mask);
             for (uint32 i = 0; i < count; ++i)
                 locations[i] = {0, i};
             stream.ViewInstancingDesc = CD3DX12_VIEW_INSTANCING_DESC(count, locations, D3D12_VIEW_INSTANCING_FLAG_ENABLE_VIEW_INSTANCE_MASKING);
         }
         const D3D12_PIPELINE_STATE_STREAM_DESC stream_desc{sizeof(stream), &stream};
-        DX_CHECK_HRESULT(context.device->CreatePipelineState(&stream_desc, IID_PPV_ARGS(&pipeline->state)));
+        DX_CHECK_HRESULT(context.device->CreatePipelineState(&stream_desc, IID_PPV_ARGS(&pipeline.state)));
     } else {
-        const HRESULT result = context.device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline->state));
+        const HRESULT result = context.device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline.state));
         if (FAILED(result))
             for (const auto& shader : shaders.shaders)
                 LOG_ERROR("D3D12 failing graphics stage: {} / {}", shader.name, shader.entry_point);
         DX_CHECK_HRESULT(result);
+    }
+}
+} // namespace
+
+PipelineHandle CreatePipeline(DeviceContext& context, PipelineShaderInfo&& shaders, const GfxPsoCreateInfo* gfx) {
+    const auto error = gfx ? ValidateGraphicsShaderStages(shaders.shaders) : ValidateComputeShaderStages(shaders.shaders);
+    if (!error.empty())
+        throw std::invalid_argument(std::string(error));
+    if (gfx && gfx->view_mask && (!context.view_instancing || std::bit_width(gfx->view_mask) > D3D12_MAX_VIEW_INSTANCE_COUNT))
+        throw std::invalid_argument("D3D12 multiview requires view instancing and at most four views");
+    Array<Binding> bindings;
+    Array<D3D12_ROOT_PARAMETER1> roots;
+    Array<D3D12_DESCRIPTOR_RANGE1> ranges;
+    const uint64 active = ReflectPipelineBindings(shaders, bindings, roots, ranges);
+    auto* pipeline = MoerNew(Pipeline)(active);
+    PipelineHandle owner{pipeline};
+    pipeline->bindings = std::move(bindings);
+    pipeline->compute = gfx == nullptr;
+    pipeline->view_mask = gfx ? gfx->view_mask : 0;
+    CreateRootSignature(context, *pipeline, roots);
+    if (gfx) {
+        CreateGraphicsPipeline(context, *pipeline, shaders, *gfx);
+    } else {
+        CreateComputePipeline(context, *pipeline, shaders.shaders.front());
     }
     return owner;
 }
