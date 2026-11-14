@@ -86,9 +86,6 @@ public:
     bool               IsSeparateWindow() const;
     Render::TextureRef GetWindowFrameBuffer();
 
-    void RegisterUIFunc(std::string name, std::function<void()>&& callback);
-    void UnregisterUIFunc(std::string name);
-
 public: // Sub UI
     ConsolePanel    m_console_panel;
     RasterUI       m_raster_ui;
@@ -163,9 +160,6 @@ private:
     InspectorUI                   m_inspector_ui;
     WindowInputFrameTracker       m_window_input_tracker;
     WindowInputFrameSnapshot      m_window_input_snapshot;
-
-    // Custom Func
-    UnorderedMap<std::string, std::function<void()>> m_show_func_map;
 };
 
 } // namespace Moer

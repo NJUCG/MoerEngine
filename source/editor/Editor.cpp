@@ -100,14 +100,6 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 [this]() {
                     return m_editor_ui->CaptureDrawFrame();
                 },
-            .on_register_ui_func =
-                [this](std::string name, std::function<void()> callback) {
-                    m_editor_ui->RegisterUIFunc(std::move(name), std::move(callback));
-                },
-            .on_unregister_ui_func =
-                [this](std::string name) {
-                    m_editor_ui->UnregisterUIFunc(std::move(name));
-                },
             .on_show_config_sub_ui =
                 [this]() {
                     m_editor_ui->SetShowRenderConfigSubUI(true);

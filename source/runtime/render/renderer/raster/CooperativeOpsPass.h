@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RasterConfig.h"
+#include "RasterFrameStatus.h"
 #include "RasterResource.h"
 #include "misc/Types.h"
 
@@ -18,38 +18,23 @@ namespace Moer::Render::Raster {
  */
 class CooperativeOpsPass {
 public:
-    struct PreparedStatus {
-        CooperativeOpsStatus status{};
-    };
-
     explicit CooperativeOpsPass(RasterContext& context) :
         m_cooperative_info(context.device.GetCooperativeExtensionInfo()) {}
 
-    [[nodiscard]] PreparedStatus Prepare(const RasterConfig& ui_config) const {
-        PreparedStatus prepared{.status = ui_config.cooperative_ops_status};
-        UpdateSnapshotStatus(prepared.status);
-        auto& status = prepared.status;
-        if (!ui_config.cooperative_ops_enabled) {
+    [[nodiscard]] CooperativeOpsStatus Prepare(bool enabled) {
+        CooperativeOpsStatus status{};
+        UpdateSnapshotStatus(status);
+        status.frames_evaluated = m_frames_evaluated;
+        if (!enabled) {
             status.matrix_runtime_status = "Inactive";
             status.vector_runtime_status = "Inactive";
-            return prepared;
+            return status;
         }
 
-        ++status.frames_evaluated;
+        status.frames_evaluated = ++m_frames_evaluated;
 
         UpdateRuntimeStatus(status);
-        return prepared;
-    }
-
-    void Commit(RasterConfig& ui_config, const PreparedStatus& prepared) const {
-        ui_config.cooperative_ops_status = prepared.status;
-    }
-
-    TextureWithHandle
-    Process(RasterContext& context, RasterConfig& ui_config, TextureWithHandle input_image) {
-        (void)context;
-        Commit(ui_config, Prepare(ui_config));
-        return input_image;
+        return status;
     }
 
 private:
@@ -236,6 +221,8 @@ private:
 
 private:
     CooperativeExtensionInfo m_cooperative_info{};
+    // Render Thread owned; feedback consumers never feed a lagging count back into it.
+    uint32 m_frames_evaluated = 0;
 };
 
 } // namespace Moer::Render::Raster

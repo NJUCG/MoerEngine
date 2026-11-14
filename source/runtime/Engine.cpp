@@ -1620,7 +1620,7 @@ void Engine::Run(const EngineHooks& hooks) {
                     },
                     [this, raster_renderer, &runtime_hooks](Raster::RasterFrameFeedback feedback) {
                         raster_renderer->ApplyFrameFeedback(
-                            std::move(feedback), m_editor_config->raster_config, runtime_hooks
+                            std::move(feedback), *m_editor_config, runtime_hooks
                         );
                     },
                     [&runtime_hooks]() {
@@ -1645,7 +1645,7 @@ void Engine::Run(const EngineHooks& hooks) {
                     ) {
                         raytracing_renderer->ApplyFrameFeedback(
                             std::move(feedback),
-                            m_editor_config->raytracing_config,
+                            *m_editor_config,
                             runtime_hooks
                         );
                     },
@@ -1653,7 +1653,6 @@ void Engine::Run(const EngineHooks& hooks) {
                         return runtime_hooks.should_reload && runtime_hooks.should_reload();
                     }
                 );
-                raytracing_renderer->Shutdown(runtime_hooks);
 
             } else {
                 MOER_ASSERT(
@@ -1682,7 +1681,7 @@ void Engine::Run(const EngineHooks& hooks) {
                         raytracing_renderer->PrepareFrame(m_editor_config, runtime_hooks);
                     raytracing_renderer->ApplyFrameFeedback(
                         raytracing_renderer->RenderFrame(std::move(frame_packet)),
-                        m_editor_config->raytracing_config,
+                        *m_editor_config,
                         runtime_hooks
                     );
 
@@ -1690,7 +1689,6 @@ void Engine::Run(const EngineHooks& hooks) {
                         break;
                     }
                 }
-                raytracing_renderer->Shutdown(runtime_hooks);
             } else {
                 m_renderer->Run(m_editor_config, runtime_hooks);
             }

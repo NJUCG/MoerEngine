@@ -11,6 +11,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHICompletion.h"
 #include "rhi/RHIGpuScope.h"
+#include "rhi/RHIProfileData.h"
 #include "rhi/RHIQuery.h"
 #include "rhi/RHIReadback.h"
 #include "rhi/RHIResource.h"
@@ -2328,16 +2329,6 @@ private:
     EGpuMarkerMode mode     = EGpuMarkerMode::Label;
 };
 class QueueCmd {};
-
-struct ProfileResultEntry {
-    std::string name;
-    double      time;
-};
-
-struct ProfileData {
-    Array<ProfileResultEntry> gpu_entries;
-    Array<ProfileResultEntry> cpu_entries;
-};
 
 enum class EPresentStatus : uint8 {
     Unresolved,

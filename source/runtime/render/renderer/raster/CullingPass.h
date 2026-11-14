@@ -21,7 +21,7 @@
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 
 #include "CullingReadbackState.h"
-#include "RasterConfig.h"
+#include "RasterFrameStatus.h"
 #include "RasterGraphResourceAccess.h"
 #include "RasterResource.h"
 
@@ -107,16 +107,7 @@ public:
         int   force_lod_level;     // -1 = auto, 0 = leaf, 1+ = 简化层级
     };
 
-    // Stores the CPU-visible counters copied back from the GPU culling pass.
-    struct CullStatistics {
-        uint32 total_instances_before     = 0; // 裁剪前的总实例数
-        uint32 total_instances_after      = 0; // 裁剪后的总实例数
-        uint32 visible_draws              = 0; // 可见的 Draw 数量
-        uint32 total_draws                = 0; // 总 Draw 数量
-        uint32 frustum_culled_instances   = 0; // 被视锥剔除的实例数
-        uint32 occlusion_culled_instances = 0; // 被Hi-Z遮挡剔除的实例数
-        uint32 lod_culled_instances       = 0; // 被 Cluster LOD 剔除的实例数
-    };
+    using CullStatistics = CullingStats;
 
     struct RecordParameters {
         BufferView       source_draw_commands{};

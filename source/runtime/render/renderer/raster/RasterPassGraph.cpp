@@ -278,12 +278,13 @@ RenderGraph::PassHandle ProbeUpdatePass::AddToGraph(
 RenderGraph::PassHandle GeometryPass::AddToGraph(
     RenderGraph&   graph,
     RasterContext& context,
-    RasterConfig&  raster_config,
+    const RasterConfig& raster_config,
     const Camera&  camera,
-    GraphResources resources
+    GraphResources resources,
+    CullingStats& out_stats
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.GeometryPass");
-    auto parameters = std::make_shared<const RecordParameters>(Prepare(context, raster_config, camera));
+    auto parameters = std::make_shared<const RecordParameters>(Prepare(context, raster_config, camera, out_stats));
     culling_pass.AddToGraph(graph, "Geometry", parameters->culling, resources.hiz_previous);
     const RasterSceneGraphReads scene_reads(graph, context.GetGpuSceneRes());
     const auto indices = ImportRasterBuffer(graph, "Scene.indices", parameters->index_buffer.GetBuffer());

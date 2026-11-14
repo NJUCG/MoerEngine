@@ -806,6 +806,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     }
 
     TextureRef default_output_texture = raster_context.textures.output.tex;
+    RasterFrameFeedback feedback{};
     bool       raster_pipeline_recorded = false;
     Matrix4x4f raster_commit_view_proj  = Matrix4x4f::Identity();
     std::optional<AoFrameResources> raster_ao_frame;
@@ -946,9 +947,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         raster_commit_aa_mode = raster_config.aa_mode;
         raster_context.Update(gaussian_display_context ?
             std::clamp(camera.GetDeltaTime(), 0.f, .1f) : camera.GetDeltaTime());
-        cooperative_ops_pass->Commit(
-            raster_config, cooperative_ops_pass->Prepare(raster_config)
-        );
+        auto& status = feedback.status.emplace();
+        status.cooperative_ops_status = cooperative_ops_pass->Prepare(raster_config.cooperative_ops_enabled);
 
         if (scene_tick_state.updated_transform || scene_tick_state.rebuilt_mesh) {
             raster_context.csm_data.shadow_cache_config_snapshot_valid = false;
@@ -1273,7 +1273,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                          .base_color     = graph_resources.base_color,
                          .normal         = graph_resources.normal,
                          .metal_rough_ao = graph_resources.metal_rough_ao,
-                         .depth          = graph_resources.depth}
+                         .depth          = graph_resources.depth},
+                        status.culling_stats
                     );
                     tessellated_surface_pass->AddToGraph(
                         graph,
@@ -1806,18 +1807,15 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         PresentUiDrawFrame(frame_packet.ui_draw_frame, ui_execution_thread);
     }
 
-    RasterFrameFeedback feedback{};
     if (m_gaussian_export) feedback.gaussian_export_status = m_gaussian_export->GetStatus();
-    if (m_gaussian_splat_pass && (frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
+    if (feedback.status && m_gaussian_splat_pass && (frame_packet.gaussian_content == EGaussianSceneContent::GaussianOnly ||
         frame_packet.gaussian_content == EGaussianSceneContent::Mixed)) {
-        feedback.gaussian_status = m_gaussian_splat_pass->GetStatus();
-        feedback.gaussian_status.shadow_cast_gpu_ms = shadow_depth_pass->GetGaussianShadowGpuTime();
-        if(m_gaussian_composite_pass) feedback.gaussian_status.composite_gpu_ms = m_gaussian_composite_pass->GetGpuTime();
+        feedback.status->gaussian_status = m_gaussian_splat_pass->GetStatus();
+        feedback.status->gaussian_status.shadow_cast_gpu_ms = shadow_depth_pass->GetGaussianShadowGpuTime();
+        if(m_gaussian_composite_pass) feedback.status->gaussian_status.composite_gpu_ms = m_gaussian_composite_pass->GetGpuTime();
     }
     feedback.frame_id              = frame_packet.frame_id;
     feedback.main_present_receipt  = std::move(main_present_receipt);
-    feedback.culling_stats          = frame_packet.raster_config.culling_stats;
-    feedback.cooperative_ops_status = frame_packet.raster_config.cooperative_ops_status;
     if (frame_packet.frame_id == 0) {
         for (const TextureView& view : raster_context.GetDisplayableFrameBuffersView()) {
             feedback.displayable_frame_buffer_names.emplace_back(view.GetTexture()->GetName());
@@ -1829,22 +1827,22 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
 bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     ApplyFrameFeedback(
-        RenderFrame(PrepareFrame(editor_config, hooks)), editor_config->raster_config, hooks
+        RenderFrame(PrepareFrame(editor_config, hooks)), *editor_config, hooks
     );
     return !hooks.should_reload || !hooks.should_reload();
 }
 
 void RasterRenderer::ApplyFrameFeedback(
     RasterFrameFeedback feedback,
-    RasterConfig&       target_config,
+    EditorConfig&       target_config,
     const EngineHooks&  hooks
 ) {
     assert(IsCurrentlyGameThread());
     ApplyMainPresentReceipt(feedback.main_present_receipt, hooks);
-    target_config.gaussian_status = feedback.gaussian_status;
     scene.ApplyGaussianImageExportStatus(feedback.gaussian_export_status);
-    target_config.culling_stats          = feedback.culling_stats;
-    target_config.cooperative_ops_status = feedback.cooperative_ops_status;
+    if (feedback.status) {
+        target_config.raster_status = std::move(*feedback.status);
+    }
     if (!feedback.displayable_frame_buffer_names.empty() &&
         hooks.on_raster_register_frame_buffer_names) {
         hooks.on_raster_register_frame_buffer_names(feedback.displayable_frame_buffer_names);

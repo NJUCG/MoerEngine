@@ -75,8 +75,8 @@ EditorUI::EditorUI(
     ProfileDump::ProfileDocumentLoader&   profile_document_loader
 ) :
     m_console_panel(engine.GetCommandEndpoint()),
-    m_raster_ui(editor_config->raster_config),
-    m_raytracing_ui(editor_config->raytracing_config),
+    m_raster_ui(editor_config->raster_config, editor_config->raster_status),
+    m_raytracing_ui(editor_config->raytracing_config, editor_config->raytracing_debug_state),
     m_scene_editing_ui(editor_config->scene_test_case_config),
     m_profile_capture_ui(engine),
     m_profile_viewer_ui(profile_document_loader),
@@ -1075,7 +1075,7 @@ void EditorUI::ShowGaussianSettings(Scene& scene) {
     if (ImGui::Button("Frame Gaussian bounds"))
         m_config->raster_config.should_frame_gaussians = true;
     ImGui::EndDisabled();
-    const auto& status        = m_config->raster_config.gaussian_status;
+    const auto& status        = m_config->raster_status.gaussian_status;
     const auto  export_status = scene.GetGaussianImageExportStatus();
     if (!export_status.message.empty())
         ImGui::TextWrapped("%s", export_status.message.c_str());
@@ -1221,10 +1221,9 @@ void EditorUI::ShowConfig(Scene& scene) {
     ImGui::Text("\tFPS: %.1f", io.Framerate);
     ImGui::Text("\tFrame Time: %.1f ms", 1000.0f / io.Framerate);
 
-    // Custom Func
-    for (auto& [name, func] : m_show_func_map) {
+    if (m_config->selected_render_method == ERenderMethod::Raytracing && scene.IsReady()) {
         ImGui::Separator();
-        func();
+        m_raytracing_ui.ShowDebug();
     }
 
     ImGui::PopItemWidth(); // 和PushItemWidt相对应
@@ -1256,14 +1255,6 @@ void EditorUI::SyncWindowVisibilitySettings() {
 #endif
 
     EditorUISettings::StoreWindowVisibilitySettings(settings);
-}
-
-void EditorUI::RegisterUIFunc(std::string name, std::function<void()>&& callback) {
-    m_show_func_map[std::move(name)] = std::move(callback);
-}
-
-void EditorUI::UnregisterUIFunc(std::string name) {
-    m_show_func_map.erase(name);
 }
 
 } // namespace Moer

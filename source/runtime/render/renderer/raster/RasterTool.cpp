@@ -1,7 +1,6 @@
 // 实现各独立 Raster Pass 共用的小型工具函数。
 
 #include "RasterTool.h"
-#include "RasterConfig.h"
 #include "log/LogSystem.h"
 #include "misc/Timer.h"
 #include "misc/Types.h"
@@ -12,7 +11,6 @@
 
 #include <cassert>
 #include <source_location>
-#include <span>
 #include <sstream>
 #include <stdexcept>
 
@@ -73,15 +71,6 @@ static_assert(s_csm_shadow_draw_scope_names.size() == CSM_MAX_CASCADES);
 static_assert(s_point_shadow_face_marker_names.size() == CUBE_FACE_Num);
 static_assert(s_point_shadow_culling_scope_names.size() == CUBE_FACE_Num);
 static_assert(s_point_shadow_draw_scope_names.size() == CUBE_FACE_Num);
-
-double FindGpuTime(const ProfileData& profile_data, std::string_view name) {
-    for (const auto& entry : profile_data.gpu_entries) {
-        if (entry.name == name) {
-            return entry.time;
-        }
-    }
-    return -1.0;
-}
 
 } // namespace
 
@@ -168,73 +157,6 @@ bool RasterTool::ShouldLogDebugEverySeconds(
     auto timer_it = s_debug_log_timers.try_emplace(site_key.str(), seconds, true).first;
     return timer_it->second.Tick();
 #endif
-}
-
-// 按固定时间间隔输出 raster GPU profiling 汇总，避免把 profiler 状态放进 renderer。
-void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config) {
-    const auto profile_data = gfx_queue.GetProfilerEntry();
-    if (profile_data.gpu_entries.empty() || !ShouldLogDebugEverySeconds(1.0)) {
-        return;
-    }
-
-    auto find_gpu_time = [&profile_data](std::string_view name) -> double { return FindGpuTime(profile_data, name); };
-
-    auto sum_gpu_times = [&find_gpu_time](std::span<const std::string_view> names) -> double {
-        double total = 0.0;
-        for (std::string_view name : names) {
-            const double time = find_gpu_time(name);
-            if (time >= 0.0) {
-                total += time;
-            }
-        }
-        return total;
-    };
-
-    std::ostringstream stream;
-    stream.setf(std::ios::fixed);
-    stream.precision(3);
-
-    const double graphics_exec            = find_gpu_time("Graphics Exec");
-    const double csm_shadow_culling_sum   = sum_gpu_times(s_csm_shadow_culling_scope_names);
-    const double csm_shadow_draw_sum      = sum_gpu_times(s_csm_shadow_draw_scope_names);
-    const double point_shadow_culling_sum = sum_gpu_times(s_point_shadow_culling_scope_names);
-    const double point_shadow_draw_sum    = sum_gpu_times(s_point_shadow_draw_scope_names);
-    const double geometry_culling        = find_gpu_time(GetGeometryCullingProfileScopeName());
-    const double geometry_draw           = find_gpu_time(GetGeometryDrawProfileScopeName());
-
-    stream << "[RasterProfile] GPU(ms)";
-    if (graphics_exec >= 0.0) {
-        stream << " GraphicsExec=" << graphics_exec;
-    }
-    if (csm_shadow_culling_sum > 0.0) {
-        stream << " CsmShadowCullSum=" << csm_shadow_culling_sum;
-    }
-    if (csm_shadow_draw_sum > 0.0) {
-        stream << " CsmShadowDrawSum=" << csm_shadow_draw_sum;
-    }
-    if (point_shadow_culling_sum > 0.0) {
-        stream << " PointShadowCullSum=" << point_shadow_culling_sum;
-    }
-    if (point_shadow_draw_sum > 0.0) {
-        stream << " PointShadowDrawSum=" << point_shadow_draw_sum;
-    }
-    if (geometry_culling >= 0.0) {
-        stream << " GeometryCull=" << geometry_culling;
-    }
-    if (geometry_draw >= 0.0) {
-        stream << " GeometryDraw=" << geometry_draw;
-    }
-
-    const auto& culling_stats = raster_config.culling_stats;
-    if (culling_stats.total_instances_before > 0) {
-        stream << " | CullStats inst=" << culling_stats.total_instances_after << "/"
-               << culling_stats.total_instances_before << " draws=" << culling_stats.visible_draws << "/"
-               << culling_stats.total_draws << " frustum=" << culling_stats.frustum_culled_instances
-               << " occlusion=" << culling_stats.occlusion_culled_instances
-               << " ratio=" << culling_stats.GetCullingRatio() * 100.0f << "%";
-    }
-
-    LOG_DEBUG("{}", stream.str());
 }
 
 // 执行 Scene 同步阶段积累的 copy/gfx command list。

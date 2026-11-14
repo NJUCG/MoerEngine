@@ -38,15 +38,11 @@ public:
 
     RaytracingFramePacket   PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
     RaytracingFrameFeedback RenderFrame(RaytracingFramePacket frame_packet);
-    // Retained for source/ABI compatibility with tools that apply feedback
-    // without editor lifecycle hooks.
-    void ApplyFrameFeedback(RaytracingFrameFeedback feedback, RaytracingConfig& target_config);
     void ApplyFrameFeedback(
         RaytracingFrameFeedback feedback,
-        RaytracingConfig&       target_config,
+        EditorConfig&           target_config,
         const EngineHooks&      hooks
     );
-    void Shutdown(const EngineHooks& hooks);
 
     bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
 
@@ -60,16 +56,11 @@ private:
     SceneRenderExtentTracker scene_render_extent_tracker;
     UniquePtr<RuntimeState>  runtime_state;
 
-    RaytracingDebugFrameInput              debug_ui_frame_input{};
-    ProfileData                            debug_ui_profiler_data{};
-    Array<std::string>                     debug_ui_material_texture_names;
-    uint64                                 next_frame_id                    = 0;
-    uint64                                 render_extent_generation         = 0;
-    bool                                   capture_scene_geometry_snapshot = true;
-    bool                                   debug_ui_registered             = false;
-    bool                                   export_request_in_flight        = false;
+    uint64 next_frame_id                    = 0;
+    uint64 render_extent_generation         = 0;
+    bool   capture_scene_geometry_snapshot = true;
+    bool   export_request_in_flight        = false;
 
-    void EnsureDebugUiRegistered(const EngineHooks& hooks);
     bool RefreshSceneRuntimeRefs();
     SceneUpdateResult ExecuteSceneUpdates(
         SceneUpdateBatch&                                batch,
